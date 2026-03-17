@@ -11,9 +11,6 @@ out/
 
 # 환경변수 (절대 커밋 금지)
 .env
-.env.*
-**/application-local.yml
-**/application-secret.yml
 
 # 로그
 *.log

@@ -98,17 +98,18 @@ docker-compose up -d   # PostgreSQL 16 + Redis 7
 - DTO: Lombok `@Builder`, `@Getter`, Response에 `from()` 정적 팩토리 메서드
 - 엔티티: `@NoArgsConstructor(access = AccessLevel.PROTECTED)`, `FetchType.LAZY` 기본
 - Enum: `EnumType.STRING` 사용 (ORDINAL 금지)
-- 예외: common 모듈의 `IeumException` + `ErrorCode` enum
-- API 응답: 공통 래퍼 `{ success, data, message }`
+- 예외: common 모듈의 `CustomException` + `ErrorCode` enum
+- API 응답: 공통 래퍼 `{ success, data, message, code }`
 - Service: `@Transactional(readOnly = true)` 기본, 쓰기는 메서드에 `@Transactional`
-- Controller: Swagger `@Tag`, `@Operation` 추가
+- Controller: 반드시 `{컨트롤러명}Docs` 인터페이스를 `implements`하여 생성. Swagger 명세(`@Tag`, `@Operation` 등)는 Docs 인터페이스에 선언, Controller 클래스에는 작성 금지
 
 ## Git 컨벤션
-- 브랜치: `main` → `develop` → `feature/<기능명>` (직접 push는 feature만)
+- 브랜치: `main` → `develop` → `feature/<노션-이슈-아이디>` (직접 push는 feature만)
 - 브랜치명: 영어 소문자 + 하이픈(-) 만 사용
 - 커밋: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`
 - PR: `[feat] 기능명` 형식, Squash Merge만 사용
 - feature 브랜치 수명: 최대 3일
+- **git push는 절대 직접 실행하지 않음 — 사용자가 직접 수행**
 
 ## DB 마이그레이션
 - 위치: `api/src/main/resources/db/migration/`
