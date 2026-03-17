@@ -9,11 +9,21 @@ IEUM 프로젝트 전반에 걸쳐 일관된 예외 처리 구조를 유지한�
 ```java
 // com.ieum.common.exception
 @Getter
-public class IeumException extends RuntimeException {
+public class CustomException extends RuntimeException {
     private final ErrorCode errorCode;
 
-    public IeumException(ErrorCode errorCode) {
+    public CustomException(ErrorCode errorCode) {
         super(errorCode.getMessage());
+        this.errorCode = errorCode;
+    }
+
+    public CustomException(ErrorCode errorCode, String detailMessage) {
+        super(detailMessage);
+        this.errorCode = errorCode;
+    }
+
+    public CustomException(ErrorCode errorCode, Throwable cause) {
+        super(errorCode.getMessage(), cause);
         this.errorCode = errorCode;
     }
 }
@@ -66,12 +76,13 @@ public enum ErrorCode {
 @Slf4j
 public class GlobalExceptionHandler {
 
-    @ExceptionHandler(IeumException.class)
-    public ResponseEntity<ApiResponse<Void>> handleIeumException(IeumException e) {
-        log.warn("IeumException: {}", e.getMessage());
+    @ExceptionHandler(CustomException.class)
+    public ResponseEntity<ApiResponse<Void>> handleCustomException(CustomException e) {
+        ErrorCode code = e.getErrorCode();
+        log.warn("[{}] {}", code.name(), e.getMessage());
         return ResponseEntity
-                .status(e.getErrorCode().getStatus())
-                .body(ApiResponse.error(e.getMessage()));
+                .status(code.getStatus())
+                .body(ApiResponse.error(code, e.getMessage()));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -97,7 +108,7 @@ public class GlobalExceptionHandler {
 // Service에서 사용
 public Workflow findById(UUID id) {
     return repository.findById(id)
-            .orElseThrow(() -> new IeumException(ErrorCode.WORKFLOW_NOT_FOUND));
+            .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
 }
 ```
 
