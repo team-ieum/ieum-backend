@@ -25,6 +25,8 @@ description: API 응답 포맷 및 예외 처리 규칙 준수 여부를 검증�
 | `common/src/main/java/com/ieum/common/exception/SuccessCode.java` | 성공 코드 enum |
 | `common/src/main/java/com/ieum/common/exception/CustomException.java` | 비즈니스 예외 클래스 |
 | `api/src/main/java/com/ieum/api/common/GlobalExceptionHandler.java` | 전역 예외 핸들러 |
+| `api/src/main/java/com/ieum/api/common/HealthController.java` | 헬스체크 Controller (Docs 패턴 예시) |
+| `api/src/main/java/com/ieum/api/common/HealthControllerDocs.java` | 헬스체크 Docs 인터페이스 (Swagger 명세 선언) |
 
 ## Workflow
 
@@ -33,11 +35,11 @@ description: API 응답 포맷 및 예외 처리 규칙 준수 여부를 검증�
 모든 Controller 메서드는 `ApiResponse` 또는 `ResponseEntity<ApiResponse<...>>`를 반환해야 합니다.
 
 ```bash
-# Controller 파일 목록 확인
-find . -path "*/controller/*Controller.java" | grep -v test
+# Controller 파일 목록 확인 (패키지 위치 무관하게 전체 탐지)
+find . -name "*Controller.java" | grep -v test
 
-# ResponseEntity나 ApiResponse 없이 다른 타입을 반환하는 메서드 탐지
-grep -rn "public.*\(.*\)" --include="*Controller.java" . | grep -v "ApiResponse" | grep -v "ResponseEntity" | grep -v "//"
+# ResponseEntity나 ApiResponse 없이 다른 타입을 반환하는 메서드 탐지 (클래스 선언 제외)
+grep -rEn "public [a-zA-Z<>\[\]]+\s+\w+\s*\(" --include="*Controller.java" . | grep -v "ApiResponse" | grep -v "ResponseEntity" | grep -v "class " | grep -v "//"
 ```
 
 **PASS:** 모든 Controller 메서드가 `ApiResponse<T>` 또는 `ResponseEntity<ApiResponse<T>>`를 반환
@@ -89,6 +91,21 @@ grep -rn "new CustomException(" --include="*.java" . | grep -v test
 
 **PASS:** 모든 결과에 `ErrorCode.` 포함
 **FAIL:** `ErrorCode` 없이 생성된 경우
+
+### Check 6: Controller — Docs 인터페이스 구현 확인
+
+모든 `*Controller.java`는 대응하는 `*ControllerDocs` 인터페이스를 `implements`해야 하며, `@Tag`/`@Operation` 등 Swagger 어노테이션은 Docs 인터페이스에만 선언해야 합니다.
+
+```bash
+# implements *ControllerDocs 없는 Controller 탐지
+grep -rL "implements.*ControllerDocs" $(find . -name "*Controller.java" | grep -v test)
+
+# Controller 클래스에 @Tag 또는 @Operation 직접 선언 여부 탐지
+grep -rn "@Tag\|@Operation" --include="*Controller.java" . | grep -v test | grep -v "Docs.java"
+```
+
+**PASS:** 모든 Controller가 `implements *ControllerDocs`, Controller 파일에 `@Tag`/`@Operation` 없음
+**FAIL:** Docs 인터페이스 없이 단독으로 존재하거나, Controller 클래스에 직접 Swagger 어노테이션 선언
 
 ## 예외사항
 

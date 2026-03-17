@@ -85,12 +85,15 @@ docker-compose up -d   # PostgreSQL 16 + Redis 7
 # 빌드
 ./gradlew build
 
-# 실행 (api 모듈, 로컬 프로필)
-./gradlew :api:bootRun --args='--spring.profiles.active=local'
+# 실행 (api 모듈)
+./gradlew :api:bootRun
 ```
 
 ### DB 접속 정보 (로컬)
 - Host: `localhost:5432`, DB: `ieum`, User/PW: `ieum`/`ieum`
+
+### 환경변수 설정 방식
+`application.yml`은 `${ENV_VAR}` 플레이스홀더로 Git에 커밋. 실제 값은 **IntelliJ Run Configuration → Environment variables** 에 직접 입력.
 
 ## 코드 컨벤션
 - 패키지 루트: `com.ieum.<모듈명>`
@@ -117,7 +120,7 @@ docker-compose up -d   # PostgreSQL 16 + Redis 7
 
 ## 주의사항
 - `api` 모듈만 `org.springframework.boot` 플러그인 적용 (실행 가능한 JAR)
-- `application-local.yml`은 Git 추적 제외 (로컬 전용)
+- `application.yml`은 `${ENV_VAR}` 플레이스홀더로 Git 커밋, 실제 값은 IntelliJ Run Configuration에서 주입
 - `scanBasePackages = "com.ieum"` 으로 모든 모듈 Bean 스캔
 - 공통 의존성(Lombok, Test)은 루트 `build.gradle`의 `subprojects`에 선언 → 중복 선언 불필요
 
@@ -139,6 +142,7 @@ docker-compose up -d   # PostgreSQL 16 + Redis 7
 | `jpa-entity` | JPA 엔티티 설계 패턴 (PostgreSQL 기반) |
 | `exception-handling` | 공통 예외 처리 패턴 (CustomException + ErrorCode) |
 | `verify-api-response` | API 응답 포맷 및 예외 처리 규칙 준수 여부 검증 |
+| `verify-db-migration` | Flyway DB 마이그레이션 규칙 준수 여부 검증 |
 | `ai-integration` | AI 모듈 연동 패턴 (Claude, OpenAI 등) |
 | `new-module` | Gradle 서브모듈 추가 절차 |
 | `verify-implementation` | 프로젝트의 모든 verify 스킬을 순차 실행하여 통합 검증 보고서를 생성합니다 |
