@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: ieum-postgres
+    environment:
+      POSTGRES_DB: ieum
+      POSTGRES_USER: ieum
+      POSTGRES_PASSWORD: ieum
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: ieum-redis
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres-data:
