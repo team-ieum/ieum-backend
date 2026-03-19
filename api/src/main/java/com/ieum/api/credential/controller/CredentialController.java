@@ -6,6 +6,7 @@ import com.ieum.ai.credential.domain.CredentialType;
 import com.ieum.ai.credential.service.CredentialService;
 import com.ieum.api.credential.dto.CreateCredentialRequest;
 import com.ieum.api.credential.dto.CredentialResponse;
+import com.ieum.api.credential.dto.ValidateCredentialResponse;
 import com.ieum.auth.security.CustomUserDetails;
 import com.ieum.common.dto.ApiResponse;
 import com.ieum.common.exception.CustomException;
@@ -70,5 +71,21 @@ public class CredentialController implements CredentialControllerDocs {
 
         credentialService.delete(id, userDetails.getId());
         return ResponseEntity.ok(ApiResponse.ok());
+    }
+
+    @PostMapping("/{id}/validate")
+    public ResponseEntity<ApiResponse<ValidateCredentialResponse>> validate(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable UUID id) {
+
+        boolean isValid = credentialService.validateCredential(id, userDetails.getId());
+        Credential credential = credentialService.getByIdAndUserId(id, userDetails.getId());
+
+        ValidateCredentialResponse response = ValidateCredentialResponse.builder()
+                .isValid(isValid)
+                .provider(credential.getProvider().name())
+                .build();
+
+        return ResponseEntity.ok(ApiResponse.ok(response));
     }
 }
