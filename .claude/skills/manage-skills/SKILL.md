@@ -28,13 +28,10 @@ argument-hint: "[선택사항: 특정 스킬 이름 또는 집중할 영역]"
 
 현재 프로젝트에 등록된 검증 스킬 목록입니다. 새 스킬 생성/삭제 시 이 목록을 업데이트합니다.
 
-(아직 등록된 검증 스킬이 없습니다)
-
-<!-- 스킬이 추가되면 아래 형식으로 등록:
 | 스킬 | 설명 | 커버 파일 패턴 |
 |------|------|---------------|
-| `verify-example` | 예시 검증 | `src/example/**/*.ts` |
--->
+| `verify-api-response` | API 응답 포맷 및 예외 처리 규칙 검증 | `**/dto/ApiResponse.java`, `**/dto/PageResponse.java`, `**/exception/*.java`, `**/common/GlobalExceptionHandler.java`, `**/controller/*Controller.java`, `**/service/*Service.java` |
+| `verify-db-migration` | Flyway DB 마이그레이션 규칙 검증 | `**/db/migration/*.sql`, `api/build.gradle`, `**/application*.yml` |
 
 ## 워크플로우
 
