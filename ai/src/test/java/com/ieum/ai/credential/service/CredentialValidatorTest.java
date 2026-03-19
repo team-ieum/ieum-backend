@@ -77,6 +77,15 @@ class CredentialValidatorTest {
         assertThat(credentialValidator.validate(AiProvider.OPENAI, "invalid-key")).isFalse();
     }
 
+    @Test
+    void validate_claude_429_returnsTrue() {
+        given(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(String.class)))
+                .willThrow(HttpClientErrorException.create(HttpStatus.TOO_MANY_REQUESTS, "Too Many Requests",
+                        HttpHeaders.EMPTY, null, null));
+
+        assertThat(credentialValidator.validate(AiProvider.CLAUDE, "valid-but-rate-limited")).isTrue();
+    }
+
     // ===== GEMINI =====
 
     @Test
@@ -94,5 +103,14 @@ class CredentialValidatorTest {
                         HttpHeaders.EMPTY, null, null));
 
         assertThat(credentialValidator.validate(AiProvider.GEMINI, "invalid-key")).isFalse();
+    }
+
+    @Test
+    void validate_gemini_429_returnsTrue() {
+        given(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(String.class)))
+                .willThrow(HttpClientErrorException.create(HttpStatus.TOO_MANY_REQUESTS, "Too Many Requests",
+                        HttpHeaders.EMPTY, null, null));
+
+        assertThat(credentialValidator.validate(AiProvider.GEMINI, "valid-but-rate-limited")).isTrue();
     }
 }
