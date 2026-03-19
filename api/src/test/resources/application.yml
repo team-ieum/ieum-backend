@@ -1,0 +1,40 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=PostgreSQL
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        format_sql: false
+
+  flyway:
+    enabled: false
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            client-id: test-client-id
+            client-secret: test-client-secret
+            scope: email, profile
+
+jwt:
+  secret: test-secret-key-that-is-long-enough-for-hs256-algorithm-minimum
+  expiration: 86400000
+  refresh-expiration: 604800000
+
+aes:
+  secret-key: test-aes-key-32bytes-padding!!!!!

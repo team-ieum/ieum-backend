@@ -12,20 +12,6 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: ieum_test
-          POSTGRES_USER: ieum
-          POSTGRES_PASSWORD: ieum1234
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
       redis:
         image: redis:7-alpine
         ports:
@@ -64,9 +50,3 @@ jobs:
 
       - name: 테스트
         run: ./gradlew test --no-daemon
-        env:
-          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/ieum_test
-          SPRING_DATASOURCE_USERNAME: ieum
-          SPRING_DATASOURCE_PASSWORD: ieum1234
-          SPRING_REDIS_HOST: localhost
-          SPRING_REDIS_PORT: 6379
