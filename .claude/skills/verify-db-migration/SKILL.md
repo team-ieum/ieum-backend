@@ -20,7 +20,8 @@ Flyway 마이그레이션 SQL 파일이 프로젝트 DB 스키마 규칙을 준�
 | File | Purpose |
 |------|---------|
 | `api/src/main/resources/db/migration/` | Flyway 마이그레이션 파일 위치 |
-| `api/src/main/resources/db/migration/V1__create_users_table.sql` | 마이그레이션 예시 |
+| `api/src/main/resources/db/migration/V1__create_users_table.sql` | 테이블 생성 마이그레이션 예시 |
+| `api/src/main/resources/db/migration/V2__add_role_to_users.sql` | 컬럼 추가 마이그레이션 예시 |
 
 ## Workflow
 
