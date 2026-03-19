@@ -64,9 +64,3 @@ jobs:
 
       - name: 테스트
         run: ./gradlew test --no-daemon
-        env:
-          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/ieum_test
-          SPRING_DATASOURCE_USERNAME: ieum
-          SPRING_DATASOURCE_PASSWORD: ieum1234
-          SPRING_REDIS_HOST: localhost
-          SPRING_REDIS_PORT: 6379

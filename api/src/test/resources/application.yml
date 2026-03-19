@@ -1,0 +1,50 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/ieum_test
+    username: ieum
+    password: ieum1234
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            client-id: test-client-id
+            client-secret: test-client-secret
+            scope: email, profile
+
+jwt:
+  secret: test-jwt-secret-key-for-testing-purposes-only-min-256bits
+  expiration: 3600000
+  refresh-expiration: 86400000
+
+aes:
+  secret-key: test-aes-key-32-bytes-exactly!!x
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+server:
+  port: 8080
