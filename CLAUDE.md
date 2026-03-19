@@ -98,7 +98,8 @@ docker-compose up -d   # PostgreSQL 16 + Redis 7
 - DTO: Lombok `@Builder`, `@Getter`, Response에 `from()` 정적 팩토리 메서드
 - 엔티티: `@NoArgsConstructor(access = AccessLevel.PROTECTED)`, `FetchType.LAZY` 기본
 - Enum: `EnumType.STRING` 사용 (ORDINAL 금지)
-- 예외: common 모듈의 `IeumException` + `ErrorCode` enum
+- 예외: common 모듈의 `CustomException(ErrorCode)` 사용 — `RuntimeException`, `IllegalArgumentException` 직접 throw 금지
+- JWT 예외: `ExpiredJwtException` → `CustomException(ErrorCode.TOKEN_EXPIRED)`, `JwtException` → `CustomException(ErrorCode.TOKEN_INVALID)` 로 변환
 - API 응답: 공통 래퍼 `{ success, data, message }`
 - Service: `@Transactional(readOnly = true)` 기본, 쓰기는 메서드에 `@Transactional`
 - Controller: Swagger `@Tag`, `@Operation` 추가
