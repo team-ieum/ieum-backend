@@ -37,4 +37,4 @@ jwt:
   refresh-expiration: 604800000
 
 aes:
-  secret-key: test-aes-key-32bytes-padding!!!!!
+  secret-key: test-aes-key-32bytes-padding!!!!
