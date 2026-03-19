@@ -103,6 +103,29 @@ docker-compose up -d   # PostgreSQL 16 + Redis 7
 - Service: `@Transactional(readOnly = true)` 기본, 쓰기는 메서드에 `@Transactional`
 - Controller: Swagger `@Tag`, `@Operation` 추가
 
+## Repository 규칙
+Repository는 **커맨드용**과 **쿼리용**으로 분리하여 생성한다.
+
+| 종류 | 인터페이스 | 역할 |
+|------|-----------|------|
+| 커맨드 | `{Entity}Repository` | `JpaRepository` 상속 — 저장/삭제 등 쓰기 전용 |
+| 쿼리 | `{Entity}QueryRepository` | `JPAQueryFactory` 주입 — 조회 전용 (OpenFeign QueryDSL 사용) |
+
+### 규칙
+- 단순 PK 조회(`findById`)는 커맨드 Repository 사용
+- 조건부 조회, 정렬, 페이징 등 복잡한 조회는 반드시 쿼리 Repository에 구현
+- 쿼리 Repository는 인터페이스 없이 `@Repository` 클래스로 직접 구현
+- QueryDSL 라이브러리: `io.github.openfeign.querydsl` 7.1 (CVE-2024-49203 패치 버전)
+- Q클래스는 빌드 시 자동 생성 (`build/generated/sources/annotationProcessor`)
+- `orderBy()`에 사용자 입력값 직접 전달 금지 — 허용된 필드 whitelist로만 정렬
+
+### 예시 구조
+```
+repository/
+├── UserRepository.java         # JpaRepository<User, UUID>
+└── UserQueryRepository.java    # @Repository + JPAQueryFactory
+```
+
 ## Git 컨벤션
 - 브랜치: `main` → `develop` → `feature/<기능명>` (직접 push는 feature만)
 - 브랜치명: 영어 소문자 + 하이픈(-) 만 사용
