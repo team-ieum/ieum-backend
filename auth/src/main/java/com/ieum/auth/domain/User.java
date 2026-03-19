@@ -44,6 +44,10 @@ public class User extends BaseEntity {
     @Column(name = "provider_id", length = 255)
     private String providerId;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private UserRole role;
+
     public void updateName(String name) {
         this.name = name;
     }

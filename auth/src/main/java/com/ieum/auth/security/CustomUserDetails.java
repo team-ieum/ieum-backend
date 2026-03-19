@@ -24,16 +24,16 @@ public class CustomUserDetails implements UserDetails {
             user.getId(),
             user.getEmail(),
             user.getPasswordHash() != null ? user.getPasswordHash() : "",
-            Collections.singletonList(new SimpleGrantedAuthority("ROLE_USER"))
+            Collections.singletonList(new SimpleGrantedAuthority(user.getRole().name()))
         );
     }
 
-    public static CustomUserDetails of(UUID id, String email) {
+    public static CustomUserDetails of(UUID id, String email, String role) {
         return new CustomUserDetails(
             id,
             email,
             "",
-            Collections.singletonList(new SimpleGrantedAuthority("ROLE_USER"))
+            Collections.singletonList(new SimpleGrantedAuthority(role))
         );
     }
 

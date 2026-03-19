@@ -25,6 +25,10 @@ description: API 응답 포맷 및 예외 처리 규칙 준수 여부를 검증�
 | `common/src/main/java/com/ieum/common/exception/SuccessCode.java` | 성공 코드 enum |
 | `common/src/main/java/com/ieum/common/exception/CustomException.java` | 비즈니스 예외 클래스 |
 | `api/src/main/java/com/ieum/api/common/GlobalExceptionHandler.java` | 전역 예외 핸들러 |
+| `api/src/main/java/com/ieum/api/auth/controller/AuthController.java` | 인증 Controller |
+| `api/src/main/java/com/ieum/api/user/controller/UserController.java` | 사용자 Controller |
+| `auth/src/main/java/com/ieum/auth/service/AuthService.java` | 인증 Service |
+| `api/src/main/java/com/ieum/api/user/service/UserService.java` | 사용자 Service |
 
 ## Workflow
 
@@ -99,3 +103,4 @@ grep -rn "new CustomException(" --include="*.java" . | grep -v test
 3. **Controller가 아직 없는 경우** — Check 1은 Controller 파일이 0개면 PASS 처리
 4. **`@RestController` 없는 클래스** — Controller 어노테이션이 없는 클래스는 Check 1 제외
 5. **인터페이스/추상 클래스** — 구현체가 아닌 선언부는 Check 2 제외
+6. **JWT Filter/EntryPoint** — `JwtAuthenticationFilter`, `JwtAuthenticationEntryPoint`는 Controller/Service가 아니므로 Check 1, 2 제외

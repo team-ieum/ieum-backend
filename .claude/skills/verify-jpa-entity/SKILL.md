@@ -27,6 +27,8 @@ JPA 엔티티와 Repository가 프로젝트 규칙에 맞게 작성되었는지 
 | `auth/src/main/java/com/ieum/auth/repository/UserRepository.java` | 커맨드 Repository 예시 |
 | `auth/src/main/java/com/ieum/auth/repository/UserRepositoryCustom.java` | 쿼리 Repository 인터페이스 예시 |
 | `auth/src/main/java/com/ieum/auth/repository/UserRepositoryImpl.java` | 쿼리 Repository 구현체 예시 |
+| `auth/src/main/java/com/ieum/auth/domain/RefreshToken.java` | Redis 도메인 예시 (`@RedisHash`) |
+| `auth/src/main/java/com/ieum/auth/repository/RefreshTokenRepository.java` | Redis CrudRepository 예시 |
 
 ## Workflow
 
@@ -139,3 +141,5 @@ grep -rn "FetchType\.EAGER" --include="*.java" . | grep -v test | grep -v build
 3. **단일 단어 필드** — `email`, `name`, `id` 등 단일 단어 필드는 `@Column(name)` 생략 가능
 4. **빌드 생성 파일** — `build/` 하위 Q클래스는 검사 제외
 5. **@AllArgsConstructor(access = AccessLevel.PRIVATE)** — 엔티티에서 PRIVATE은 Builder 패턴과 함께 허용
+6. **@RedisHash 도메인** — `RefreshToken` 등 Redis 엔티티는 `@Entity`가 없으므로 Check 1, 2 제외. `BaseEntity` 상속 불필요
+7. **CrudRepository (Redis용)** — `RefreshTokenRepository`처럼 `CrudRepository`를 상속하는 Redis Repository는 Check 5(JpaRepository 쌍 검사) 제외
