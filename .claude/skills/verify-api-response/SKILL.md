@@ -25,6 +25,12 @@ description: API 응답 포맷 및 예외 처리 규칙 준수 여부를 검증�
 | `common/src/main/java/com/ieum/common/exception/SuccessCode.java` | 성공 코드 enum |
 | `common/src/main/java/com/ieum/common/exception/CustomException.java` | 비즈니스 예외 클래스 |
 | `api/src/main/java/com/ieum/api/common/GlobalExceptionHandler.java` | 전역 예외 핸들러 |
+| `api/src/main/java/com/ieum/api/auth/controller/AuthController.java` | 인증 Controller |
+| `api/src/main/java/com/ieum/api/auth/controller/AuthControllerDocs.java` | 인증 Controller Docs 인터페이스 |
+| `api/src/main/java/com/ieum/api/user/controller/UserController.java` | 사용자 Controller |
+| `api/src/main/java/com/ieum/api/user/controller/UserControllerDocs.java` | 사용자 Controller Docs 인터페이스 |
+| `auth/src/main/java/com/ieum/auth/service/AuthService.java` | 인증 Service |
+| `api/src/main/java/com/ieum/api/user/service/UserService.java` | 사용자 Service |
 
 ## Workflow
 
@@ -90,6 +96,34 @@ grep -rn "new CustomException(" --include="*.java" . | grep -v test
 **PASS:** 모든 결과에 `ErrorCode.` 포함
 **FAIL:** `ErrorCode` 없이 생성된 경우
 
+### Check 6: Controller — *ControllerDocs 인터페이스 implements 확인
+
+모든 `*Controller.java`는 대응하는 `*ControllerDocs` 인터페이스를 implements해야 합니다.
+
+```bash
+# @RestController(Advice 아님)가 있는 파일 중 ControllerDocs를 implements하지 않는 경우 탐지
+# "@RestController$" 패턴으로 @RestControllerAdvice와 구분
+grep -rln "@RestController$" --include="*.java" . | grep -v test | grep -v build | \
+  xargs grep -L "implements.*ControllerDocs"
+```
+
+**PASS:** 결과가 없음 (모든 @RestController가 *ControllerDocs implements)
+**FAIL:** 1건 이상 — `implements {ControllerName}Docs` 추가 및 Docs 인터페이스 생성 필요
+
+### Check 7: Swagger 어노테이션이 Docs 인터페이스에만 있는지 확인
+
+`@Tag`, `@Operation` 등 Swagger 어노테이션은 `*ControllerDocs.java`에만 있어야 합니다.
+`*Controller.java` 구현 클래스에는 절대 선언하지 않습니다.
+
+```bash
+# @Tag 또는 @Operation이 Docs가 아닌 Controller 클래스에 있는지 탐지
+grep -rn "@Tag\|@Operation\|@io\.swagger" --include="*Controller.java" . | \
+  grep -v "Docs" | grep -v test | grep -v build
+```
+
+**PASS:** 결과가 없음 (0건)
+**FAIL:** 1건 이상 — 해당 어노테이션을 `*ControllerDocs.java`로 이동 필요
+
 ## 예외사항
 
 다음은 **위반이 아닙니다**:
@@ -99,3 +133,5 @@ grep -rn "new CustomException(" --include="*.java" . | grep -v test
 3. **Controller가 아직 없는 경우** — Check 1은 Controller 파일이 0개면 PASS 처리
 4. **`@RestController` 없는 클래스** — Controller 어노테이션이 없는 클래스는 Check 1 제외
 5. **인터페이스/추상 클래스** — 구현체가 아닌 선언부는 Check 2 제외
+6. **JWT Filter/EntryPoint** — `JwtAuthenticationFilter`, `JwtAuthenticationEntryPoint`는 Controller/Service가 아니므로 Check 1, 2 제외
+7. **`*ControllerDocs.java` 파일 자체** — Check 6 대상에서 제외 (Docs 인터페이스는 @RestController 없음)

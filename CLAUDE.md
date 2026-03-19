@@ -98,10 +98,34 @@ docker-compose up -d   # PostgreSQL 16 + Redis 7
 - DTO: Lombok `@Builder`, `@Getter`, Response에 `from()` 정적 팩토리 메서드
 - 엔티티: `@NoArgsConstructor(access = AccessLevel.PROTECTED)`, `FetchType.LAZY` 기본
 - Enum: `EnumType.STRING` 사용 (ORDINAL 금지)
-- 예외: common 모듈의 `IeumException` + `ErrorCode` enum
+- 예외: common 모듈의 `CustomException(ErrorCode)` 사용 — `RuntimeException`, `IllegalArgumentException` 직접 throw 금지
+- JWT 예외: `ExpiredJwtException` → `CustomException(ErrorCode.TOKEN_EXPIRED)`, `JwtException` → `CustomException(ErrorCode.TOKEN_INVALID)` 로 변환
 - API 응답: 공통 래퍼 `{ success, data, message }`
 - Service: `@Transactional(readOnly = true)` 기본, 쓰기는 메서드에 `@Transactional`
 - Controller: Swagger `@Tag`, `@Operation` 추가
+
+## Repository 규칙
+Repository는 **커맨드용**과 **쿼리용**으로 분리하여 생성한다.
+
+| 종류 | 인터페이스 | 역할 |
+|------|-----------|------|
+| 커맨드 | `{Entity}Repository` | `JpaRepository` 상속 — 저장/삭제 등 쓰기 전용 |
+| 쿼리 | `{Entity}QueryRepository` | `JPAQueryFactory` 주입 — 조회 전용 (OpenFeign QueryDSL 사용) |
+
+### 규칙
+- 단순 PK 조회(`findById`)는 커맨드 Repository 사용
+- 조건부 조회, 정렬, 페이징 등 복잡한 조회는 반드시 쿼리 Repository에 구현
+- 쿼리 Repository는 인터페이스 없이 `@Repository` 클래스로 직접 구현
+- QueryDSL 라이브러리: `io.github.openfeign.querydsl` 7.1 (CVE-2024-49203 패치 버전)
+- Q클래스는 빌드 시 자동 생성 (`build/generated/sources/annotationProcessor`)
+- `orderBy()`에 사용자 입력값 직접 전달 금지 — 허용된 필드 whitelist로만 정렬
+
+### 예시 구조
+```
+repository/
+├── UserRepository.java         # JpaRepository<User, UUID>
+└── UserQueryRepository.java    # @Repository + JPAQueryFactory
+```
 
 ## Git 컨벤션
 - 브랜치: `main` → `develop` → `feature/<기능명>` (직접 push는 feature만)
@@ -138,6 +162,9 @@ docker-compose up -d   # PostgreSQL 16 + Redis 7
 | `jpa-entity` | JPA 엔티티 설계 패턴 (PostgreSQL 기반) |
 | `exception-handling` | 공통 예외 처리 패턴 (CustomException + ErrorCode) |
 | `verify-api-response` | API 응답 포맷 및 예외 처리 규칙 준수 여부 검증 |
+| `verify-jpa-entity` | JPA 엔티티 및 Repository 규칙 준수 여부 검증 (BaseEntity 상속, EnumType.STRING, Repository 분리) |
+| `verify-db-migration` | Flyway DB 마이그레이션 규칙 준수 여부 검증 |
+| `verify-security` | Spring Security 설정 및 JWT 인증 레이어 규칙 준수 여부 검증 |
 | `ai-integration` | AI 모듈 연동 패턴 (Claude, OpenAI 등) |
 | `new-module` | Gradle 서브모듈 추가 절차 |
 | `verify-implementation` | 프로젝트의 모든 verify 스킬을 순차 실행하여 통합 검증 보고서를 생성합니다 |
