@@ -23,6 +23,7 @@ Thumbbs.db
 # Claude Code (개인 설정만 제외)
 .claude/settings.local.json
 .claude/todos/
+.claude/worktrees/
 
 # Terraform
 *.tfstate
