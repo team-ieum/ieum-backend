@@ -23,6 +23,7 @@ public class CredentialService {
     private final CredentialRepository credentialRepository;
     private final CredentialQueryRepository credentialQueryRepository;
     private final AesEncryptor aesEncryptor;
+    private final CredentialValidator credentialValidator;
 
     @Transactional
     public Credential create(UUID userId, AiProvider provider, CredentialType credentialType,
@@ -66,6 +67,15 @@ public class CredentialService {
         Credential credential = credentialRepository.findById(credentialId)
                 .orElseThrow(() -> new CustomException(ErrorCode.NOT_FOUND));
         return aesEncryptor.decrypt(credential.getEncryptedApiKey());
+    }
+
+    @Transactional
+    public boolean validateCredential(UUID credentialId, UUID userId) {
+        Credential credential = getByIdAndUserId(credentialId, userId);
+        String decryptedKey = aesEncryptor.decrypt(credential.getEncryptedApiKey());
+        boolean result = credentialValidator.validate(credential.getProvider(), decryptedKey);
+        credential.updateValidation(result);
+        return result;
     }
 
     @Transactional

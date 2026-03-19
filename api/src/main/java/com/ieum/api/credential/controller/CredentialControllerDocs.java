@@ -2,6 +2,7 @@ package com.ieum.api.credential.controller;
 
 import com.ieum.api.credential.dto.CreateCredentialRequest;
 import com.ieum.api.credential.dto.CredentialResponse;
+import com.ieum.api.credential.dto.ValidateCredentialResponse;
 import com.ieum.auth.security.CustomUserDetails;
 import com.ieum.common.dto.ApiResponse;
 import io.swagger.v3.oas.annotations.Operation;
@@ -29,4 +30,8 @@ public interface CredentialControllerDocs {
     @Operation(summary = "크레덴셜 삭제")
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<Void>> delete(CustomUserDetails userDetails, UUID id);
+
+    @Operation(summary = "크레덴셜 유효성 검증")
+    @PreAuthorize("hasRole('USER')")
+    ResponseEntity<ApiResponse<ValidateCredentialResponse>> validate(CustomUserDetails userDetails, UUID id);
 }
