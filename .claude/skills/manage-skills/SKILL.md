@@ -31,6 +31,8 @@ argument-hint: "[선택사항: 특정 스킬 이름 또는 집중할 영역]"
 | 스킬 | 설명 | 커버 파일 패턴 |
 |------|------|---------------|
 | `verify-api-response` | API 응답 포맷 및 예외 처리 규칙 검증 | `**/dto/ApiResponse.java`, `**/dto/PageResponse.java`, `**/exception/*.java`, `**/common/GlobalExceptionHandler.java`, `**/controller/*Controller.java`, `**/service/*Service.java` |
+| `verify-jpa-entity` | JPA 엔티티 및 Repository 규칙 검증 | `**/entity/*.java`, `**/domain/*.java`, `**/repository/*Repository.java`, `**/repository/*RepositoryCustom.java`, `**/repository/*RepositoryImpl.java`, `**/config/JpaAuditingConfig.java`, `**/config/QueryDslConfig.java` |
+| `verify-db-migration` | Flyway DB 마이그레이션 규칙 검증 | `**/db/migration/V*.sql` |
 
 ## 워크플로우
 

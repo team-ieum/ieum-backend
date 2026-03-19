@@ -30,6 +30,8 @@ argument-hint: "[선택사항: 특정 verify 스킬 이름]"
 | # | 스킬 | 설명 |
 |---|------|------|
 | 1 | `verify-api-response` | API 응답 포맷 및 예외 처리 규칙 검증 |
+| 2 | `verify-jpa-entity` | JPA 엔티티 및 Repository 규칙 검증 |
+| 3 | `verify-db-migration` | Flyway DB 마이그레이션 규칙 검증 |
 
 ## 워크플로우
 
