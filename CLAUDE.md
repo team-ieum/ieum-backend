@@ -164,6 +164,7 @@ repository/
 | `verify-api-response` | API 응답 포맷 및 예외 처리 규칙 준수 여부 검증 |
 | `verify-jpa-entity` | JPA 엔티티 및 Repository 규칙 준수 여부 검증 (BaseEntity 상속, EnumType.STRING, Repository 분리) |
 | `verify-db-migration` | Flyway DB 마이그레이션 규칙 준수 여부 검증 |
+| `verify-security` | Spring Security 설정 및 JWT 인증 레이어 규칙 준수 여부 검증 |
 | `ai-integration` | AI 모듈 연동 패턴 (Claude, OpenAI 등) |
 | `new-module` | Gradle 서브모듈 추가 절차 |
 | `verify-implementation` | 프로젝트의 모든 verify 스킬을 순차 실행하여 통합 검증 보고서를 생성합니다 |

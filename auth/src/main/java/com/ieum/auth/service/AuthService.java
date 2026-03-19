@@ -3,6 +3,7 @@ package com.ieum.auth.service;
 import com.ieum.auth.domain.AuthProvider;
 import com.ieum.auth.domain.RefreshToken;
 import com.ieum.auth.domain.User;
+import com.ieum.auth.domain.UserRole;
 import com.ieum.auth.dto.TokenInfo;
 import com.ieum.auth.jwt.JwtTokenProvider;
 import com.ieum.auth.repository.RefreshTokenRepository;
@@ -39,6 +40,7 @@ public class AuthService {
             .passwordHash(passwordEncoder.encode(password))
             .name(name)
             .provider(AuthProvider.LOCAL)
+            .role(UserRole.ROLE_USER)
             .build();
         return userRepository.save(user);
     }
@@ -52,7 +54,7 @@ public class AuthService {
             throw new CustomException(ErrorCode.INVALID_CREDENTIALS);
         }
 
-        String accessToken = jwtTokenProvider.generateAccessToken(user.getId(), user.getEmail());
+        String accessToken = jwtTokenProvider.generateAccessToken(user.getId(), user.getEmail(), user.getRole().name());
         String refreshToken = jwtTokenProvider.generateRefreshToken(user.getId());
 
         refreshTokenRepository.save(RefreshToken.builder()
@@ -83,7 +85,7 @@ public class AuthService {
         User user = userRepository.findById(userId)
             .orElseThrow(() -> new CustomException(ErrorCode.NOT_FOUND));
 
-        String newAccessToken = jwtTokenProvider.generateAccessToken(user.getId(), user.getEmail());
+        String newAccessToken = jwtTokenProvider.generateAccessToken(user.getId(), user.getEmail(), user.getRole().name());
         long expiresIn = jwtTokenProvider.getExpiration(newAccessToken) / 1000;
 
         return new TokenInfo(newAccessToken, refreshToken, expiresIn);
