@@ -49,7 +49,8 @@ public class OAuth2AuthenticationSuccessHandler extends SimpleUrlAuthenticationS
             .ttl(refreshExpiration / 1000)
             .build());
 
-        long expiresIn = jwtTokenProvider.getExpiration(accessToken) / 1000;
+        long expiresIn = jwtTokenProvider.getAccessTokenExpiration();
+
         String code = UUID.randomUUID().toString();
         oAuthAuthorizationCodeRepository.save(OAuthAuthorizationCode.builder()
             .code(code)
