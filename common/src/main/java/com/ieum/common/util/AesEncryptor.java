@@ -3,9 +3,11 @@ package com.ieum.common.util;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import jakarta.annotation.PostConstruct;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
@@ -14,6 +16,7 @@ import java.util.Base64;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
+@Slf4j
 @Component
 public class AesEncryptor {
 
@@ -72,8 +75,15 @@ public class AesEncryptor {
 
             byte[] decrypted = cipher.doFinal(cipherText);
             return new String(decrypted, UTF_8);
+        } catch (IllegalArgumentException e) {
+            log.error("[AesEncryptor] Base64 디코딩 실패 - 저장된 데이터가 손상되었을 수 있습니다", e);
+            throw new CustomException(ErrorCode.CREDENTIAL_DECRYPT_FAILED);
+        } catch (AEADBadTagException e) {
+            log.error("[AesEncryptor] GCM 태그 검증 실패 - 키 불일치 또는 데이터 변조 의심", e);
+            throw new CustomException(ErrorCode.CREDENTIAL_DECRYPT_FAILED);
         } catch (Exception e) {
-            throw new CustomException(ErrorCode.INTERNAL_SERVER_ERROR, "Decryption failed");
+            log.error("[AesEncryptor] 복호화 중 예상치 못한 예외 발생", e);
+            throw new CustomException(ErrorCode.CREDENTIAL_DECRYPT_FAILED);
         }
     }
 }
