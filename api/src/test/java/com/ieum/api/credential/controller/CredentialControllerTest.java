@@ -5,6 +5,7 @@ import com.ieum.ai.credential.domain.AiProvider;
 import com.ieum.ai.credential.domain.Credential;
 import com.ieum.ai.credential.domain.CredentialType;
 import com.ieum.ai.credential.service.CredentialService;
+import com.ieum.ai.credential.service.CredentialValidationResult;
 import com.ieum.api.common.GlobalExceptionHandler;
 import com.ieum.auth.security.CustomUserDetails;
 import com.ieum.common.exception.CustomException;
@@ -176,7 +177,7 @@ class CredentialControllerTest {
     @Test
     void validate_validKey_returns200WithTrue() throws Exception {
         Credential credential = buildCredential();
-        given(credentialService.validateCredential(credentialId, userId)).willReturn(true);
+        given(credentialService.validateCredential(credentialId, userId)).willReturn(CredentialValidationResult.success());
         given(credentialService.getByIdAndUserId(credentialId, userId)).willReturn(credential);
 
         mockMvc.perform(post("/api/v1/credentials/" + credentialId + "/validate"))
@@ -188,12 +189,14 @@ class CredentialControllerTest {
     @Test
     void validate_invalidKey_returns200WithFalse() throws Exception {
         Credential credential = buildCredential();
-        given(credentialService.validateCredential(credentialId, userId)).willReturn(false);
+        given(credentialService.validateCredential(credentialId, userId))
+                .willReturn(CredentialValidationResult.failed("API 키가 유효하지 않습니다."));
         given(credentialService.getByIdAndUserId(credentialId, userId)).willReturn(credential);
 
         mockMvc.perform(post("/api/v1/credentials/" + credentialId + "/validate"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.valid").value(false));
+                .andExpect(jsonPath("$.data.valid").value(false))
+                .andExpect(jsonPath("$.data.failureReason").value("API 키가 유효하지 않습니다."));
     }
 
     // ===== 헬퍼 =====

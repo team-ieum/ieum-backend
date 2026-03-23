@@ -4,6 +4,7 @@ import com.ieum.ai.credential.domain.AiProvider;
 import com.ieum.ai.credential.domain.Credential;
 import com.ieum.ai.credential.domain.CredentialType;
 import com.ieum.ai.credential.service.CredentialService;
+import com.ieum.ai.credential.service.CredentialValidationResult;
 import com.ieum.api.credential.dto.CreateCredentialRequest;
 import com.ieum.api.credential.dto.CredentialResponse;
 import com.ieum.api.credential.dto.ValidateCredentialResponse;
@@ -78,12 +79,13 @@ public class CredentialController implements CredentialControllerDocs {
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable UUID id) {
 
-        boolean isValid = credentialService.validateCredential(id, userDetails.getId());
+        CredentialValidationResult result = credentialService.validateCredential(id, userDetails.getId());
         Credential credential = credentialService.getByIdAndUserId(id, userDetails.getId());
 
         ValidateCredentialResponse response = ValidateCredentialResponse.builder()
-                .isValid(isValid)
+                .isValid(result.valid())
                 .provider(credential.getProvider().name())
+                .failureReason(result.failureReason())
                 .build();
 
         return ResponseEntity.ok(ApiResponse.ok(response));
