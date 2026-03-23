@@ -5,6 +5,7 @@ import com.ieum.auth.jwt.JwtAuthenticationFilter;
 import com.ieum.auth.security.CustomOAuth2UserService;
 import com.ieum.auth.security.CustomUserDetailsService;
 import com.ieum.auth.security.HttpCookieOAuth2AuthorizationRequestRepository;
+import com.ieum.auth.security.OAuth2AuthenticationFailureHandler;
 import com.ieum.auth.security.OAuth2AuthenticationSuccessHandler;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
@@ -30,6 +31,8 @@ public class SecurityConfig {
     private final CustomUserDetailsService customUserDetailsService;
     private final CustomOAuth2UserService customOAuth2UserService;
     private final OAuth2AuthenticationSuccessHandler oAuth2AuthenticationSuccessHandler;
+    private final OAuth2AuthenticationFailureHandler oAuth2AuthenticationFailureHandler;
+    private final HttpCookieOAuth2AuthorizationRequestRepository cookieAuthorizationRequestRepository;
 
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -63,7 +66,8 @@ public class SecurityConfig {
                     .baseUri("/api/v1/auth/*/callback"))
                 .userInfoEndpoint(userInfo -> userInfo
                     .userService(customOAuth2UserService))
-                .successHandler(oAuth2AuthenticationSuccessHandler))
+                .successHandler(oAuth2AuthenticationSuccessHandler)
+                .failureHandler(oAuth2AuthenticationFailureHandler))
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
