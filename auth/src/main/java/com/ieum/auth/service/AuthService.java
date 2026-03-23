@@ -66,7 +66,7 @@ public class AuthService {
             .ttl(refreshExpiration / 1000)
             .build());
 
-        long expiresIn = jwtTokenProvider.getExpiration(accessToken) / 1000;
+        long expiresIn = jwtTokenProvider.getAccessTokenExpiration();
         return new TokenInfo(accessToken, refreshToken, expiresIn);
     }
 
@@ -89,7 +89,7 @@ public class AuthService {
             .orElseThrow(() -> new CustomException(ErrorCode.NOT_FOUND));
 
         String newAccessToken = jwtTokenProvider.generateAccessToken(user.getId(), user.getEmail(), user.getRole().name());
-        long expiresIn = jwtTokenProvider.getExpiration(newAccessToken) / 1000;
+        long expiresIn = jwtTokenProvider.getAccessTokenExpiration();
 
         return new TokenInfo(newAccessToken, refreshToken, expiresIn);
     }
