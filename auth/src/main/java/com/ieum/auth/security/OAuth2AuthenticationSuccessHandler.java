@@ -2,14 +2,10 @@ package com.ieum.auth.security;
 
 import com.ieum.auth.domain.OAuthAuthorizationCode;
 import com.ieum.auth.domain.RefreshToken;
-import com.ieum.auth.domain.AuthProvider;
 import com.ieum.auth.domain.User;
 import com.ieum.auth.jwt.JwtTokenProvider;
 import com.ieum.auth.repository.OAuthAuthorizationCodeRepository;
 import com.ieum.auth.repository.RefreshTokenRepository;
-import com.ieum.auth.repository.UserRepository;
-import com.ieum.common.exception.CustomException;
-import com.ieum.common.exception.ErrorCode;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
@@ -28,7 +24,6 @@ public class OAuth2AuthenticationSuccessHandler extends SimpleUrlAuthenticationS
     private static final long OAUTH_CODE_TTL_SECONDS = 30L;
 
     private final JwtTokenProvider jwtTokenProvider;
-    private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
     private final OAuthAuthorizationCodeRepository oAuthAuthorizationCodeRepository;
 
@@ -41,11 +36,8 @@ public class OAuth2AuthenticationSuccessHandler extends SimpleUrlAuthenticationS
     @Override
     public void onAuthenticationSuccess(HttpServletRequest request, HttpServletResponse response,
         Authentication authentication) throws IOException {
-        OAuth2User oAuth2User = (OAuth2User) authentication.getPrincipal();
-        String providerId = oAuth2User.getAttribute("sub");
-
-        User user = userRepository.findByProviderAndProviderId(AuthProvider.GOOGLE, providerId)
-            .orElseThrow(() -> new CustomException(ErrorCode.NOT_FOUND));
+        CustomOAuth2User oAuth2User = (CustomOAuth2User) authentication.getPrincipal();
+        User user = oAuth2User.getUser();
 
         String accessToken = jwtTokenProvider.generateAccessToken(
             user.getId(), user.getEmail(), user.getRole().name());

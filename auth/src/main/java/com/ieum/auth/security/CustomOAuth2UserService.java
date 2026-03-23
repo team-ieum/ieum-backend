@@ -33,18 +33,6 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
         String name = oAuth2User.getAttribute("name");
         String providerId = oAuth2User.getAttribute("sub");
 
-        userRepository.findByProviderAndProviderId(AuthProvider.GOOGLE, providerId)
-            .orElseGet(() -> userRepository.save(
-                User.builder()
-                    .email(email)
-                    .name(name)
-                    .provider(AuthProvider.GOOGLE)
-                    .providerId(providerId)
-                    .role(UserRole.ROLE_USER)
-                    .build()
-            ));
-
-        return oAuth2User;
         User user = userRepository.findByProviderAndProviderId(AuthProvider.GOOGLE, providerId)
             .orElseGet(() -> {
                 if (userRepository.existsByEmail(email)) {
