@@ -4,6 +4,7 @@ import com.ieum.auth.jwt.JwtAuthenticationEntryPoint;
 import com.ieum.auth.jwt.JwtAuthenticationFilter;
 import com.ieum.auth.security.CustomOAuth2UserService;
 import com.ieum.auth.security.CustomUserDetailsService;
+import com.ieum.auth.security.HttpCookieOAuth2AuthorizationRequestRepository;
 import com.ieum.auth.security.OAuth2AuthenticationSuccessHandler;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
@@ -51,14 +52,13 @@ public class SecurityConfig {
                     "/swagger-ui/**",
                     "/v3/api-docs/**",
                     "/webhooks/**",
-                    "/actuator/**",
-                    "/oauth2/**",
-                    "/login/oauth2/**"
+                    "/actuator/**"
                 ).permitAll()
                 .anyRequest().authenticated())
             .oauth2Login(oauth2 -> oauth2
                 .authorizationEndpoint(auth -> auth
-                    .baseUri("/api/v1/auth"))
+                    .baseUri("/api/v1/auth")
+                    .authorizationRequestRepository(cookieAuthorizationRequestRepository))
                 .redirectionEndpoint(redirect -> redirect
                     .baseUri("/api/v1/auth/*/callback"))
                 .userInfoEndpoint(userInfo -> userInfo
