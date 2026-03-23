@@ -61,8 +61,28 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
                 );
             });
 
+        saveOrUpdateConnectedAccount(user, userRequest);
 
         return new CustomOAuth2User(oAuth2User, user);
+    }
 
+    private void saveOrUpdateConnectedAccount(User user, OAuth2UserRequest userRequest) {
+        String encryptedToken = aesEncryptionService.encrypt(
+            userRequest.getAccessToken().getTokenValue()
+        );
+        String scopes = String.join(" ", userRequest.getAccessToken().getScopes());
+
+        connectedAccountRepository.findByUserIdAndProvider(user.getId(), AuthProvider.GOOGLE)
+            .ifPresentOrElse(
+                account -> account.updateTokenAndScopes(encryptedToken, scopes),
+                () -> connectedAccountRepository.save(
+                    ConnectedAccount.builder()
+                        .userId(user.getId())
+                        .provider(AuthProvider.GOOGLE)
+                        .accessToken(encryptedToken)
+                        .scopes(scopes)
+                        .build()
+                )
+            );
     }
 }
