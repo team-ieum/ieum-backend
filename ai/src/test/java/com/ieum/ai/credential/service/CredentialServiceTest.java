@@ -40,6 +40,8 @@ class CredentialServiceTest {
 
     @Test
     void create_success() {
+        given(credentialQueryRepository.existsByUserIdAndProviderAndDisplayName(userId, AiProvider.CLAUDE, "My Claude Key")).willReturn(false);
+        given(credentialQueryRepository.countByUserId(userId)).willReturn(0L);
         given(aesEncryptor.encrypt(anyString())).willReturn("encrypted-key");
         Credential saved = buildCredential();
         given(credentialRepository.save(any())).willReturn(saved);
@@ -49,6 +51,45 @@ class CredentialServiceTest {
 
         assertThat(result).isEqualTo(saved);
         then(credentialRepository).should().save(any(Credential.class));
+    }
+
+    @Test
+    void create_invalidKeyFormat_throwsInvalidApiKeyFormat() {
+        assertThatThrownBy(() -> credentialService.create(userId, AiProvider.CLAUDE,
+                CredentialType.API_KEY, "My Key", "invalid-format-key-here"))
+                .isInstanceOf(CustomException.class)
+                .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.INVALID_API_KEY_FORMAT));
+
+        then(credentialRepository).should(never()).save(any());
+    }
+
+    @Test
+    void create_duplicateDisplayName_throwsCredentialDuplicateName() {
+        given(credentialQueryRepository.existsByUserIdAndProviderAndDisplayName(
+                userId, AiProvider.CLAUDE, "My Claude Key")).willReturn(true);
+
+        assertThatThrownBy(() -> credentialService.create(userId, AiProvider.CLAUDE,
+                CredentialType.API_KEY, "My Claude Key", "sk-ant-api03-testkey12345"))
+                .isInstanceOf(CustomException.class)
+                .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.CREDENTIAL_DUPLICATE_NAME));
+
+        then(credentialRepository).should(never()).save(any());
+    }
+
+    @Test
+    void create_limitExceeded_throwsCredentialLimitExceeded() {
+        given(credentialQueryRepository.existsByUserIdAndProviderAndDisplayName(any(), any(), anyString())).willReturn(false);
+        given(credentialQueryRepository.countByUserId(userId)).willReturn(10L);
+
+        assertThatThrownBy(() -> credentialService.create(userId, AiProvider.CLAUDE,
+                CredentialType.API_KEY, "My Key", "sk-ant-api03-testkey12345"))
+                .isInstanceOf(CustomException.class)
+                .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.CREDENTIAL_LIMIT_EXCEEDED));
+
+        then(credentialRepository).should(never()).save(any());
     }
 
     @Test

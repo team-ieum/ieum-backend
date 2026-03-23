@@ -20,6 +20,8 @@ import java.util.UUID;
 @Transactional(readOnly = true)
 public class CredentialService {
 
+    private static final int MAX_CREDENTIALS_PER_USER = 10;
+
     private final CredentialRepository credentialRepository;
     private final CredentialQueryRepository credentialQueryRepository;
     private final AesEncryptor aesEncryptor;
@@ -30,6 +32,17 @@ public class CredentialService {
                              String displayName, String rawApiKey) {
         if (rawApiKey == null || rawApiKey.isBlank()) {
             throw new CustomException(ErrorCode.INVALID_INPUT);
+        }
+
+        ApiKeyFormatValidator.validate(provider, rawApiKey);
+
+        if (credentialQueryRepository.existsByUserIdAndProviderAndDisplayName(userId, provider, displayName)) {
+            throw new CustomException(ErrorCode.CREDENTIAL_DUPLICATE_NAME);
+        }
+
+        if (credentialQueryRepository.countByUserId(userId) >= MAX_CREDENTIALS_PER_USER) {
+            throw new CustomException(ErrorCode.CREDENTIAL_LIMIT_EXCEEDED,
+                    "크레덴셜은 최대 " + MAX_CREDENTIALS_PER_USER + "개까지 등록할 수 있습니다.");
         }
 
         String encryptedApiKey = aesEncryptor.encrypt(rawApiKey);
