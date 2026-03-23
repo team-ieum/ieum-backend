@@ -18,6 +18,7 @@ public enum ErrorCode {
     // 인증
     INVALID_CREDENTIALS(HttpStatus.BAD_REQUEST, "이메일 또는 비밀번호가 일치하지 않습니다."),
     EMAIL_ALREADY_EXISTS(HttpStatus.BAD_REQUEST, "이미 등록된 이메일입니다."),
+    SOCIAL_LOGIN_EMAIL_CONFLICT(HttpStatus.CONFLICT, "동일한 이메일로 가입된 계정이 있습니다. 이메일/비밀번호로 로그인해주세요."),
     TOKEN_EXPIRED(HttpStatus.UNAUTHORIZED, "만료된 토큰입니다."),
     TOKEN_INVALID(HttpStatus.UNAUTHORIZED, "유효하지 않은 토큰입니다."),
 

@@ -1,9 +1,13 @@
 package com.ieum.auth.security;
 
 import com.ieum.auth.domain.AuthProvider;
+import com.ieum.auth.domain.ConnectedAccount;
 import com.ieum.auth.domain.User;
 import com.ieum.auth.domain.UserRole;
+import com.ieum.auth.repository.ConnectedAccountRepository;
 import com.ieum.auth.repository.UserRepository;
+import com.ieum.common.exception.ErrorCode;
+import com.ieum.common.util.AesEncryptionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService;
 import org.springframework.security.oauth2.client.userinfo.OAuth2UserRequest;
@@ -17,6 +21,8 @@ import org.springframework.transaction.annotation.Transactional;
 public class CustomOAuth2UserService extends DefaultOAuth2UserService {
 
     private final UserRepository userRepository;
+    private final ConnectedAccountRepository connectedAccountRepository;
+    private final AesEncryptionService aesEncryptionService;
 
     @Override
     @Transactional
@@ -39,5 +45,24 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
             ));
 
         return oAuth2User;
+        User user = userRepository.findByProviderAndProviderId(AuthProvider.GOOGLE, providerId)
+            .orElseGet(() -> {
+                if (userRepository.existsByEmail(email)) {
+                    throw new OAuth2AuthenticationException(ErrorCode.SOCIAL_LOGIN_EMAIL_CONFLICT.name());
+                }
+                return userRepository.save(
+                    User.builder()
+                        .email(email)
+                        .name(name)
+                        .provider(AuthProvider.GOOGLE)
+                        .providerId(providerId)
+                        .role(UserRole.ROLE_USER)
+                        .build()
+                );
+            });
+
+
+        return new CustomOAuth2User(oAuth2User, user);
+
     }
 }
