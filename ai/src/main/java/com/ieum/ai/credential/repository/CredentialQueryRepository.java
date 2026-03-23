@@ -47,4 +47,12 @@ public class CredentialQueryRepository {
                 )
                 .fetchFirst() != null;
     }
+
+    public long countByUserId(UUID userId) {
+        return queryFactory
+                .select(credential.count())
+                .from(credential)
+                .where(credential.userId.eq(userId))
+                .fetchOne();
+    }
 }
