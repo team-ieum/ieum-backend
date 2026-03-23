@@ -3,7 +3,6 @@ package com.ieum.ai.credential.service;
 import com.ieum.ai.credential.domain.AiProvider;
 import com.ieum.ai.credential.domain.Credential;
 import com.ieum.ai.credential.domain.CredentialType;
-import com.ieum.ai.credential.service.CredentialValidationResult;
 import com.ieum.ai.credential.repository.CredentialQueryRepository;
 import com.ieum.ai.credential.repository.CredentialRepository;
 import com.ieum.common.exception.CustomException;

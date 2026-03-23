@@ -32,6 +32,7 @@ public enum ErrorCode {
     PROVIDER_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "AI 프로바이더 서버에 일시적인 장애가 발생했습니다. 잠시 후 다시 시도해주세요."),
     CREDENTIAL_VALIDATION_TIMEOUT(HttpStatus.GATEWAY_TIMEOUT, "AI 프로바이더 응답 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."),
     CREDENTIAL_VALIDATION_NETWORK_ERROR(HttpStatus.BAD_GATEWAY, "AI 프로바이더와의 연결에 실패했습니다. 네트워크 상태를 확인해주세요."),
+    CREDENTIAL_DECRYPT_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "크레덴셜 복호화에 실패했습니다. 데이터가 손상되었거나 암호화 키가 변경되었을 수 있습니다."),
 
     // 프롬프트 템플릿
     INVALID_PROMPT_TEMPLATE(HttpStatus.BAD_REQUEST, "프롬프트 템플릿 형식이 올바르지 않습니다."),

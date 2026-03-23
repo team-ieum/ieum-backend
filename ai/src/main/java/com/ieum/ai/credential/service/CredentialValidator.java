@@ -202,7 +202,7 @@ public class CredentialValidator {
                         "Gemini 서버 응답 시간이 초과되었습니다.");
             }
             throw new CustomException(ErrorCode.CREDENTIAL_VALIDATION_NETWORK_ERROR,
-                    "Gemini 서버에 연결할 수 없습니다: " + e.getMessage());
+                    "Gemini 서버에 연결할 수 없습니다.");
         } catch (HttpServerErrorException e) {
             throw new CustomException(ErrorCode.PROVIDER_UNAVAILABLE,
                     "Gemini 서버에 일시적 장애가 발생했습니다 (HTTP " + e.getStatusCode().value() + ").");
