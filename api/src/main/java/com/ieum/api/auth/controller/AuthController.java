@@ -58,7 +58,7 @@ public class AuthController implements AuthControllerDocs {
         return ResponseEntity.ok(ApiResponse.ok());
     }
 
-    @PostMapping("/token")
+    @PostMapping("/oauth/token")
     public ResponseEntity<ApiResponse<TokenResponse>> exchangeOAuthToken(
         @RequestBody @Valid OAuthTokenExchangeRequest request) {
 
