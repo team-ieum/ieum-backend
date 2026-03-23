@@ -6,6 +6,7 @@ import com.ieum.api.credential.dto.ValidateCredentialResponse;
 import com.ieum.auth.security.CustomUserDetails;
 import com.ieum.common.dto.ApiResponse;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.ResponseEntity;
@@ -29,9 +30,11 @@ public interface CredentialControllerDocs {
 
     @Operation(summary = "크레덴셜 삭제")
     @PreAuthorize("hasRole('USER')")
-    ResponseEntity<ApiResponse<Void>> delete(CustomUserDetails userDetails, UUID id);
+    ResponseEntity<ApiResponse<Void>> delete(CustomUserDetails userDetails,
+                                             @Parameter(description = "크레덴셜 ID") UUID id);
 
     @Operation(summary = "크레덴셜 유효성 검증")
     @PreAuthorize("hasRole('USER')")
-    ResponseEntity<ApiResponse<ValidateCredentialResponse>> validate(CustomUserDetails userDetails, UUID id);
+    ResponseEntity<ApiResponse<ValidateCredentialResponse>> validate(CustomUserDetails userDetails,
+                                                                     @Parameter(description = "크레덴셜 ID") UUID id);
 }
