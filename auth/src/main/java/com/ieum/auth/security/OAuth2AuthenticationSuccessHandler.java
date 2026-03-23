@@ -1,9 +1,11 @@
 package com.ieum.auth.security;
 
+import com.ieum.auth.domain.OAuthAuthorizationCode;
 import com.ieum.auth.domain.RefreshToken;
 import com.ieum.auth.domain.AuthProvider;
 import com.ieum.auth.domain.User;
 import com.ieum.auth.jwt.JwtTokenProvider;
+import com.ieum.auth.repository.OAuthAuthorizationCodeRepository;
 import com.ieum.auth.repository.RefreshTokenRepository;
 import com.ieum.auth.repository.UserRepository;
 import com.ieum.common.exception.CustomException;
@@ -11,10 +13,10 @@ import com.ieum.common.exception.ErrorCode;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.security.web.authentication.SimpleUrlAuthenticationSuccessHandler;
 import org.springframework.stereotype.Component;
 import org.springframework.web.util.UriComponentsBuilder;
@@ -23,9 +25,12 @@ import org.springframework.web.util.UriComponentsBuilder;
 @RequiredArgsConstructor
 public class OAuth2AuthenticationSuccessHandler extends SimpleUrlAuthenticationSuccessHandler {
 
+    private static final long OAUTH_CODE_TTL_SECONDS = 30L;
+
     private final JwtTokenProvider jwtTokenProvider;
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final OAuthAuthorizationCodeRepository oAuthAuthorizationCodeRepository;
 
     @Value("${oauth2.redirect-uri}")
     private String redirectUri;
@@ -53,11 +58,17 @@ public class OAuth2AuthenticationSuccessHandler extends SimpleUrlAuthenticationS
             .build());
 
         long expiresIn = jwtTokenProvider.getExpiration(accessToken) / 1000;
+        String code = UUID.randomUUID().toString();
+        oAuthAuthorizationCodeRepository.save(OAuthAuthorizationCode.builder()
+            .code(code)
+            .accessToken(accessToken)
+            .refreshToken(refreshToken)
+            .expiresIn(expiresIn)
+            .ttl(OAUTH_CODE_TTL_SECONDS)
+            .build());
 
         String targetUrl = UriComponentsBuilder.fromUriString(redirectUri)
-            .queryParam("access_token", accessToken)
-            .queryParam("refresh_token", refreshToken)
-            .queryParam("expires_in", expiresIn)
+            .queryParam("code", code)
             .build().toUriString();
 
         getRedirectStrategy().sendRedirect(request, response, targetUrl);
