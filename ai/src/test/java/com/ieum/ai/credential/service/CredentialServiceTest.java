@@ -3,6 +3,7 @@ package com.ieum.ai.credential.service;
 import com.ieum.ai.credential.domain.AiProvider;
 import com.ieum.ai.credential.domain.Credential;
 import com.ieum.ai.credential.domain.CredentialType;
+import com.ieum.ai.credential.service.CredentialValidationResult;
 import com.ieum.ai.credential.repository.CredentialQueryRepository;
 import com.ieum.ai.credential.repository.CredentialRepository;
 import com.ieum.common.exception.CustomException;
@@ -173,27 +174,31 @@ class CredentialServiceTest {
     // ===== validateCredential =====
 
     @Test
-    void validateCredential_valid_returnsTrue() {
+    void validateCredential_valid_returnsSuccess() {
         Credential credential = buildCredential();
         given(credentialRepository.findByIdAndUserId(credentialId, userId)).willReturn(Optional.of(credential));
         given(aesEncryptor.decrypt(anyString())).willReturn("sk-ant-api03-decrypted");
-        given(credentialValidator.validate(AiProvider.CLAUDE, "sk-ant-api03-decrypted")).willReturn(true);
+        given(credentialValidator.validate(AiProvider.CLAUDE, "sk-ant-api03-decrypted"))
+                .willReturn(CredentialValidationResult.success());
 
-        boolean result = credentialService.validateCredential(credentialId, userId);
+        CredentialValidationResult result = credentialService.validateCredential(credentialId, userId);
 
-        assertThat(result).isTrue();
+        assertThat(result.valid()).isTrue();
+        assertThat(result.failureReason()).isNull();
     }
 
     @Test
-    void validateCredential_invalid_returnsFalse() {
+    void validateCredential_invalid_returnsFailed() {
         Credential credential = buildCredential();
         given(credentialRepository.findByIdAndUserId(credentialId, userId)).willReturn(Optional.of(credential));
         given(aesEncryptor.decrypt(anyString())).willReturn("invalid-key");
-        given(credentialValidator.validate(AiProvider.CLAUDE, "invalid-key")).willReturn(false);
+        given(credentialValidator.validate(AiProvider.CLAUDE, "invalid-key"))
+                .willReturn(CredentialValidationResult.failed("API 키가 유효하지 않습니다."));
 
-        boolean result = credentialService.validateCredential(credentialId, userId);
+        CredentialValidationResult result = credentialService.validateCredential(credentialId, userId);
 
-        assertThat(result).isFalse();
+        assertThat(result.valid()).isFalse();
+        assertThat(result.failureReason()).isEqualTo("API 키가 유효하지 않습니다.");
     }
 
     // ===== 헬퍼 =====

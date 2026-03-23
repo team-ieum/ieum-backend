@@ -8,7 +8,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
+
+import java.net.SocketTimeoutException;
 
 @Slf4j
 @Service
@@ -17,7 +21,7 @@ public class CredentialValidator {
 
     private final RestTemplate restTemplate;
 
-    public boolean validate(AiProvider provider, String decryptedApiKey) {
+    public CredentialValidationResult validate(AiProvider provider, String decryptedApiKey) {
         return switch (provider) {
             case CLAUDE -> validateClaude(decryptedApiKey);
             case OPENAI -> validateOpenAI(decryptedApiKey);
@@ -25,7 +29,7 @@ public class CredentialValidator {
         };
     }
 
-    private boolean validateClaude(String apiKey) {
+    private CredentialValidationResult validateClaude(String apiKey) {
         try {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
@@ -46,33 +50,48 @@ public class CredentialValidator {
                     new HttpEntity<>(body, headers),
                     String.class
             );
-            return true;
+            return CredentialValidationResult.success();
         } catch (HttpClientErrorException e) {
-            if (e.getStatusCode() == HttpStatus.TOO_MANY_REQUESTS) {
-                if (isBillingError(e)) {
-                    throw new CustomException(ErrorCode.CREDENTIAL_NO_BILLING,
-                            "Claude 계정에 결제 수단이 등록되어 있지 않거나 크레딧이 부족합니다.");
-                }
-                return true;
+            int status = e.getStatusCode().value();
+            if (status == 429 && isBillingError(e)) {
+                throw new CustomException(ErrorCode.CREDENTIAL_NO_BILLING,
+                        "Claude 계정에 결제 수단이 등록되어 있지 않거나 크레딧이 부족합니다.");
             }
-            if (e.getStatusCode().value() == 402) {
+            if (status == 402) {
                 throw new CustomException(ErrorCode.CREDENTIAL_NO_BILLING,
                         "Claude 계정에 결제 수단이 등록되어 있지 않습니다.");
             }
-            if (e.getStatusCode() == HttpStatus.UNAUTHORIZED || e.getStatusCode() == HttpStatus.FORBIDDEN) {
-                return false;
+            if (status == 429) {
+                return CredentialValidationResult.success();
             }
-            log.warn("[CredentialValidator] Claude 검증 실패 - status: {}", e.getStatusCode());
-            return false;
+            if (status == 401 || status == 403) {
+                return CredentialValidationResult.failed("API 키가 유효하지 않습니다. 키를 확인해주세요.");
+            }
+            if (status >= 500) {
+                throw new CustomException(ErrorCode.PROVIDER_UNAVAILABLE,
+                        "Claude 서버에 일시적 장애가 발생했습니다 (HTTP " + status + "). 잠시 후 다시 시도해주세요.");
+            }
+            log.warn("[Claude] 검증 실패 - status: {}", e.getStatusCode());
+            return CredentialValidationResult.failed("검증 중 예상치 못한 오류가 발생했습니다 (HTTP " + status + ").");
+        } catch (ResourceAccessException e) {
+            if (e.getCause() instanceof SocketTimeoutException) {
+                throw new CustomException(ErrorCode.CREDENTIAL_VALIDATION_TIMEOUT,
+                        "Claude 서버 응답 시간이 초과되었습니다.");
+            }
+            throw new CustomException(ErrorCode.CREDENTIAL_VALIDATION_NETWORK_ERROR,
+                    "Claude 서버에 연결할 수 없습니다: " + e.getMessage());
+        } catch (HttpServerErrorException e) {
+            throw new CustomException(ErrorCode.PROVIDER_UNAVAILABLE,
+                    "Claude 서버에 일시적 장애가 발생했습니다 (HTTP " + e.getStatusCode().value() + ").");
         } catch (CustomException e) {
             throw e;
         } catch (Exception e) {
-            log.warn("[CredentialValidator] Claude 검증 중 예외 발생 - {}", e.getMessage());
-            return false;
+            log.error("[Claude] 검증 중 예상치 못한 예외 발생", e);
+            return CredentialValidationResult.failed("검증 중 알 수 없는 오류가 발생했습니다.");
         }
     }
 
-    private boolean validateOpenAI(String apiKey) {
+    private CredentialValidationResult validateOpenAI(String apiKey) {
         try {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
@@ -92,33 +111,48 @@ public class CredentialValidator {
                     new HttpEntity<>(body, headers),
                     String.class
             );
-            return true;
+            return CredentialValidationResult.success();
         } catch (HttpClientErrorException e) {
-            if (e.getStatusCode() == HttpStatus.TOO_MANY_REQUESTS) {
-                if (isBillingError(e)) {
-                    throw new CustomException(ErrorCode.CREDENTIAL_NO_BILLING,
-                            "OpenAI 계정에 결제 수단이 등록되어 있지 않거나 크레딧이 부족합니다.");
-                }
-                return true;
+            int status = e.getStatusCode().value();
+            if (status == 429 && isBillingError(e)) {
+                throw new CustomException(ErrorCode.CREDENTIAL_NO_BILLING,
+                        "OpenAI 계정에 결제 수단이 등록되어 있지 않거나 크레딧이 부족합니다.");
             }
-            if (e.getStatusCode().value() == 402) {
+            if (status == 402) {
                 throw new CustomException(ErrorCode.CREDENTIAL_NO_BILLING,
                         "OpenAI 계정에 결제 수단이 등록되어 있지 않습니다.");
             }
-            if (e.getStatusCode() == HttpStatus.UNAUTHORIZED || e.getStatusCode() == HttpStatus.FORBIDDEN) {
-                return false;
+            if (status == 429) {
+                return CredentialValidationResult.success();
             }
-            log.warn("[CredentialValidator] OpenAI 검증 실패 - status: {}", e.getStatusCode());
-            return false;
+            if (status == 401 || status == 403) {
+                return CredentialValidationResult.failed("API 키가 유효하지 않습니다. 키를 확인해주세요.");
+            }
+            if (status >= 500) {
+                throw new CustomException(ErrorCode.PROVIDER_UNAVAILABLE,
+                        "OpenAI 서버에 일시적 장애가 발생했습니다 (HTTP " + status + "). 잠시 후 다시 시도해주세요.");
+            }
+            log.warn("[OpenAI] 검증 실패 - status: {}", e.getStatusCode());
+            return CredentialValidationResult.failed("검증 중 예상치 못한 오류가 발생했습니다 (HTTP " + status + ").");
+        } catch (ResourceAccessException e) {
+            if (e.getCause() instanceof SocketTimeoutException) {
+                throw new CustomException(ErrorCode.CREDENTIAL_VALIDATION_TIMEOUT,
+                        "OpenAI 서버 응답 시간이 초과되었습니다.");
+            }
+            throw new CustomException(ErrorCode.CREDENTIAL_VALIDATION_NETWORK_ERROR,
+                    "OpenAI 서버에 연결할 수 없습니다: " + e.getMessage());
+        } catch (HttpServerErrorException e) {
+            throw new CustomException(ErrorCode.PROVIDER_UNAVAILABLE,
+                    "OpenAI 서버에 일시적 장애가 발생했습니다 (HTTP " + e.getStatusCode().value() + ").");
         } catch (CustomException e) {
             throw e;
         } catch (Exception e) {
-            log.warn("[CredentialValidator] OpenAI 검증 중 예외 발생 - {}", e.getMessage());
-            return false;
+            log.error("[OpenAI] 검증 중 예상치 못한 예외 발생", e);
+            return CredentialValidationResult.failed("검증 중 알 수 없는 오류가 발생했습니다.");
         }
     }
 
-    private boolean validateGemini(String apiKey) {
+    private CredentialValidationResult validateGemini(String apiKey) {
         try {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
@@ -136,29 +170,47 @@ public class CredentialValidator {
                     new HttpEntity<>(body, headers),
                     String.class
             );
-            return true;
+            return CredentialValidationResult.success();
         } catch (HttpClientErrorException e) {
-            if (e.getStatusCode() == HttpStatus.TOO_MANY_REQUESTS) {
-                if (isBillingError(e)) {
-                    throw new CustomException(ErrorCode.CREDENTIAL_NO_BILLING,
-                            "Gemini 계정에 결제 수단이 등록되어 있지 않거나 할당량이 초과되었습니다.");
-                }
-                return true;
+            int status = e.getStatusCode().value();
+            if (status == 429 && isBillingError(e)) {
+                throw new CustomException(ErrorCode.CREDENTIAL_NO_BILLING,
+                        "Gemini 계정에 결제 수단이 등록되어 있지 않거나 할당량이 초과되었습니다.");
             }
-            if (e.getStatusCode().value() == 402) {
+            if (status == 402) {
                 throw new CustomException(ErrorCode.CREDENTIAL_NO_BILLING,
                         "Gemini 계정에 결제 수단이 등록되어 있지 않습니다.");
             }
-            if (e.getStatusCode() == HttpStatus.BAD_REQUEST || e.getStatusCode() == HttpStatus.FORBIDDEN) {
-                return false;
+            if (status == 429) {
+                return CredentialValidationResult.success();
             }
-            log.warn("[CredentialValidator] Gemini 검증 실패 - status: {}", e.getStatusCode());
-            return false;
+            if (status == 401 || status == 403) {
+                return CredentialValidationResult.failed("API 키가 유효하지 않습니다. 키를 확인해주세요.");
+            }
+            if (status == 400) {
+                return CredentialValidationResult.failed("API 키가 유효하지 않습니다.");
+            }
+            if (status >= 500) {
+                throw new CustomException(ErrorCode.PROVIDER_UNAVAILABLE,
+                        "Gemini 서버에 일시적 장애가 발생했습니다 (HTTP " + status + "). 잠시 후 다시 시도해주세요.");
+            }
+            log.warn("[Gemini] 검증 실패 - status: {}", e.getStatusCode());
+            return CredentialValidationResult.failed("검증 중 예상치 못한 오류가 발생했습니다 (HTTP " + status + ").");
+        } catch (ResourceAccessException e) {
+            if (e.getCause() instanceof SocketTimeoutException) {
+                throw new CustomException(ErrorCode.CREDENTIAL_VALIDATION_TIMEOUT,
+                        "Gemini 서버 응답 시간이 초과되었습니다.");
+            }
+            throw new CustomException(ErrorCode.CREDENTIAL_VALIDATION_NETWORK_ERROR,
+                    "Gemini 서버에 연결할 수 없습니다: " + e.getMessage());
+        } catch (HttpServerErrorException e) {
+            throw new CustomException(ErrorCode.PROVIDER_UNAVAILABLE,
+                    "Gemini 서버에 일시적 장애가 발생했습니다 (HTTP " + e.getStatusCode().value() + ").");
         } catch (CustomException e) {
             throw e;
         } catch (Exception e) {
-            log.warn("[CredentialValidator] Gemini 검증 중 예외 발생 - {}", e.getMessage());
-            return false;
+            log.error("[Gemini] 검증 중 예상치 못한 예외 발생", e);
+            return CredentialValidationResult.failed("검증 중 알 수 없는 오류가 발생했습니다.");
         }
     }
 

@@ -83,11 +83,11 @@ public class CredentialService {
     }
 
     @Transactional
-    public boolean validateCredential(UUID credentialId, UUID userId) {
+    public CredentialValidationResult validateCredential(UUID credentialId, UUID userId) {
         Credential credential = getByIdAndUserId(credentialId, userId);
         String decryptedKey = aesEncryptor.decrypt(credential.getEncryptedApiKey());
-        boolean result = credentialValidator.validate(credential.getProvider(), decryptedKey);
-        credential.updateValidation(result);
+        CredentialValidationResult result = credentialValidator.validate(credential.getProvider(), decryptedKey);
+        credential.updateValidation(result.valid());
         return result;
     }
 
