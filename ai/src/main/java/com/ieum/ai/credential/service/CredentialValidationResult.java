@@ -2,13 +2,14 @@ package com.ieum.ai.credential.service;
 
 public record CredentialValidationResult(
         boolean valid,
-        String failureReason
+        String failureReason,
+        String provider
 ) {
-    public static CredentialValidationResult success() {
-        return new CredentialValidationResult(true, null);
+    public static CredentialValidationResult success(String provider) {
+        return new CredentialValidationResult(true, null, provider);
     }
 
-    public static CredentialValidationResult failed(String reason) {
-        return new CredentialValidationResult(false, reason);
+    public static CredentialValidationResult failed(String provider, String reason) {
+        return new CredentialValidationResult(false, reason, provider);
     }
 }

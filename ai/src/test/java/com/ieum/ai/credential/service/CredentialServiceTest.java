@@ -178,7 +178,7 @@ class CredentialServiceTest {
         given(credentialRepository.findByIdAndUserId(credentialId, userId)).willReturn(Optional.of(credential));
         given(aesEncryptor.decrypt(anyString())).willReturn("sk-ant-api03-decrypted");
         given(credentialValidator.validate(AiProvider.CLAUDE, "sk-ant-api03-decrypted"))
-                .willReturn(CredentialValidationResult.success());
+                .willReturn(CredentialValidationResult.success("CLAUDE"));
 
         CredentialValidationResult result = credentialService.validateCredential(credentialId, userId);
 
@@ -192,7 +192,7 @@ class CredentialServiceTest {
         given(credentialRepository.findByIdAndUserId(credentialId, userId)).willReturn(Optional.of(credential));
         given(aesEncryptor.decrypt(anyString())).willReturn("invalid-key");
         given(credentialValidator.validate(AiProvider.CLAUDE, "invalid-key"))
-                .willReturn(CredentialValidationResult.failed("API 키가 유효하지 않습니다."));
+                .willReturn(CredentialValidationResult.failed("CLAUDE", "API 키가 유효하지 않습니다."));
 
         CredentialValidationResult result = credentialService.validateCredential(credentialId, userId);
 

@@ -176,9 +176,8 @@ class CredentialControllerTest {
 
     @Test
     void validate_validKey_returns200WithTrue() throws Exception {
-        Credential credential = buildCredential();
-        given(credentialService.validateCredential(credentialId, userId)).willReturn(CredentialValidationResult.success());
-        given(credentialService.getByIdAndUserId(credentialId, userId)).willReturn(credential);
+        given(credentialService.validateCredential(credentialId, userId))
+                .willReturn(CredentialValidationResult.success("CLAUDE"));
 
         mockMvc.perform(post("/api/v1/credentials/" + credentialId + "/validate"))
                 .andExpect(status().isOk())
@@ -188,10 +187,8 @@ class CredentialControllerTest {
 
     @Test
     void validate_invalidKey_returns200WithFalse() throws Exception {
-        Credential credential = buildCredential();
         given(credentialService.validateCredential(credentialId, userId))
-                .willReturn(CredentialValidationResult.failed("API 키가 유효하지 않습니다."));
-        given(credentialService.getByIdAndUserId(credentialId, userId)).willReturn(credential);
+                .willReturn(CredentialValidationResult.failed("CLAUDE", "API 키가 유효하지 않습니다."));
 
         mockMvc.perform(post("/api/v1/credentials/" + credentialId + "/validate"))
                 .andExpect(status().isOk())

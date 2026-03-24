@@ -27,6 +27,8 @@ public class AesEncryptor {
     @Value("${aes.secret-key}")
     private String secretKey;
 
+    private SecretKeySpec secretKeySpec;
+
     @PostConstruct
     public void validateKey() {
         byte[] keyBytes = secretKey.getBytes(UTF_8);
@@ -35,17 +37,16 @@ public class AesEncryptor {
                 "AES secret key must be exactly 32 bytes (256-bit), but was " + keyBytes.length + " bytes."
             );
         }
+        this.secretKeySpec = new SecretKeySpec(keyBytes, "AES");
     }
 
     public String encrypt(String plainText) {
         try {
-            SecretKeySpec keySpec = new SecretKeySpec(secretKey.getBytes(UTF_8), "AES");
-
             byte[] iv = new byte[IV_LENGTH];
             new SecureRandom().nextBytes(iv);
 
             Cipher cipher = Cipher.getInstance(ALGORITHM);
-            cipher.init(Cipher.ENCRYPT_MODE, keySpec, new GCMParameterSpec(GCM_TAG_LENGTH, iv));
+            cipher.init(Cipher.ENCRYPT_MODE, secretKeySpec, new GCMParameterSpec(GCM_TAG_LENGTH, iv));
 
             byte[] encrypted = cipher.doFinal(plainText.getBytes(UTF_8));
 
@@ -69,9 +70,8 @@ public class AesEncryptor {
             byte[] cipherText = new byte[combined.length - IV_LENGTH];
             System.arraycopy(combined, IV_LENGTH, cipherText, 0, cipherText.length);
 
-            SecretKeySpec keySpec = new SecretKeySpec(secretKey.getBytes(UTF_8), "AES");
             Cipher cipher = Cipher.getInstance(ALGORITHM);
-            cipher.init(Cipher.DECRYPT_MODE, keySpec, new GCMParameterSpec(GCM_TAG_LENGTH, iv));
+            cipher.init(Cipher.DECRYPT_MODE, secretKeySpec, new GCMParameterSpec(GCM_TAG_LENGTH, iv));
 
             byte[] decrypted = cipher.doFinal(cipherText);
             return new String(decrypted, UTF_8);
