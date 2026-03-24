@@ -29,8 +29,12 @@ description: API 응답 포맷 및 예외 처리 규칙 준수 여부를 검증�
 | `api/src/main/java/com/ieum/api/auth/controller/AuthControllerDocs.java` | 인증 Controller Docs 인터페이스 |
 | `api/src/main/java/com/ieum/api/user/controller/UserController.java` | 사용자 Controller |
 | `api/src/main/java/com/ieum/api/user/controller/UserControllerDocs.java` | 사용자 Controller Docs 인터페이스 |
+| `api/src/main/java/com/ieum/api/credential/controller/CredentialController.java` | 크레덴셜 Controller |
+| `api/src/main/java/com/ieum/api/credential/controller/CredentialControllerDocs.java` | 크레덴셜 Controller Docs 인터페이스 |
+| `api/src/main/java/com/ieum/api/provider/controller/ProviderController.java` | 프로바이더 Controller |
 | `auth/src/main/java/com/ieum/auth/service/AuthService.java` | 인증 Service |
 | `api/src/main/java/com/ieum/api/user/service/UserService.java` | 사용자 Service |
+| `ai/src/main/java/com/ieum/ai/credential/service/CredentialService.java` | 크레덴셜 Service (ai 모듈) |
 
 ## Workflow
 
