@@ -49,10 +49,11 @@ public class CredentialQueryRepository {
     }
 
     public long countByUserId(UUID userId) {
-        return queryFactory
+        Long count = queryFactory
                 .select(credential.count())
                 .from(credential)
                 .where(credential.userId.eq(userId))
                 .fetchOne();
+        return count != null ? count : 0L;
     }
 }
