@@ -80,11 +80,10 @@ public class CredentialController implements CredentialControllerDocs {
             @PathVariable UUID id) {
 
         CredentialValidationResult result = credentialService.validateCredential(id, userDetails.getId());
-        Credential credential = credentialService.getByIdAndUserId(id, userDetails.getId());
 
         ValidateCredentialResponse response = ValidateCredentialResponse.builder()
                 .isValid(result.valid())
-                .provider(credential.getProvider().name())
+                .provider(result.provider())
                 .failureReason(result.failureReason())
                 .build();
 

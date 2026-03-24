@@ -50,7 +50,7 @@ public class CredentialValidator {
                     new HttpEntity<>(body, headers),
                     String.class
             );
-            return CredentialValidationResult.success();
+            return CredentialValidationResult.success("CLAUDE");
         } catch (HttpClientErrorException e) {
             return handleClientError("Claude", e);
         } catch (ResourceAccessException e) {
@@ -61,7 +61,7 @@ public class CredentialValidator {
             throw e;
         } catch (Exception e) {
             log.error("[Claude] 검증 중 예상치 못한 예외 발생", e);
-            return CredentialValidationResult.failed("검증 중 알 수 없는 오류가 발생했습니다.");
+            return CredentialValidationResult.failed("CLAUDE", "검증 중 알 수 없는 오류가 발생했습니다.");
         }
     }
 
@@ -85,7 +85,7 @@ public class CredentialValidator {
                     new HttpEntity<>(body, headers),
                     String.class
             );
-            return CredentialValidationResult.success();
+            return CredentialValidationResult.success("OPENAI");
         } catch (HttpClientErrorException e) {
             return handleClientError("OpenAI", e);
         } catch (ResourceAccessException e) {
@@ -96,7 +96,7 @@ public class CredentialValidator {
             throw e;
         } catch (Exception e) {
             log.error("[OpenAI] 검증 중 예상치 못한 예외 발생", e);
-            return CredentialValidationResult.failed("검증 중 알 수 없는 오류가 발생했습니다.");
+            return CredentialValidationResult.failed("OPENAI", "검증 중 알 수 없는 오류가 발생했습니다.");
         }
     }
 
@@ -118,7 +118,7 @@ public class CredentialValidator {
                     new HttpEntity<>(body, headers),
                     String.class
             );
-            return CredentialValidationResult.success();
+            return CredentialValidationResult.success("GEMINI");
         } catch (HttpClientErrorException e) {
             return handleClientError("Gemini", e);
         } catch (ResourceAccessException e) {
@@ -129,7 +129,7 @@ public class CredentialValidator {
             throw e;
         } catch (Exception e) {
             log.error("[Gemini] 검증 중 예상치 못한 예외 발생", e);
-            return CredentialValidationResult.failed("검증 중 알 수 없는 오류가 발생했습니다.");
+            return CredentialValidationResult.failed("GEMINI", "검증 중 알 수 없는 오류가 발생했습니다.");
         }
     }
 
@@ -144,20 +144,20 @@ public class CredentialValidator {
                     providerName + " 계정에 결제 수단이 등록되어 있지 않습니다.");
         }
         if (status == 429) {
-            return CredentialValidationResult.success();
+            return CredentialValidationResult.success(providerName);
         }
         if (status == 401 || status == 403) {
-            return CredentialValidationResult.failed("API 키가 유효하지 않습니다. 키를 확인해주세요.");
+            return CredentialValidationResult.failed(providerName, "API 키가 유효하지 않습니다. 키를 확인해주세요.");
         }
         if (status == 400) {
-            return CredentialValidationResult.failed("API 키가 유효하지 않습니다.");
+            return CredentialValidationResult.failed(providerName, "API 키가 유효하지 않습니다.");
         }
         if (status >= 500) {
             throw new CustomException(ErrorCode.PROVIDER_UNAVAILABLE,
                     providerName + " 서버에 일시적 장애가 발생했습니다 (HTTP " + status + "). 잠시 후 다시 시도해주세요.");
         }
         log.warn("[{}] 검증 실패 - status: {}", providerName, e.getStatusCode());
-        return CredentialValidationResult.failed("검증 중 예상치 못한 오류가 발생했습니다 (HTTP " + status + ").");
+        return CredentialValidationResult.failed(providerName, "검증 중 예상치 못한 오류가 발생했습니다 (HTTP " + status + ").");
     }
 
     private CredentialValidationResult handleResourceAccessError(String providerName, ResourceAccessException e) {
