@@ -25,6 +25,7 @@ public enum ErrorCode {
     INVALID_API_KEY(HttpStatus.BAD_REQUEST, "프로바이더 API 키 검증에 실패했습니다."),
     CREDENTIAL_EXPIRED(HttpStatus.UNAUTHORIZED, "OAuth 토큰이 만료되었습니다."),
     CREDENTIAL_IN_USE(HttpStatus.CONFLICT, "워크플로우에서 사용 중인 크레덴셜입니다."),
+    CREDENTIAL_NO_BILLING(HttpStatus.PAYMENT_REQUIRED, "API Key에 결제 수단이 등록되지 않았습니다."),
 
     // 프롬프트 템플릿
     INVALID_PROMPT_TEMPLATE(HttpStatus.BAD_REQUEST, "프롬프트 템플릿 형식이 올바르지 않습니다."),
