@@ -1,8 +1,8 @@
-package com.ieum.ai.prompt.repository;
+package com.ieum.api.prompt.repository;
 
-import static com.ieum.ai.prompt.domain.QPromptTemplate.promptTemplate;
+import static com.ieum.api.prompt.domain.QPromptTemplate.promptTemplate;
 
-import com.ieum.ai.prompt.domain.PromptTemplate;
+import com.ieum.api.prompt.domain.PromptTemplate;
 import com.querydsl.core.BooleanBuilder;
 import com.querydsl.jpa.impl.JPAQueryFactory;
 import java.util.List;

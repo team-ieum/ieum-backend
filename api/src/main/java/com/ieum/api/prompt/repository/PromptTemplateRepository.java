@@ -1,6 +1,6 @@
-package com.ieum.ai.prompt.repository;
+package com.ieum.api.prompt.repository;
 
-import com.ieum.ai.prompt.domain.PromptTemplate;
+import com.ieum.api.prompt.domain.PromptTemplate;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
