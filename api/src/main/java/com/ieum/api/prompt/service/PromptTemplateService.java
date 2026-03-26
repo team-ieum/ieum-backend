@@ -1,10 +1,12 @@
-package com.ieum.ai.prompt.service;
+package com.ieum.api.prompt.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.ieum.ai.prompt.domain.PromptTemplate;
-import com.ieum.ai.prompt.repository.PromptTemplateQueryRepository;
-import com.ieum.ai.prompt.repository.PromptTemplateRepository;
+import com.ieum.api.prompt.domain.PromptTemplate;
+import com.ieum.api.prompt.repository.PromptTemplateQueryRepository;
+import com.ieum.api.prompt.repository.PromptTemplateRepository;
+import com.ieum.api.prompt.dto.CreatePromptTemplateRequest;
+import com.ieum.api.prompt.dto.UpdatePromptTemplateRequest;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import java.util.UUID;
@@ -24,19 +26,17 @@ public class PromptTemplateService {
     private final ObjectMapper objectMapper;
 
     @Transactional
-    public PromptTemplate create(UUID userId, String name, String description, String category,
-            String systemMessage, String userMessageTemplate,
-            String inputVariables, String defaultParameters) {
-        validateJsonFormat(inputVariables, "inputVariables");
-        validateJsonFormat(defaultParameters, "defaultParameters");
+    public PromptTemplate create(UUID userId, CreatePromptTemplateRequest request) {
+        String inputVariables = toJsonString(request.getInputVariables(), "inputVariables");
+        String defaultParameters = toJsonString(request.getDefaultParameters(), "defaultParameters");
 
         PromptTemplate template = PromptTemplate.builder()
             .userId(userId)
-            .name(name)
-            .description(description)
-            .category(category)
-            .systemMessage(systemMessage)
-            .userMessageTemplate(userMessageTemplate)
+            .name(request.getName())
+            .description(request.getDescription())
+            .category(request.getCategory())
+            .systemMessage(request.getSystemMessage())
+            .userMessageTemplate(request.getUserMessageTemplate())
             .inputVariables(inputVariables)
             .defaultParameters(defaultParameters)
             .version(1)
@@ -56,15 +56,19 @@ public class PromptTemplateService {
     }
 
     @Transactional
-    public PromptTemplate update(UUID templateId, UUID userId, String name, String description,
-            String category, String systemMessage, String userMessageTemplate,
-            String inputVariables, String defaultParameters) {
+    public PromptTemplate update(UUID templateId, UUID userId, UpdatePromptTemplateRequest request) {
         PromptTemplate template = getByIdAndUserId(templateId, userId);
-        validateJsonFormat(inputVariables, "inputVariables");
-        validateJsonFormat(defaultParameters, "defaultParameters");
+        String inputVariables = toJsonString(request.getInputVariables(), "inputVariables");
+        String defaultParameters = toJsonString(request.getDefaultParameters(), "defaultParameters");
 
-        template.update(name, description, category, systemMessage, userMessageTemplate,
-            inputVariables, defaultParameters);
+        template.update(
+            request.getName(),
+            request.getDescription(),
+            request.getCategory(),
+            request.getSystemMessage(),
+            request.getUserMessageTemplate(),
+            inputVariables,
+            defaultParameters);
 
         return template;
     }
@@ -76,12 +80,12 @@ public class PromptTemplateService {
         promptTemplateRepository.delete(template);
     }
 
-    private void validateJsonFormat(String json, String fieldName) {
-        if (json == null) {
-            return;
+    private String toJsonString(Object value, String fieldName) {
+        if (value == null) {
+            return null;
         }
         try {
-            objectMapper.readTree(json);
+            return objectMapper.writeValueAsString(value);
         } catch (JsonProcessingException e) {
             throw new CustomException(ErrorCode.INVALID_PROMPT_TEMPLATE,
                 fieldName + " JSON 형식이 올바르지 않습니다.");

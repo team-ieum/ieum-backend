@@ -1,4 +1,4 @@
-package com.ieum.ai.prompt.domain;
+package com.ieum.api.prompt.domain;
 
 import com.ieum.common.entity.BaseEntity;
 import jakarta.persistence.Column;
