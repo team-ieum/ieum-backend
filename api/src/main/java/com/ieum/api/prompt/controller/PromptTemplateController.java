@@ -1,11 +1,19 @@
 package com.ieum.api.prompt.controller;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.prompt.domain.PromptTemplate;
 import com.ieum.api.prompt.dto.CreatePromptTemplateRequest;
 import com.ieum.api.prompt.dto.PromptTemplateResponse;
+import com.ieum.api.prompt.dto.TestPromptTemplateRequest;
+import com.ieum.api.prompt.dto.TestPromptTemplateResponse;
+import com.ieum.api.prompt.dto.TestPromptTemplateResponse.RenderedPromptDto;
+import com.ieum.api.prompt.dto.TestPromptTemplateResponse.TokenUsageDto;
 import com.ieum.api.prompt.dto.UpdatePromptTemplateRequest;
 import com.ieum.api.prompt.service.PromptTemplateService;
+import com.ieum.api.prompt.service.TestResult;
+import com.ieum.common.exception.CustomException;
+import com.ieum.common.exception.ErrorCode;
 import com.ieum.auth.security.CustomUserDetails;
 import com.ieum.common.dto.ApiResponse;
 import com.ieum.common.dto.PageResponse;
@@ -83,6 +91,34 @@ public class PromptTemplateController implements PromptTemplateControllerDocs {
         return ResponseEntity.ok(ApiResponse.ok(PromptTemplateResponse.from(template, objectMapper)));
     }
 
+    @PostMapping("/{id}/test")
+    public ResponseEntity<ApiResponse<TestPromptTemplateResponse>> test(
+        @AuthenticationPrincipal CustomUserDetails userDetails,
+        @PathVariable UUID id,
+        @RequestBody @Valid TestPromptTemplateRequest request) {
+
+        String parametersJson = toJsonString(request.getParameters());
+        TestResult result = promptTemplateService.testTemplate(
+            id,
+            userDetails.getId(),
+            request.getCredentialId(),
+            request.getProvider(),
+            request.getModel(),
+            request.getVariables(),
+            parametersJson);
+
+        TestPromptTemplateResponse response = TestPromptTemplateResponse.builder()
+            .response(result.response())
+            .usage(new TokenUsageDto(result.usage().inputTokens(), result.usage().outputTokens()))
+            .durationMs(result.durationMs())
+            .renderedPrompt(new RenderedPromptDto(
+                result.renderedPrompt().systemMessage(),
+                result.renderedPrompt().userMessage()))
+            .build();
+
+        return ResponseEntity.ok(ApiResponse.ok(response));
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<ApiResponse<Void>> delete(
         @AuthenticationPrincipal CustomUserDetails userDetails,
@@ -90,5 +126,16 @@ public class PromptTemplateController implements PromptTemplateControllerDocs {
 
         promptTemplateService.delete(id, userDetails.getId());
         return ResponseEntity.ok(ApiResponse.ok());
+    }
+
+    private String toJsonString(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            throw new CustomException(ErrorCode.INVALID_INPUT);
+        }
     }
 }
