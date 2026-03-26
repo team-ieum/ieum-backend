@@ -23,9 +23,16 @@ public enum ErrorCode {
 
     // 크레덴셜 (BYOK)
     INVALID_API_KEY(HttpStatus.BAD_REQUEST, "프로바이더 API 키 검증에 실패했습니다."),
+    INVALID_API_KEY_FORMAT(HttpStatus.BAD_REQUEST, "API 키 형식이 올바르지 않습니다. 프로바이더별 키 형식을 확인해주세요."),
+    CREDENTIAL_DUPLICATE_NAME(HttpStatus.CONFLICT, "같은 프로바이더에 동일한 이름의 크레덴셜이 이미 존재합니다."),
+    CREDENTIAL_LIMIT_EXCEEDED(HttpStatus.BAD_REQUEST, "크레덴셜 등록 한도를 초과했습니다."),
+    CREDENTIAL_NO_BILLING(HttpStatus.PAYMENT_REQUIRED, "프로바이더 계정에 결제 수단이 등록되어 있지 않습니다. 프로바이더 대시보드에서 결제 설정을 확인해주세요."),
     CREDENTIAL_EXPIRED(HttpStatus.UNAUTHORIZED, "OAuth 토큰이 만료되었습니다."),
     CREDENTIAL_IN_USE(HttpStatus.CONFLICT, "워크플로우에서 사용 중인 크레덴셜입니다."),
-    CREDENTIAL_NO_BILLING(HttpStatus.PAYMENT_REQUIRED, "API Key에 결제 수단이 등록되지 않았습니다."),
+    PROVIDER_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "AI 프로바이더 서버에 일시적인 장애가 발생했습니다. 잠시 후 다시 시도해주세요."),
+    CREDENTIAL_VALIDATION_TIMEOUT(HttpStatus.GATEWAY_TIMEOUT, "AI 프로바이더 응답 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."),
+    CREDENTIAL_VALIDATION_NETWORK_ERROR(HttpStatus.BAD_GATEWAY, "AI 프로바이더와의 연결에 실패했습니다. 네트워크 상태를 확인해주세요."),
+    CREDENTIAL_DECRYPT_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "크레덴셜 복호화에 실패했습니다. 데이터가 손상되었거나 암호화 키가 변경되었을 수 있습니다."),
 
     // 프롬프트 템플릿
     INVALID_PROMPT_TEMPLATE(HttpStatus.BAD_REQUEST, "프롬프트 템플릿 형식이 올바르지 않습니다."),
