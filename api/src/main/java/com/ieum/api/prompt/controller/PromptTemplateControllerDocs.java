@@ -2,6 +2,8 @@ package com.ieum.api.prompt.controller;
 
 import com.ieum.api.prompt.dto.CreatePromptTemplateRequest;
 import com.ieum.api.prompt.dto.PromptTemplateResponse;
+import com.ieum.api.prompt.dto.TestPromptTemplateRequest;
+import com.ieum.api.prompt.dto.TestPromptTemplateResponse;
 import com.ieum.api.prompt.dto.UpdatePromptTemplateRequest;
 import com.ieum.auth.security.CustomUserDetails;
 import com.ieum.common.dto.ApiResponse;
@@ -50,4 +52,11 @@ public interface PromptTemplateControllerDocs {
     ResponseEntity<ApiResponse<Void>> delete(
         CustomUserDetails userDetails,
         UUID id);
+
+    @Operation(summary = "템플릿 LLM 테스트", description = "실제 LLM을 호출하여 템플릿 동작을 검증합니다. 사용자의 API Key를 소비합니다.")
+    @PreAuthorize("hasRole('USER')")
+    ResponseEntity<ApiResponse<TestPromptTemplateResponse>> test(
+        CustomUserDetails userDetails,
+        UUID id,
+        TestPromptTemplateRequest request);
 }
