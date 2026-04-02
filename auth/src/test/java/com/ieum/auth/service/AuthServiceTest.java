@@ -85,7 +85,7 @@ class AuthServiceTest {
         given(passwordEncoder.matches(anyString(), anyString())).willReturn(true);
         given(jwtTokenProvider.generateAccessToken(any(), anyString(), anyString())).willReturn("access-token");
         given(jwtTokenProvider.generateRefreshToken(any())).willReturn("refresh-token");
-        given(jwtTokenProvider.getExpiration("access-token")).willReturn(1800000L);
+        given(jwtTokenProvider.getAccessTokenExpiration()).willReturn(1800L);
 
         TokenInfo result = authService.login(user.getEmail(), "Password1!");
 
@@ -134,7 +134,7 @@ class AuthServiceTest {
         given(refreshTokenRepository.findById(userId.toString())).willReturn(Optional.of(stored));
         given(userRepository.findById(userId)).willReturn(Optional.of(user));
         given(jwtTokenProvider.generateAccessToken(any(), anyString(), anyString())).willReturn("new-access-token");
-        given(jwtTokenProvider.getExpiration("new-access-token")).willReturn(1800000L);
+        given(jwtTokenProvider.getAccessTokenExpiration()).willReturn(1800L);
 
         TokenInfo result = authService.refresh("refresh-token");
 

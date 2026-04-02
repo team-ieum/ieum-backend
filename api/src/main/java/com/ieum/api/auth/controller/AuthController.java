@@ -1,6 +1,7 @@
 package com.ieum.api.auth.controller;
 
 import com.ieum.api.auth.dto.LoginRequest;
+import com.ieum.api.auth.dto.OAuthTokenExchangeRequest;
 import com.ieum.api.auth.dto.RefreshRequest;
 import com.ieum.api.auth.dto.RegisterRequest;
 import com.ieum.api.auth.dto.RegisterResponse;
@@ -55,6 +56,14 @@ public class AuthController implements AuthControllerDocs {
 
         authService.logout(request.getRefreshToken());
         return ResponseEntity.ok(ApiResponse.ok());
+    }
+
+    @PostMapping("/oauth/token")
+    public ResponseEntity<ApiResponse<TokenResponse>> exchangeOAuthToken(
+        @RequestBody @Valid OAuthTokenExchangeRequest request) {
+
+        TokenInfo tokenInfo = authService.exchangeOAuthCode(request.getCode());
+        return ResponseEntity.ok(ApiResponse.ok(toTokenResponse(tokenInfo)));
     }
 
     private TokenResponse toTokenResponse(TokenInfo tokenInfo) {
