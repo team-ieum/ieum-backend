@@ -82,6 +82,10 @@ public class JwtTokenProvider {
         return parseClaims(token).get("role", String.class);
     }
 
+    public long getAccessTokenExpiration() {
+        return expiration / 1000;
+    }
+
     public Long getExpiration(String token) {
         Date expiry = parseClaims(token).getExpiration();
         return expiry.getTime() - System.currentTimeMillis();

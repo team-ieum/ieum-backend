@@ -1,6 +1,7 @@
 package com.ieum.api.auth.controller;
 
 import com.ieum.api.auth.dto.LoginRequest;
+import com.ieum.api.auth.dto.OAuthTokenExchangeRequest;
 import com.ieum.api.auth.dto.RefreshRequest;
 import com.ieum.api.auth.dto.RegisterRequest;
 import com.ieum.api.auth.dto.RegisterResponse;
@@ -24,4 +25,7 @@ public interface AuthControllerDocs {
 
     @Operation(summary = "로그아웃")
     ResponseEntity<ApiResponse<Void>> logout(RefreshRequest request);
+
+    @Operation(summary = "OAuth 토큰 교환 (POST /api/v1/auth/oauth/token)", description = "Google 로그인 후 발급된 일회용 코드를 JWT 토큰으로 교환합니다. 코드는 30초 내에 한 번만 사용 가능합니다.")
+    ResponseEntity<ApiResponse<TokenResponse>> exchangeOAuthToken(OAuthTokenExchangeRequest request);
 }

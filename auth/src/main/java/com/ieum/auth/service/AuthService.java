@@ -1,11 +1,13 @@
 package com.ieum.auth.service;
 
 import com.ieum.auth.domain.AuthProvider;
+import com.ieum.auth.domain.OAuthAuthorizationCode;
 import com.ieum.auth.domain.RefreshToken;
 import com.ieum.auth.domain.User;
 import com.ieum.auth.domain.UserRole;
 import com.ieum.auth.dto.TokenInfo;
 import com.ieum.auth.jwt.JwtTokenProvider;
+import com.ieum.auth.repository.OAuthAuthorizationCodeRepository;
 import com.ieum.auth.repository.RefreshTokenRepository;
 import com.ieum.auth.repository.UserRepository;
 import com.ieum.common.exception.CustomException;
@@ -24,6 +26,7 @@ public class AuthService {
 
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final OAuthAuthorizationCodeRepository oAuthAuthorizationCodeRepository;
     private final JwtTokenProvider jwtTokenProvider;
     private final PasswordEncoder passwordEncoder;
 
@@ -63,7 +66,7 @@ public class AuthService {
             .ttl(refreshExpiration / 1000)
             .build());
 
-        long expiresIn = jwtTokenProvider.getExpiration(accessToken) / 1000;
+        long expiresIn = jwtTokenProvider.getAccessTokenExpiration();
         return new TokenInfo(accessToken, refreshToken, expiresIn);
     }
 
@@ -86,9 +89,23 @@ public class AuthService {
             .orElseThrow(() -> new CustomException(ErrorCode.NOT_FOUND));
 
         String newAccessToken = jwtTokenProvider.generateAccessToken(user.getId(), user.getEmail(), user.getRole().name());
-        long expiresIn = jwtTokenProvider.getExpiration(newAccessToken) / 1000;
+        long expiresIn = jwtTokenProvider.getAccessTokenExpiration();
 
         return new TokenInfo(newAccessToken, refreshToken, expiresIn);
+    }
+
+    @Transactional
+    public TokenInfo exchangeOAuthCode(String code) {
+        OAuthAuthorizationCode authorizationCode = oAuthAuthorizationCodeRepository.findById(code)
+            .orElseThrow(() -> new CustomException(ErrorCode.TOKEN_INVALID));
+
+        oAuthAuthorizationCodeRepository.deleteById(code);
+
+        return new TokenInfo(
+            authorizationCode.getAccessToken(),
+            authorizationCode.getRefreshToken(),
+            authorizationCode.getExpiresIn()
+        );
     }
 
     @Transactional
