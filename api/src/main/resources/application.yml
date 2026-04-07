@@ -3,9 +3,9 @@ spring:
     name: ieum-backend
 
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/ieum}
-    username: ${DB_USERNAME:ieum}
-    password: ${DB_PASSWORD:ieum}
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
 
   jpa:
@@ -23,8 +23,8 @@ spring:
 
   data:
     redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT}
 
   security:
     oauth2:
@@ -33,16 +33,19 @@ spring:
           google:
             client-id: ${GOOGLE_CLIENT_ID}
             client-secret: ${GOOGLE_CLIENT_SECRET}
+            redirect-uri: "{baseUrl}/api/v1/auth/{registrationId}/callback"
             scope: email, profile,
               https://www.googleapis.com/auth/gmail.modify,
               https://www.googleapis.com/auth/spreadsheets,
               https://www.googleapis.com/auth/drive,
               https://www.googleapis.com/auth/calendar
+oauth2:
+  redirect-uri: ${OAUTH2_REDIRECT_URI:http://localhost:3000/oauth2/callback}
 
 jwt:
   secret: ${JWT_SECRET}
-  expiration: 86400000
-  refresh-expiration: 604800000
+  expiration: ${JWT_EXPIRATION}
+  refresh-expiration: ${JWT_REFRESH_EXPIRATION}
 
 aes:
   secret-key: ${AES_SECRET_KEY}
