@@ -25,11 +25,21 @@
     "PreToolUse": [
       {
         "matcher": "Bash",
-        "script": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -qE '(git push|git commit|git merge|git rebase|git checkout|git branch -[dD])'; then echo 'BLOCK: git 명령은 DoHoon이 직접 실행합니다. 명령어만 안내해주세요.' >&2; exit 1; fi"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -qE '(git push|git commit|git merge|git rebase|git checkout|git branch -[dD])'; then echo 'BLOCK: git 명령은 DoHoon이 직접 실행합니다. 명령어만 안내해주세요.' >&2; exit 1; fi"
+          }
+        ]
       },
       {
         "matcher": "Bash",
-        "script": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -qE '(rm -rf|DROP TABLE|DELETE FROM|TRUNCATE)'; then echo 'BLOCK: 위험한 명령이 차단되었습니다.' >&2; exit 1; fi"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -qE '(rm -rf|DROP TABLE|DELETE FROM|TRUNCATE)'; then echo 'BLOCK: 위험한 명령이 차단되었습니다.' >&2; exit 1; fi"
+          }
+        ]
       }
     ]
   }

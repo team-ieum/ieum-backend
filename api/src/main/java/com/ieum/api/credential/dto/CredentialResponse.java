@@ -1,6 +1,6 @@
 package com.ieum.api.credential.dto;
 
-import com.ieum.ai.credential.domain.Credential;
+import com.ieum.api.credential.domain.Credential;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Builder;
 import lombok.Getter;
