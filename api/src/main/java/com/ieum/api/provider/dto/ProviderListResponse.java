@@ -1,6 +1,6 @@
 package com.ieum.api.provider.dto;
 
-import com.ieum.ai.provider.model.ProviderInfo;
+import com.ieum.api.provider.model.ProviderInfo;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Builder;
 import lombok.Getter;
