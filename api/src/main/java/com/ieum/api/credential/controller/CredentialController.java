@@ -1,10 +1,10 @@
 package com.ieum.api.credential.controller;
 
-import com.ieum.ai.credential.domain.AiProvider;
-import com.ieum.ai.credential.domain.Credential;
-import com.ieum.ai.credential.domain.CredentialType;
-import com.ieum.ai.credential.service.CredentialService;
-import com.ieum.ai.credential.service.CredentialValidationResult;
+import com.ieum.api.credential.domain.AiProvider;
+import com.ieum.api.credential.domain.Credential;
+import com.ieum.api.credential.domain.CredentialType;
+import com.ieum.api.credential.service.CredentialService;
+import com.ieum.api.credential.service.CredentialValidationResult;
 import com.ieum.api.credential.dto.CreateCredentialRequest;
 import com.ieum.api.credential.dto.CredentialResponse;
 import com.ieum.api.credential.dto.ValidateCredentialResponse;

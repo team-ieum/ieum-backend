@@ -1,11 +1,11 @@
 package com.ieum.api.credential.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.ieum.ai.credential.domain.AiProvider;
-import com.ieum.ai.credential.domain.Credential;
-import com.ieum.ai.credential.domain.CredentialType;
-import com.ieum.ai.credential.service.CredentialService;
-import com.ieum.ai.credential.service.CredentialValidationResult;
+import com.ieum.api.credential.domain.AiProvider;
+import com.ieum.api.credential.domain.Credential;
+import com.ieum.api.credential.domain.CredentialType;
+import com.ieum.api.credential.service.CredentialService;
+import com.ieum.api.credential.service.CredentialValidationResult;
 import com.ieum.api.common.GlobalExceptionHandler;
 import com.ieum.auth.security.CustomUserDetails;
 import com.ieum.common.exception.CustomException;

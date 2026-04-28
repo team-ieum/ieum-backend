@@ -1,7 +1,7 @@
 package com.ieum.api.provider.controller;
 
-import com.ieum.ai.provider.model.ProviderInfo;
-import com.ieum.ai.provider.service.ProviderRegistry;
+import com.ieum.api.provider.model.ProviderInfo;
+import com.ieum.api.provider.service.ProviderRegistry;
 import com.ieum.api.provider.dto.ProviderListResponse;
 import com.ieum.common.dto.ApiResponse;
 import lombok.RequiredArgsConstructor;
