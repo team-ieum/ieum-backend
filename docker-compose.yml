@@ -17,5 +17,16 @@ services:
     ports:
       - "6379:6379"
 
+  mongodb:
+    image: mongo:7
+    container_name: ieum-mongo
+    environment:
+      MONGO_INITDB_DATABASE: ieum
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
 volumes:
   postgres-data:
+  mongo-data:
