@@ -46,3 +46,7 @@ jwt:
 
 aes:
   secret-key: test-aes-key-32bytes-padding!!!!
+
+ieum:
+  agent:
+    url: http://localhost:8000
