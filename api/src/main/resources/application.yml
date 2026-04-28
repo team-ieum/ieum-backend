@@ -17,10 +17,6 @@ spring:
         format_sql: true
         dialect: org.hibernate.dialect.PostgreSQLDialect
 
-  flyway:
-    enabled: true
-    locations: classpath:db/migration
-
   data:
     redis:
       host: ${REDIS_HOST}
@@ -58,3 +54,7 @@ springdoc:
 
 server:
   port: 8080
+
+ieum:
+  agent:
+    url: ${AGENT_SERVICE_URL}
