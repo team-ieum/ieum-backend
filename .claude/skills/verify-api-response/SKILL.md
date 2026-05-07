@@ -36,6 +36,9 @@ description: API 응답 포맷 및 예외 처리 규칙 준수 여부를 검증�
 | `api/src/main/java/com/ieum/api/user/service/UserService.java` | 사용자 Service |
 | `ai/src/main/java/com/ieum/ai/credential/service/CredentialService.java` | 크레덴셜 Service (ai 모듈) |
 | `workflow-core/src/main/java/com/ieum/workflowcore/engine/SyncExecutionRuntime.java` | 워크플로우 실행 엔진 (engine 계층, Check 2 예외 대상) |
+| `api/src/main/java/com/ieum/api/workflow/controller/WorkflowController.java` | 워크플로우 Controller |
+| `api/src/main/java/com/ieum/api/workflow/controller/WorkflowControllerDocs.java` | 워크플로우 Controller Docs 인터페이스 |
+| `api/src/main/java/com/ieum/api/workflow/service/WorkflowService.java` | 워크플로우 Service |
 
 ## Workflow
 

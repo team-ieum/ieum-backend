@@ -122,5 +122,6 @@ docker-compose up -d                                    # PostgreSQL 16 + Redis 
 | `verify-jpa-entity` | JPA 엔티티 및 Repository 규칙 검증 |
 | `verify-db-migration` | Flyway 마이그레이션 규칙 검증 |
 | `verify-security` | Spring Security 및 JWT 인증 규칙 검증 |
+| `verify-workflow-engine` | 워크플로우 실행 엔진 패턴 규칙 검증 (NodeExecutor 등록, Stub 패턴, ExecutorResult 생성) |
 | `verify-implementation` | 모든 verify 스킬 순차 실행, 통합 검증 보고서 |
 | `manage-skills` | 세션 변경사항 분석, 스킬 생성/업데이트, CLAUDE.md 관리 |

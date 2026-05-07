@@ -149,6 +149,23 @@ grep -rn "FetchType\.EAGER" --include="*.java" . | grep -v test | grep -v build
 **PASS:** 결과가 없음 (0건)
 **FAIL:** 1건 이상 — `FetchType.LAZY`로 교체 필요
 
+### Check 8: @Modifying bulk DELETE에 clearAutomatically = true 확인
+
+`@Modifying @Query("DELETE ...")` 형태의 bulk DELETE는 반드시 `clearAutomatically = true`를 설정해야 합니다.
+미설정 시 삭제된 엔티티가 1차 캐시에 남아 다음 flush 시 `TransientObjectException`이 발생합니다.
+
+```bash
+# @Modifying이 있는 파일 확인
+grep -rn "@Modifying" --include="*.java" . | grep -v test | grep -v build
+
+# clearAutomatically = true 없이 @Modifying만 있는 경우 탐지
+grep -rln "@Modifying" --include="*.java" . | grep -v test | grep -v build | \
+  xargs grep -l "DELETE" | xargs grep -L "clearAutomatically"
+```
+
+**PASS:** bulk DELETE가 있는 `@Modifying`에 모두 `clearAutomatically = true` 포함
+**FAIL:** 1건 이상 — `@Modifying(clearAutomatically = true)`로 변경 필요
+
 ## 예외사항
 
 다음은 **위반이 아닙니다**:
