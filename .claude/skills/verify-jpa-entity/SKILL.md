@@ -34,6 +34,18 @@ JPA 엔티티와 Repository가 프로젝트 규칙에 맞게 작성되었는지 
 | `ai/src/main/java/com/ieum/ai/credential/domain/CredentialType.java` | 크레덴셜 타입 Enum |
 | `ai/src/main/java/com/ieum/ai/credential/repository/CredentialRepository.java` | 크레덴셜 커맨드 Repository |
 | `ai/src/main/java/com/ieum/ai/credential/repository/CredentialQueryRepository.java` | 크레덴셜 쿼리 Repository (QueryDSL 독립 클래스 패턴) |
+| `workflow-core/src/main/java/com/ieum/workflowcore/domain/Workflow.java` | 워크플로우 엔티티 |
+| `workflow-core/src/main/java/com/ieum/workflowcore/domain/WorkflowVersion.java` | 워크플로우 버전 엔티티 |
+| `workflow-core/src/main/java/com/ieum/workflowcore/domain/WorkflowExecution.java` | 워크플로우 실행 엔티티 (`workflow_runs` 테이블) |
+| `workflow-core/src/main/java/com/ieum/workflowcore/domain/WorkflowExecutionLog.java` | 노드 실행 로그 엔티티 (`node_runs` 테이블) |
+| `workflow-core/src/main/java/com/ieum/workflowcore/domain/enums/ExecutionStatus.java` | 실행 상태 Enum |
+| `workflow-core/src/main/java/com/ieum/workflowcore/domain/enums/TriggerType.java` | 트리거 타입 Enum |
+| `workflow-core/src/main/java/com/ieum/workflowcore/domain/enums/NodeType.java` | 노드 타입 Enum |
+| `workflow-core/src/main/java/com/ieum/workflowcore/domain/enums/ExecutionLogStatus.java` | 노드 실행 결과 Enum |
+| `workflow-core/src/main/java/com/ieum/workflowcore/repository/WorkflowRepository.java` | 워크플로우 커맨드 Repository |
+| `workflow-core/src/main/java/com/ieum/workflowcore/repository/WorkflowVersionRepository.java` | 워크플로우 버전 Repository (`@Query` JPQL 패턴) |
+| `workflow-core/src/main/java/com/ieum/workflowcore/repository/WorkflowExecutionRepository.java` | 실행 이력 Repository |
+| `workflow-core/src/main/java/com/ieum/workflowcore/repository/WorkflowExecutionLogRepository.java` | 노드 실행 로그 Repository |
 
 ## Workflow
 
@@ -149,3 +161,4 @@ grep -rn "FetchType\.EAGER" --include="*.java" . | grep -v test | grep -v build
 6. **@RedisHash 도메인** — `RefreshToken` 등 Redis 엔티티는 `@Entity`가 없으므로 Check 1, 2 제외. `BaseEntity` 상속 불필요
 7. **CrudRepository (Redis용)** — `RefreshTokenRepository`처럼 `CrudRepository`를 상속하는 Redis Repository는 Check 5(JpaRepository 쌍 검사) 제외
 8. **`{Entity}QueryRepository` 단독 클래스 패턴** — ai 모듈처럼 `RepositoryCustom`/`RepositoryImpl` 인터페이스 분리 없이 `@Repository` 클래스에 직접 JPAQueryFactory를 주입하는 `{Entity}QueryRepository` 방식은 CLAUDE.md 공식 패턴으로 Check 5 예외. Check 6(`JPAQueryFactory` 사용 여부)은 동일하게 적용
+9. **단순 `@Query` JPQL 패턴** — `WorkflowVersionRepository`처럼 ORDER BY + LIMIT 등 단순 JPQL이 필요한 경우 JpaRepository 인터페이스에 `@Query`를 직접 선언하는 것은 허용. QueryDSL이 필요한 복잡한 동적 쿼리(다중 조건, 정렬 동적 처리 등)에만 `QueryRepository` 분리 필요
