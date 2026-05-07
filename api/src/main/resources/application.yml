@@ -29,7 +29,7 @@ spring:
           google:
             client-id: ${GOOGLE_CLIENT_ID}
             client-secret: ${GOOGLE_CLIENT_SECRET}
-            redirect-uri: "{baseUrl}/api/v1/auth/{registrationId}/callback"
+            redirect-uri: "{baseUrl}/api/v1/oauth2/callback/{registrationId}"
             scope: email, profile,
               https://www.googleapis.com/auth/gmail.modify,
               https://www.googleapis.com/auth/spreadsheets,
