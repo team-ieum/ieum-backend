@@ -1,5 +1,6 @@
 package com.ieum.workflowcore.repository;
 
+import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.domain.enums.TriggerType;
@@ -7,6 +8,9 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecution, UUID> {
 
@@ -15,4 +19,10 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
     List<WorkflowExecution> findByWorkflowIdAndStatus(UUID workflowId, ExecutionStatus status, Pageable pageable);
 
     List<WorkflowExecution> findByWorkflowIdAndTriggerType(UUID workflowId, TriggerType triggerType, Pageable pageable);
+
+    List<WorkflowExecution> findByWorkflow(Workflow workflow);
+
+    @Modifying(clearAutomatically = true)
+    @Query("DELETE FROM WorkflowExecution we WHERE we.workflow = :workflow")
+    void deleteByWorkflow(@Param("workflow") Workflow workflow);
 }

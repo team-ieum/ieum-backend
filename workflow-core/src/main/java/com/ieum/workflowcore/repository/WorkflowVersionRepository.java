@@ -1,10 +1,12 @@
 package com.ieum.workflowcore.repository;
 
+import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowVersion;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -18,4 +20,8 @@ public interface WorkflowVersionRepository extends JpaRepository<WorkflowVersion
     Optional<WorkflowVersion> findLatestByWorkflowId(@Param("workflowId") UUID workflowId);
 
     List<WorkflowVersion> findByWorkflowId(UUID workflowId);
+
+    @Modifying(clearAutomatically = true)
+    @Query("DELETE FROM WorkflowVersion wv WHERE wv.workflow = :workflow")
+    void deleteByWorkflow(@Param("workflow") Workflow workflow);
 }
