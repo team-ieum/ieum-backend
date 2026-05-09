@@ -28,7 +28,8 @@ jobs:
     name: Deploy Dev to Self Hosted Server
     runs-on:
       group: ieum_dev_server
-      labels: [self-hosted, linux, x64, dev, deploy]
+      labels: [self-hosted, linux, x64, ieum-backend]
+
 
     services:
       redis:
