@@ -68,21 +68,36 @@ public class ChatService {
 
     /**
      * 메시지를 전송하고 AI 응답을 블로킹으로 반환한다 (REST API 전용).
+     *
+     * @param workflowId 워크플로우 ID
+     * @param userId     현재 인증된 사용자 ID
+     * @param request    ChatRequest (message + optional sessionId)
+     * @return AI AGENT 응답 메시지 DTO
      */
     @Transactional
     public ChatResponse chat(UUID workflowId, UUID userId, ChatRequest request) {
+
+        // 1. 세션 찾거나 새로 생성
         ChatSession session = createOrGetSession(workflowId, userId, request.getSessionId());
+
+        // 2. 워크플로우 AI 노드 설정 로드 (소유권 검증 포함)
         AgentConfig agentConfig = resolveAgentConfig(workflowId, userId);
 
+        // 3. USER 메시지 저장
         saveUserMessage(session, request.getMessage());
 
+        // 4. 첫 메시지면 세션 제목 자동 설정
         if (session.getTitle() == null) {
             autoUpdateTitle(session, request.getMessage());
         }
 
+        // 5. 대화 히스토리 구성 (방금 저장한 USER 메시지 포함, 오래된 순)
         List<AgentMessage> agentMessages = buildAgentMessages(session);
+
+        // 6. Google 빌트인 도구 → Access Token 조회 (없으면 null)
         String googleAccessToken = resolveGoogleAccessToken(agentConfig.tools(), userId);
 
+        // 7. AI 에이전트 호출
         log.info("[ChatService] AI 응답 요청 — workflowId: {}, sessionId: {}",
             workflowId, session.getId());
         ChatAgentResponse agentResponse = agentClient.chat(
@@ -92,6 +107,7 @@ public class ChatService {
             googleAccessToken
         );
 
+        // 8. AGENT 메시지 저장 후 반환 — sessionId를 직접 전달하여 LAZY 로딩 회피
         ChatMessage agentMessage = saveAgentMessage(
             session,
             agentResponse.getContent(),
@@ -104,6 +120,14 @@ public class ChatService {
 
     // ─────────────────────────────────────── 히스토리 ─────────────────────────
 
+    /**
+     * 세션의 채팅 히스토리를 페이지네이션으로 조회한다 (최신순).
+     *
+     * @param sessionId 세션 ID
+     * @param userId    현재 인증된 사용자 ID (소유권 검증용)
+     * @param pageable  페이지 요청 정보
+     * @return 페이지네이션된 ChatMessage 목록
+     */
     public Page<ChatMessage> getChatHistory(UUID sessionId, UUID userId, Pageable pageable) {
         sessionRepository.findByIdAndUserId(sessionId, userId)
             .orElseThrow(() -> new CustomException(ErrorCode.CHAT_SESSION_NOT_FOUND));
@@ -112,6 +136,15 @@ public class ChatService {
 
     // ─────────────────────────────────────── 세션 ─────────────────────────────
 
+    /**
+     * sessionId가 주어지면 해당 세션을 조회하고, 없으면 새 세션을 생성한다.
+     * WebSocket 핸들러에서 직접 호출할 수 있도록 public으로 공개한다.
+     *
+     * @param workflowId 워크플로우 ID
+     * @param userId     현재 인증된 사용자 ID
+     * @param sessionId  기존 세션 ID (nullable)
+     * @return 기존 또는 신규 ChatSession
+     */
     @Transactional
     public ChatSession createOrGetSession(UUID workflowId, UUID userId, UUID sessionId) {
         if (sessionId != null) {
@@ -127,6 +160,10 @@ public class ChatService {
 
     // ─────────────────────────────────────── 메시지 저장 ──────────────────────
 
+    /**
+     * USER 메시지를 DB에 저장한다.
+     * WebSocket 핸들러에서 직접 호출할 수 있도록 public으로 공개한다.
+     */
     @Transactional
     public ChatMessage saveUserMessage(ChatSession session, String content) {
         ChatMessage message = ChatMessage.builder()
@@ -137,6 +174,10 @@ public class ChatService {
         return messageRepository.save(message);
     }
 
+    /**
+     * AGENT 응답 메시지를 DB에 저장한다.
+     * WebSocket 핸들러에서 직접 호출할 수 있도록 public으로 공개한다.
+     */
     @Transactional
     public ChatMessage saveAgentMessage(ChatSession session, String content,
             Integer inputTokens, Integer outputTokens) {
@@ -152,6 +193,16 @@ public class ChatService {
 
     // ─────────────────────────────────────── 에이전트 설정 ────────────────────
 
+    /**
+     * 워크플로우에서 AI 노드 설정(llmProvider, credentialId, tools)을 추출하고
+     * API Key를 복호화하여 반환한다.
+     *
+     * <p>WebSocket 핸들러에서 재사용할 수 있도록 public으로 공개한다.
+     *
+     * @throws CustomException WORKFLOW_NOT_FOUND — 워크플로우를 찾을 수 없는 경우
+     * @throws CustomException WORKFLOW_HAS_NO_AI_NODE — AI 노드가 없는 경우
+     * @throws CustomException INVALID_WORKFLOW — nodesJson 파싱 실패 시
+     */
     @SuppressWarnings("unchecked")
     public AgentConfig resolveAgentConfig(UUID workflowId, UUID userId) {
         workflowCrudService.getWorkflowByOwner(userId, workflowId);
@@ -182,6 +233,12 @@ public class ChatService {
         return new AgentConfig(llmProvider, decryptedApiKey, tools);
     }
 
+    /**
+     * 현재 세션의 대화 히스토리를 AgentMessage 목록으로 변환한다 (오래된 순).
+     * SYSTEM 메시지는 제외한다.
+     *
+     * <p>WebSocket 핸들러에서 재사용할 수 있도록 public으로 공개한다.
+     */
     public List<AgentMessage> buildAgentMessages(ChatSession session) {
         List<ChatMessage> messages = messageRepository
             .findBySessionIdOrderByCreatedAtAsc(session.getId());
