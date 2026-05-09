@@ -13,40 +13,22 @@ concurrency:
   cancel-in-progress: true
 
 env:
-<<<<<<< HEAD
-  JAVA_VERSION: ${{ secrets.JAVA_VERSION }}
-  IMAGE_NAME: ${{ secrets.BACKEND_IMAGE_NAME }}
-  CONTAINER_NAME: ${{ secrets.BACKEND_CONTAINER_NAME }}
-  DOCKER_NETWORK: ${{ secrets.DOCKER_NETWORK }}
-  BACKEND_IP: ${{ secrets.BACKEND_IP }}
-  BACKEND_PORT: ${{ secrets.BACKEND_PORT }}
-  SPRING_PROFILES_ACTIVE: ${{ secrets.SPRING_PROFILES_ACTIVE }}
-  ENV_FILE: ${{ secrets.BACKEND_ENV_FILE }}
-=======
   JAVA_VERSION: '21'
   IMAGE_NAME: ieum-backend-dev
   CONTAINER_NAME: ieum-backend
   LEGACY_CONTAINER_NAME: hirescope-backend
-  DOCKER_NETWORK: deploy_hirescope_net
+  DOCKER_NETWORK: ieum_net_green
   BACKEND_IP: 10.10.10.11
   BACKEND_PORT: '8080'
   SPRING_PROFILES_ACTIVE: dev
   ENV_FILE: /home/kwung/deploy/ieum-backend/.env
->>>>>>> 33f7698 (Add backend dev server deployment workflow (#18))
 
 jobs:
   deploy:
     name: Deploy Dev to Self Hosted Server
     runs-on:
       group: ieum_dev_server
-      labels: [self-hosted, linux, x64, ieum-backend]
-
-<<<<<<< HEAD
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-=======
+      labels: [self-hosted, linux, x64, dev, deploy]
 
     services:
       redis:
@@ -65,38 +47,19 @@ jobs:
         uses: actions/checkout@v4
 
       # JDK 21 설치
->>>>>>> 33f7698 (Add backend dev server deployment workflow (#18))
       - name: Setup JDK
         uses: actions/setup-java@v4
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: temurin
 
-<<<<<<< HEAD
-      - name: Make Gradle executable
-        run: chmod +x gradlew
-
-      - name: Build
-        run: ./gradlew :api:bootJar -x test --no-daemon
-
-      - name: Test
-        run: ./gradlew test --no-daemon
-
-      - name: Prepare boot jar
-        run: |
-          mkdir -p .deploy
-          BOOT_JAR="$(find api/build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*plain.jar' | head -n 1)"
-
-          if [ -z "$BOOT_JAR" ]; then
-            echo "::error::Spring Boot jar file was not found in api/build/libs"
-=======
       # Gradle wrapper 실행 권한 부여
       - name: Make Gradle executable
         run: chmod +x gradlew
 
-      # 테스트를 제외하고 애플리케이션 빌드
+      # 테스트를 제외하고 실행 가능한 Spring Boot JAR 생성
       - name: Build
-        run: ./gradlew build -x test --no-daemon
+        run: ./gradlew :api:bootJar -x test --no-daemon
 
       # 테스트 실행
       - name: Test
@@ -107,20 +70,16 @@ jobs:
         run: |
           mkdir -p .deploy
 
-          BOOT_JAR="$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*plain.jar' | head -n 1)"
+          BOOT_JAR="$(find api/build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*plain.jar' | head -n 1)"
 
           if [ -z "$BOOT_JAR" ]; then
-            echo "::error::Spring Boot jar file was not found in build/libs"
->>>>>>> 33f7698 (Add backend dev server deployment workflow (#18))
+            echo "::error::Spring Boot jar file was not found in api/build/libs"
             exit 1
           fi
 
           cp "$BOOT_JAR" .deploy/app.jar
 
-<<<<<<< HEAD
-=======
       # CI 배포용 Dockerfile 생성
->>>>>>> 33f7698 (Add backend dev server deployment workflow (#18))
       - name: Write Dockerfile
         run: |
           cat > Dockerfile.ci <<'EOF'
@@ -131,27 +90,11 @@ jobs:
           ENTRYPOINT ["java", "-jar", "/app/app.jar"]
           EOF
 
-<<<<<<< HEAD
-=======
       # Docker 이미지 빌드
->>>>>>> 33f7698 (Add backend dev server deployment workflow (#18))
       - name: Build Docker image
         run: |
           docker build \
             -f Dockerfile.ci \
-<<<<<<< HEAD
-            -t "$IMAGE_NAME:${{ github.sha }}" \
-            -t "$IMAGE_NAME:latest" .
-
-      - name: Restart backend container
-        run: |
-          docker network inspect "$DOCKER_NETWORK" >/dev/null 2>&1 
-
-          docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-
-          ENV_ARGS=""
-          if [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ]; then
-=======
             -t $IMAGE_NAME:${{ github.sha }} \
             -t $IMAGE_NAME:latest .
 
@@ -166,7 +109,6 @@ jobs:
 
           ENV_ARGS=""
           if [ -f "$ENV_FILE" ]; then
->>>>>>> 33f7698 (Add backend dev server deployment workflow (#18))
             ENV_ARGS="--env-file $ENV_FILE"
           fi
 
@@ -179,10 +121,7 @@ jobs:
             $ENV_ARGS \
             "$IMAGE_NAME:latest"
 
-<<<<<<< HEAD
-=======
       # 배포 확인
->>>>>>> 33f7698 (Add backend dev server deployment workflow (#18))
       - name: Health check
         run: |
           for i in $(seq 1 30); do
@@ -198,8 +137,4 @@ jobs:
           done
 
           docker logs --tail 200 "$CONTAINER_NAME"
-<<<<<<< HEAD
           exit 1
-=======
-          exit 1
->>>>>>> 33f7698 (Add backend dev server deployment workflow (#18))
