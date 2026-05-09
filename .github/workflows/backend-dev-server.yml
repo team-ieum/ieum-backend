@@ -17,7 +17,7 @@ env:
   IMAGE_NAME: ieum-backend-dev
   CONTAINER_NAME: ieum-backend
   LEGACY_CONTAINER_NAME: hirescope-backend
-  DOCKER_NETWORK: deploy_hirescope_net
+  DOCKER_NETWORK: ieum_net_green
   BACKEND_IP: 10.10.10.11
   BACKEND_PORT: '8080'
   SPRING_PROFILES_ACTIVE: dev
@@ -28,8 +28,7 @@ jobs:
     name: Deploy Dev to Self Hosted Server
     runs-on:
       group: ieum_dev_server
-      labels: [self-hosted, linux, x64, ieum-backend]
-
+      labels: [self-hosted, linux, x64, dev, deploy]
 
     services:
       redis:
@@ -58,9 +57,9 @@ jobs:
       - name: Make Gradle executable
         run: chmod +x gradlew
 
-      # 테스트를 제외하고 애플리케이션 빌드
+      # 테스트를 제외하고 실행 가능한 Spring Boot JAR 생성
       - name: Build
-        run: ./gradlew build -x test --no-daemon
+        run: ./gradlew :api:bootJar -x test --no-daemon
 
       # 테스트 실행
       - name: Test
@@ -71,10 +70,10 @@ jobs:
         run: |
           mkdir -p .deploy
 
-          BOOT_JAR="$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*plain.jar' | head -n 1)"
+          BOOT_JAR="$(find api/build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*plain.jar' | head -n 1)"
 
           if [ -z "$BOOT_JAR" ]; then
-            echo "::error::Spring Boot jar file was not found in build/libs"
+            echo "::error::Spring Boot jar file was not found in api/build/libs"
             exit 1
           fi
 
