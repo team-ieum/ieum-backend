@@ -1,13 +1,11 @@
-package com.ieum.workflowcore.executor;
+package com.ieum.workflowcore.engine.executor;
 
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.ExecutionCursor;
 import com.ieum.workflowcore.engine.ExecutorResult;
 import com.ieum.workflowcore.engine.Node;
-import com.ieum.workflowcore.engine.executor.CredentialProvider;
-import com.ieum.workflowcore.engine.executor.NodeExecutor;
-import com.ieum.workflowcore.executor.dto.AgentExecutionResult;
-import com.ieum.workflowcore.executor.dto.AgentNodeRequest;
+import com.ieum.workflowcore.engine.executor.dto.AgentExecutionResult;
+import com.ieum.workflowcore.engine.executor.dto.AgentNodeRequest;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
@@ -73,11 +71,9 @@ public class AgentNodeExecutor implements NodeExecutor {
             String promptTemplateId = (String) config.get("promptTemplateId");
             List<Map<String, Object>> tools = (List<Map<String, Object>>) config.get("tools");
 
-            // 프롬프트 변수 치환
             String renderedPrompt = cursor.renderVariables(promptTemplate);
             log.debug("[AgentNodeExecutor] 렌더링된 프롬프트 길이: {}", renderedPrompt.length());
 
-            // API Key 복호화
             String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
 
             AgentNodeRequest request = AgentNodeRequest.builder()
@@ -92,7 +88,8 @@ public class AgentNodeExecutor implements NodeExecutor {
             if (!agentResult.isSuccess()) {
                 log.error("[AgentNodeExecutor] 에이전트 실행 실패 — nodeId: {}, error: {}",
                     node.getId(), agentResult.getErrorMessage());
-                return ExecutorResult.failure(agentResult.getErrorMessage(), System.currentTimeMillis() - startTime);
+                return ExecutorResult.failure(agentResult.getErrorMessage(),
+                    System.currentTimeMillis() - startTime);
             }
 
             Map<String, Object> output = new HashMap<>();
@@ -126,7 +123,8 @@ public class AgentNodeExecutor implements NodeExecutor {
             log.error("[AgentNodeExecutor] 에이전트 서비스 오류 — status: {}, body: {}",
                 e.getStatusCode(), e.getResponseBodyAsString());
             return new AgentExecutionResult(false, null, null,
-                "에이전트 서비스 오류 (HTTP " + e.getStatusCode().value() + "): " + e.getResponseBodyAsString());
+                "에이전트 서비스 오류 (HTTP " + e.getStatusCode().value() + "): "
+                    + e.getResponseBodyAsString());
         }
     }
 }
