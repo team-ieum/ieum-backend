@@ -28,6 +28,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -65,11 +67,11 @@ public class WorkflowService {
             .build();
         workflowVersionRepository.save(version);
 
-        return WorkflowResponse.from(workflow, version);
+        return WorkflowResponse.from(workflow, version, objectMapper);
     }
 
     public PageResponse<WorkflowResponse> getWorkflows(UUID userId, String cursor, int size) {
-        int page = cursor != null ? Integer.parseInt(cursor) : 0;
+        int page = parseCursor(cursor);
         Pageable pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
         List<Workflow> workflows = workflowRepository.findByUserId(userId, pageable);
 
@@ -77,9 +79,13 @@ public class WorkflowService {
         boolean hasNext = !workflowRepository.findByUserId(userId, peekPageable).isEmpty();
         String nextCursor = hasNext ? String.valueOf(page + 1) : null;
 
+        List<UUID> workflowIds = workflows.stream().map(Workflow::getId).toList();
+        Map<UUID, WorkflowVersion> latestVersionMap = workflowVersionRepository
+            .findLatestByWorkflowIds(workflowIds).stream()
+            .collect(Collectors.toMap(wv -> wv.getWorkflow().getId(), Function.identity()));
+
         List<WorkflowResponse> responses = workflows.stream()
-            .map(w -> WorkflowResponse.from(w,
-                workflowVersionRepository.findLatestByWorkflowId(w.getId()).orElse(null)))
+            .map(w -> WorkflowResponse.from(w, latestVersionMap.get(w.getId()), objectMapper))
             .toList();
 
         return PageResponse.of(responses, hasNext, nextCursor);
@@ -90,7 +96,7 @@ public class WorkflowService {
         WorkflowVersion latestVersion = workflowVersionRepository
             .findLatestByWorkflowId(workflowId)
             .orElse(null);
-        return WorkflowResponse.from(workflow, latestVersion);
+        return WorkflowResponse.from(workflow, latestVersion, objectMapper);
     }
 
     @Transactional
@@ -99,7 +105,7 @@ public class WorkflowService {
         Workflow workflow = findWorkflowByOwner(userId, workflowId);
         workflow.update(request.getName(), request.getDescription());
 
-        int nextVersion = workflowVersionRepository.findByWorkflowId(workflowId).size() + 1;
+        int nextVersion = workflowVersionRepository.findMaxVersionByWorkflowId(workflowId) + 1;
         WorkflowVersion version = WorkflowVersion.builder()
             .workflow(workflow)
             .version(nextVersion)
@@ -108,7 +114,7 @@ public class WorkflowService {
             .build();
         workflowVersionRepository.save(version);
 
-        return WorkflowResponse.from(workflow, version);
+        return WorkflowResponse.from(workflow, version, objectMapper);
     }
 
     @Transactional
@@ -130,7 +136,7 @@ public class WorkflowService {
         workflow.activate();
         WorkflowVersion latestVersion = workflowVersionRepository
             .findLatestByWorkflowId(workflowId).orElse(null);
-        return WorkflowResponse.from(workflow, latestVersion);
+        return WorkflowResponse.from(workflow, latestVersion, objectMapper);
     }
 
     @Transactional
@@ -139,7 +145,7 @@ public class WorkflowService {
         workflow.deactivate();
         WorkflowVersion latestVersion = workflowVersionRepository
             .findLatestByWorkflowId(workflowId).orElse(null);
-        return WorkflowResponse.from(workflow, latestVersion);
+        return WorkflowResponse.from(workflow, latestVersion, objectMapper);
     }
 
     @Transactional
@@ -176,7 +182,7 @@ public class WorkflowService {
             String cursor, int size) {
         findWorkflowByOwner(userId, workflowId);
 
-        int page = cursor != null ? Integer.parseInt(cursor) : 0;
+        int page = parseCursor(cursor);
         Pageable pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
         List<WorkflowExecution> executions = workflowExecutionRepository
             .findByWorkflowId(workflowId, pageable);
@@ -215,6 +221,15 @@ public class WorkflowService {
     private Workflow findWorkflowByOwner(UUID userId, UUID workflowId) {
         return workflowRepository.findByIdAndUserId(workflowId, userId)
             .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+    }
+
+    private int parseCursor(String cursor) {
+        if (cursor == null) return 0;
+        try {
+            return Integer.parseInt(cursor);
+        } catch (NumberFormatException e) {
+            throw new CustomException(ErrorCode.INVALID_CURSOR);
+        }
     }
 
     private String toJson(Object obj) {
