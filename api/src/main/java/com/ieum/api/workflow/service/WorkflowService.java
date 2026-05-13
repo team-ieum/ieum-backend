@@ -1,5 +1,6 @@
 package com.ieum.api.workflow.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.api.workflow.dto.CreateWorkflowRequest;
@@ -31,12 +32,14 @@ import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -67,7 +70,8 @@ public class WorkflowService {
             .build();
         workflowVersionRepository.save(version);
 
-        return WorkflowResponse.from(workflow, version, objectMapper);
+        return WorkflowResponse.from(workflow, version,
+            parseNodes(version.getNodesJson()), parseEdges(version.getEdgesJson()));
     }
 
     public PageResponse<WorkflowResponse> getWorkflows(UUID userId, String cursor, int size) {
@@ -85,7 +89,12 @@ public class WorkflowService {
             .collect(Collectors.toMap(wv -> wv.getWorkflow().getId(), Function.identity()));
 
         List<WorkflowResponse> responses = workflows.stream()
-            .map(w -> WorkflowResponse.from(w, latestVersionMap.get(w.getId()), objectMapper))
+            .map(w -> {
+                WorkflowVersion wv = latestVersionMap.get(w.getId());
+                List<NodeDto> nodes = wv != null ? parseNodes(wv.getNodesJson()) : Collections.emptyList();
+                List<EdgeDto> edges = wv != null ? parseEdges(wv.getEdgesJson()) : Collections.emptyList();
+                return WorkflowResponse.from(w, wv, nodes, edges);
+            })
             .toList();
 
         return PageResponse.of(responses, hasNext, nextCursor);
@@ -96,7 +105,9 @@ public class WorkflowService {
         WorkflowVersion latestVersion = workflowVersionRepository
             .findFirstByWorkflowIdOrderByVersionDesc(workflowId)
             .orElse(null);
-        return WorkflowResponse.from(workflow, latestVersion, objectMapper);
+        List<NodeDto> nodes = latestVersion != null ? parseNodes(latestVersion.getNodesJson()) : Collections.emptyList();
+        List<EdgeDto> edges = latestVersion != null ? parseEdges(latestVersion.getEdgesJson()) : Collections.emptyList();
+        return WorkflowResponse.from(workflow, latestVersion, nodes, edges);
     }
 
     @Transactional
@@ -114,16 +125,18 @@ public class WorkflowService {
             .build();
         workflowVersionRepository.save(version);
 
-        return WorkflowResponse.from(workflow, version, objectMapper);
+        return WorkflowResponse.from(workflow, version,
+            parseNodes(version.getNodesJson()), parseEdges(version.getEdgesJson()));
     }
 
     @Transactional
     public void deleteWorkflow(UUID userId, UUID workflowId) {
         Workflow workflow = findWorkflowByOwner(userId, workflowId);
 
-        List<WorkflowExecution> executions = workflowExecutionRepository.findByWorkflow(workflow);
-        for (WorkflowExecution execution : executions) {
-            workflowExecutionLogRepository.deleteByExecution(execution);
+        List<UUID> executionIds = workflowExecutionRepository.findByWorkflow(workflow)
+            .stream().map(WorkflowExecution::getId).toList();
+        if (!executionIds.isEmpty()) {
+            workflowExecutionLogRepository.deleteByExecutionIdIn(executionIds); // 단일 쿼리
         }
         workflowExecutionRepository.deleteByWorkflow(workflow);
         workflowVersionRepository.deleteByWorkflow(workflow);
@@ -136,7 +149,9 @@ public class WorkflowService {
         workflow.activate();
         WorkflowVersion latestVersion = workflowVersionRepository
             .findFirstByWorkflowIdOrderByVersionDesc(workflowId).orElse(null);
-        return WorkflowResponse.from(workflow, latestVersion, objectMapper);
+        List<NodeDto> nodes = latestVersion != null ? parseNodes(latestVersion.getNodesJson()) : Collections.emptyList();
+        List<EdgeDto> edges = latestVersion != null ? parseEdges(latestVersion.getEdgesJson()) : Collections.emptyList();
+        return WorkflowResponse.from(workflow, latestVersion, nodes, edges);
     }
 
     @Transactional
@@ -145,7 +160,9 @@ public class WorkflowService {
         workflow.deactivate();
         WorkflowVersion latestVersion = workflowVersionRepository
             .findFirstByWorkflowIdOrderByVersionDesc(workflowId).orElse(null);
-        return WorkflowResponse.from(workflow, latestVersion, objectMapper);
+        List<NodeDto> nodes = latestVersion != null ? parseNodes(latestVersion.getNodesJson()) : Collections.emptyList();
+        List<EdgeDto> edges = latestVersion != null ? parseEdges(latestVersion.getEdgesJson()) : Collections.emptyList();
+        return WorkflowResponse.from(workflow, latestVersion, nodes, edges);
     }
 
     @Transactional
@@ -229,6 +246,26 @@ public class WorkflowService {
             return Integer.parseInt(cursor);
         } catch (NumberFormatException e) {
             throw new CustomException(ErrorCode.INVALID_CURSOR);
+        }
+    }
+
+    private List<NodeDto> parseNodes(String json) {
+        if (json == null || json.isBlank()) return Collections.emptyList();
+        try {
+            return objectMapper.readValue(json, new TypeReference<>() {});
+        } catch (Exception e) {
+            log.warn("[WorkflowService] nodes JSON 파싱 실패: {}", e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
+    private List<EdgeDto> parseEdges(String json) {
+        if (json == null || json.isBlank()) return Collections.emptyList();
+        try {
+            return objectMapper.readValue(json, new TypeReference<>() {});
+        } catch (Exception e) {
+            log.warn("[WorkflowService] edges JSON 파싱 실패: {}", e.getMessage());
+            return Collections.emptyList();
         }
     }
 

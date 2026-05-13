@@ -37,9 +37,9 @@ public class ConditionNodeExecutor implements NodeExecutor {
             Map<String, Object> config = node.getConfig();
             String operator = (String) config.get("operator");
 
-            // 변수 치환 (SyncExecutionRuntime이 이미 config에 치환했지만, leftValue/rightValue는 추가로 처리)
-            Object leftValue = config.get("leftValue");
-            Object rightValue = config.get("rightValue");
+            // left/leftValue, right/rightValue 둘 다 허용 (Swagger 예시와 내부 필드명 혼용 대응)
+            Object leftValue = config.containsKey("left") ? config.get("left") : config.get("leftValue");
+            Object rightValue = config.containsKey("right") ? config.get("right") : config.get("rightValue");
 
             if (leftValue instanceof String s) {
                 leftValue = cursor.renderVariables(s);
