@@ -17,6 +17,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -64,13 +65,24 @@ public class SyncExecutionRuntime {
         log.info("[Runtime] 워크플로우 실행 시작 — executionId: {}, versionId: {}",
             execution.getId(), workflowVersion.getId());
 
-        // 1. JSON 파싱
-        List<Node> nodes = objectMapper.readValue(
-            workflowVersion.getNodesJson(), new TypeReference<>() {}
-        );
-        List<Edge> edges = objectMapper.readValue(
-            workflowVersion.getEdgesJson(), new TypeReference<>() {}
-        );
+        // 1. JSON 파싱 및 TRIGGER 검증 (start() 이전 — 실패 시 FAILED로 전환)
+        List<Node> nodes;
+        List<Edge> edges;
+        Node triggerNode;
+        try {
+            nodes = objectMapper.readValue(workflowVersion.getNodesJson(), new TypeReference<>() {});
+            edges = objectMapper.readValue(workflowVersion.getEdgesJson(), new TypeReference<>() {});
+            triggerNode = nodes.stream()
+                .filter(n -> n.getType() == NodeType.TRIGGER)
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("TRIGGER 노드가 없습니다."));
+        } catch (Exception e) {
+            log.error("[Runtime] 워크플로우 초기화 실패 — executionId: {}, error: {}",
+                execution.getId(), e.getMessage());
+            execution.fail();
+            workflowExecutionRepository.save(execution);
+            throw e;
+        }
 
         // 2. ExecutionCursor 초기화
         ExecutionCursor cursor = new ExecutionCursor();
@@ -78,18 +90,12 @@ public class SyncExecutionRuntime {
         cursor.setAllEdges(edges);
         cursor.setContext(new ExecutionContext());
 
-        // 3. TRIGGER 노드 탐색 및 트리거 데이터 컨텍스트 주입
-        Node triggerNode = nodes.stream()
-            .filter(n -> n.getType() == NodeType.TRIGGER)
-            .findFirst()
-            .orElseThrow(() -> new IllegalStateException("TRIGGER 노드가 없습니다."));
-
         cursor.getContext().setNodeOutput(triggerNode.getId(),
             triggerData != null ? triggerData : new HashMap<>());
         cursor.setCurrentNodeId(triggerNode.getId());
-        cursor.isCircularReference(triggerNode.getId()); // 시작 노드를 방문 목록에 추가
+        cursor.isCircularReference(triggerNode.getId());
 
-        // 4. RUNNING 상태로 전환
+        // 3. RUNNING 상태로 전환
         execution.start();
         workflowExecutionRepository.save(execution);
 
@@ -202,6 +208,22 @@ public class SyncExecutionRuntime {
         return value;
     }
 
+    private static final Set<String> SENSITIVE_KEYS =
+        Set.of("apiKey", "api_key", "token", "secret", "password", "Authorization");
+
+    private Map<String, Object> maskSensitiveFields(Map<String, Object> data) {
+        if (data == null) return null;
+        Map<String, Object> masked = new java.util.LinkedHashMap<>();
+        data.forEach((k, v) -> {
+            if (SENSITIVE_KEYS.stream().anyMatch(s -> k.toLowerCase().contains(s.toLowerCase()))) {
+                masked.put(k, "***");
+            } else {
+                masked.put(k, v);
+            }
+        });
+        return masked;
+    }
+
     private void saveExecutionLog(
         WorkflowExecution execution,
         Node node,
@@ -210,9 +232,9 @@ public class SyncExecutionRuntime {
         long durationMs
     ) {
         try {
-            String inputJson = objectMapper.writeValueAsString(input);
+            String inputJson = objectMapper.writeValueAsString(maskSensitiveFields(input));
             String outputJson = result.isSuccess()
-                ? objectMapper.writeValueAsString(result.getOutput())
+                ? objectMapper.writeValueAsString(maskSensitiveFields(result.getOutput()))
                 : null;
 
             WorkflowExecutionLog logEntry = WorkflowExecutionLog.builder()

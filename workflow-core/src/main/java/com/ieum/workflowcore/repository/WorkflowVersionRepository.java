@@ -12,8 +12,7 @@ import org.springframework.data.repository.query.Param;
 
 public interface WorkflowVersionRepository extends JpaRepository<WorkflowVersion, UUID> {
 
-    @Query("SELECT wv FROM WorkflowVersion wv WHERE wv.workflow.id = :workflowId ORDER BY wv.version DESC LIMIT 1")
-    Optional<WorkflowVersion> findLatestByWorkflowId(@Param("workflowId") UUID workflowId);
+    Optional<WorkflowVersion> findFirstByWorkflowIdOrderByVersionDesc(UUID workflowId);
 
     /** 여러 워크플로우 ID의 최신 버전을 한 번에 조회 (N+1 방지) */
     @Query("SELECT wv FROM WorkflowVersion wv WHERE wv.workflow.id IN :workflowIds AND wv.version = " +

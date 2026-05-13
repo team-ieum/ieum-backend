@@ -38,9 +38,15 @@ public class TriggerNodeExecutor implements NodeExecutor {
 
             switch (triggerType) {
                 case "SCHEDULE" -> {
-                    output.put("triggeredAt",
-                        LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
-                    log.debug("[TriggerExecutor] SCHEDULE 트리거 — triggeredAt: {}", output.get("triggeredAt"));
+                    String cron = (String) node.getConfig().get("cron");
+                    if (cron == null || cron.isBlank()) {
+                        throw new IllegalStateException(
+                            "SCHEDULE 트리거에 cron 필드가 없습니다. nodeId: " + node.getId());
+                    }
+                    String triggeredAt = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+                    output.put("triggeredAt", triggeredAt);
+                    output.put("cron", cron);
+                    log.debug("[TriggerExecutor] SCHEDULE 트리거 — cron: {}, triggeredAt: {}", cron, triggeredAt);
                 }
                 default -> {
                     // WEBHOOK, MANUAL: 입력 데이터를 그대로 output으로 전달
