@@ -33,3 +33,7 @@ Thumbbs.db
 .terraform/
 
 .claude/worktrees/
+
+.agents/
+.codex/
+AGENTS.md

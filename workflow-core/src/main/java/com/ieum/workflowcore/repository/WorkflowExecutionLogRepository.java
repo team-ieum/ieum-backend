@@ -19,4 +19,11 @@ public interface WorkflowExecutionLogRepository extends JpaRepository<WorkflowEx
     @Modifying(clearAutomatically = true)
     @Query("DELETE FROM WorkflowExecutionLog wl WHERE wl.execution = :execution")
     void deleteByExecution(@Param("execution") WorkflowExecution execution);
+
+    /**
+     * 여러 실행 ID에 속한 로그를 단일 쿼리로 삭제한다 (N+1 방지).
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("DELETE FROM WorkflowExecutionLog wl WHERE wl.execution.id IN :executionIds")
+    void deleteByExecutionIdIn(@Param("executionIds") List<UUID> executionIds);
 }

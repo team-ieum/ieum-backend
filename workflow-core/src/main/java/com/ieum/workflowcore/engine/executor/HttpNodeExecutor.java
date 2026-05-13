@@ -6,6 +6,8 @@ import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.ExecutionCursor;
 import com.ieum.workflowcore.engine.ExecutorResult;
 import com.ieum.workflowcore.engine.Node;
+import java.net.InetAddress;
+import java.net.URI;
 import java.util.HashMap;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
@@ -62,6 +64,7 @@ public class HttpNodeExecutor implements NodeExecutor {
             Object bodyObj = config.get("body");
 
             log.debug("[HttpExecutor] {} {}", method, url);
+            validateUrl(url);
 
             // 헤더 변수 치환
             HttpHeaders httpHeaders = new HttpHeaders();
@@ -107,6 +110,31 @@ public class HttpNodeExecutor implements NodeExecutor {
             case "DELETE" -> restTemplate.exchange(url, HttpMethod.DELETE, entity, String.class);
             default -> throw new IllegalArgumentException("지원하지 않는 HTTP 메서드: " + method);
         };
+    }
+
+    /**
+     * SSRF 방어: 루프백·사이트로컬·링크로컬 등 내부 네트워크 주소 차단.
+     * AWS 메타데이터(169.254.169.254), localhost, 10.x/172.16-31.x/192.168.x 등을 포함한다.
+     */
+    private void validateUrl(String url) {
+        try {
+            String host = new URI(url).getHost();
+            if (host == null || host.isBlank()) {
+                throw new IllegalArgumentException("URL에 호스트가 없습니다: " + url);
+            }
+            InetAddress address = InetAddress.getByName(host);
+            if (address.isLoopbackAddress()
+                    || address.isSiteLocalAddress()
+                    || address.isLinkLocalAddress()
+                    || address.isAnyLocalAddress()) {
+                throw new IllegalArgumentException(
+                    "내부 네트워크 주소로의 요청은 허용되지 않습니다: " + host);
+            }
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException("유효하지 않은 URL: " + url, e);
+        }
     }
 
     private Object parseBody(String body) {
