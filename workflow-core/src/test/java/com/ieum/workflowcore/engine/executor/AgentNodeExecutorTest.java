@@ -33,7 +33,7 @@ class AgentNodeExecutorTest {
         mockWebServer.start();
         credentialProvider = mock(CredentialProvider.class);
         when(credentialProvider.getDecryptedApiKey(any())).thenReturn("decrypted-api-key");
-        executor = new AgentNodeExecutor(mockWebServer.url("/").toString(), credentialProvider);
+        executor = new AgentNodeExecutor(mockWebServer.url("/").toString(), credentialProvider, 30);
     }
 
     @AfterEach

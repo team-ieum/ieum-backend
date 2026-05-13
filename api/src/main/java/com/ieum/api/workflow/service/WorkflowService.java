@@ -94,7 +94,7 @@ public class WorkflowService {
     public WorkflowResponse getWorkflow(UUID userId, UUID workflowId) {
         Workflow workflow = findWorkflowByOwner(userId, workflowId);
         WorkflowVersion latestVersion = workflowVersionRepository
-            .findLatestByWorkflowId(workflowId)
+            .findFirstByWorkflowIdOrderByVersionDesc(workflowId)
             .orElse(null);
         return WorkflowResponse.from(workflow, latestVersion, objectMapper);
     }
@@ -135,7 +135,7 @@ public class WorkflowService {
         Workflow workflow = findWorkflowByOwner(userId, workflowId);
         workflow.activate();
         WorkflowVersion latestVersion = workflowVersionRepository
-            .findLatestByWorkflowId(workflowId).orElse(null);
+            .findFirstByWorkflowIdOrderByVersionDesc(workflowId).orElse(null);
         return WorkflowResponse.from(workflow, latestVersion, objectMapper);
     }
 
@@ -144,7 +144,7 @@ public class WorkflowService {
         Workflow workflow = findWorkflowByOwner(userId, workflowId);
         workflow.deactivate();
         WorkflowVersion latestVersion = workflowVersionRepository
-            .findLatestByWorkflowId(workflowId).orElse(null);
+            .findFirstByWorkflowIdOrderByVersionDesc(workflowId).orElse(null);
         return WorkflowResponse.from(workflow, latestVersion, objectMapper);
     }
 
@@ -158,7 +158,7 @@ public class WorkflowService {
         }
 
         WorkflowVersion latestVersion = workflowVersionRepository
-            .findLatestByWorkflowId(workflowId)
+            .findFirstByWorkflowIdOrderByVersionDesc(workflowId)
             .orElseThrow(() -> new CustomException(ErrorCode.INVALID_WORKFLOW, "버전이 없는 워크플로우입니다."));
 
         WorkflowExecution execution = WorkflowExecution.builder()

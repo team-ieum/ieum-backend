@@ -40,15 +40,18 @@ public class AgentNodeExecutor implements NodeExecutor {
 
     private final WebClient webClient;
     private final CredentialProvider credentialProvider;
+    private final int agentTimeoutSeconds;
 
     public AgentNodeExecutor(
         @Value("${ieum.agent.url}") String agentBaseUrl,
-        CredentialProvider credentialProvider
+        CredentialProvider credentialProvider,
+        @Value("${ieum.agent.timeout-seconds:120}") int agentTimeoutSeconds
     ) {
         this.webClient = WebClient.builder()
             .baseUrl(agentBaseUrl)
             .build();
         this.credentialProvider = credentialProvider;
+        this.agentTimeoutSeconds = agentTimeoutSeconds;
     }
 
     @Override
@@ -69,6 +72,9 @@ public class AgentNodeExecutor implements NodeExecutor {
             String credentialId = (String) config.get("credentialId");
             String promptTemplate = (String) config.getOrDefault("prompt", "");
             String promptTemplateId = (String) config.get("promptTemplateId");
+            String systemMessage = (String) config.get("systemMessage");
+            String model = (String) config.get("model");
+            String agentType = (String) config.getOrDefault("agentType", "simple");
             List<Map<String, Object>> tools = (List<Map<String, Object>>) config.get("tools");
 
             String renderedPrompt = cursor.renderVariables(promptTemplate);
@@ -80,6 +86,9 @@ public class AgentNodeExecutor implements NodeExecutor {
                 .nodeId(node.getId())
                 .promptTemplateId(promptTemplateId)
                 .renderedPrompt(renderedPrompt)
+                .systemMessage(systemMessage)
+                .model(model)
+                .agentType(agentType)
                 .tools(tools)
                 .build();
 
@@ -117,7 +126,7 @@ public class AgentNodeExecutor implements NodeExecutor {
                 .bodyValue(request)
                 .retrieve()
                 .bodyToMono(AgentExecutionResult.class)
-                .timeout(Duration.ofSeconds(60))
+                .timeout(Duration.ofSeconds(agentTimeoutSeconds))
                 .block();
         } catch (WebClientResponseException e) {
             log.error("[AgentNodeExecutor] 에이전트 서비스 오류 — status: {}, body: {}",
