@@ -120,11 +120,24 @@ grep -rn "addFilterBefore\|JwtAuthenticationFilter" --include="SecurityConfig.ja
 **PASS:** `addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)` 존재
 **FAIL:** 미존재 — `addFilterBefore` 설정 추가 필요
 
+### Check 9: OAuth2 authorizationEndpoint baseUri 충돌 방지 확인
+
+`oauth2Login().authorizationEndpoint().baseUri()`가 REST API 경로와 겹치면 OAuth2 필터가 일반 API 요청을 가로챕니다.
+예: `baseUri("/api/v1/auth")`로 설정 시 `POST /api/v1/auth/register`의 `register`가 registrationId로 인식됨.
+
+```bash
+# authorizationEndpoint baseUri 설정 확인
+grep -rn "authorizationEndpoint\|baseUri" --include="SecurityConfig.java" . | grep -v test | grep -v build
+```
+
+**PASS:** `baseUri`가 `/oauth2/authorization` 또는 `/api/v1/oauth2/authorize` 등 REST API 경로와 겹치지 않는 전용 경로
+**FAIL:** REST 컨트롤러 경로(`/api/v1/auth` 등)와 동일한 prefix 사용 → 전용 경로로 분리 필요
+
 ## 예외사항
 
 다음은 **위반이 아닙니다**:
 
 1. **테스트 코드** — `src/test` 하위 파일은 검사 제외
 2. **빌드 생성 파일** — `build/` 하위 파일은 검사 제외
-3. **OAuth2 설정 누락** — OAuth2 로그인 설정은 별도 커밋에서 추가 (현재 미포함이 정상)
+3. **OAuth2 설정 존재** — OAuth2 로그인 설정이 구현됨. `oauth2Login()` 블록과 관련 핸들러(`OAuth2AuthenticationSuccessHandler` 등)가 존재하는 것은 정상
 4. **formLogin/httpBasic 비활성화** — REST API이므로 비활성화가 올바른 설정

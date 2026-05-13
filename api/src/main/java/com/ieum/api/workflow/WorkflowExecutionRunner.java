@@ -1,0 +1,28 @@
+package com.ieum.api.workflow;
+
+import com.ieum.workflowcore.domain.WorkflowExecution;
+import com.ieum.workflowcore.domain.WorkflowVersion;
+import com.ieum.workflowcore.engine.SyncExecutionRuntime;
+import java.util.Map;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Component;
+
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class WorkflowExecutionRunner {
+
+    private final SyncExecutionRuntime syncExecutionRuntime;
+
+    @Async("workflowExecutor")
+    public void run(WorkflowVersion workflowVersion, WorkflowExecution execution,
+            Map<String, Object> triggerData) {
+        try {
+            syncExecutionRuntime.execute(workflowVersion, execution, triggerData);
+        } catch (Exception e) {
+            log.error("[Runner] 워크플로우 실행 예외 — executionId: {}", execution.getId(), e);
+        }
+    }
+}

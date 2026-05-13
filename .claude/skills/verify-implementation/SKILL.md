@@ -33,6 +33,7 @@ argument-hint: "[선택사항: 특정 verify 스킬 이름]"
 | 2 | `verify-jpa-entity` | JPA 엔티티 및 Repository 규칙 검증 |
 | 3 | `verify-db-migration` | Flyway DB 마이그레이션 규칙 검증 |
 | 4 | `verify-security` | Spring Security 설정 및 JWT 인증 레이어 규칙 검증 |
+| 5 | `verify-workflow-engine` | 워크플로우 실행 엔진 패턴 규칙 검증 |
 
 ## 워크플로우
 
