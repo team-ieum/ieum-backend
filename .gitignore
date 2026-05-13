@@ -31,3 +31,9 @@ Thumbbs.db
 *.tfstate
 *.tfstate.backup
 .terraform/
+
+.claude/worktrees/
+
+.agents/
+.codex/
+AGENTS.md
