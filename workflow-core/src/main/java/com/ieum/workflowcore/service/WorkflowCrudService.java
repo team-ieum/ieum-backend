@@ -134,6 +134,15 @@ public class WorkflowCrudService {
             .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
     }
 
+    /**
+     * 스케줄 Job에서 사용. 비활성화된 경우 null 반환 (소유권 검증 불필요).
+     */
+    public Workflow findActiveById(UUID workflowId) {
+        return workflowRepository.findById(workflowId)
+            .filter(Workflow::isActive)
+            .orElse(null);
+    }
+
     public Optional<WorkflowVersion> findLatestVersion(UUID workflowId) {
         return workflowVersionRepository.findFirstByWorkflowIdOrderByVersionDesc(workflowId);
     }
