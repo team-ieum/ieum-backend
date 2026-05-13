@@ -52,6 +52,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(
                     "/api/v1/auth/**",
+                    "/api/v1/oauth2/**",
                     "/api/v1/providers",
                     "/swagger-ui/**",
                     "/v3/api-docs/**",
@@ -61,10 +62,10 @@ public class SecurityConfig {
                 .anyRequest().authenticated())
             .oauth2Login(oauth2 -> oauth2
                 .authorizationEndpoint(auth -> auth
-                    .baseUri("/api/v1/auth")
+                    .baseUri("/api/v1/oauth2/authorize")
                     .authorizationRequestRepository(cookieAuthorizationRequestRepository))
                 .redirectionEndpoint(redirect -> redirect
-                    .baseUri("/api/v1/auth/*/callback"))
+                    .baseUri("/api/v1/oauth2/callback/*"))
                 .userInfoEndpoint(userInfo -> userInfo
                     .userService(customOAuth2UserService))
                 .successHandler(oAuth2AuthenticationSuccessHandler)

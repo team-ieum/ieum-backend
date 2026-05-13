@@ -34,6 +34,7 @@ argument-hint: "[선택사항: 특정 스킬 이름 또는 집중할 영역]"
 | `verify-jpa-entity` | JPA 엔티티 및 Repository 규칙 검증 | `**/entity/*.java`, `**/domain/*.java`, `**/repository/*Repository.java`, `**/repository/*RepositoryCustom.java`, `**/repository/*RepositoryImpl.java`, `**/config/JpaAuditingConfig.java`, `**/config/QueryDslConfig.java` |
 | `verify-db-migration` | Flyway DB 마이그레이션 규칙 검증 | `**/db/migration/V*.sql` |
 | `verify-security` | Spring Security 설정 및 JWT 인증 레이어 규칙 검증 | `**/config/SecurityConfig.java`, `**/jwt/Jwt*.java`, `**/security/Custom*.java` |
+| `verify-workflow-engine` | 워크플로우 실행 엔진 패턴 규칙 검증 | `**/engine/executor/*.java`, `**/executor/*NodeExecutor.java`, `**/engine/SyncExecutionRuntime.java`, `**/engine/ExecutorResult.java`, `**/config/WorkflowConfig.java`, `**/workflow/WorkflowExecutionRunner.java` |
 
 ## 워크플로우
 
