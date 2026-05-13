@@ -1,0 +1,221 @@
+package com.ieum.api.workflow.controller;
+
+import com.ieum.api.workflow.dto.CreateWorkflowRequest;
+import com.ieum.api.workflow.dto.ExecuteWorkflowRequest;
+import com.ieum.api.workflow.dto.UpdateWorkflowRequest;
+import com.ieum.api.workflow.dto.WorkflowExecutionLogResponse;
+import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
+import com.ieum.api.workflow.dto.WorkflowResponse;
+import com.ieum.auth.security.CustomUserDetails;
+import com.ieum.common.dto.ApiResponse;
+import com.ieum.common.dto.PageResponse;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.parameters.RequestBody;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import java.util.List;
+import java.util.UUID;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+
+@Tag(name = "워크플로우", description = "워크플로우 생성·관리·실행")
+@SecurityRequirement(name = "BearerAuth")
+public interface WorkflowControllerDocs {
+
+    @Operation(summary = "워크플로우 생성")
+    @PreAuthorize("hasRole('USER')")
+    @RequestBody(content = @Content(
+        mediaType = "application/json",
+        schema = @Schema(implementation = CreateWorkflowRequest.class),
+        examples = {
+            @ExampleObject(
+                name = "TRIGGER → TRANSFORM",
+                summary = "변수 치환 기본 테스트",
+                value = """
+                    {
+                      "name": "변수 치환 테스트",
+                      "description": "triggerData 값을 TRANSFORM으로 가공",
+                      "nodes": [
+                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "시작",      "config": {} },
+                        { "id": "node-transform", "type": "TRANSFORM", "label": "메시지 가공",
+                          "config": { "mappings": {
+                            "greeting": "안녕하세요, {{nodes.node-trigger.output.name}}님!",
+                            "original": "{{nodes.node-trigger.output.name}}"
+                          }}}
+                      ],
+                      "edges": [
+                        { "source": "node-trigger", "target": "node-transform" }
+                      ]
+                    }"""
+            ),
+            @ExampleObject(
+                name = "TRIGGER → CONDITION → TRANSFORM 분기",
+                summary = "score 값으로 합격/불합격 분기",
+                value = """
+                    {
+                      "name": "CONDITION 분기 테스트",
+                      "description": "score 값에 따라 pass/fail 분기",
+                      "nodes": [
+                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "시작", "config": {} },
+                        { "id": "node-condition", "type": "CONDITION", "label": "점수 판정",
+                          "config": { "left": "{{nodes.node-trigger.output.score}}", "operator": "greaterThanOrEqual", "right": "60" }},
+                        { "id": "node-pass", "type": "TRANSFORM", "label": "합격 처리",
+                          "config": { "mappings": { "result": "합격", "score": "{{nodes.node-trigger.output.score}}" }}},
+                        { "id": "node-fail", "type": "TRANSFORM", "label": "불합격 처리",
+                          "config": { "mappings": { "result": "불합격", "score": "{{nodes.node-trigger.output.score}}" }}}
+                      ],
+                      "edges": [
+                        { "source": "node-trigger",   "target": "node-condition" },
+                        { "source": "node-condition", "target": "node-pass", "conditionType": "true" },
+                        { "source": "node-condition", "target": "node-fail", "conditionType": "false" }
+                      ]
+                    }"""
+            ),
+            @ExampleObject(
+                name = "TRIGGER → HTTP → TRANSFORM",
+                summary = "외부 API 호출 후 결과 가공",
+                value = """
+                    {
+                      "name": "HTTP 호출 테스트",
+                      "description": "공개 API 호출 후 결과 가공",
+                      "nodes": [
+                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "시작", "config": {} },
+                        { "id": "node-http",      "type": "HTTP",      "label": "공개 API 호출",
+                          "config": { "method": "GET", "url": "https://jsonplaceholder.typicode.com/todos/1", "headers": {} }},
+                        { "id": "node-transform", "type": "TRANSFORM", "label": "결과 정리",
+                          "config": { "mappings": {
+                            "todoTitle": "{{nodes.node-http.output.title}}",
+                            "isDone":    "{{nodes.node-http.output.completed}}"
+                          }}}
+                      ],
+                      "edges": [
+                        { "source": "node-trigger", "target": "node-http" },
+                        { "source": "node-http",    "target": "node-transform" }
+                      ]
+                    }"""
+            )
+        }
+    ))
+    ResponseEntity<ApiResponse<WorkflowResponse>> create(
+            CustomUserDetails userDetails,
+            CreateWorkflowRequest request);
+
+    @Operation(summary = "워크플로우 목록 조회")
+    @PreAuthorize("hasRole('USER')")
+    ResponseEntity<ApiResponse<PageResponse<WorkflowResponse>>> getList(
+            CustomUserDetails userDetails,
+            @Parameter(description = "커서 (페이지 번호)") String cursor,
+            @Parameter(description = "페이지 크기") int size);
+
+    @Operation(summary = "워크플로우 상세 조회")
+    @PreAuthorize("hasRole('USER')")
+    ResponseEntity<ApiResponse<WorkflowResponse>> get(
+            CustomUserDetails userDetails,
+            @Parameter(description = "워크플로우 ID") UUID id);
+
+    @Operation(summary = "워크플로우 수정 (새 버전 생성)")
+    @PreAuthorize("hasRole('USER')")
+    @RequestBody(content = @Content(
+        mediaType = "application/json",
+        schema = @Schema(implementation = UpdateWorkflowRequest.class),
+        examples = {
+            @ExampleObject(
+                name = "이름·설명 수정 + 노드 추가",
+                value = """
+                    {
+                      "name": "변수 치환 테스트 v2",
+                      "description": "노드 하나 추가",
+                      "nodes": [
+                        { "id": "node-trigger",    "type": "TRIGGER",   "label": "시작", "config": {} },
+                        { "id": "node-transform1", "type": "TRANSFORM", "label": "1차 가공",
+                          "config": { "mappings": { "step1": "{{nodes.node-trigger.output.name}}" }}},
+                        { "id": "node-transform2", "type": "TRANSFORM", "label": "2차 가공",
+                          "config": { "mappings": { "step2": "가공완료: {{nodes.node-transform1.output.step1}}" }}}
+                      ],
+                      "edges": [
+                        { "source": "node-trigger",    "target": "node-transform1" },
+                        { "source": "node-transform1", "target": "node-transform2" }
+                      ]
+                    }"""
+            )
+        }
+    ))
+    ResponseEntity<ApiResponse<WorkflowResponse>> update(
+            CustomUserDetails userDetails,
+            @Parameter(description = "워크플로우 ID") UUID id,
+            UpdateWorkflowRequest request);
+
+    @Operation(summary = "워크플로우 삭제")
+    @PreAuthorize("hasRole('USER')")
+    ResponseEntity<ApiResponse<Void>> delete(
+            CustomUserDetails userDetails,
+            @Parameter(description = "워크플로우 ID") UUID id);
+
+    @Operation(summary = "워크플로우 활성화")
+    @PreAuthorize("hasRole('USER')")
+    ResponseEntity<ApiResponse<WorkflowResponse>> activate(
+            CustomUserDetails userDetails,
+            @Parameter(description = "워크플로우 ID") UUID id);
+
+    @Operation(summary = "워크플로우 비활성화")
+    @PreAuthorize("hasRole('USER')")
+    ResponseEntity<ApiResponse<WorkflowResponse>> deactivate(
+            CustomUserDetails userDetails,
+            @Parameter(description = "워크플로우 ID") UUID id);
+
+    @Operation(summary = "워크플로우 수동 실행")
+    @PreAuthorize("hasRole('USER')")
+    @RequestBody(content = @Content(
+        mediaType = "application/json",
+        schema = @Schema(implementation = ExecuteWorkflowRequest.class),
+        examples = {
+            @ExampleObject(
+                name = "이름 전달",
+                summary = "TRIGGER → TRANSFORM 테스트용",
+                value = """
+                    { "triggerData": { "name": "홍길동" } }"""
+            ),
+            @ExampleObject(
+                name = "점수 전달 (합격)",
+                summary = "CONDITION 분기 테스트용 — score 85",
+                value = """
+                    { "triggerData": { "score": "85" } }"""
+            ),
+            @ExampleObject(
+                name = "점수 전달 (불합격)",
+                summary = "CONDITION 분기 테스트용 — score 45",
+                value = """
+                    { "triggerData": { "score": "45" } }"""
+            ),
+            @ExampleObject(
+                name = "빈 triggerData",
+                summary = "HTTP 호출 테스트용",
+                value = """
+                    {}"""
+            )
+        }
+    ))
+    ResponseEntity<ApiResponse<WorkflowExecutionResponse>> execute(
+            CustomUserDetails userDetails,
+            @Parameter(description = "워크플로우 ID") UUID id,
+            ExecuteWorkflowRequest request);
+
+    @Operation(summary = "실행 목록 조회")
+    @PreAuthorize("hasRole('USER')")
+    ResponseEntity<ApiResponse<PageResponse<WorkflowExecutionResponse>>> getExecutions(
+            CustomUserDetails userDetails,
+            @Parameter(description = "워크플로우 ID") UUID id,
+            @Parameter(description = "커서 (페이지 번호)") String cursor,
+            @Parameter(description = "페이지 크기") int size);
+
+    @Operation(summary = "실행 로그 조회")
+    @PreAuthorize("hasRole('USER')")
+    ResponseEntity<ApiResponse<List<WorkflowExecutionLogResponse>>> getExecutionLogs(
+            CustomUserDetails userDetails,
+            @Parameter(description = "워크플로우 ID") UUID id,
+            @Parameter(description = "실행 ID") UUID executionId);
+}

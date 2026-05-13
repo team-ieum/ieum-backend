@@ -35,6 +35,10 @@ description: API 응답 포맷 및 예외 처리 규칙 준수 여부를 검증�
 | `auth/src/main/java/com/ieum/auth/service/AuthService.java` | 인증 Service |
 | `api/src/main/java/com/ieum/api/user/service/UserService.java` | 사용자 Service |
 | `ai/src/main/java/com/ieum/ai/credential/service/CredentialService.java` | 크레덴셜 Service (ai 모듈) |
+| `workflow-core/src/main/java/com/ieum/workflowcore/engine/SyncExecutionRuntime.java` | 워크플로우 실행 엔진 (engine 계층, Check 2 예외 대상) |
+| `api/src/main/java/com/ieum/api/workflow/controller/WorkflowController.java` | 워크플로우 Controller |
+| `api/src/main/java/com/ieum/api/workflow/controller/WorkflowControllerDocs.java` | 워크플로우 Controller Docs 인터페이스 |
+| `api/src/main/java/com/ieum/api/workflow/service/WorkflowService.java` | 워크플로우 Service |
 
 ## Workflow
 
@@ -139,3 +143,4 @@ grep -rn "@Tag\|@Operation\|@io\.swagger" --include="*Controller.java" . | \
 5. **인터페이스/추상 클래스** — 구현체가 아닌 선언부는 Check 2 제외
 6. **JWT Filter/EntryPoint** — `JwtAuthenticationFilter`, `JwtAuthenticationEntryPoint`는 Controller/Service가 아니므로 Check 1, 2 제외
 7. **`*ControllerDocs.java` 파일 자체** — Check 6 대상에서 제외 (Docs 인터페이스는 @RestController 없음)
+8. **엔진/인프라 컴포넌트** — `SyncExecutionRuntime`, `ExecutionCursor` 등 `engine/` 패키지 클래스는 Service가 아니므로 Check 2 제외. 이 계층의 `IllegalStateException`은 시스템 불변식 위반(트리거 노드 없음, Executor 미등록 등)을 나타내며 의도된 사용
