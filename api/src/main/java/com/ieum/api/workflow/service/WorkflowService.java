@@ -56,7 +56,9 @@ public class WorkflowService {
             request.getName(),
             request.getDescription(),
             toJson(request.getNodes()),
-            toJson(request.getEdges())
+            toJson(request.getEdges()),
+            request.getTriggerType(),
+            request.getCronExpression()
         );
         return toResponse(version.getWorkflow(), version);
     }
@@ -91,7 +93,9 @@ public class WorkflowService {
             request.getName(),
             request.getDescription(),
             toJson(request.getNodes()),
-            toJson(request.getEdges())
+            toJson(request.getEdges()),
+            request.getTriggerType(),
+            request.getCronExpression()
         );
         return toResponse(version.getWorkflow(), version);
     }
