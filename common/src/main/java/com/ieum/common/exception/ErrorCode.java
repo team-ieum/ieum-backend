@@ -66,7 +66,8 @@ public enum ErrorCode {
 
     // 연동 계정
     ACCOUNT_NOT_CONNECTED(HttpStatus.BAD_REQUEST, "연동된 계정이 없습니다."),
-    TOKEN_REFRESH_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "토큰 갱신에 실패했습니다.");
+    TOKEN_REFRESH_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "토큰 갱신에 실패했습니다."),
+    AUTHENTICATION_REQUIRED(HttpStatus.UNAUTHORIZED, "재인증이 필요합니다. Google 계정을 다시 연동해주세요.");
 
     private final HttpStatus status;
     private final String message;
