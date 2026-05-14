@@ -10,6 +10,7 @@ import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowRepository;
 import com.ieum.workflowcore.repository.WorkflowVersionRepository;
+import com.ieum.workflowcore.scheduler.WorkflowScheduler;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -17,9 +18,9 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import org.quartz.CronExpression;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.quartz.CronExpression;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -31,6 +32,9 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>api 모듈에 대한 의존 없이 순수 도메인 로직만 담당한다.
  * 호출자(api WorkflowService)가 DTO 변환과 페이지 래핑을 담당한다.
+ *
+ * <p>SCHEDULE 트리거 워크플로우는 CRUD/활성화/비활성화 시 {@link WorkflowScheduler}를 통해
+ * Quartz Job을 자동으로 동기화한다.
  */
 @Slf4j
 @Service
@@ -42,6 +46,7 @@ public class WorkflowCrudService {
     private final WorkflowVersionRepository workflowVersionRepository;
     private final WorkflowExecutionRepository workflowExecutionRepository;
     private final WorkflowExecutionLogRepository workflowExecutionLogRepository;
+    private final WorkflowScheduler workflowScheduler;
 
     // ------------------------------------------------------------------ WRITE
 
@@ -68,6 +73,11 @@ public class WorkflowCrudService {
             .build();
         workflowVersionRepository.save(version);
 
+        // SCHEDULE 트리거이고 활성 상태(기본값 true)면 Quartz Job 등록
+        if (triggerType == TriggerType.SCHEDULE) {
+            workflowScheduler.registerJob(workflow.getId(), cronExpression);
+        }
+
         log.info("[WorkflowCrudService] 워크플로우 생성 — workflowId: {}, version: 1, triggerType: {}",
             workflow.getId(), workflow.getTriggerType());
         return version;
@@ -92,13 +102,20 @@ public class WorkflowCrudService {
             .build();
         workflowVersionRepository.save(version);
 
-        log.info("[WorkflowCrudService] 워크플로우 업데이트 — workflowId: {}, version: {}", workflowId, nextVersion);
+        // 트리거 타입 변경 또는 Cron 변경에 따라 Job 동기화
+        syncScheduleJob(workflow);
+
+        log.info("[WorkflowCrudService] 워크플로우 업데이트 — workflowId: {}, version: {}, triggerType: {}",
+            workflowId, nextVersion, triggerType);
         return version;
     }
 
     @Transactional
     public void deleteWorkflow(UUID userId, UUID workflowId) {
         Workflow workflow = getWorkflowByOwner(userId, workflowId);
+
+        // DB 삭제 전 Quartz Job 먼저 제거 (등록 안 된 경우 no-op)
+        workflowScheduler.deleteJob(workflowId);
 
         List<UUID> executionIds = workflowExecutionRepository.findByWorkflow(workflow)
             .stream().map(WorkflowExecution::getId).toList();
@@ -116,6 +133,12 @@ public class WorkflowCrudService {
     public Workflow activateWorkflow(UUID userId, UUID workflowId) {
         Workflow workflow = getWorkflowByOwner(userId, workflowId);
         workflow.activate();
+
+        // SCHEDULE 트리거면 활성화 시 Job 재등록
+        if (workflow.getTriggerType() == TriggerType.SCHEDULE) {
+            workflowScheduler.registerJob(workflowId, workflow.getCronExpression());
+        }
+
         log.info("[WorkflowCrudService] 워크플로우 활성화 — workflowId: {}", workflowId);
         return workflow;
     }
@@ -124,6 +147,12 @@ public class WorkflowCrudService {
     public Workflow deactivateWorkflow(UUID userId, UUID workflowId) {
         Workflow workflow = getWorkflowByOwner(userId, workflowId);
         workflow.deactivate();
+
+        // SCHEDULE 트리거면 비활성화 시 Job 제거 (비활성 중엔 실행 안 됨)
+        if (workflow.getTriggerType() == TriggerType.SCHEDULE) {
+            workflowScheduler.deleteJob(workflowId);
+        }
+
         log.info("[WorkflowCrudService] 워크플로우 비활성화 — workflowId: {}", workflowId);
         return workflow;
     }
@@ -154,6 +183,13 @@ public class WorkflowCrudService {
             .orElse(null);
     }
 
+    /**
+     * 서버 재시작 시 RAMJobStore 복구용 — 활성 SCHEDULE 워크플로우 전체 조회.
+     */
+    public List<Workflow> findActiveScheduleWorkflows() {
+        return workflowRepository.findByTriggerTypeAndIsActive(TriggerType.SCHEDULE, true);
+    }
+
     public Optional<WorkflowVersion> findLatestVersion(UUID workflowId) {
         return workflowVersionRepository.findFirstByWorkflowIdOrderByVersionDesc(workflowId);
     }
@@ -169,7 +205,22 @@ public class WorkflowCrudService {
             .collect(Collectors.toMap(wv -> wv.getWorkflow().getId(), Function.identity()));
     }
 
-    // ------------------------------------------------------------------ VALIDATE
+    // ------------------------------------------------------------------ PRIVATE
+
+    /**
+     * 워크플로우의 현재 상태(triggerType + isActive)에 따라 Quartz Job을 동기화한다.
+     * <ul>
+     *   <li>SCHEDULE + 활성 → registerJob (신규 or Cron 갱신)
+     *   <li>그 외 → deleteJob (MANUAL로 변경되거나 비활성인 경우)
+     * </ul>
+     */
+    private void syncScheduleJob(Workflow workflow) {
+        if (workflow.getTriggerType() == TriggerType.SCHEDULE && workflow.isActive()) {
+            workflowScheduler.registerJob(workflow.getId(), workflow.getCronExpression());
+        } else {
+            workflowScheduler.deleteJob(workflow.getId());
+        }
+    }
 
     /**
      * SCHEDULE 트리거일 때 cronExpression 필수 및 Quartz 형식 유효성 검사.
