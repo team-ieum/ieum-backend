@@ -17,7 +17,6 @@ import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Webhook 트리거 비즈니스 로직.
@@ -59,7 +58,7 @@ public class WebhookService {
 
         workflowExecutionRunner.run(latestVersion, execution, payload);
 
-        log.info("[WebhookService] Webhook 트리거 완료 — workflowId: {}, executionId: {}",
+        log.info("[WebhookService] Webhook 비동기 실행 시작 — workflowId: {}, executionId: {}",
             workflowId, execution.getId());
 
         return WorkflowExecutionResponse.from(execution);
