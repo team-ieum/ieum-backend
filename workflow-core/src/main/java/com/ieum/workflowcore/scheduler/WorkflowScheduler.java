@@ -4,6 +4,7 @@ import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.quartz.CronScheduleBuilder;
+import org.quartz.CronTrigger;
 import org.quartz.JobBuilder;
 import org.quartz.JobDetail;
 import org.quartz.JobKey;
@@ -11,7 +12,6 @@ import org.quartz.Scheduler;
 import org.quartz.SchedulerException;
 import org.quartz.TriggerBuilder;
 import org.quartz.TriggerKey;
-import org.quartz.impl.triggers.CronTriggerImpl;
 import org.springframework.stereotype.Component;
 
 /**
@@ -41,9 +41,12 @@ public class WorkflowScheduler {
         TriggerKey triggerKey = JobKeyGenerator.triggerKey(workflowId);
 
         try {
-            CronTriggerImpl trigger = (CronTriggerImpl) TriggerBuilder.newTrigger()
+            // withMisfireHandlingInstructionDoNothing: 서버 다운 중 놓친 실행은 스킵
+            // (FIRE_ONCE_NOW 대신 사용 — 밀린 실행이 한꺼번에 트리거되는 것을 방지)
+            CronTrigger trigger = TriggerBuilder.newTrigger()
                 .withIdentity(triggerKey)
-                .withSchedule(CronScheduleBuilder.cronSchedule(cronExpression))
+                .withSchedule(CronScheduleBuilder.cronSchedule(cronExpression)
+                    .withMisfireHandlingInstructionDoNothing())
                 .build();
 
             if (scheduler.checkExists(jobKey)) {
