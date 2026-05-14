@@ -1,5 +1,6 @@
 package com.ieum.api.workflow.dto;
 
+import com.ieum.workflowcore.domain.enums.TriggerType;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -20,4 +21,10 @@ public class UpdateWorkflowRequest {
 
     @NotNull
     private List<EdgeDto> edges;
+
+    /** 트리거 타입. 미입력 시 MANUAL로 처리 */
+    private TriggerType triggerType;
+
+    /** SCHEDULE 트리거일 때 필수. Quartz 6자리 Cron 표현식 (예: "0 0 10 * * ?") */
+    private String cronExpression;
 }

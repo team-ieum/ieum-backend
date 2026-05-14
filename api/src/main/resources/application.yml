@@ -2,6 +2,10 @@ spring:
   application:
     name: ieum-backend
 
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.quartz.QuartzAutoConfiguration
+
   datasource:
     url: ${DB_URL}
     username: ${DB_USERNAME}
@@ -58,3 +62,6 @@ server:
 ieum:
   agent:
     url: ${AGENT_SERVICE_URL}
+  scheduler:
+    thread-count: ${QUARTZ_THREAD_COUNT:10}
+    thread-name-prefix: ${QUARTZ_THREAD_NAME_PREFIX:quartz-}
