@@ -5,6 +5,7 @@ import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowVersion;
+import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowRepository;
@@ -16,6 +17,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.quartz.CronExpression;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
@@ -45,12 +47,16 @@ public class WorkflowCrudService {
 
     @Transactional
     public WorkflowVersion createWorkflow(UUID userId, String name, String description,
-            String nodesJson, String edgesJson) {
+            String nodesJson, String edgesJson, TriggerType triggerType, String cronExpression) {
+        validateScheduleConfig(triggerType, cronExpression);
+
         Workflow workflow = Workflow.builder()
             .userId(userId)
             .name(name)
             .description(description)
             .isActive(true)
+            .triggerType(triggerType)
+            .cronExpression(cronExpression)
             .build();
         workflowRepository.save(workflow);
 
@@ -62,15 +68,20 @@ public class WorkflowCrudService {
             .build();
         workflowVersionRepository.save(version);
 
-        log.info("[WorkflowCrudService] 워크플로우 생성 — workflowId: {}, version: 1", workflow.getId());
+        log.info("[WorkflowCrudService] 워크플로우 생성 — workflowId: {}, version: 1, triggerType: {}",
+            workflow.getId(), workflow.getTriggerType());
         return version;
     }
 
     @Transactional
     public WorkflowVersion updateWorkflow(UUID userId, UUID workflowId, String name,
-            String description, String nodesJson, String edgesJson) {
+            String description, String nodesJson, String edgesJson,
+            TriggerType triggerType, String cronExpression) {
+        validateScheduleConfig(triggerType, cronExpression);
+
         Workflow workflow = getWorkflowByOwner(userId, workflowId);
         workflow.update(name, description);
+        workflow.updateSchedule(triggerType, cronExpression);
 
         int nextVersion = workflowVersionRepository.findMaxVersionByWorkflowId(workflowId) + 1;
         WorkflowVersion version = WorkflowVersion.builder()
@@ -156,5 +167,23 @@ public class WorkflowCrudService {
         }
         return workflowVersionRepository.findLatestByWorkflowIds(workflowIds).stream()
             .collect(Collectors.toMap(wv -> wv.getWorkflow().getId(), Function.identity()));
+    }
+
+    // ------------------------------------------------------------------ VALIDATE
+
+    /**
+     * SCHEDULE 트리거일 때 cronExpression 필수 및 Quartz 형식 유효성 검사.
+     */
+    private void validateScheduleConfig(TriggerType triggerType, String cronExpression) {
+        if (triggerType != TriggerType.SCHEDULE) return;
+
+        if (cronExpression == null || cronExpression.isBlank()) {
+            throw new CustomException(ErrorCode.INVALID_CRON_EXPRESSION,
+                "SCHEDULE 트리거에는 cronExpression이 필요합니다.");
+        }
+        if (!CronExpression.isValidExpression(cronExpression)) {
+            throw new CustomException(ErrorCode.INVALID_CRON_EXPRESSION,
+                "올바르지 않은 Quartz Cron 표현식입니다: " + cronExpression);
+        }
     }
 }

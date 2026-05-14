@@ -45,6 +45,7 @@ public enum ErrorCode {
     // 워크플로우
     WORKFLOW_NOT_FOUND(HttpStatus.NOT_FOUND, "워크플로우를 찾을 수 없습니다."),
     INVALID_WORKFLOW(HttpStatus.BAD_REQUEST, "워크플로우 구성이 올바르지 않습니다."),
+    INVALID_CRON_EXPRESSION(HttpStatus.BAD_REQUEST, "올바르지 않은 Cron 표현식입니다."),
     EXECUTION_NOT_FOUND(HttpStatus.NOT_FOUND, "실행 기록을 찾을 수 없습니다."),
     INVALID_CURSOR(HttpStatus.BAD_REQUEST, "유효하지 않은 커서 값입니다."),
 
