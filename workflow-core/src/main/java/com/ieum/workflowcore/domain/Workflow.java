@@ -1,8 +1,11 @@
 package com.ieum.workflowcore.domain;
 
 import com.ieum.common.entity.BaseEntity;
+import com.ieum.workflowcore.domain.enums.TriggerType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -49,12 +52,25 @@ public class Workflow extends BaseEntity {
     @Column(name = "is_active", nullable = false)
     private boolean isActive = true;
 
+    /** 트리거 타입 (MANUAL / WEBHOOK / SCHEDULE) */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "trigger_type", nullable = false, length = 20,
+            columnDefinition = "VARCHAR(20) DEFAULT 'MANUAL'")
+    private TriggerType triggerType = TriggerType.MANUAL;
+
+    /** Quartz Cron 표현식 — SCHEDULE 트리거일 때만 사용 (nullable) */
+    @Column(name = "cron_expression", length = 100)
+    private String cronExpression;
+
     @Builder
-    private Workflow(UUID userId, String name, String description, boolean isActive) {
+    private Workflow(UUID userId, String name, String description, boolean isActive,
+            TriggerType triggerType, String cronExpression) {
         this.userId = userId;
         this.name = name;
         this.description = description;
         this.isActive = isActive;
+        this.triggerType = triggerType != null ? triggerType : TriggerType.MANUAL;
+        this.cronExpression = cronExpression;
     }
 
     public void activate() {
@@ -68,5 +84,10 @@ public class Workflow extends BaseEntity {
     public void update(String name, String description) {
         this.name = name;
         this.description = description;
+    }
+
+    public void updateSchedule(TriggerType triggerType, String cronExpression) {
+        this.triggerType = triggerType != null ? triggerType : TriggerType.MANUAL;
+        this.cronExpression = cronExpression;
     }
 }
