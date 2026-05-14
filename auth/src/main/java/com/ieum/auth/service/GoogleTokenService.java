@@ -37,7 +37,7 @@ import org.springframework.web.client.RestTemplate;
 @RequiredArgsConstructor
 public class GoogleTokenService {
 
-    private static final String TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo?access_token=";
+    private static final String TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo";
     private static final String TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 
     private final ConnectedAccountRepository connectedAccountRepository;
@@ -93,12 +93,19 @@ public class GoogleTokenService {
     /**
      * Google tokeninfo API로 토큰 유효성을 확인한다.
      *
-     * <p>네트워크 오류 또는 4xx 응답 시 만료로 간주하여 {@code false}를 반환한다.</p>
+     * <p>POST 방식으로 호출하여 access_token이 URL(서버 액세스 로그)에 노출되지 않도록 한다.
+     * 네트워크 오류 또는 4xx 응답 시 만료로 간주하여 {@code false}를 반환한다.</p>
      */
     private boolean isTokenValid(String accessToken) {
         try {
-            ResponseEntity<Map> response = restTemplate.getForEntity(
-                TOKENINFO_URL + accessToken, Map.class);
+            MultiValueMap<String, String> params = new LinkedMultiValueMap<>();
+            params.add("access_token", accessToken);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
+
+            HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(params, headers);
+            ResponseEntity<Map> response = restTemplate.postForEntity(TOKENINFO_URL, request, Map.class);
             return response.getStatusCode().is2xxSuccessful();
         } catch (Exception e) {
             log.debug("[GoogleTokenService] tokeninfo 호출 실패 — 만료로 간주: {}", e.getMessage());
@@ -126,7 +133,7 @@ public class GoogleTokenService {
             HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(params, headers);
             ResponseEntity<Map> response = restTemplate.postForEntity(TOKEN_ENDPOINT, request, Map.class);
 
-            if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
+            if (response == null || !response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
                 log.warn("[GoogleTokenService] userId={} token endpoint 응답 실패: status={}", userId,
                     response.getStatusCode());
                 throw new CustomException(ErrorCode.AUTHENTICATION_REQUIRED);

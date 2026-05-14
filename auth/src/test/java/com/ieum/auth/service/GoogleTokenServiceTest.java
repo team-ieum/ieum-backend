@@ -29,7 +29,6 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
-import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
 class GoogleTokenServiceTest {
@@ -78,7 +77,9 @@ class GoogleTokenServiceTest {
         given(connectedAccountRepository.findByUserIdAndProvider(userId, AuthProvider.GOOGLE))
             .willReturn(Optional.of(buildAccount(ENCRYPTED_REFRESH_TOKEN)));
         given(aesEncryptor.decrypt(ENCRYPTED_ACCESS_TOKEN)).willReturn(PLAIN_ACCESS_TOKEN);
-        given(restTemplate.getForEntity(anyString(), eq(Map.class)))
+
+        // tokeninfo POST → 200 (유효)
+        given(restTemplate.postForEntity(anyString(), any(), eq(Map.class)))
             .willReturn(new ResponseEntity<>(Map.of("aud", "test-client-id"), HttpStatus.OK));
 
         // when
@@ -86,8 +87,9 @@ class GoogleTokenServiceTest {
 
         // then
         assertThat(result).isEqualTo(PLAIN_ACCESS_TOKEN);
-        // 토큰이 유효하면 refresh endpoint를 호출하지 않아야 한다
-        then(restTemplate).should(never()).postForEntity(anyString(), any(), eq(Map.class));
+        // 유효한 토큰이므로 refresh_token 복호화 없음
+        then(aesEncryptor).should().decrypt(ENCRYPTED_ACCESS_TOKEN);
+        then(aesEncryptor).shouldHaveNoMoreInteractions();
     }
 
     // ── 2. 토큰 만료 → 갱신 성공 ─────────────────────────────────────────────
@@ -101,12 +103,10 @@ class GoogleTokenServiceTest {
         given(aesEncryptor.decrypt(ENCRYPTED_REFRESH_TOKEN)).willReturn(PLAIN_REFRESH_TOKEN);
         given(aesEncryptor.encrypt(NEW_PLAIN_ACCESS_TOKEN)).willReturn(ENCRYPTED_NEW_ACCESS_TOKEN);
 
-        // tokeninfo → 401 (만료로 간주)
-        given(restTemplate.getForEntity(anyString(), eq(Map.class)))
-            .willThrow(new HttpClientErrorException(HttpStatus.UNAUTHORIZED));
-
-        // token endpoint → 200 (갱신 성공)
+        // 1차 postForEntity: tokeninfo → 401 (만료)
+        // 2차 postForEntity: token endpoint → 200 (갱신 성공)
         given(restTemplate.postForEntity(anyString(), any(), eq(Map.class)))
+            .willThrow(new HttpClientErrorException(HttpStatus.UNAUTHORIZED))
             .willReturn(new ResponseEntity<>(
                 Map.of("access_token", NEW_PLAIN_ACCESS_TOKEN, "expires_in", 3600),
                 HttpStatus.OK));
@@ -128,7 +128,9 @@ class GoogleTokenServiceTest {
         given(connectedAccountRepository.findByUserIdAndProvider(userId, AuthProvider.GOOGLE))
             .willReturn(Optional.of(buildAccount(null)));
         given(aesEncryptor.decrypt(ENCRYPTED_ACCESS_TOKEN)).willReturn(PLAIN_ACCESS_TOKEN);
-        given(restTemplate.getForEntity(anyString(), eq(Map.class)))
+
+        // tokeninfo POST → 401 (만료)
+        given(restTemplate.postForEntity(anyString(), any(), eq(Map.class)))
             .willThrow(new HttpClientErrorException(HttpStatus.UNAUTHORIZED));
 
         // when & then
@@ -147,11 +149,11 @@ class GoogleTokenServiceTest {
             .willReturn(Optional.of(buildAccount(ENCRYPTED_REFRESH_TOKEN)));
         given(aesEncryptor.decrypt(ENCRYPTED_ACCESS_TOKEN)).willReturn(PLAIN_ACCESS_TOKEN);
         given(aesEncryptor.decrypt(ENCRYPTED_REFRESH_TOKEN)).willReturn(PLAIN_REFRESH_TOKEN);
-        given(restTemplate.getForEntity(anyString(), eq(Map.class)))
-            .willThrow(new HttpClientErrorException(HttpStatus.UNAUTHORIZED));
 
-        // token endpoint → 400 invalid_grant
+        // 1차 postForEntity: tokeninfo → 401 (만료)
+        // 2차 postForEntity: token endpoint → 400 invalid_grant
         given(restTemplate.postForEntity(anyString(), any(), eq(Map.class)))
+            .willThrow(new HttpClientErrorException(HttpStatus.UNAUTHORIZED))
             .willReturn(new ResponseEntity<>(
                 Map.of("error", "invalid_grant"), HttpStatus.BAD_REQUEST));
 
