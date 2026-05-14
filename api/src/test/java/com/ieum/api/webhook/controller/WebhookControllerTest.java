@@ -75,7 +75,7 @@ class WebhookControllerTest {
     }
 
     @Test
-    @DisplayName("payload 없이 호출 — 200 OK (빈 payload 허용)")
+    @DisplayName("payload 없이 호출 — 202 Accepted (빈 payload 허용)")
     void trigger_빈_payload_성공() throws Exception {
         UUID workflowId = UUID.randomUUID();
         WorkflowExecutionResponse response = WorkflowExecutionResponse.builder()

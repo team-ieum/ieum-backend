@@ -11,10 +11,10 @@ import org.springframework.scheduling.quartz.SchedulerFactoryBean;
 /**
  * Quartz 스케줄러 설정.
  *
- * <p>Spring Boot의 QuartzAutoConfiguration을 대체한다
- * ({@code @ConditionalOnMissingBean(SchedulerFactoryBean.class)} 조건에 의해 자동 비활성화).
+ * <p>Spring Boot의 QuartzAutoConfiguration은 {@code application.yml}의
+ * {@code spring.autoconfigure.exclude} 설정으로 명시적으로 비활성화되어 있다.
  *
- * <p>JobStore: RAMJobStore (서버 재시작 시 Job 손실 → 3단계에서 ApplicationRunner로 재등록).
+ * <p>JobStore: RAMJobStore (서버 재시작 시 Job 손실 → {@link com.ieum.workflowcore.scheduler.ScheduleJobRestorer}가 복구).
  * 운영 환경에서 JDBCJobStore로 전환 시 {@code ieum.scheduler.job-store-type=jdbc} 설정.
  */
 @Slf4j

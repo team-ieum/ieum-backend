@@ -26,6 +26,8 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * 워크플로우 CRUD 비즈니스 로직.
@@ -73,9 +75,10 @@ public class WorkflowCrudService {
             .build();
         workflowVersionRepository.save(version);
 
-        // SCHEDULE 트리거이고 활성 상태(기본값 true)면 Quartz Job 등록
+        // DB 커밋 후 Quartz Job 등록 — 트랜잭션 롤백 시 Job이 고아로 남는 것을 방지
         if (triggerType == TriggerType.SCHEDULE) {
-            workflowScheduler.registerJob(workflow.getId(), cronExpression);
+            final UUID scheduledWorkflowId = workflow.getId();
+            afterCommit(() -> workflowScheduler.registerJob(scheduledWorkflowId, cronExpression));
         }
 
         log.info("[WorkflowCrudService] 워크플로우 생성 — workflowId: {}, version: 1, triggerType: {}",
@@ -102,8 +105,9 @@ public class WorkflowCrudService {
             .build();
         workflowVersionRepository.save(version);
 
-        // 트리거 타입 변경 또는 Cron 변경에 따라 Job 동기화
-        syncScheduleJob(workflow);
+        // DB 커밋 후 Job 동기화 — 트랜잭션 롤백 시 Quartz 상태가 DB와 불일치하는 것을 방지
+        final Workflow updatedWorkflow = workflow;
+        afterCommit(() -> syncScheduleJob(updatedWorkflow));
 
         log.info("[WorkflowCrudService] 워크플로우 업데이트 — workflowId: {}, version: {}, triggerType: {}",
             workflowId, nextVersion, triggerType);
@@ -114,9 +118,6 @@ public class WorkflowCrudService {
     public void deleteWorkflow(UUID userId, UUID workflowId) {
         Workflow workflow = getWorkflowByOwner(userId, workflowId);
 
-        // DB 삭제 전 Quartz Job 먼저 제거 (등록 안 된 경우 no-op)
-        workflowScheduler.deleteJob(workflowId);
-
         List<UUID> executionIds = workflowExecutionRepository.findByWorkflow(workflow)
             .stream().map(WorkflowExecution::getId).toList();
         if (!executionIds.isEmpty()) {
@@ -126,6 +127,9 @@ public class WorkflowCrudService {
         workflowVersionRepository.deleteByWorkflow(workflow);
         workflowRepository.delete(workflow);
 
+        // DB 커밋 후 Quartz Job 제거 — DB 롤백 시 Job이 삭제되는 것을 방지
+        afterCommit(() -> workflowScheduler.deleteJob(workflowId));
+
         log.info("[WorkflowCrudService] 워크플로우 삭제 — workflowId: {}", workflowId);
     }
 
@@ -133,12 +137,8 @@ public class WorkflowCrudService {
     public Workflow activateWorkflow(UUID userId, UUID workflowId) {
         Workflow workflow = getWorkflowByOwner(userId, workflowId);
         workflow.activate();
-
-        // SCHEDULE 트리거면 활성화 시 Job 재등록
-        if (workflow.getTriggerType() == TriggerType.SCHEDULE) {
-            workflowScheduler.registerJob(workflowId, workflow.getCronExpression());
-        }
-
+        final Workflow activatedWorkflow = workflow;
+        afterCommit(() -> syncScheduleJob(activatedWorkflow));
         log.info("[WorkflowCrudService] 워크플로우 활성화 — workflowId: {}", workflowId);
         return workflow;
     }
@@ -147,12 +147,8 @@ public class WorkflowCrudService {
     public Workflow deactivateWorkflow(UUID userId, UUID workflowId) {
         Workflow workflow = getWorkflowByOwner(userId, workflowId);
         workflow.deactivate();
-
-        // SCHEDULE 트리거면 비활성화 시 Job 제거 (비활성 중엔 실행 안 됨)
-        if (workflow.getTriggerType() == TriggerType.SCHEDULE) {
-            workflowScheduler.deleteJob(workflowId);
-        }
-
+        final Workflow deactivatedWorkflow = workflow;
+        afterCommit(() -> syncScheduleJob(deactivatedWorkflow));
         log.info("[WorkflowCrudService] 워크플로우 비활성화 — workflowId: {}", workflowId);
         return workflow;
     }
@@ -214,6 +210,19 @@ public class WorkflowCrudService {
     }
 
     // ------------------------------------------------------------------ PRIVATE
+
+    /**
+     * 현재 트랜잭션 커밋 이후에 action을 실행한다.
+     * Quartz Job 조작을 DB 커밋 이후로 미뤄 트랜잭션 롤백 시 상태 불일치를 방지한다.
+     */
+    private void afterCommit(Runnable action) {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
+    }
 
     /**
      * 워크플로우의 현재 상태(triggerType + isActive)에 따라 Quartz Job을 동기화한다.
