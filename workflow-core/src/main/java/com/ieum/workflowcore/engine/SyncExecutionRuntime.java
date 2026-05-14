@@ -88,7 +88,9 @@ public class SyncExecutionRuntime {
         ExecutionCursor cursor = new ExecutionCursor();
         cursor.setAllNodes(nodes);
         cursor.setAllEdges(edges);
-        cursor.setContext(new ExecutionContext());
+        ExecutionContext context = new ExecutionContext();
+        context.setUserId(execution.getWorkflow().getUserId());
+        cursor.setContext(context);
 
         cursor.getContext().setNodeOutput(triggerNode.getId(),
             triggerData != null ? triggerData : new HashMap<>());
