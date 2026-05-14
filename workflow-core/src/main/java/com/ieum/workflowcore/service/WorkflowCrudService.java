@@ -175,6 +175,14 @@ public class WorkflowCrudService {
     }
 
     /**
+     * Webhook 트리거에서 사용. 소유권 검증 없이 ID로만 조회 (없으면 예외).
+     */
+    public Workflow getWorkflowById(UUID workflowId) {
+        return workflowRepository.findById(workflowId)
+            .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+    }
+
+    /**
      * 스케줄 Job에서 사용. 비활성화된 경우 null 반환 (소유권 검증 불필요).
      */
     public Workflow findActiveById(UUID workflowId) {
