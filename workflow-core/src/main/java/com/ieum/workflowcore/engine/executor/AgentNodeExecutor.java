@@ -38,19 +38,24 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 @Component
 public class AgentNodeExecutor implements NodeExecutor {
 
+    private static final String GOOGLE_BUILTIN_PREFIX = "builtin:google_";
+
     private final WebClient webClient;
     private final CredentialProvider credentialProvider;
+    private final GoogleTokenProvider googleTokenProvider;
     private final int agentTimeoutSeconds;
 
     public AgentNodeExecutor(
         @Value("${ieum.agent.url}") String agentBaseUrl,
         CredentialProvider credentialProvider,
+        GoogleTokenProvider googleTokenProvider,
         @Value("${ieum.agent.timeout-seconds:120}") int agentTimeoutSeconds
     ) {
         this.webClient = WebClient.builder()
             .baseUrl(agentBaseUrl)
             .build();
         this.credentialProvider = credentialProvider;
+        this.googleTokenProvider = googleTokenProvider;
         this.agentTimeoutSeconds = agentTimeoutSeconds;
     }
 
@@ -82,6 +87,9 @@ public class AgentNodeExecutor implements NodeExecutor {
 
             String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
 
+            // Google 빌트인 도구(builtin:google_*) 감지 → X-Google-Access-Token 헤더용 토큰 조회
+            String googleAccessToken = resolveGoogleAccessToken(tools, cursor);
+
             AgentNodeRequest request = AgentNodeRequest.builder()
                 .nodeId(node.getId())
                 .promptTemplateId(promptTemplateId)
@@ -92,7 +100,7 @@ public class AgentNodeExecutor implements NodeExecutor {
                 .tools(tools)
                 .build();
 
-            AgentExecutionResult agentResult = callAgentService(request, llmProvider, decryptedApiKey);
+            AgentExecutionResult agentResult = callAgentService(request, llmProvider, decryptedApiKey, googleAccessToken);
 
             if (!agentResult.isSuccess()) {
                 log.error("[AgentNodeExecutor] 에이전트 실행 실패 — nodeId: {}, error: {}",
@@ -114,15 +122,57 @@ public class AgentNodeExecutor implements NodeExecutor {
         }
     }
 
+    /**
+     * Google 빌트인 도구({@code builtin:google_*})가 tools 목록에 포함된 경우
+     * Google Access Token을 조회하여 반환한다.
+     *
+     * <p>Google 도구가 없거나 userId가 없으면 {@code null}을 반환한다.
+     * 토큰 조회 실패 시 예외를 전파하여 노드 실행 실패로 처리한다.
+     *
+     * @param tools  노드 config의 tools 목록 (nullable)
+     * @param cursor 실행 커서 (userId 포함)
+     * @return Google Access Token 원문, 또는 {@code null}
+     */
+    private String resolveGoogleAccessToken(List<Map<String, Object>> tools, ExecutionCursor cursor) {
+        if (tools == null || tools.isEmpty()) {
+            return null;
+        }
+
+        boolean hasGoogleTool = tools.stream()
+            .map(tool -> (String) tool.get("name"))
+            .filter(name -> name != null)
+            .anyMatch(name -> name.startsWith(GOOGLE_BUILTIN_PREFIX));
+
+        if (!hasGoogleTool) {
+            return null;
+        }
+
+        java.util.UUID userId = cursor.getContext().getUserId();
+        if (userId == null) {
+            log.warn("[AgentNodeExecutor] Google 빌트인 도구 사용이지만 userId가 없음 — 토큰 없이 진행");
+            return null;
+        }
+
+        log.debug("[AgentNodeExecutor] Google 빌트인 도구 감지 — userId: {} 로 토큰 조회", userId);
+        return googleTokenProvider.getValidAccessToken(userId);
+    }
+
     private AgentExecutionResult callAgentService(
-        AgentNodeRequest request, String llmProvider, String llmApiKey
+        AgentNodeRequest request, String llmProvider, String llmApiKey, String googleAccessToken
     ) {
         try {
-            return webClient.post()
+            var requestSpec = webClient.post()
                 .uri("/v1/execute")
                 .contentType(MediaType.APPLICATION_JSON)
                 .header("X-LLM-Provider", llmProvider)
-                .header("X-LLM-Api-Key", llmApiKey)
+                .header("X-LLM-Api-Key", llmApiKey);
+
+            if (googleAccessToken != null) {
+                requestSpec = requestSpec.header("X-Google-Access-Token", googleAccessToken);
+                log.debug("[AgentNodeExecutor] X-Google-Access-Token 헤더 주입");
+            }
+
+            return requestSpec
                 .bodyValue(request)
                 .retrieve()
                 .bodyToMono(AgentExecutionResult.class)
