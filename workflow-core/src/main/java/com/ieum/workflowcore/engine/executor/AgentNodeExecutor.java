@@ -10,6 +10,7 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
@@ -147,7 +148,7 @@ public class AgentNodeExecutor implements NodeExecutor {
             return null;
         }
 
-        java.util.UUID userId = cursor.getContext().getUserId();
+        UUID userId = cursor.getContext().getUserId();
         if (userId == null) {
             log.warn("[AgentNodeExecutor] Google 빌트인 도구 사용이지만 userId가 없음 — 토큰 없이 진행");
             return null;
