@@ -33,6 +33,75 @@ public interface WorkflowControllerDocs {
         schema = @Schema(implementation = CreateWorkflowRequest.class),
         examples = {
             @ExampleObject(
+                name = "MANUAL 트리거",
+                summary = "수동 실행 — 이름 입력받아 인사 메시지 생성",
+                value = """
+                    {
+                      "name": "MANUAL 인사 워크플로우",
+                      "description": "수동으로 실행하면 이름을 받아 인사 메시지를 만든다",
+                      "triggerType": "MANUAL",
+                      "nodes": [
+                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "시작",      "config": {} },
+                        { "id": "node-transform", "type": "TRANSFORM", "label": "메시지 생성",
+                          "config": { "mappings": {
+                            "message": "안녕하세요, {{nodes.node-trigger.output.name}}님!"
+                          }}}
+                      ],
+                      "edges": [
+                        { "source": "node-trigger", "target": "node-transform" }
+                      ]
+                    }"""
+            ),
+            @ExampleObject(
+                name = "SCHEDULE 트리거",
+                summary = "매일 오전 10시 자동 실행 — Quartz Cron",
+                value = """
+                    {
+                      "name": "SCHEDULE 일일 보고 워크플로우",
+                      "description": "매일 오전 10시에 외부 API를 호출해 데이터를 수집한다",
+                      "triggerType": "SCHEDULE",
+                      "cronExpression": "0 0 10 * * ?",
+                      "nodes": [
+                        { "id": "node-trigger",   "type": "TRIGGER", "label": "스케줄 시작", "config": {} },
+                        { "id": "node-http",      "type": "HTTP",    "label": "데이터 수집",
+                          "config": { "method": "GET", "url": "https://jsonplaceholder.typicode.com/todos/1", "headers": {} }},
+                        { "id": "node-transform", "type": "TRANSFORM", "label": "결과 정리",
+                          "config": { "mappings": {
+                            "title":     "{{nodes.node-http.output.title}}",
+                            "completed": "{{nodes.node-http.output.completed}}"
+                          }}}
+                      ],
+                      "edges": [
+                        { "source": "node-trigger", "target": "node-http" },
+                        { "source": "node-http",    "target": "node-transform" }
+                      ]
+                    }"""
+            ),
+            @ExampleObject(
+                name = "WEBHOOK 트리거",
+                summary = "외부 시스템이 POST /webhooks/{id} 로 호출 — 인증 불필요",
+                value = """
+                    {
+                      "name": "WEBHOOK 주문 알림 워크플로우",
+                      "description": "외부 쇼핑몰에서 주문 이벤트 발생 시 호출",
+                      "triggerType": "WEBHOOK",
+                      "nodes": [
+                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "Webhook 수신", "config": {} },
+                        { "id": "node-condition", "type": "CONDITION", "label": "주문 금액 확인",
+                          "config": { "left": "{{nodes.node-trigger.output.amount}}", "operator": "greaterThan", "right": "50000" }},
+                        { "id": "node-vip",   "type": "TRANSFORM", "label": "VIP 처리",
+                          "config": { "mappings": { "grade": "VIP", "orderId": "{{nodes.node-trigger.output.orderId}}" }}},
+                        { "id": "node-normal", "type": "TRANSFORM", "label": "일반 처리",
+                          "config": { "mappings": { "grade": "일반", "orderId": "{{nodes.node-trigger.output.orderId}}" }}}
+                      ],
+                      "edges": [
+                        { "source": "node-trigger",   "target": "node-condition" },
+                        { "source": "node-condition", "target": "node-vip",    "conditionType": "true" },
+                        { "source": "node-condition", "target": "node-normal", "conditionType": "false" }
+                      ]
+                    }"""
+            ),
+            @ExampleObject(
                 name = "TRIGGER → TRANSFORM",
                 summary = "변수 치환 기본 테스트",
                 value = """

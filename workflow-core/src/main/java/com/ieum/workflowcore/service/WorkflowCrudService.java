@@ -5,10 +5,12 @@ import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowVersion;
+import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowRepository;
 import com.ieum.workflowcore.repository.WorkflowVersionRepository;
+import com.ieum.workflowcore.scheduler.WorkflowScheduler;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -18,17 +20,23 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.quartz.CronExpression;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * 워크플로우 CRUD 비즈니스 로직.
  *
  * <p>api 모듈에 대한 의존 없이 순수 도메인 로직만 담당한다.
  * 호출자(api WorkflowService)가 DTO 변환과 페이지 래핑을 담당한다.
+ *
+ * <p>SCHEDULE 트리거 워크플로우는 CRUD/활성화/비활성화 시 {@link WorkflowScheduler}를 통해
+ * Quartz Job을 자동으로 동기화한다.
  */
 @Slf4j
 @Service
@@ -40,17 +48,22 @@ public class WorkflowCrudService {
     private final WorkflowVersionRepository workflowVersionRepository;
     private final WorkflowExecutionRepository workflowExecutionRepository;
     private final WorkflowExecutionLogRepository workflowExecutionLogRepository;
+    private final WorkflowScheduler workflowScheduler;
 
     // ------------------------------------------------------------------ WRITE
 
     @Transactional
     public WorkflowVersion createWorkflow(UUID userId, String name, String description,
-            String nodesJson, String edgesJson) {
+            String nodesJson, String edgesJson, TriggerType triggerType, String cronExpression) {
+        validateScheduleConfig(triggerType, cronExpression);
+
         Workflow workflow = Workflow.builder()
             .userId(userId)
             .name(name)
             .description(description)
             .isActive(true)
+            .triggerType(triggerType)
+            .cronExpression(cronExpression)
             .build();
         workflowRepository.save(workflow);
 
@@ -62,15 +75,26 @@ public class WorkflowCrudService {
             .build();
         workflowVersionRepository.save(version);
 
-        log.info("[WorkflowCrudService] 워크플로우 생성 — workflowId: {}, version: 1", workflow.getId());
+        // DB 커밋 후 Quartz Job 등록 — 트랜잭션 롤백 시 Job이 고아로 남는 것을 방지
+        if (triggerType == TriggerType.SCHEDULE) {
+            final UUID scheduledWorkflowId = workflow.getId();
+            afterCommit(() -> workflowScheduler.registerJob(scheduledWorkflowId, cronExpression));
+        }
+
+        log.info("[WorkflowCrudService] 워크플로우 생성 — workflowId: {}, version: 1, triggerType: {}",
+            workflow.getId(), workflow.getTriggerType());
         return version;
     }
 
     @Transactional
     public WorkflowVersion updateWorkflow(UUID userId, UUID workflowId, String name,
-            String description, String nodesJson, String edgesJson) {
+            String description, String nodesJson, String edgesJson,
+            TriggerType triggerType, String cronExpression) {
+        validateScheduleConfig(triggerType, cronExpression);
+
         Workflow workflow = getWorkflowByOwner(userId, workflowId);
         workflow.update(name, description);
+        workflow.updateSchedule(triggerType, cronExpression);
 
         int nextVersion = workflowVersionRepository.findMaxVersionByWorkflowId(workflowId) + 1;
         WorkflowVersion version = WorkflowVersion.builder()
@@ -81,7 +105,12 @@ public class WorkflowCrudService {
             .build();
         workflowVersionRepository.save(version);
 
-        log.info("[WorkflowCrudService] 워크플로우 업데이트 — workflowId: {}, version: {}", workflowId, nextVersion);
+        // DB 커밋 후 Job 동기화 — 트랜잭션 롤백 시 Quartz 상태가 DB와 불일치하는 것을 방지
+        final Workflow updatedWorkflow = workflow;
+        afterCommit(() -> syncScheduleJob(updatedWorkflow));
+
+        log.info("[WorkflowCrudService] 워크플로우 업데이트 — workflowId: {}, version: {}, triggerType: {}",
+            workflowId, nextVersion, triggerType);
         return version;
     }
 
@@ -98,6 +127,9 @@ public class WorkflowCrudService {
         workflowVersionRepository.deleteByWorkflow(workflow);
         workflowRepository.delete(workflow);
 
+        // DB 커밋 후 Quartz Job 제거 — DB 롤백 시 Job이 삭제되는 것을 방지
+        afterCommit(() -> workflowScheduler.deleteJob(workflowId));
+
         log.info("[WorkflowCrudService] 워크플로우 삭제 — workflowId: {}", workflowId);
     }
 
@@ -105,6 +137,8 @@ public class WorkflowCrudService {
     public Workflow activateWorkflow(UUID userId, UUID workflowId) {
         Workflow workflow = getWorkflowByOwner(userId, workflowId);
         workflow.activate();
+        final Workflow activatedWorkflow = workflow;
+        afterCommit(() -> syncScheduleJob(activatedWorkflow));
         log.info("[WorkflowCrudService] 워크플로우 활성화 — workflowId: {}", workflowId);
         return workflow;
     }
@@ -113,6 +147,8 @@ public class WorkflowCrudService {
     public Workflow deactivateWorkflow(UUID userId, UUID workflowId) {
         Workflow workflow = getWorkflowByOwner(userId, workflowId);
         workflow.deactivate();
+        final Workflow deactivatedWorkflow = workflow;
+        afterCommit(() -> syncScheduleJob(deactivatedWorkflow));
         log.info("[WorkflowCrudService] 워크플로우 비활성화 — workflowId: {}", workflowId);
         return workflow;
     }
@@ -134,6 +170,30 @@ public class WorkflowCrudService {
             .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
     }
 
+    /**
+     * Webhook 트리거에서 사용. 소유권 검증 없이 ID로만 조회 (없으면 예외).
+     */
+    public Workflow getWorkflowById(UUID workflowId) {
+        return workflowRepository.findById(workflowId)
+            .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+    }
+
+    /**
+     * 스케줄 Job에서 사용. 비활성화된 경우 null 반환 (소유권 검증 불필요).
+     */
+    public Workflow findActiveById(UUID workflowId) {
+        return workflowRepository.findById(workflowId)
+            .filter(Workflow::isActive)
+            .orElse(null);
+    }
+
+    /**
+     * 서버 재시작 시 RAMJobStore 복구용 — 활성 SCHEDULE 워크플로우 전체 조회.
+     */
+    public List<Workflow> findActiveScheduleWorkflows() {
+        return workflowRepository.findByTriggerTypeAndIsActive(TriggerType.SCHEDULE, true);
+    }
+
     public Optional<WorkflowVersion> findLatestVersion(UUID workflowId) {
         return workflowVersionRepository.findFirstByWorkflowIdOrderByVersionDesc(workflowId);
     }
@@ -147,5 +207,51 @@ public class WorkflowCrudService {
         }
         return workflowVersionRepository.findLatestByWorkflowIds(workflowIds).stream()
             .collect(Collectors.toMap(wv -> wv.getWorkflow().getId(), Function.identity()));
+    }
+
+    // ------------------------------------------------------------------ PRIVATE
+
+    /**
+     * 현재 트랜잭션 커밋 이후에 action을 실행한다.
+     * Quartz Job 조작을 DB 커밋 이후로 미뤄 트랜잭션 롤백 시 상태 불일치를 방지한다.
+     */
+    private void afterCommit(Runnable action) {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
+    }
+
+    /**
+     * 워크플로우의 현재 상태(triggerType + isActive)에 따라 Quartz Job을 동기화한다.
+     * <ul>
+     *   <li>SCHEDULE + 활성 → registerJob (신규 or Cron 갱신)
+     *   <li>그 외 → deleteJob (MANUAL로 변경되거나 비활성인 경우)
+     * </ul>
+     */
+    private void syncScheduleJob(Workflow workflow) {
+        if (workflow.getTriggerType() == TriggerType.SCHEDULE && workflow.isActive()) {
+            workflowScheduler.registerJob(workflow.getId(), workflow.getCronExpression());
+        } else {
+            workflowScheduler.deleteJob(workflow.getId());
+        }
+    }
+
+    /**
+     * SCHEDULE 트리거일 때 cronExpression 필수 및 Quartz 형식 유효성 검사.
+     */
+    private void validateScheduleConfig(TriggerType triggerType, String cronExpression) {
+        if (triggerType != TriggerType.SCHEDULE) return;
+
+        if (cronExpression == null || cronExpression.isBlank()) {
+            throw new CustomException(ErrorCode.INVALID_CRON_EXPRESSION,
+                "SCHEDULE 트리거에는 cronExpression이 필요합니다.");
+        }
+        if (!CronExpression.isValidExpression(cronExpression)) {
+            throw new CustomException(ErrorCode.INVALID_CRON_EXPRESSION,
+                "올바르지 않은 Quartz Cron 표현식입니다: " + cronExpression);
+        }
     }
 }

@@ -56,7 +56,9 @@ public class WorkflowService {
             request.getName(),
             request.getDescription(),
             toJson(request.getNodes()),
-            toJson(request.getEdges())
+            toJson(request.getEdges()),
+            request.getTriggerType(),
+            request.getCronExpression()
         );
         return toResponse(version.getWorkflow(), version);
     }
@@ -91,7 +93,9 @@ public class WorkflowService {
             request.getName(),
             request.getDescription(),
             toJson(request.getNodes()),
-            toJson(request.getEdges())
+            toJson(request.getEdges()),
+            request.getTriggerType(),
+            request.getCronExpression()
         );
         return toResponse(version.getWorkflow(), version);
     }
@@ -117,7 +121,9 @@ public class WorkflowService {
 
     // ------------------------------------------------------------------ EXECUTION
 
-    @Transactional
+    // @Transactional 미사용 의도:
+    // prepareExecution()이 자체 트랜잭션으로 커밋된 뒤 @Async 런너가 실행되어야
+    // 비동기 스레드에서 detached entity merge 오류를 방지할 수 있다.
     public WorkflowExecutionResponse executeWorkflow(UUID userId, UUID workflowId,
             ExecuteWorkflowRequest request) {
         Workflow workflow = workflowCrudService.getWorkflowByOwner(userId, workflowId);
