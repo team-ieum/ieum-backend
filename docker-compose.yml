@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: ieum
       POSTGRES_PASSWORD: ieum
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
@@ -15,7 +15,7 @@ services:
     image: redis:7-alpine
     container_name: ieum-redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
 
   mongodb:
     image: mongo:7
@@ -23,7 +23,7 @@ services:
     environment:
       MONGO_INITDB_DATABASE: ieum
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongo-data:/data/db
 
