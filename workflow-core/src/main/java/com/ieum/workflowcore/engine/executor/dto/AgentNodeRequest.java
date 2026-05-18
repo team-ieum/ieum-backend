@@ -26,4 +26,6 @@ public class AgentNodeRequest {
     /** 에이전트 실행 타입 (simple / react) (nullable, 기본값: simple) */
     private String agentType;
     private List<Map<String, Object>> tools;
+    /** 이전 노드들의 output 전체 — Python ieum-agent의 workflow_context 툴에 전달 (nullable) */
+    private Map<String, Object> workflowContext;
 }
