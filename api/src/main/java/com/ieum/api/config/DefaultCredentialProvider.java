@@ -1,6 +1,8 @@
 package com.ieum.api.config;
 
 import com.ieum.api.credential.service.CredentialService;
+import com.ieum.common.exception.CustomException;
+import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.engine.executor.CredentialProvider;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +25,10 @@ public class DefaultCredentialProvider implements CredentialProvider {
 
     @Override
     public String getDecryptedApiKey(String credentialId) {
-        return credentialService.decrypt(UUID.fromString(credentialId));
+        try {
+            return credentialService.decrypt(UUID.fromString(credentialId));
+        } catch (IllegalArgumentException e) {
+            throw new CustomException(ErrorCode.INVALID_INPUT, "유효하지 않은 Credential ID 형식입니다.");
+        }
     }
 }
