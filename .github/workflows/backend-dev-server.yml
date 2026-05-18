@@ -1,0 +1,119 @@
+name: Backend Dev Server Deploy
+
+on:
+  push:
+    branches: [infra/IEUM-SRV-14]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend_dev_server
+  cancel-in-progress: true
+
+env:
+  JAVA_VERSION: ${{ secrets.JAVA_VERSION }}
+  IMAGE_NAME: ${{ secrets.BACKEND_IMAGE_NAME }}
+  CONTAINER_NAME: ${{ secrets.BACKEND_CONTAINER_NAME }}
+  DOCKER_NETWORK: ${{ secrets.DOCKER_NETWORK }}
+  BACKEND_IP: ${{ secrets.BACKEND_IP }}
+  BACKEND_PORT: ${{ secrets.BACKEND_PORT }}
+  SPRING_PROFILES_ACTIVE: ${{ secrets.SPRING_PROFILES_ACTIVE }}
+  ENV_FILE: ${{ secrets.BACKEND_ENV_FILE }}
+
+jobs:
+  deploy:
+    name: Deploy Dev to Self Hosted Server
+    runs-on:
+      group: ieum_dev_server
+      labels: [self-hosted, linux, x64, ieum-backend]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - name: Make Gradle executable
+        run: chmod +x gradlew
+
+      - name: Build
+        run: ./gradlew :api:bootJar -x test --no-daemon
+
+      - name: Test
+        run: ./gradlew test --no-daemon
+
+      - name: Prepare boot jar
+        run: |
+          mkdir -p .deploy
+          BOOT_JAR="$(find api/build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*plain.jar' | head -n 1)"
+
+          if [ -z "$BOOT_JAR" ]; then
+            echo "::error::Spring Boot jar file was not found in api/build/libs"
+            exit 1
+          fi
+
+          cp "$BOOT_JAR" .deploy/app.jar
+
+      - name: Write Dockerfile
+        run: |
+          cat > Dockerfile.ci <<'EOF'
+          FROM eclipse-temurin:21-jre
+          WORKDIR /app
+          COPY .deploy/app.jar /app/app.jar
+          EXPOSE 8080
+          ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+          EOF
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -f Dockerfile.ci \
+            -t "$IMAGE_NAME:${{ github.sha }}" \
+            -t "$IMAGE_NAME:latest" .
+
+      - name: Restart backend container
+        run: |
+          docker network inspect "$DOCKER_NETWORK" >/dev/null 2>&1 
+
+          docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+
+          if [ -n "$LEGACY_CONTAINER_NAME" ]; then
+            docker rm -f "$LEGACY_CONTAINER_NAME" >/dev/null 2>&1 || true
+          fi
+
+          ENV_ARGS=""
+          if [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ]; then
+            ENV_ARGS="--env-file $ENV_FILE"
+          fi
+
+          docker run -d \
+            --name "$CONTAINER_NAME" \
+            --restart unless-stopped \
+            --network "$DOCKER_NETWORK" \
+            --ip "$BACKEND_IP" \
+            -e SPRING_PROFILES_ACTIVE="$SPRING_PROFILES_ACTIVE" \
+            $ENV_ARGS \
+            "$IMAGE_NAME:latest"
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS "http://$BACKEND_IP:$BACKEND_PORT/actuator/health" >/dev/null 2>&1; then
+              exit 0
+            fi
+
+            if curl -fsS "http://$BACKEND_IP:$BACKEND_PORT/v3/api-docs" >/dev/null 2>&1; then
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          docker logs --tail 200 "$CONTAINER_NAME"
+          exit 1
