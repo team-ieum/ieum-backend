@@ -83,10 +83,6 @@ jobs:
 
           docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 
-          if [ -n "$LEGACY_CONTAINER_NAME" ]; then
-            docker rm -f "$LEGACY_CONTAINER_NAME" >/dev/null 2>&1 || true
-          fi
-
           ENV_ARGS=""
           if [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ]; then
             ENV_ARGS="--env-file $ENV_FILE"
