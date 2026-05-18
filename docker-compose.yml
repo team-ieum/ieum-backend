@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_DB: ieum
       POSTGRES_USER: ieum
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ieum
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
@@ -22,8 +22,6 @@ services:
     container_name: ieum-mongo
     environment:
       MONGO_INITDB_DATABASE: ieum
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD}
     ports:
       - "127.0.0.1:27017:27017"
     volumes:
