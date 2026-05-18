@@ -27,5 +27,5 @@ public class AgentNodeRequest {
     private String agentType;
     private List<Map<String, Object>> tools;
     /** 이전 노드들의 output 전체 — Python ieum-agent의 workflow_context 툴에 전달 (nullable) */
-    private Map<String, Object> workflowContext;
+    private Map<String, Map<String, Object>> workflowContext;
 }
