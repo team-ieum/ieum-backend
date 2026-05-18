@@ -99,9 +99,10 @@ public class AgentNodeExecutor implements NodeExecutor {
                 .model(model)
                 .agentType(agentType)
                 .tools(tools)
+                .workflowContext(cursor.getContext().getNodeOutputs())
                 .build();
 
-            AgentExecutionResult agentResult = callAgentService(request, llmProvider, decryptedApiKey, googleAccessToken);
+            AgentExecutionResult agentResult = callAgentService(request, llmProvider, decryptedApiKey, googleAccessToken, cursor.getContext().getUserId());
 
             if (!agentResult.isSuccess()) {
                 log.error("[AgentNodeExecutor] 에이전트 실행 실패 — nodeId: {}, error: {}",
@@ -159,14 +160,18 @@ public class AgentNodeExecutor implements NodeExecutor {
     }
 
     private AgentExecutionResult callAgentService(
-        AgentNodeRequest request, String llmProvider, String llmApiKey, String googleAccessToken
+        AgentNodeRequest request, String llmProvider, String llmApiKey, String googleAccessToken, UUID userId
     ) {
         try {
-            var requestSpec = webClient.post()
+            WebClient.RequestBodySpec requestSpec = webClient.post()
                 .uri("/v1/execute")
                 .contentType(MediaType.APPLICATION_JSON)
                 .header("X-LLM-Provider", llmProvider)
                 .header("X-LLM-Api-Key", llmApiKey);
+
+            if (userId != null) {
+                requestSpec = requestSpec.header("X-User-Id", userId.toString());
+            }
 
             if (googleAccessToken != null) {
                 requestSpec = requestSpec.header("X-Google-Access-Token", googleAccessToken);
