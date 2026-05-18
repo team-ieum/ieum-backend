@@ -99,6 +99,7 @@ public class AgentNodeExecutor implements NodeExecutor {
                 .model(model)
                 .agentType(agentType)
                 .tools(tools)
+                .workflowContext(cursor.getContext().getNodeOutputs())
                 .build();
 
             AgentExecutionResult agentResult = callAgentService(request, llmProvider, decryptedApiKey, googleAccessToken);
