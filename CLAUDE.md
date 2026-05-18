@@ -31,7 +31,7 @@ integration → auth
 
 ## 기술 스택
 Java 21, Spring Boot 3.5.11, Gradle 8.14.4 (Groovy DSL), PostgreSQL 16 (UUID PK, JSONB),
-Redis 7, Flyway, Lombok, Spring Security + OAuth2, JWT (jjwt 0.12.6), AES-256 암호화,
+Redis 7, Lombok, Spring Security + OAuth2, JWT (jjwt 0.12.6), AES-256 암호화,
 QueryDSL (openfeign 7.1), springdoc-openapi 2.8.4, Quartz, Spring @Async (MVP)
 
 ## Claude Code 워크플로우 규칙
@@ -44,7 +44,7 @@ QueryDSL (openfeign 7.1), springdoc-openapi 2.8.4, Quartz, Spring @Async (MVP)
 5. **이미 구현된 것 재생성 금지** — ErrorCode, CustomException, ApiResponse, PageResponse, BaseEntity, AesEncryptor 등
 
 ### 구현 순서 원칙
-엔티티+Repository → Service → DTO → Controller → Flyway 마이그레이션 → 설정 → 테스트
+엔티티+Repository → Service → DTO → Controller → 설정 → 테스트
 
 ### 각 단계 완료 시 출력 형식
 ```
@@ -91,7 +91,6 @@ QueryDSL (openfeign 7.1), springdoc-openapi 2.8.4, Quartz, Spring @Async (MVP)
 - 공통 의존성(Lombok, Test)은 루트 `build.gradle`의 `subprojects`에 선언 → 모듈별 중복 선언 불필요
 - Q클래스는 `./gradlew build` 후 생성됨 — 빌드 전에는 QueryDSL 코드가 컴파일 에러
 - `application-local.yml`은 `.gitignore`에 포함 — 환경변수는 `.env` 파일 사용
-- Flyway 파일명: `V{버전}__{설명}.sql` (언더바 **2개**), 위치: `api/src/main/resources/db/migration/`
 - 변수 참조 문법: `{{nodes.<uuid>.output.<field>}}` (workflow-core에서 사용)
 - JWT 예외는 반드시 CustomException으로 변환 — ExpiredJwtException → TOKEN_EXPIRED, JwtException → TOKEN_INVALID
 
@@ -120,7 +119,6 @@ docker-compose up -d                                    # PostgreSQL 16 + Redis 
 | `pr-readiness` | PR 전 빌드/품질/Notion 동기화 점검, PR 설명 초안 생성 |
 | `verify-api-response` | API 응답 포맷 및 예외 처리 규칙 검증 |
 | `verify-jpa-entity` | JPA 엔티티 및 Repository 규칙 검증 |
-| `verify-db-migration` | Flyway 마이그레이션 규칙 검증 |
 | `verify-security` | Spring Security 및 JWT 인증 규칙 검증 |
 | `verify-workflow-engine` | 워크플로우 실행 엔진 패턴 규칙 검증 (NodeExecutor 등록, Stub 패턴, ExecutorResult 생성) |
 | `verify-implementation` | 모든 verify 스킬 순차 실행, 통합 검증 보고서 |

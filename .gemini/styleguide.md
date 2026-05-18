@@ -111,13 +111,3 @@ integration  → auth
 - type 목록: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `infra`
 - 예시: `feat: 워크플로우 실행 커서 구현`
 
----
-
-## Flyway 마이그레이션
-
-- 파일명: `V{버전}__{설명}.sql` (언더바 **2개**)
-- 위치: `api/src/main/resources/db/migration/`
-- UUID 기본값: `gen_random_uuid()`
-- TIMESTAMP 컬럼: `DEFAULT now()`
-- 인덱스 네이밍: `idx_{테이블명}_{컬럼명}`
-- Enum 컬럼: `VARCHAR` 타입 사용 (ORDINAL 금지)
