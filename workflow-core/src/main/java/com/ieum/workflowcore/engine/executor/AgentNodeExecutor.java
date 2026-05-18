@@ -163,12 +163,15 @@ public class AgentNodeExecutor implements NodeExecutor {
         AgentNodeRequest request, String llmProvider, String llmApiKey, String googleAccessToken, UUID userId
     ) {
         try {
-            var requestSpec = webClient.post()
+            WebClient.RequestBodySpec requestSpec = webClient.post()
                 .uri("/v1/execute")
                 .contentType(MediaType.APPLICATION_JSON)
                 .header("X-LLM-Provider", llmProvider)
-                .header("X-LLM-Api-Key", llmApiKey)
-                .header("X-User-Id", userId != null ? userId.toString() : "");
+                .header("X-LLM-Api-Key", llmApiKey);
+
+            if (userId != null) {
+                requestSpec = requestSpec.header("X-User-Id", userId.toString());
+            }
 
             if (googleAccessToken != null) {
                 requestSpec = requestSpec.header("X-Google-Access-Token", googleAccessToken);
