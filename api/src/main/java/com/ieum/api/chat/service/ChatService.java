@@ -104,7 +104,8 @@ public class ChatService {
             agentMessages,
             agentConfig.llmProvider(),
             agentConfig.decryptedApiKey(),
-            googleAccessToken
+            googleAccessToken,
+            userId
         );
 
         // 8. AGENT 메시지 저장 후 반환 — sessionId를 직접 전달하여 LAZY 로딩 회피
@@ -276,11 +277,75 @@ public class ChatService {
         return googleTokenProvider.getValidAccessToken(userId);
     }
 
+    // ─────────────────────────────────────── WebSocket 스트리밍 ───────────────
+
+    /**
+     * WebSocket 스트리밍 시작 전 트랜잭션 처리 (세션 생성, 메시지 저장, 에이전트 설정 로드).
+     *
+     * <p>반환된 {@link StreamSetupResult}를 사용해 {@code AgentClient.chatStream()}을 호출한다.
+     * 스트리밍이 끝난 뒤 {@link #saveAgentMessageById}로 AGENT 메시지를 저장한다.
+     *
+     * @param workflowId 워크플로우 ID
+     * @param userId     현재 인증된 사용자 ID
+     * @param request    ChatRequest (message + optional sessionId)
+     * @return 스트리밍에 필요한 컨텍스트
+     */
+    @Transactional
+    public StreamSetupResult prepareStream(UUID workflowId, UUID userId, ChatRequest request) {
+        ChatSession session = createOrGetSession(workflowId, userId, request.getSessionId());
+        AgentConfig config = resolveAgentConfig(workflowId, userId);
+
+        saveUserMessage(session, request.getMessage());
+
+        if (session.getTitle() == null) {
+            autoUpdateTitle(session, request.getMessage());
+        }
+
+        List<AgentMessage> messages = buildAgentMessages(session);
+        String googleToken = resolveGoogleAccessToken(config.tools(), userId);
+
+        log.info("[ChatService] 스트림 준비 완료 — workflowId: {}, sessionId: {}",
+            workflowId, session.getId());
+
+        return new StreamSetupResult(session.getId(), config, messages, googleToken);
+    }
+
+    /**
+     * 스트리밍 완료 후 AGENT 메시지를 sessionId만으로 저장한다.
+     *
+     * <p>WebSocket 핸들러의 {@code onComplete} 콜백에서 호출한다. 이미 인증된 사용자의
+     * 세션이므로 userId 재검증 없이 저장한다.
+     *
+     * @param sessionId   채팅 세션 ID
+     * @param content     전체 응답 텍스트 (토큰 조각 누적)
+     * @param inputTokens 입력 토큰 수 (nullable)
+     * @param outputTokens 출력 토큰 수 (nullable)
+     * @return 저장된 ChatMessage
+     */
+    @Transactional
+    public ChatMessage saveAgentMessageById(UUID sessionId, String content,
+            Integer inputTokens, Integer outputTokens) {
+        ChatSession session = sessionRepository.findById(sessionId)
+            .orElseThrow(() -> new CustomException(ErrorCode.CHAT_SESSION_NOT_FOUND));
+        return saveAgentMessage(session, content, inputTokens, outputTokens);
+    }
+
     // ─────────────────────────────────────── 내부 DTO ─────────────────────────
 
     public record AgentConfig(
         String llmProvider,
         String decryptedApiKey,
         List<Map<String, Object>> tools
+    ) {}
+
+    /**
+     * WebSocket 스트리밍 설정 결과.
+     * {@link #prepareStream}이 반환하며 {@code AgentClient.chatStream()} 호출에 사용된다.
+     */
+    public record StreamSetupResult(
+        UUID sessionId,
+        AgentConfig config,
+        List<AgentMessage> messages,
+        String googleToken
     ) {}
 }
