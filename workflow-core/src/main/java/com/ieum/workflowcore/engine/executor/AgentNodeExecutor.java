@@ -40,17 +40,18 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 public class AgentNodeExecutor implements NodeExecutor {
 
     private static final String GOOGLE_BUILTIN_PREFIX = "builtin:google_";
-    private static final String NOTION_BUILTIN_PREFIX = "builtin:notion_";
 
     private final WebClient webClient;
     private final CredentialProvider credentialProvider;
     private final GoogleTokenProvider googleTokenProvider;
+    private final ToolAuthResolver toolAuthResolver;
     private final int agentTimeoutSeconds;
 
     public AgentNodeExecutor(
         @Value("${ieum.agent.url}") String agentBaseUrl,
         CredentialProvider credentialProvider,
         GoogleTokenProvider googleTokenProvider,
+        ToolAuthResolver toolAuthResolver,
         @Value("${ieum.agent.timeout-seconds:120}") int agentTimeoutSeconds
     ) {
         this.webClient = WebClient.builder()
@@ -58,6 +59,7 @@ public class AgentNodeExecutor implements NodeExecutor {
             .build();
         this.credentialProvider = credentialProvider;
         this.googleTokenProvider = googleTokenProvider;
+        this.toolAuthResolver = toolAuthResolver;
         this.agentTimeoutSeconds = agentTimeoutSeconds;
     }
 
@@ -89,9 +91,8 @@ public class AgentNodeExecutor implements NodeExecutor {
 
             String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
 
-            // Google 빌트인 도구(builtin:google_*) 감지 → X-Google-Access-Token 헤더용 토큰 조회
             String googleAccessToken = resolveGoogleAccessToken(tools, cursor);
-            String notionToken = resolveNotionToken(tools);
+            Map<String, String> toolAuthHeaders = toolAuthResolver.resolveHeaders(tools);
 
             AgentNodeRequest request = AgentNodeRequest.builder()
                 .nodeId(node.getId())
@@ -106,7 +107,7 @@ public class AgentNodeExecutor implements NodeExecutor {
 
             AgentExecutionResult agentResult = callAgentService(
                 request, llmProvider, decryptedApiKey, googleAccessToken,
-                cursor.getContext().getUserId(), notionToken);
+                cursor.getContext().getUserId(), toolAuthHeaders);
 
             if (!agentResult.isSuccess()) {
                 log.error("[AgentNodeExecutor] 에이전트 실행 실패 — nodeId: {}, error: {}",
@@ -163,48 +164,9 @@ public class AgentNodeExecutor implements NodeExecutor {
         return googleTokenProvider.getValidAccessToken(userId);
     }
 
-    /**
-     * Notion 빌트인 도구(builtin:notion_*)가 tools 목록에 포함된 경우
-     * 해당 도구의 credentialId로 Notion Integration Token을 복호화하여 반환한다.
-     *
-     * <p>Notion 도구가 없거나 credentialId가 없으면 {@code null}을 반환한다.
-     *
-     * @param tools 노드 config의 tools 목록 (nullable)
-     * @return 복호화된 Notion Integration Token, 또는 {@code null}
-     */
-    private String resolveNotionToken(List<Map<String, Object>> tools) {
-        if (tools == null || tools.isEmpty()) {
-            return null;
-        }
-
-        boolean hasNotionTool = tools.stream()
-            .anyMatch(tool -> tool.get("name") instanceof String name
-                && name.startsWith(NOTION_BUILTIN_PREFIX));
-
-        if (!hasNotionTool) {
-            return null;
-        }
-
-        return tools.stream()
-            .filter(tool -> tool.get("name") instanceof String name
-                && name.startsWith(NOTION_BUILTIN_PREFIX))
-            .map(tool -> tool.get("credentialId"))
-            .filter(id -> id instanceof String)
-            .map(id -> (String) id)
-            .findFirst()
-            .map(credentialId -> {
-                log.debug("[AgentNodeExecutor] Notion 빌트인 도구 감지 — credentialId: {} 로 토큰 조회", credentialId);
-                return credentialProvider.getDecryptedApiKey(credentialId);
-            })
-            .orElseGet(() -> {
-                log.warn("[AgentNodeExecutor] Notion 빌트인 도구 사용이지만 credentialId가 없음 — 토큰 없이 진행");
-                return null;
-            });
-    }
-
     private AgentExecutionResult callAgentService(
         AgentNodeRequest request, String llmProvider, String llmApiKey,
-        String googleAccessToken, UUID userId, String notionToken
+        String googleAccessToken, UUID userId, Map<String, String> toolAuthHeaders
     ) {
         try {
             WebClient.RequestBodySpec requestSpec = webClient.post()
@@ -222,9 +184,9 @@ public class AgentNodeExecutor implements NodeExecutor {
                 log.debug("[AgentNodeExecutor] X-Google-Access-Token 헤더 주입");
             }
 
-            if (notionToken != null) {
-                requestSpec = requestSpec.header("X-Notion-Token", notionToken);
-                log.debug("[AgentNodeExecutor] X-Notion-Token 헤더 주입");
+            for (Map.Entry<String, String> entry : toolAuthHeaders.entrySet()) {
+                requestSpec = requestSpec.header(entry.getKey(), entry.getValue());
+                log.debug("[AgentNodeExecutor] 도구 인증 헤더 주입 — header: {}", entry.getKey());
             }
 
             return requestSpec

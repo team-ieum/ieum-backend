@@ -5,6 +5,7 @@ import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -13,6 +14,9 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecution, UUID> {
+
+    @Query("SELECT e FROM WorkflowExecution e JOIN FETCH e.workflow WHERE e.id = :id")
+    Optional<WorkflowExecution> findWithWorkflowById(@Param("id") UUID id);
 
     List<WorkflowExecution> findByWorkflowId(UUID workflowId, Pageable pageable);
 

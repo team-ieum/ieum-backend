@@ -44,6 +44,7 @@ class AgentNodeExecutorTest {
             mockWebServer.url("/").toString(),
             credentialProvider,
             googleTokenProvider,
+            new ToolAuthResolver(credentialProvider),
             30
         );
     }
@@ -207,7 +208,7 @@ class AgentNodeExecutorTest {
 
     @Test
     @DisplayName("Notion 빌트인 도구가 있고 credentialId가 있으면 X-Notion-Token 헤더가 주입된다")
-    void execute_withNotionBuiltinTool_injectsNotionTokenHeader() throws InterruptedException {
+    void execute_withNotionBuiltinToolLegacyCredentialId_injectsNotionTokenHeader() throws InterruptedException {
         // given
         mockWebServer.enqueue(new MockResponse()
             .setResponseCode(200)
@@ -225,6 +226,66 @@ class AgentNodeExecutorTest {
         assertThat(result.isSuccess()).isTrue();
         RecordedRequest recorded = mockWebServer.takeRequest();
         assertThat(recorded.getHeader("X-Notion-Token")).isEqualTo("decrypted-api-key");
+    }
+
+    @Test
+    @DisplayName("Notion 빌트인 도구의 auth credentialId로 X-Notion-Token 헤더가 주입된다")
+    void execute_withNotionBuiltinToolAuthCredential_injectsNotionTokenHeader() throws InterruptedException {
+        // given
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeWithTools("노션에 정리해줘", "CLAUDE", "llm-cred-id",
+            List.of(Map.of(
+                "name", "builtin:notion_create_page",
+                "auth", Map.of(
+                    "type", "credential",
+                    "credentialId", "notion-cred-id"
+                )
+            )));
+        ExecutionCursor cursor = buildCursor();
+
+        // when
+        ExecutorResult result = executor.execute(node, Collections.emptyMap(), cursor);
+
+        // then
+        assertThat(result.isSuccess()).isTrue();
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Notion-Token")).isEqualTo("decrypted-api-key");
+        verify(credentialProvider).getDecryptedApiKey("llm-cred-id");
+        verify(credentialProvider).getDecryptedApiKey("notion-cred-id");
+    }
+
+    @Test
+    @DisplayName("Notion 빌트인 도구의 auth secret value로 X-Notion-Token 헤더가 주입된다")
+    void execute_withNotionBuiltinToolAuthSecret_injectsNotionTokenHeader() throws InterruptedException {
+        // given
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeWithTools("노션에 정리해줘", "CLAUDE", "llm-cred-id",
+            List.of(Map.of(
+                "name", "builtin:notion_create_page",
+                "auth", Map.of(
+                    "type", "secret",
+                    "value", "ntn_test_token"
+                )
+            )));
+        ExecutionCursor cursor = buildCursor();
+
+        // when
+        ExecutorResult result = executor.execute(node, Collections.emptyMap(), cursor);
+
+        // then
+        assertThat(result.isSuccess()).isTrue();
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Notion-Token")).isEqualTo("ntn_test_token");
+        verify(credentialProvider).getDecryptedApiKey("llm-cred-id");
+        verify(credentialProvider, never()).getDecryptedApiKey("ntn_test_token");
     }
 
     @Test

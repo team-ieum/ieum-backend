@@ -65,7 +65,7 @@ public class SyncExecutionRuntime {
         Map<String, Object> triggerData
     ) throws Exception {
 
-        WorkflowExecution execution = workflowExecutionRepository.findById(executionId)
+        WorkflowExecution execution = workflowExecutionRepository.findWithWorkflowById(executionId)
             .orElseThrow(() -> new CustomException(ErrorCode.EXECUTION_NOT_FOUND));
 
         log.info("[Runtime] 워크플로우 실행 시작 — executionId: {}, versionId: {}",
