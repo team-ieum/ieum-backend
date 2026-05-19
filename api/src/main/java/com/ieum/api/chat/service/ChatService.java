@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.api.chat.dto.ChatRequest;
 import com.ieum.api.chat.dto.ChatResponse;
+import com.ieum.api.chat.service.IntegrationContextService.IntegrationContext;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.chat.domain.ChatMessage;
@@ -62,6 +63,7 @@ public class ChatService {
     private final WorkflowCrudService workflowCrudService;
     private final CredentialProvider credentialProvider;
     private final GoogleTokenProvider googleTokenProvider;
+    private final IntegrationContextService integrationContextService;
     private final AgentClient agentClient;
     private final ObjectMapper objectMapper;
 
@@ -92,25 +94,28 @@ public class ChatService {
             autoUpdateTitle(session, request.getPrompt());
         }
 
-        // 5. Google 빌트인 도구 → Access Token 조회 (없으면 null)
+        // 5. 연동 서비스 상태 조회 (available / unavailable)
+        IntegrationContext integrationContext = integrationContextService.resolve(userId);
+
+        // 6. Google 빌트인 도구 → Access Token 조회 (없으면 null)
         String googleAccessToken = resolveGoogleAccessToken(agentConfig.tools(), userId);
 
-        // 6. AI 에이전트 호출
+        // 7. AI 에이전트 호출
         log.info("[ChatService] AI 응답 요청 — workflowId: {}, sessionId: {}",
             workflowId, session.getId());
         ChatAgentResponse agentResponse = agentClient.chat(
             request.getPrompt(),
             request.getCurrentNodes(),
             request.getCurrentEdges(),
-            List.of(),   // availableIntegrations — Step 3에서 구현
-            List.of(),   // unavailableIntegrations — Step 3에서 구현
+            integrationContext.available(),
+            integrationContext.unavailable(),
             agentConfig.llmProvider(),
             agentConfig.decryptedApiKey(),
             googleAccessToken,
             userId
         );
 
-        // 7. AGENT 메시지 저장 후 반환 — sessionId를 직접 전달하여 LAZY 로딩 회피
+        // 8. AGENT 메시지 저장 후 반환 — sessionId를 직접 전달하여 LAZY 로딩 회피
         ChatMessage agentMessage = saveAgentMessage(
             session,
             agentResponse.getContent(),
@@ -118,7 +123,7 @@ public class ChatService {
             agentResponse.getOutputTokens()
         );
 
-        return ChatResponse.from(agentMessage, session.getId());
+        return ChatResponse.from(agentMessage, session.getId(), agentResponse);
     }
 
     // ─────────────────────────────────────── 히스토리 ─────────────────────────
@@ -296,6 +301,7 @@ public class ChatService {
             autoUpdateTitle(session, request.getPrompt());
         }
 
+        IntegrationContext integrationContext = integrationContextService.resolve(userId);
         String googleToken = resolveGoogleAccessToken(config.tools(), userId);
 
         log.info("[ChatService] 스트림 준비 완료 — workflowId: {}, sessionId: {}",
@@ -307,6 +313,7 @@ public class ChatService {
             request.getPrompt(),
             request.getCurrentNodes(),
             request.getCurrentEdges(),
+            integrationContext,
             googleToken
         );
     }
@@ -356,6 +363,7 @@ public class ChatService {
         String prompt,
         List<Object> currentNodes,
         List<Object> currentEdges,
+        IntegrationContext integrationContext,
         String googleToken
     ) {}
 }
