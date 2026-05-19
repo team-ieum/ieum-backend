@@ -1,4 +1,4 @@
-package com.ieum.api.chat.domain;
+package com.ieum.workflowcore.chat.domain;
 
 import com.ieum.common.entity.BaseEntity;
 import jakarta.persistence.Column;
