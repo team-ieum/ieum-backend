@@ -50,7 +50,6 @@ class WorkflowScheduleJobTest {
     void setUp() {
         workflowId = UUID.randomUUID();
         executionId = UUID.randomUUID();
-        given(execution.getId()).willReturn(executionId);
 
         JobDataMap dataMap = new JobDataMap();
         dataMap.put(WorkflowScheduleJob.KEY_WORKFLOW_ID, workflowId.toString());
@@ -66,6 +65,7 @@ class WorkflowScheduleJobTest {
         given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(workflowVersion));
         given(workflowExecutionService.prepareExecution(workflow, workflowVersion, TriggerType.SCHEDULE))
             .willReturn(execution);
+        given(execution.getId()).willReturn(executionId);
 
         job.execute(jobContext);
 
