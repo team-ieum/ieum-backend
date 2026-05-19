@@ -62,6 +62,7 @@ public class ChatController implements ChatControllerDocs {
     @GetMapping("/history")
     public ResponseEntity<ApiResponse<PageResponse<ChatResponse>>> getChatHistory(
         @AuthenticationPrincipal CustomUserDetails userDetails,
+        @PathVariable UUID workflowId,
         @RequestParam UUID sessionId,
         @RequestParam(defaultValue = "0") int page,
         @RequestParam(defaultValue = "20") int size
