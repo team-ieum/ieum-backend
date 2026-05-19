@@ -56,7 +56,7 @@ public class WebhookService {
             ? request.getPayload()
             : Collections.emptyMap();
 
-        workflowExecutionRunner.run(latestVersion, execution, payload);
+        workflowExecutionRunner.run(latestVersion, execution.getId(), payload);
 
         log.info("[WebhookService] Webhook 비동기 실행 시작 — workflowId: {}, executionId: {}",
             workflowId, execution.getId());
