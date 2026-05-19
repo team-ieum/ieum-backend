@@ -7,6 +7,7 @@ import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import java.time.Duration;
 import java.util.List;
+import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
@@ -14,13 +15,27 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
+import reactor.core.scheduler.Schedulers;
 
 /**
- * ieum-agent 채팅 엔드포인트({@code POST /v1/chat}) 클라이언트.
+ * ieum-agent {@code POST /v1/chat} 클라이언트.
  *
- * <p>REST 블로킹 호출({@link #chat})과 SSE 스트리밍 호출({@link #chatStream}) 두 가지를 제공한다.
- * - REST 엔드포인트에서는 {@code chat()}을 사용한다.
- * - WebSocket 실시간 스트리밍에서는 {@code chatStream()}을 사용한다.
+ * <h3>요청 헤더</h3>
+ * <ul>
+ *   <li>{@code X-LLM-Provider} — LLM 프로바이더 (OPENAI, CLAUDE, GEMINI)</li>
+ *   <li>{@code X-LLM-Api-Key} — 복호화된 API Key</li>
+ *   <li>{@code X-User-Id} — 사용자 UUID</li>
+ *   <li>{@code X-Google-Access-Token} — Google 빌트인 도구 사용 시 (optional)</li>
+ * </ul>
+ *
+ * <h3>요청 body</h3>
+ * <pre>
+ * {
+ *   "prompt": "유저 메시지 텍스트",
+ *   "availableIntegrations": [],
+ *   "unavailableIntegrations": []
+ * }
+ * </pre>
  */
 @Slf4j
 @Component
@@ -42,23 +57,24 @@ public class AgentClient {
     /**
      * AI 에이전트에 채팅 메시지를 전송하고 전체 응답을 블로킹으로 반환한다.
      *
-     * @param messages           대화 히스토리 (최신 사용자 메시지 포함)
-     * @param llmProvider        LLM 프로바이더 이름 (예: "CLAUDE", "OPENAI")
-     * @param apiKey             복호화된 API Key
-     * @param googleAccessToken  Google 빌트인 도구 사용 시 필요한 Access Token (nullable)
-     * @return AI 응답 (content + 토큰 사용량)
+     * @param messages          대화 히스토리 (최신 사용자 메시지 포함)
+     * @param llmProvider       LLM 프로바이더 이름 (예: "OPENAI", "CLAUDE")
+     * @param apiKey            복호화된 API Key
+     * @param googleAccessToken Google 빌트인 도구 사용 시 필요한 Access Token (nullable)
+     * @param userId            현재 인증된 사용자 ID
+     * @return AI 응답
      */
     public ChatAgentResponse chat(
         List<AgentMessage> messages,
         String llmProvider,
         String apiKey,
-        String googleAccessToken
+        String googleAccessToken,
+        UUID userId
     ) {
         log.debug("[AgentClient] chat 요청 — provider: {}, messages: {}개", llmProvider, messages.size());
 
         ChatAgentRequest request = ChatAgentRequest.builder()
-            .messages(messages)
-            .stream(false)
+            .prompt(extractPrompt(messages))
             .build();
 
         try {
@@ -66,7 +82,8 @@ public class AgentClient {
                 .uri("/v1/chat")
                 .contentType(MediaType.APPLICATION_JSON)
                 .header("X-LLM-Provider", llmProvider)
-                .header("X-LLM-Api-Key", apiKey);
+                .header("X-LLM-Api-Key", apiKey)
+                .header("X-User-Id", userId.toString());
 
             if (googleAccessToken != null) {
                 requestSpec = requestSpec.header("X-Google-Access-Token", googleAccessToken);
@@ -84,8 +101,7 @@ public class AgentClient {
                 throw new CustomException(ErrorCode.PROVIDER_ERROR);
             }
 
-            log.debug("[AgentClient] chat 완료 — inputTokens: {}, outputTokens: {}",
-                response.getInputTokens(), response.getOutputTokens());
+            log.debug("[AgentClient] chat 완료 — type: {}", response.getType());
             return response;
 
         } catch (CustomException e) {
@@ -108,43 +124,42 @@ public class AgentClient {
     }
 
     /**
-     * AI 에이전트에 채팅 메시지를 전송하고 SSE 스트리밍으로 토큰 조각을 반환한다.
-     *
-     * <p>WebSocket 브로드캐스트에 사용된다.
-     * 에러 발생 시 {@link Flux#error}로 전파한다.
-     *
-     * @return 토큰 조각 문자열의 Flux
+     * ieum-agent /v1/chat 은 스트리밍을 지원하지 않으므로,
+     * blocking 호출 결과를 단일 Flux 항목으로 래핑한다.
      */
     public Flux<String> chatStream(
         List<AgentMessage> messages,
         String llmProvider,
         String apiKey,
-        String googleAccessToken
+        String googleAccessToken,
+        UUID userId
     ) {
         log.debug("[AgentClient] chatStream 요청 — provider: {}, messages: {}개",
             llmProvider, messages.size());
 
-        ChatAgentRequest request = ChatAgentRequest.builder()
-            .messages(messages)
-            .stream(true)
-            .build();
+        return Flux.<String>create(sink -> {
+            try {
+                String content = chat(messages, llmProvider, apiKey, googleAccessToken, userId).getContent();
+                sink.next(content);
+                sink.complete();
+            } catch (Exception e) {
+                sink.error(e);
+            }
+        }).subscribeOn(Schedulers.boundedElastic());
+    }
 
-        var requestSpec = webClient.post()
-            .uri("/v1/chat")
-            .contentType(MediaType.APPLICATION_JSON)
-            .header("X-LLM-Provider", llmProvider)
-            .header("X-LLM-Api-Key", apiKey);
-
-        if (googleAccessToken != null) {
-            requestSpec = requestSpec.header("X-Google-Access-Token", googleAccessToken);
+    /**
+     * 대화 히스토리에서 prompt 문자열을 추출한다.
+     * 마지막 user 메시지의 content를 prompt로 사용한다.
+     */
+    private String extractPrompt(List<AgentMessage> messages) {
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            AgentMessage msg = messages.get(i);
+            if ("user".equals(msg.getRole())) {
+                return msg.getContent();
+            }
         }
-
-        return requestSpec
-            .bodyValue(request)
-            .retrieve()
-            .bodyToFlux(String.class)
-            .timeout(Duration.ofSeconds(timeoutSeconds))
-            .doOnComplete(() -> log.debug("[AgentClient] chatStream 완료"))
-            .doOnError(e -> log.error("[AgentClient] chatStream 오류", e));
+        // fallback: 마지막 메시지 content
+        return messages.isEmpty() ? "" : messages.get(messages.size() - 1).getContent();
     }
 }

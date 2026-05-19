@@ -57,7 +57,8 @@ public class SecurityConfig {
                     "/swagger-ui/**",
                     "/v3/api-docs/**",
                     "/webhooks/**",
-                    "/actuator/**"
+                    "/actuator/**",
+                    "/ws/**"          // WebSocket 핸드쉐이크 (STOMP 인증은 ChannelInterceptor 담당)
                 ).permitAll()
                 .anyRequest().authenticated())
             .oauth2Login(oauth2 -> oauth2

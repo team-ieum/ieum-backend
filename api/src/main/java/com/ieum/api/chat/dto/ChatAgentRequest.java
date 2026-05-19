@@ -11,13 +11,20 @@ import lombok.Getter;
 @Builder
 public class ChatAgentRequest {
 
-    /** 대화 히스토리 (최신 사용자 메시지 포함) */
-    private final List<AgentMessage> messages;
+    /** 유저 메시지 텍스트 */
+    private final String prompt;
 
-    /** 사용할 모델 이름 (nullable — agent 기본값 사용) */
-    private final String model;
+    /** 현재 워크플로우 노드 목록 (채팅용으로는 미사용 — null 전달) */
+    private final List<Object> currentNodes;
 
-    /** 스트리밍 응답 여부 */
+    /** 현재 워크플로우 엣지 목록 (채팅용으로는 미사용 — null 전달) */
+    private final List<Object> currentEdges;
+
+    /** 사용 가능한 연동 목록 */
     @Builder.Default
-    private final boolean stream = false;
+    private final List<Object> availableIntegrations = List.of();
+
+    /** 사용 불가 연동 목록 */
+    @Builder.Default
+    private final List<Object> unavailableIntegrations = List.of();
 }
