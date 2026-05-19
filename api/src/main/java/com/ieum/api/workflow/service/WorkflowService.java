@@ -136,7 +136,7 @@ public class WorkflowService {
         Map<String, Object> triggerData = request.getTriggerData() != null
             ? request.getTriggerData()
             : Collections.emptyMap();
-        workflowExecutionRunner.run(latestVersion, execution, triggerData);
+        workflowExecutionRunner.run(latestVersion, execution.getId(), triggerData);
 
         return WorkflowExecutionResponse.from(execution);
     }

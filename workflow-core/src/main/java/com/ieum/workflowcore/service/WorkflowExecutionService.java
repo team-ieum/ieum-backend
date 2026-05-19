@@ -84,4 +84,15 @@ public class WorkflowExecutionService {
         }
         return workflowExecutionLogRepository.findByExecutionIdOrderByCreatedAtAsc(executionId);
     }
+
+    @Transactional
+    public void markAsFailed(UUID executionId) {
+        workflowExecutionRepository.findById(executionId).ifPresent(execution -> {
+            if (execution.getStatus() != ExecutionStatus.FAILED
+                    && execution.getStatus() != ExecutionStatus.SUCCESS) {
+                execution.fail();
+                log.warn("[ExecutionService] 실행 상태 FAILED 강제 업데이트 — executionId: {}", executionId);
+            }
+        });
+    }
 }

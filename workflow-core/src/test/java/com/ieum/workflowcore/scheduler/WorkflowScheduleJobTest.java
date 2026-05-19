@@ -44,10 +44,13 @@ class WorkflowScheduleJobTest {
     private WorkflowScheduleJob job;
 
     private UUID workflowId;
+    private UUID executionId;
 
     @BeforeEach
     void setUp() {
         workflowId = UUID.randomUUID();
+        executionId = UUID.randomUUID();
+
         JobDataMap dataMap = new JobDataMap();
         dataMap.put(WorkflowScheduleJob.KEY_WORKFLOW_ID, workflowId.toString());
 
@@ -57,26 +60,27 @@ class WorkflowScheduleJobTest {
 
     @Test
     @DisplayName("활성 워크플로우 — 정상 실행 (prepareExecution + runtime.execute 호출)")
-    void execute_활성_워크플로우_정상_실행() throws Exception {
+    void execute_activeWorkflow_executesNormally() throws Exception {
         given(workflowCrudService.findActiveById(workflowId)).willReturn(workflow);
         given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(workflowVersion));
         given(workflowExecutionService.prepareExecution(workflow, workflowVersion, TriggerType.SCHEDULE))
             .willReturn(execution);
+        given(execution.getId()).willReturn(executionId);
 
         job.execute(jobContext);
 
         then(workflowExecutionService).should().prepareExecution(workflow, workflowVersion, TriggerType.SCHEDULE);
-        then(syncExecutionRuntime).should().execute(eq(workflowVersion), eq(execution), eq(Collections.emptyMap()));
+        then(syncExecutionRuntime).should().execute(eq(workflowVersion), eq(executionId), eq(Collections.emptyMap()));
     }
 
     @Test
     @DisplayName("비활성 워크플로우 — 실행 스킵 (prepareExecution 미호출)")
-    void execute_비활성_워크플로우_스킵() throws Exception {
+    void execute_inactiveWorkflow_skipsExecution() throws Exception {
         given(workflowCrudService.findActiveById(workflowId)).willReturn(null);
 
         job.execute(jobContext);
 
         then(workflowExecutionService).should(never()).prepareExecution(any(), any(), any());
-        then(syncExecutionRuntime).should(never()).execute(any(), any(), any(Map.class));
+        then(syncExecutionRuntime).should(never()).execute(any(), any(UUID.class), any(Map.class));
     }
 }

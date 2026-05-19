@@ -3,11 +3,11 @@ services:
     image: postgres:16
     container_name: ieum-postgres
     environment:
-      POSTGRES_DB: ieum
-      POSTGRES_USER: ieum
-      POSTGRES_PASSWORD: ieum
+      POSTGRES_DB: ${POSTGRES_DEV_DB}
+      POSTGRES_USER: ${POSTGRES_DEV_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_DEV_PASSWORD}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
@@ -15,15 +15,17 @@ services:
     image: redis:7-alpine
     container_name: ieum-redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
 
   mongodb:
     image: mongo:7
     container_name: ieum-mongo
     environment:
-      MONGO_INITDB_DATABASE: ieum
+      MONGO_INITDB_DATABASE: ${MONGO_DEV_DB}
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_DEV_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_DEV_PASSWORD}
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongo-data:/data/db
 
