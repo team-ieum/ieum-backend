@@ -28,6 +28,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * API 레이어 워크플로우 서비스.
@@ -121,9 +123,11 @@ public class WorkflowService {
 
     // ------------------------------------------------------------------ EXECUTION
 
-    // @Transactional 미사용 의도:
-    // prepareExecution()이 자체 트랜잭션으로 커밋된 뒤 @Async 런너가 실행되어야
-    // 비동기 스레드에서 detached entity merge 오류를 방지할 수 있다.
+    // @Transactional 사용:
+    // prepareExecution()은 REQUIRED로 이 트랜잭션에 참여한다.
+    // TransactionSynchronizationManager.afterCommit()으로 커밋 완료 후 @Async 런너를 실행하여
+    // Race Condition(findById 시점 레코드 미존재) 및 Detached Entity 문제를 방지한다.
+    @Transactional
     public WorkflowExecutionResponse executeWorkflow(UUID userId, UUID workflowId,
             ExecuteWorkflowRequest request) {
         Workflow workflow = workflowCrudService.getWorkflowByOwner(userId, workflowId);
@@ -136,7 +140,16 @@ public class WorkflowService {
         Map<String, Object> triggerData = request.getTriggerData() != null
             ? request.getTriggerData()
             : Collections.emptyMap();
-        workflowExecutionRunner.run(latestVersion, execution.getId(), triggerData);
+
+        final UUID executionId = execution.getId();
+        TransactionSynchronizationManager.registerSynchronization(
+            new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    workflowExecutionRunner.run(latestVersion, executionId, triggerData);
+                }
+            }
+        );
 
         return WorkflowExecutionResponse.from(execution);
     }
