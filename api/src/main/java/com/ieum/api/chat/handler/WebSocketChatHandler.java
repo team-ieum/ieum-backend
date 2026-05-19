@@ -7,6 +7,7 @@ import com.ieum.api.chat.service.ChatService;
 import com.ieum.api.chat.service.ChatService.StreamSetupResult;
 import com.ieum.common.exception.CustomException;
 import java.security.Principal;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import lombok.RequiredArgsConstructor;
@@ -86,7 +87,11 @@ public class WebSocketChatHandler {
         AtomicInteger tokenIndex = new AtomicInteger(0);
 
         agentClient.chatStream(
-            setup.messages(),
+            setup.prompt(),
+            setup.currentNodes(),
+            setup.currentEdges(),
+            List.of(),   // availableIntegrations — Step 3에서 구현
+            List.of(),   // unavailableIntegrations — Step 3에서 구현
             setup.config().llmProvider(),
             setup.config().decryptedApiKey(),
             setup.googleToken(),

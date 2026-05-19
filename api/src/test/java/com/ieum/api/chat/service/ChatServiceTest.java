@@ -1,7 +1,6 @@
 package com.ieum.api.chat.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.ieum.api.chat.dto.AgentMessage;
 import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.api.chat.dto.ChatRequest;
 import com.ieum.api.chat.dto.ChatResponse;
@@ -14,12 +13,10 @@ import com.ieum.workflowcore.chat.domain.MessageType;
 import com.ieum.workflowcore.chat.repository.ChatMessageRepository;
 import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
 import com.ieum.workflowcore.domain.WorkflowVersion;
-import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.executor.CredentialProvider;
 import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,9 +25,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.junit.jupiter.api.Nested;
 import org.mockito.Mockito;
+import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -138,27 +134,6 @@ class ChatServiceTest {
             chatService.getChatHistory(sessionId, userId, PageRequest.of(0, 20))
         ).isInstanceOf(CustomException.class)
             .hasMessageContaining(ErrorCode.CHAT_SESSION_NOT_FOUND.getMessage());
-    }
-
-    // ─────────────────── buildAgentMessages ────────────────────────────────
-
-    @Test
-    @DisplayName("SYSTEM 메시지는 AgentMessage 변환에서 제외된다")
-    void buildAgentMessages_excludesSystemMessages() {
-        ChatSession session = buildSession(workflowId, userId);
-        ReflectionTestUtils.setField(session, "id", sessionId);
-
-        given(messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId)).willReturn(List.of(
-            buildMessage(session, MessageType.SYSTEM, "시스템"),
-            buildMessage(session, MessageType.USER, "안녕"),
-            buildMessage(session, MessageType.AGENT, "반갑습니다")
-        ));
-
-        List<AgentMessage> messages = chatService.buildAgentMessages(session);
-
-        assertThat(messages).hasSize(2);
-        assertThat(messages.get(0).getRole()).isEqualTo("user");
-        assertThat(messages.get(1).getRole()).isEqualTo("assistant");
     }
 
     // ─────────────────── resolveAgentConfig ────────────────────────────────
