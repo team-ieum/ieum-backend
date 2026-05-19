@@ -10,6 +10,7 @@ import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -205,7 +206,8 @@ class AgentNodeExecutorTest {
     // ── Notion 빌트인 도구 케이스 ─────────────────────────────────────────────
 
     @Test
-    void Notion_빌트인_도구가_있고_credentialId가_있으면_X_Notion_Token_헤더가_주입된다() throws InterruptedException {
+    @DisplayName("Notion 빌트인 도구가 있고 credentialId가 있으면 X-Notion-Token 헤더가 주입된다")
+    void execute_withNotionBuiltinTool_injectsNotionTokenHeader() throws InterruptedException {
         // given
         mockWebServer.enqueue(new MockResponse()
             .setResponseCode(200)
@@ -226,7 +228,8 @@ class AgentNodeExecutorTest {
     }
 
     @Test
-    void Notion_빌트인_도구가_없으면_X_Notion_Token_헤더가_포함되지_않는다() throws InterruptedException {
+    @DisplayName("Notion 빌트인 도구가 없으면 X-Notion-Token 헤더가 포함되지 않는다")
+    void execute_withoutNotionTool_noNotionTokenHeader() throws InterruptedException {
         // given
         mockWebServer.enqueue(new MockResponse()
             .setResponseCode(200)
@@ -246,7 +249,8 @@ class AgentNodeExecutorTest {
     }
 
     @Test
-    void Notion_빌트인_도구가_있지만_credentialId가_없으면_X_Notion_Token_헤더가_포함되지_않는다() throws InterruptedException {
+    @DisplayName("Notion 빌트인 도구가 있지만 credentialId가 없으면 X-Notion-Token 헤더가 포함되지 않는다")
+    void execute_withNotionToolButNoCredentialId_noNotionTokenHeader() throws InterruptedException {
         // given — credentialId 키 없이 name만 있는 tools config
         mockWebServer.enqueue(new MockResponse()
             .setResponseCode(200)
