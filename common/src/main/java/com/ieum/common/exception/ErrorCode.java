@@ -67,7 +67,11 @@ public enum ErrorCode {
     // 연동 계정
     ACCOUNT_NOT_CONNECTED(HttpStatus.BAD_REQUEST, "연동된 계정이 없습니다."),
     TOKEN_REFRESH_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "토큰 갱신에 실패했습니다."),
-    AUTHENTICATION_REQUIRED(HttpStatus.UNAUTHORIZED, "재인증이 필요합니다. Google 계정을 다시 연동해주세요.");
+    AUTHENTICATION_REQUIRED(HttpStatus.UNAUTHORIZED, "재인증이 필요합니다. Google 계정을 다시 연동해주세요."),
+
+    // 채팅
+    CHAT_SESSION_NOT_FOUND(HttpStatus.NOT_FOUND, "채팅 세션을 찾을 수 없습니다."),
+    WORKFLOW_HAS_NO_AI_NODE(HttpStatus.BAD_REQUEST, "워크플로우에 AI 노드가 없습니다. 워크플로우 구성을 확인해주세요.");
 
     private final HttpStatus status;
     private final String message;

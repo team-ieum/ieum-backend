@@ -1,6 +1,6 @@
 package com.ieum.api.chat.dto;
 
-import com.ieum.api.chat.domain.ChatSession;
+import com.ieum.workflowcore.chat.domain.ChatSession;
 import java.time.LocalDateTime;
 import java.util.UUID;
 import lombok.Builder;

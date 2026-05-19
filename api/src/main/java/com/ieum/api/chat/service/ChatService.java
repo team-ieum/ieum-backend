@@ -1,0 +1,229 @@
+package com.ieum.api.chat.service;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.api.chat.dto.AgentMessage;
+import com.ieum.api.chat.dto.ChatAgentResponse;
+import com.ieum.api.chat.dto.ChatRequest;
+import com.ieum.api.chat.dto.ChatResponse;
+import com.ieum.common.exception.CustomException;
+import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.chat.domain.ChatMessage;
+import com.ieum.workflowcore.chat.domain.ChatSession;
+import com.ieum.workflowcore.chat.domain.MessageType;
+import com.ieum.workflowcore.chat.repository.ChatMessageRepository;
+import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
+import com.ieum.workflowcore.domain.WorkflowVersion;
+import com.ieum.workflowcore.domain.enums.NodeType;
+import com.ieum.workflowcore.engine.Node;
+import com.ieum.workflowcore.engine.executor.CredentialProvider;
+import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
+import com.ieum.workflowcore.service.WorkflowCrudService;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.UUID;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * 워크플로우 기반 채팅 비즈니스 로직.
+ *
+ * <p>REST 블로킹 채팅({@link #chat})과 WebSocket 스트리밍에 필요한
+ * 세분화된 헬퍼 메서드를 함께 제공한다.
+ *
+ * <h3>chat() 내부 흐름</h3>
+ * <ol>
+ *   <li>세션 찾기 or 신규 생성</li>
+ *   <li>워크플로우 AI 노드 설정(credentialId, llmProvider, tools) 로드</li>
+ *   <li>USER 메시지 DB 저장</li>
+ *   <li>대화 히스토리(오래된 순) 구성 → AgentMessage 목록</li>
+ *   <li>Google 빌트인 도구 여부 판단 → Access Token 조회</li>
+ *   <li>AgentClient.chat() 호출 (블로킹)</li>
+ *   <li>AGENT 응답 메시지 DB 저장</li>
+ * </ol>
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+@Transactional(readOnly = true)
+public class ChatService {
+
+    private static final int MAX_TITLE_LENGTH = 50;
+    private static final String GOOGLE_BUILTIN_PREFIX = "builtin:google_";
+
+    private final ChatSessionRepository sessionRepository;
+    private final ChatMessageRepository messageRepository;
+    private final WorkflowCrudService workflowCrudService;
+    private final CredentialProvider credentialProvider;
+    private final GoogleTokenProvider googleTokenProvider;
+    private final AgentClient agentClient;
+    private final ObjectMapper objectMapper;
+
+    // ─────────────────────────────────────── REST 블로킹 ──────────────────────
+
+    /**
+     * 메시지를 전송하고 AI 응답을 블로킹으로 반환한다 (REST API 전용).
+     */
+    @Transactional
+    public ChatResponse chat(UUID workflowId, UUID userId, ChatRequest request) {
+        ChatSession session = createOrGetSession(workflowId, userId, request.getSessionId());
+        AgentConfig agentConfig = resolveAgentConfig(workflowId, userId);
+
+        saveUserMessage(session, request.getMessage());
+
+        if (session.getTitle() == null) {
+            autoUpdateTitle(session, request.getMessage());
+        }
+
+        List<AgentMessage> agentMessages = buildAgentMessages(session);
+        String googleAccessToken = resolveGoogleAccessToken(agentConfig.tools(), userId);
+
+        log.info("[ChatService] AI 응답 요청 — workflowId: {}, sessionId: {}",
+            workflowId, session.getId());
+        ChatAgentResponse agentResponse = agentClient.chat(
+            agentMessages,
+            agentConfig.llmProvider(),
+            agentConfig.decryptedApiKey(),
+            googleAccessToken
+        );
+
+        ChatMessage agentMessage = saveAgentMessage(
+            session,
+            agentResponse.getContent(),
+            agentResponse.getInputTokens(),
+            agentResponse.getOutputTokens()
+        );
+
+        return ChatResponse.from(agentMessage, session.getId());
+    }
+
+    // ─────────────────────────────────────── 히스토리 ─────────────────────────
+
+    public Page<ChatMessage> getChatHistory(UUID sessionId, UUID userId, Pageable pageable) {
+        sessionRepository.findByIdAndUserId(sessionId, userId)
+            .orElseThrow(() -> new CustomException(ErrorCode.CHAT_SESSION_NOT_FOUND));
+        return messageRepository.findBySessionIdOrderByCreatedAtDesc(sessionId, pageable);
+    }
+
+    // ─────────────────────────────────────── 세션 ─────────────────────────────
+
+    @Transactional
+    public ChatSession createOrGetSession(UUID workflowId, UUID userId, UUID sessionId) {
+        if (sessionId != null) {
+            return sessionRepository.findByIdAndUserId(sessionId, userId)
+                .orElseThrow(() -> new CustomException(ErrorCode.CHAT_SESSION_NOT_FOUND));
+        }
+        ChatSession session = ChatSession.builder()
+            .workflowId(workflowId)
+            .userId(userId)
+            .build();
+        return sessionRepository.save(session);
+    }
+
+    // ─────────────────────────────────────── 메시지 저장 ──────────────────────
+
+    @Transactional
+    public ChatMessage saveUserMessage(ChatSession session, String content) {
+        ChatMessage message = ChatMessage.builder()
+            .session(session)
+            .senderType(MessageType.USER)
+            .content(content)
+            .build();
+        return messageRepository.save(message);
+    }
+
+    @Transactional
+    public ChatMessage saveAgentMessage(ChatSession session, String content,
+            Integer inputTokens, Integer outputTokens) {
+        ChatMessage message = ChatMessage.builder()
+            .session(session)
+            .senderType(MessageType.AGENT)
+            .content(content)
+            .inputTokens(inputTokens)
+            .outputTokens(outputTokens)
+            .build();
+        return messageRepository.save(message);
+    }
+
+    // ─────────────────────────────────────── 에이전트 설정 ────────────────────
+
+    @SuppressWarnings("unchecked")
+    public AgentConfig resolveAgentConfig(UUID workflowId, UUID userId) {
+        workflowCrudService.getWorkflowByOwner(userId, workflowId);
+
+        WorkflowVersion version = workflowCrudService.findLatestVersion(workflowId)
+            .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+
+        List<Node> nodes;
+        try {
+            nodes = objectMapper.readValue(version.getNodesJson(), new TypeReference<>() {});
+        } catch (Exception e) {
+            log.error("[ChatService] nodesJson 파싱 실패 — workflowId: {}", workflowId, e);
+            throw new CustomException(ErrorCode.INVALID_WORKFLOW);
+        }
+
+        Node aiNode = nodes.stream()
+            .filter(n -> n.getType() == NodeType.AI)
+            .findFirst()
+            .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE));
+
+        Map<String, Object> config = aiNode.getConfig();
+        String llmProvider = (String) config.get("llmProvider");
+        String credentialId = (String) config.get("credentialId");
+        List<Map<String, Object>> tools = (List<Map<String, Object>>) config.get("tools");
+
+        String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
+
+        return new AgentConfig(llmProvider, decryptedApiKey, tools);
+    }
+
+    public List<AgentMessage> buildAgentMessages(ChatSession session) {
+        List<ChatMessage> messages = messageRepository
+            .findBySessionIdOrderByCreatedAtAsc(session.getId());
+        return messages.stream()
+            .filter(m -> m.getSenderType() != MessageType.SYSTEM)
+            .map(m -> m.getSenderType() == MessageType.USER
+                ? AgentMessage.user(m.getContent())
+                : AgentMessage.assistant(m.getContent()))
+            .toList();
+    }
+
+    // ─────────────────────────────────────── PRIVATE ──────────────────────────
+
+    private void autoUpdateTitle(ChatSession session, String firstMessage) {
+        String title = firstMessage.length() > MAX_TITLE_LENGTH
+            ? firstMessage.substring(0, MAX_TITLE_LENGTH) + "..."
+            : firstMessage;
+        session.updateTitle(title);
+        log.debug("[ChatService] 세션 제목 자동 설정 — sessionId: {}, title: {}",
+            session.getId(), title);
+    }
+
+    private String resolveGoogleAccessToken(List<Map<String, Object>> tools, UUID userId) {
+        if (tools == null || tools.isEmpty()) {
+            return null;
+        }
+        boolean hasGoogleTool = tools.stream()
+            .map(t -> (String) t.get("name"))
+            .filter(Objects::nonNull)
+            .anyMatch(name -> name.startsWith(GOOGLE_BUILTIN_PREFIX));
+        if (!hasGoogleTool) {
+            return null;
+        }
+        log.debug("[ChatService] Google 빌트인 도구 감지 — userId: {} 로 토큰 조회", userId);
+        return googleTokenProvider.getValidAccessToken(userId);
+    }
+
+    // ─────────────────────────────────────── 내부 DTO ─────────────────────────
+
+    public record AgentConfig(
+        String llmProvider,
+        String decryptedApiKey,
+        List<Map<String, Object>> tools
+    ) {}
+}
