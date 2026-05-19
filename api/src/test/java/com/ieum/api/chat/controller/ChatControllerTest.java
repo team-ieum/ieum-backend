@@ -101,7 +101,7 @@ class ChatControllerTest {
 
         mockMvc.perform(post("/api/v1/workflows/{workflowId}/chat", workflowId)
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(Map.of("message", "안녕"))))
+                .content(objectMapper.writeValueAsString(Map.of("prompt", "안녕"))))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.success").value(true))
             .andExpect(jsonPath("$.data.content").value("안녕하세요!"))
@@ -114,7 +114,7 @@ class ChatControllerTest {
     void chat_blankMessage_returns400() throws Exception {
         mockMvc.perform(post("/api/v1/workflows/{workflowId}/chat", workflowId)
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(Map.of("message", ""))))
+                .content(objectMapper.writeValueAsString(Map.of("prompt", ""))))
             .andExpect(status().isBadRequest());
     }
 
@@ -125,7 +125,7 @@ class ChatControllerTest {
 
         mockMvc.perform(post("/api/v1/workflows/{workflowId}/chat", workflowId)
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(Map.of("message", longMessage))))
+                .content(objectMapper.writeValueAsString(Map.of("prompt", longMessage))))
             .andExpect(status().isBadRequest());
     }
 
@@ -138,7 +138,7 @@ class ChatControllerTest {
         mockMvc.perform(post("/api/v1/workflows/{workflowId}/chat", workflowId)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(Map.of(
-                    "message", "안녕",
+                    "prompt", "안녕",
                     "sessionId", sessionId.toString()
                 ))))
             .andExpect(status().isNotFound());
@@ -152,7 +152,7 @@ class ChatControllerTest {
 
         mockMvc.perform(post("/api/v1/workflows/{workflowId}/chat", workflowId)
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(Map.of("message", "안녕"))))
+                .content(objectMapper.writeValueAsString(Map.of("prompt", "안녕"))))
             .andExpect(status().isBadRequest());
     }
 

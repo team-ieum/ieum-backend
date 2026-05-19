@@ -1,6 +1,5 @@
 package com.ieum.api.chat.service;
 
-import com.ieum.api.chat.dto.AgentMessage;
 import com.ieum.api.chat.dto.ChatAgentRequest;
 import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.common.exception.CustomException;
@@ -31,9 +30,11 @@ import reactor.core.scheduler.Schedulers;
  * <h3>요청 body</h3>
  * <pre>
  * {
- *   "prompt": "유저 메시지 텍스트",
- *   "availableIntegrations": [],
- *   "unavailableIntegrations": []
+ *   "prompt": "유저 자연어 입력",
+ *   "currentNodes": [...],          ← null이면 신규 생성, 있으면 수정
+ *   "currentEdges": [...],
+ *   "availableIntegrations": [...],
+ *   "unavailableIntegrations": [...]
  * }
  * </pre>
  */
@@ -57,7 +58,11 @@ public class AgentClient {
     /**
      * AI 에이전트에 채팅 메시지를 전송하고 전체 응답을 블로킹으로 반환한다.
      *
-     * @param messages          대화 히스토리 (최신 사용자 메시지 포함)
+     * @param prompt            사용자 자연어 입력
+     * @param currentNodes      현재 캔버스 노드 목록 (null = 신규 생성)
+     * @param currentEdges      현재 캔버스 엣지 목록
+     * @param availableIntegrations   연동된 서비스 목록
+     * @param unavailableIntegrations 미연동 서비스 목록
      * @param llmProvider       LLM 프로바이더 이름 (예: "OPENAI", "CLAUDE")
      * @param apiKey            복호화된 API Key
      * @param googleAccessToken Google 빌트인 도구 사용 시 필요한 Access Token (nullable)
@@ -65,16 +70,25 @@ public class AgentClient {
      * @return AI 응답
      */
     public ChatAgentResponse chat(
-        List<AgentMessage> messages,
+        String prompt,
+        List<Object> currentNodes,
+        List<Object> currentEdges,
+        List<Object> availableIntegrations,
+        List<Object> unavailableIntegrations,
         String llmProvider,
         String apiKey,
         String googleAccessToken,
         UUID userId
     ) {
-        log.debug("[AgentClient] chat 요청 — provider: {}, messages: {}개", llmProvider, messages.size());
+        log.debug("[AgentClient] chat 요청 — provider: {}, prompt: {}자",
+            llmProvider, prompt != null ? prompt.length() : 0);
 
         ChatAgentRequest request = ChatAgentRequest.builder()
-            .prompt(extractPrompt(messages))
+            .prompt(prompt)
+            .currentNodes(currentNodes)
+            .currentEdges(currentEdges)
+            .availableIntegrations(availableIntegrations != null ? availableIntegrations : List.of())
+            .unavailableIntegrations(unavailableIntegrations != null ? unavailableIntegrations : List.of())
             .build();
 
         try {
@@ -135,38 +149,31 @@ public class AgentClient {
      * 이 메서드를 교체하면 호출부 변경 없이 진짜 스트리밍으로 전환할 수 있다.
      */
     public Flux<String> chatStream(
-        List<AgentMessage> messages,
+        String prompt,
+        List<Object> currentNodes,
+        List<Object> currentEdges,
+        List<Object> availableIntegrations,
+        List<Object> unavailableIntegrations,
         String llmProvider,
         String apiKey,
         String googleAccessToken,
         UUID userId
     ) {
-        log.debug("[AgentClient] chatStream 요청 — provider: {}, messages: {}개",
-            llmProvider, messages.size());
+        log.debug("[AgentClient] chatStream 요청 — provider: {}, prompt: {}자",
+            llmProvider, prompt != null ? prompt.length() : 0);
 
         return Flux.<String>create(sink -> {
             try {
-                String content = chat(messages, llmProvider, apiKey, googleAccessToken, userId).getContent();
+                String content = chat(
+                    prompt, currentNodes, currentEdges,
+                    availableIntegrations, unavailableIntegrations,
+                    llmProvider, apiKey, googleAccessToken, userId
+                ).getContent();
                 sink.next(content);
                 sink.complete();
             } catch (Exception e) {
                 sink.error(e);
             }
         }).subscribeOn(Schedulers.boundedElastic());
-    }
-
-    /**
-     * 대화 히스토리에서 prompt 문자열을 추출한다.
-     * 마지막 user 메시지의 content를 prompt로 사용한다.
-     */
-    private String extractPrompt(List<AgentMessage> messages) {
-        for (int i = messages.size() - 1; i >= 0; i--) {
-            AgentMessage msg = messages.get(i);
-            if ("user".equals(msg.getRole())) {
-                return msg.getContent();
-            }
-        }
-        // fallback: 마지막 메시지 content
-        return messages.isEmpty() ? "" : messages.get(messages.size() - 1).getContent();
     }
 }

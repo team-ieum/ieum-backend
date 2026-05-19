@@ -2,7 +2,6 @@ package com.ieum.api.chat.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.ieum.api.chat.dto.AgentMessage;
 import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.api.chat.dto.ChatRequest;
 import com.ieum.api.chat.dto.ChatResponse;
@@ -33,17 +32,19 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 워크플로우 기반 채팅 비즈니스 로직.
  *
- * <p>REST 블로킹 채팅({@link #chat})과 WebSocket 스트리밍에 필요한
- * 세분화된 헬퍼 메서드를 함께 제공한다.
+ * <p>이 서비스는 LLM 기반 워크플로우 컴파일러 역할을 한다. 사용자의 자연어 입력을 받아
+ * ieum-agent에 전달하고, agent의 응답에 따라 workflow canonical state를 DB에 저장한다.
  *
  * <h3>chat() 내부 흐름</h3>
  * <ol>
  *   <li>세션 찾기 or 신규 생성</li>
  *   <li>워크플로우 AI 노드 설정(credentialId, llmProvider, tools) 로드</li>
  *   <li>USER 메시지 DB 저장</li>
- *   <li>대화 히스토리(오래된 순) 구성 → AgentMessage 목록</li>
+ *   <li>DB canonical state 조회 → currentNodes/currentEdges 결정</li>
+ *   <li>연동 상태 분류 (availableIntegrations / unavailableIntegrations)</li>
  *   <li>Google 빌트인 도구 여부 판단 → Access Token 조회</li>
  *   <li>AgentClient.chat() 호출 (블로킹)</li>
+ *   <li>응답 type에 따라 workflow 저장 or oauthUrl 주입</li>
  *   <li>AGENT 응답 메시지 DB 저장</li>
  * </ol>
  */
@@ -71,7 +72,7 @@ public class ChatService {
      *
      * @param workflowId 워크플로우 ID
      * @param userId     현재 인증된 사용자 ID
-     * @param request    ChatRequest (message + optional sessionId)
+     * @param request    ChatRequest (prompt + optional currentNodes/currentEdges + optional sessionId)
      * @return AI AGENT 응답 메시지 DTO
      */
     @Transactional
@@ -84,31 +85,32 @@ public class ChatService {
         AgentConfig agentConfig = resolveAgentConfig(workflowId, userId);
 
         // 3. USER 메시지 저장
-        saveUserMessage(session, request.getMessage());
+        saveUserMessage(session, request.getPrompt());
 
         // 4. 첫 메시지면 세션 제목 자동 설정
         if (session.getTitle() == null) {
-            autoUpdateTitle(session, request.getMessage());
+            autoUpdateTitle(session, request.getPrompt());
         }
 
-        // 5. 대화 히스토리 구성 (방금 저장한 USER 메시지 포함, 오래된 순)
-        List<AgentMessage> agentMessages = buildAgentMessages(session);
-
-        // 6. Google 빌트인 도구 → Access Token 조회 (없으면 null)
+        // 5. Google 빌트인 도구 → Access Token 조회 (없으면 null)
         String googleAccessToken = resolveGoogleAccessToken(agentConfig.tools(), userId);
 
-        // 7. AI 에이전트 호출
+        // 6. AI 에이전트 호출
         log.info("[ChatService] AI 응답 요청 — workflowId: {}, sessionId: {}",
             workflowId, session.getId());
         ChatAgentResponse agentResponse = agentClient.chat(
-            agentMessages,
+            request.getPrompt(),
+            request.getCurrentNodes(),
+            request.getCurrentEdges(),
+            List.of(),   // availableIntegrations — Step 3에서 구현
+            List.of(),   // unavailableIntegrations — Step 3에서 구현
             agentConfig.llmProvider(),
             agentConfig.decryptedApiKey(),
             googleAccessToken,
             userId
         );
 
-        // 8. AGENT 메시지 저장 후 반환 — sessionId를 직접 전달하여 LAZY 로딩 회피
+        // 7. AGENT 메시지 저장 후 반환 — sessionId를 직접 전달하여 LAZY 로딩 회피
         ChatMessage agentMessage = saveAgentMessage(
             session,
             agentResponse.getContent(),
@@ -244,23 +246,6 @@ public class ChatService {
         return new AgentConfig(llmProvider, decryptedApiKey, tools);
     }
 
-    /**
-     * 현재 세션의 대화 히스토리를 AgentMessage 목록으로 변환한다 (오래된 순).
-     * SYSTEM 메시지는 제외한다.
-     *
-     * <p>WebSocket 핸들러에서 재사용할 수 있도록 public으로 공개한다.
-     */
-    public List<AgentMessage> buildAgentMessages(ChatSession session) {
-        List<ChatMessage> messages = messageRepository
-            .findBySessionIdOrderByCreatedAtAsc(session.getId());
-        return messages.stream()
-            .filter(m -> m.getSenderType() != MessageType.SYSTEM)
-            .map(m -> m.getSenderType() == MessageType.USER
-                ? AgentMessage.user(m.getContent())
-                : AgentMessage.assistant(m.getContent()))
-            .toList();
-    }
-
     // ─────────────────────────────────────── PRIVATE ──────────────────────────
 
     private void autoUpdateTitle(ChatSession session, String firstMessage) {
@@ -297,7 +282,7 @@ public class ChatService {
      *
      * @param workflowId 워크플로우 ID
      * @param userId     현재 인증된 사용자 ID
-     * @param request    ChatRequest (message + optional sessionId)
+     * @param request    ChatRequest (prompt + optional currentNodes/currentEdges + optional sessionId)
      * @return 스트리밍에 필요한 컨텍스트
      */
     @Transactional
@@ -305,19 +290,25 @@ public class ChatService {
         ChatSession session = createOrGetSession(workflowId, userId, request.getSessionId());
         AgentConfig config = resolveAgentConfig(workflowId, userId);
 
-        saveUserMessage(session, request.getMessage());
+        saveUserMessage(session, request.getPrompt());
 
         if (session.getTitle() == null) {
-            autoUpdateTitle(session, request.getMessage());
+            autoUpdateTitle(session, request.getPrompt());
         }
 
-        List<AgentMessage> messages = buildAgentMessages(session);
         String googleToken = resolveGoogleAccessToken(config.tools(), userId);
 
         log.info("[ChatService] 스트림 준비 완료 — workflowId: {}, sessionId: {}",
             workflowId, session.getId());
 
-        return new StreamSetupResult(session.getId(), config, messages, googleToken);
+        return new StreamSetupResult(
+            session.getId(),
+            config,
+            request.getPrompt(),
+            request.getCurrentNodes(),
+            request.getCurrentEdges(),
+            googleToken
+        );
     }
 
     /**
@@ -326,9 +317,9 @@ public class ChatService {
      * <p>WebSocket 핸들러의 {@code onComplete} 콜백에서 호출한다. 이미 인증된 사용자의
      * 세션이므로 userId 재검증 없이 저장한다.
      *
-     * @param sessionId   채팅 세션 ID
-     * @param content     전체 응답 텍스트 (토큰 조각 누적)
-     * @param inputTokens 입력 토큰 수 (nullable)
+     * @param sessionId    채팅 세션 ID
+     * @param content      전체 응답 텍스트 (토큰 조각 누적)
+     * @param inputTokens  입력 토큰 수 (nullable)
      * @param outputTokens 출력 토큰 수 (nullable)
      * @return 저장된 ChatMessage
      */
@@ -362,7 +353,9 @@ public class ChatService {
     public record StreamSetupResult(
         UUID sessionId,
         AgentConfig config,
-        List<AgentMessage> messages,
+        String prompt,
+        List<Object> currentNodes,
+        List<Object> currentEdges,
         String googleToken
     ) {}
 }
