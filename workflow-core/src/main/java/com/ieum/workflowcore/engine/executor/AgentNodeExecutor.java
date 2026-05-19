@@ -10,7 +10,6 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -178,16 +177,29 @@ public class AgentNodeExecutor implements NodeExecutor {
             return null;
         }
 
+        boolean hasNotionTool = tools.stream()
+            .anyMatch(tool -> tool.get("name") instanceof String name
+                && name.startsWith(NOTION_BUILTIN_PREFIX));
+
+        if (!hasNotionTool) {
+            return null;
+        }
+
         return tools.stream()
-            .filter(tool -> {
-                String name = (String) tool.get("name");
-                return name != null && name.startsWith(NOTION_BUILTIN_PREFIX);
-            })
-            .map(tool -> (String) tool.get("credentialId"))
-            .filter(Objects::nonNull)
+            .filter(tool -> tool.get("name") instanceof String name
+                && name.startsWith(NOTION_BUILTIN_PREFIX))
+            .map(tool -> tool.get("credentialId"))
+            .filter(id -> id instanceof String)
+            .map(id -> (String) id)
             .findFirst()
-            .map(credentialProvider::getDecryptedApiKey)
-            .orElse(null);
+            .map(credentialId -> {
+                log.debug("[AgentNodeExecutor] Notion 빌트인 도구 감지 — credentialId: {} 로 토큰 조회", credentialId);
+                return credentialProvider.getDecryptedApiKey(credentialId);
+            })
+            .orElseGet(() -> {
+                log.warn("[AgentNodeExecutor] Notion 빌트인 도구 사용이지만 credentialId가 없음 — 토큰 없이 진행");
+                return null;
+            });
     }
 
     private AgentExecutionResult callAgentService(
