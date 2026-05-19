@@ -24,11 +24,16 @@ import org.springframework.stereotype.Controller;
  * <ol>
  *   <li>클라이언트 → {@code /app/chat/{workflowId}} 메시지 전송 (ChatRequest)</li>
  *   <li>세션 생성/조회, 사용자 메시지 저장, 에이전트 설정 로드 (트랜잭션)</li>
- *   <li>ieum-agent SSE 스트리밍 구독 시작</li>
- *   <li>토큰 수신마다 {@code /user/queue/chat/stream} 으로 즉시 전송</li>
+ *   <li>{@link AgentClient#chatStream} 구독 시작</li>
+ *   <li>응답 수신 후 {@code /user/queue/chat/stream} 으로 전송</li>
  *   <li>완료 시 AGENT 메시지 DB 저장 + COMPLETE 프레임 전송</li>
  *   <li>오류 시 ERROR 프레임 전송</li>
  * </ol>
+ *
+ * <p><b>현재 스트리밍 동작 방식:</b> {@code AgentClient.chatStream()}은 ieum-agent가
+ * 스트리밍을 지원하지 않아 응답 전체를 단일 청크로 방출한다.
+ * 클라이언트는 TOKEN 1건 → COMPLETE 순서로 수신하게 된다.
+ * ieum-agent가 SSE를 지원하면 {@link AgentClient#chatStream} 구현만 교체하면 된다.
  *
  * <h3>클라이언트 구독 경로</h3>
  * {@code /user/queue/chat/stream} — 개인 큐 (다른 사용자에게 노출 없음)
@@ -105,12 +110,14 @@ public class WebSocketChatHandler {
                     setup.sessionId(), tokenIndex.get());
 
                 try {
+                    // inputTokens/outputTokens: /v1/chat 응답에 토큰 정보가 없으므로 null 저장
                     chatService.saveAgentMessageById(
-                        setup.sessionId(), content, null, tokenIndex.get());
+                        setup.sessionId(), content, null, null);
                 } catch (Exception e) {
                     log.error("[WS] AGENT 메시지 저장 실패 — sessionId: {}", setup.sessionId(), e);
                 }
 
+                // totalTokens: 전송한 WebSocket 청크 수 (현재는 단일 청크이므로 항상 1)
                 sendToUser(userName, ChatStreamResponse.complete(tokenIndex.get()));
             }
         );

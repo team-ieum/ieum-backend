@@ -124,8 +124,15 @@ public class AgentClient {
     }
 
     /**
-     * ieum-agent /v1/chat 은 스트리밍을 지원하지 않으므로,
-     * blocking 호출 결과를 단일 Flux 항목으로 래핑한다.
+     * ieum-agent {@code /v1/chat}은 스트리밍을 지원하지 않으므로,
+     * blocking 호출 결과를 단일 항목의 Flux로 래핑한다.
+     *
+     * <p><b>주의:</b> 실제 토큰 단위 스트리밍이 아니다.
+     * AI 응답 전체가 완성된 후 한 번에 단일 항목({@code onNext} 1회)으로 방출된다.
+     * 따라서 구독자는 긴 대기 후 전체 응답을 한꺼번에 수신하게 된다.
+     *
+     * <p>ieum-agent가 SSE/스트리밍 엔드포인트를 제공하게 되면
+     * 이 메서드를 교체하면 호출부 변경 없이 진짜 스트리밍으로 전환할 수 있다.
      */
     public Flux<String> chatStream(
         List<AgentMessage> messages,

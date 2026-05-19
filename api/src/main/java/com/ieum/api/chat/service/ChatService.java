@@ -141,6 +141,10 @@ public class ChatService {
      * sessionId가 주어지면 해당 세션을 조회하고, 없으면 새 세션을 생성한다.
      * WebSocket 핸들러에서 직접 호출할 수 있도록 public으로 공개한다.
      *
+     * <p><b>트랜잭션 참고:</b> 외부(다른 Bean)에서 호출 시 새 트랜잭션을 시작한다.
+     * 같은 클래스 내의 {@code chat()}, {@code prepareStream()} 에서 호출 시에는
+     * Spring AOP 셀프 인보케이션 제약으로 인해 상위 트랜잭션에 참여한다.
+     *
      * @param workflowId 워크플로우 ID
      * @param userId     현재 인증된 사용자 ID
      * @param sessionId  기존 세션 ID (nullable)
@@ -164,6 +168,9 @@ public class ChatService {
     /**
      * USER 메시지를 DB에 저장한다.
      * WebSocket 핸들러에서 직접 호출할 수 있도록 public으로 공개한다.
+     *
+     * <p><b>트랜잭션 참고:</b> 외부 호출 시 독립 트랜잭션 시작,
+     * 클래스 내부 호출 시 상위 트랜잭션에 참여한다 (셀프 인보케이션).
      */
     @Transactional
     public ChatMessage saveUserMessage(ChatSession session, String content) {
@@ -178,6 +185,9 @@ public class ChatService {
     /**
      * AGENT 응답 메시지를 DB에 저장한다.
      * WebSocket 핸들러에서 직접 호출할 수 있도록 public으로 공개한다.
+     *
+     * <p><b>트랜잭션 참고:</b> 외부 호출 시 독립 트랜잭션 시작,
+     * 클래스 내부 호출 시 상위 트랜잭션에 참여한다 (셀프 인보케이션).
      */
     @Transactional
     public ChatMessage saveAgentMessage(ChatSession session, String content,
@@ -336,7 +346,14 @@ public class ChatService {
         String llmProvider,
         String decryptedApiKey,
         List<Map<String, Object>> tools
-    ) {}
+    ) {
+        /** 로그/디버그 출력 시 복호화된 API Key가 노출되지 않도록 마스킹한다. */
+        @Override
+        public String toString() {
+            return "AgentConfig[llmProvider=" + llmProvider
+                + ", decryptedApiKey=***, tools=" + tools + "]";
+        }
+    }
 
     /**
      * WebSocket 스트리밍 설정 결과.

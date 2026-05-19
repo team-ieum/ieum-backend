@@ -36,6 +36,7 @@ public interface ChatControllerDocs {
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<PageResponse<ChatResponse>>> getChatHistory(
         @Parameter(hidden = true) CustomUserDetails userDetails,
+        @Parameter(description = "워크플로우 ID") UUID workflowId,
         @Parameter(description = "세션 ID") UUID sessionId,
         @Parameter(description = "페이지 번호 (0부터)") int page,
         @Parameter(description = "페이지 크기") int size
