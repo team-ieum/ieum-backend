@@ -2,6 +2,7 @@ package com.ieum.api.chat.service;
 
 import com.ieum.api.chat.dto.ChatAgentRequest;
 import com.ieum.api.chat.dto.ChatAgentResponse;
+import com.ieum.api.chat.dto.IntegrationInfo;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import java.time.Duration;
@@ -61,7 +62,7 @@ public class AgentClient {
      * @param prompt            사용자 자연어 입력
      * @param currentNodes      현재 캔버스 노드 목록 (null = 신규 생성)
      * @param currentEdges      현재 캔버스 엣지 목록
-     * @param availableIntegrations   연동된 서비스 목록
+     * @param availableIntegrations   연동 완료된 서비스 목록
      * @param unavailableIntegrations 미연동 서비스 목록
      * @param llmProvider       LLM 프로바이더 이름 (예: "OPENAI", "CLAUDE")
      * @param apiKey            복호화된 API Key
@@ -73,8 +74,8 @@ public class AgentClient {
         String prompt,
         List<Object> currentNodes,
         List<Object> currentEdges,
-        List<Object> availableIntegrations,
-        List<Object> unavailableIntegrations,
+        List<IntegrationInfo> availableIntegrations,
+        List<IntegrationInfo> unavailableIntegrations,
         String llmProvider,
         String apiKey,
         String googleAccessToken,
@@ -90,6 +91,7 @@ public class AgentClient {
             .availableIntegrations(availableIntegrations != null ? availableIntegrations : List.of())
             .unavailableIntegrations(unavailableIntegrations != null ? unavailableIntegrations : List.of())
             .build();
+
 
         try {
             var requestSpec = webClient.post()
@@ -152,8 +154,8 @@ public class AgentClient {
         String prompt,
         List<Object> currentNodes,
         List<Object> currentEdges,
-        List<Object> availableIntegrations,
-        List<Object> unavailableIntegrations,
+        List<IntegrationInfo> availableIntegrations,
+        List<IntegrationInfo> unavailableIntegrations,
         String llmProvider,
         String apiKey,
         String googleAccessToken,

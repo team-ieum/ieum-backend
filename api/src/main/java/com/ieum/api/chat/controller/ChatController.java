@@ -72,7 +72,7 @@ public class ChatController implements ChatControllerDocs {
         );
 
         List<ChatResponse> content = messagePage.getContent().stream()
-            .map(m -> ChatResponse.from(m, sessionId))
+            .map(m -> ChatResponse.fromHistory(m, sessionId))
             .toList();
 
         boolean hasNext = messagePage.hasNext();

@@ -1,6 +1,7 @@
 package com.ieum.api.chat.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.api.chat.dto.AgentResponseType;
 import com.ieum.api.chat.dto.ChatResponse;
 import com.ieum.api.chat.dto.TokenUsage;
 import com.ieum.api.chat.service.ChatService;
@@ -68,7 +69,6 @@ class ChatControllerTest {
 
         userDetails = CustomUserDetails.of(userId, "test@example.com", "ROLE_USER");
 
-        // SecurityContext에 인증 정보 설정 (@AuthenticationPrincipal 주입용)
         UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
             userDetails, null, List.of(new SimpleGrantedAuthority("ROLE_USER"))
         );
@@ -92,7 +92,7 @@ class ChatControllerTest {
         ChatResponse response = ChatResponse.builder()
             .messageId(UUID.randomUUID())
             .sessionId(sessionId)
-            .senderType(MessageType.AGENT)
+            .type(AgentResponseType.CLARIFICATION_NEEDED)
             .content("안녕하세요!")
             .tokens(new TokenUsage(10, 20))
             .build();
@@ -106,7 +106,7 @@ class ChatControllerTest {
             .andExpect(jsonPath("$.success").value(true))
             .andExpect(jsonPath("$.data.content").value("안녕하세요!"))
             .andExpect(jsonPath("$.data.sessionId").value(sessionId.toString()))
-            .andExpect(jsonPath("$.data.senderType").value("AGENT"));
+            .andExpect(jsonPath("$.data.type").value("CLARIFICATION_NEEDED"));
     }
 
     @Test
