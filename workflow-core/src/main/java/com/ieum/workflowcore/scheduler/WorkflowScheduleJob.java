@@ -66,7 +66,7 @@ public class WorkflowScheduleJob implements Job {
             WorkflowExecution execution = workflowExecutionService.prepareExecution(
                 workflow, latestVersion, TriggerType.SCHEDULE);
 
-            syncExecutionRuntime.execute(latestVersion, execution, Collections.emptyMap());
+            syncExecutionRuntime.execute(latestVersion, execution.getId(), Collections.emptyMap());
 
             log.info("[WorkflowScheduleJob] 스케줄 트리거 완료 — workflowId: {}, executionId: {}",
                 workflowId, execution.getId());

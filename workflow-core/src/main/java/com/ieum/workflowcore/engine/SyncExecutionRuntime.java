@@ -2,6 +2,8 @@ package com.ieum.workflowcore.engine;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.common.exception.CustomException;
+import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowExecutionLog;
 import com.ieum.workflowcore.domain.WorkflowVersion;
@@ -18,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -53,14 +56,17 @@ public class SyncExecutionRuntime {
      * 워크플로우 버전을 파싱하여 동기적으로 실행한다.
      *
      * @param workflowVersion 실행할 버전 (nodesJson, edgesJson 포함)
-     * @param execution       이미 DB에 저장된 실행 인스턴스 (PENDING 상태)
+     * @param executionId     DB에 저장된 실행 인스턴스 ID (fresh 조회로 detached 문제 방지)
      * @param triggerData     트리거가 전달한 초기 데이터 (TRIGGER 노드 output에 저장)
      */
     public void execute(
         WorkflowVersion workflowVersion,
-        WorkflowExecution execution,
+        UUID executionId,
         Map<String, Object> triggerData
     ) throws Exception {
+
+        WorkflowExecution execution = workflowExecutionRepository.findById(executionId)
+            .orElseThrow(() -> new CustomException(ErrorCode.EXECUTION_NOT_FOUND));
 
         log.info("[Runtime] 워크플로우 실행 시작 — executionId: {}, versionId: {}",
             execution.getId(), workflowVersion.getId());
