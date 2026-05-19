@@ -10,6 +10,7 @@ import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -200,5 +201,71 @@ class AgentNodeExecutorTest {
         RecordedRequest recorded = mockWebServer.takeRequest();
         assertThat(recorded.getHeader("X-Google-Access-Token")).isNull();
         verify(googleTokenProvider, never()).getValidAccessToken(any());
+    }
+
+    // ── Notion 빌트인 도구 케이스 ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("Notion 빌트인 도구가 있고 credentialId가 있으면 X-Notion-Token 헤더가 주입된다")
+    void execute_withNotionBuiltinTool_injectsNotionTokenHeader() throws InterruptedException {
+        // given
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeWithTools("노션에 정리해줘", "CLAUDE", "cred-id",
+            List.of(Map.of("name", "builtin:notion_create_page", "credentialId", "notion-cred-id")));
+        ExecutionCursor cursor = buildCursor();
+
+        // when
+        ExecutorResult result = executor.execute(node, Collections.emptyMap(), cursor);
+
+        // then
+        assertThat(result.isSuccess()).isTrue();
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Notion-Token")).isEqualTo("decrypted-api-key");
+    }
+
+    @Test
+    @DisplayName("Notion 빌트인 도구가 없으면 X-Notion-Token 헤더가 포함되지 않는다")
+    void execute_withoutNotionTool_noNotionTokenHeader() throws InterruptedException {
+        // given
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeWithTools("웹 검색해줘", "CLAUDE", "cred-id",
+            List.of(Map.of("name", "builtin:http_fetch")));
+        ExecutionCursor cursor = buildCursor();
+
+        // when
+        executor.execute(node, Collections.emptyMap(), cursor);
+
+        // then
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Notion-Token")).isNull();
+    }
+
+    @Test
+    @DisplayName("Notion 빌트인 도구가 있지만 credentialId가 없으면 X-Notion-Token 헤더가 포함되지 않는다")
+    void execute_withNotionToolButNoCredentialId_noNotionTokenHeader() throws InterruptedException {
+        // given — credentialId 키 없이 name만 있는 tools config
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeWithTools("노션 읽어줘", "CLAUDE", "cred-id",
+            List.of(Map.of("name", "builtin:notion_read_page")));  // credentialId 없음
+        ExecutionCursor cursor = buildCursor();
+
+        // when
+        executor.execute(node, Collections.emptyMap(), cursor);
+
+        // then — credentialId 없으면 토큰 조회 없이 헤더 미포함으로 진행
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Notion-Token")).isNull();
     }
 }
