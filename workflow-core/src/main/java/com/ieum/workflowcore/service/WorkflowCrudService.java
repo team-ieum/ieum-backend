@@ -114,6 +114,39 @@ public class WorkflowCrudService {
         return version;
     }
 
+    /**
+     * AI 에이전트가 생성/수정한 노드/엣지를 새 워크플로우 버전으로 저장한다.
+     *
+     * <p>호출 전 소유권 검증이 완료된 상황에서만 호출해야 한다
+     * ({@code ChatService}에서 {@link #resolveAgentConfig} 호출 시 이미 검증됨).
+     *
+     * <p>Workflow 엔티티의 name/description/triggerType은 변경하지 않고 버전만 추가한다.
+     *
+     * @param workflowId 워크플로우 ID
+     * @param nodesJson  AI가 생성한 노드 목록 JSON
+     * @param edgesJson  AI가 생성한 엣지 목록 JSON
+     * @return 저장된 WorkflowVersion
+     * @throws CustomException WORKFLOW_NOT_FOUND — 워크플로우를 찾을 수 없는 경우
+     */
+    @Transactional
+    public WorkflowVersion saveAgentVersion(UUID workflowId, String nodesJson, String edgesJson) {
+        Workflow workflow = workflowRepository.findById(workflowId)
+            .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+
+        int nextVersion = workflowVersionRepository.findMaxVersionByWorkflowId(workflowId) + 1;
+        WorkflowVersion version = WorkflowVersion.builder()
+            .workflow(workflow)
+            .version(nextVersion)
+            .nodesJson(nodesJson)
+            .edgesJson(edgesJson)
+            .build();
+        workflowVersionRepository.save(version);
+
+        log.info("[WorkflowCrudService] AI 생성 버전 저장 — workflowId: {}, version: {}",
+            workflowId, nextVersion);
+        return version;
+    }
+
     @Transactional
     public void deleteWorkflow(UUID userId, UUID workflowId) {
         Workflow workflow = getWorkflowByOwner(userId, workflowId);

@@ -1,5 +1,6 @@
 package com.ieum.api.chat.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.chat.dto.ChatAgentResponse;
@@ -115,7 +116,12 @@ public class ChatService {
             userId
         );
 
-        // 8. AGENT 메시지 저장 후 반환 — sessionId를 직접 전달하여 LAZY 로딩 회피
+        // 8. WORKFLOW_GENERATED/MODIFIED → DB에 새 버전으로 저장
+        if (agentResponse.isWorkflowResult()) {
+            saveWorkflowVersion(workflowId, agentResponse);
+        }
+
+        // 9. AGENT 메시지 저장 후 반환 — sessionId를 직접 전달하여 LAZY 로딩 회피
         ChatMessage agentMessage = saveAgentMessage(
             session,
             agentResponse.getContent(),
@@ -260,6 +266,25 @@ public class ChatService {
         session.updateTitle(title);
         log.debug("[ChatService] 세션 제목 자동 설정 — sessionId: {}, title: {}",
             session.getId(), title);
+    }
+
+    /**
+     * AI가 생성/수정한 노드/엣지를 JSON으로 직렬화하여 새 워크플로우 버전으로 저장한다.
+     *
+     * @param workflowId    워크플로우 ID
+     * @param agentResponse WORKFLOW_GENERATED 또는 WORKFLOW_MODIFIED 응답
+     */
+    private void saveWorkflowVersion(UUID workflowId, ChatAgentResponse agentResponse) {
+        try {
+            String nodesJson = objectMapper.writeValueAsString(agentResponse.getNodes());
+            String edgesJson = objectMapper.writeValueAsString(agentResponse.getEdges());
+            workflowCrudService.saveAgentVersion(workflowId, nodesJson, edgesJson);
+            log.info("[ChatService] 워크플로우 버전 저장 완료 — workflowId: {}, type: {}",
+                workflowId, agentResponse.getType());
+        } catch (JsonProcessingException e) {
+            log.error("[ChatService] 노드/엣지 직렬화 실패 — workflowId: {}", workflowId, e);
+            throw new CustomException(ErrorCode.INVALID_WORKFLOW);
+        }
     }
 
     private String resolveGoogleAccessToken(List<Map<String, Object>> tools, UUID userId) {
