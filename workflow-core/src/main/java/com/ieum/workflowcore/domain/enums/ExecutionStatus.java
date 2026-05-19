@@ -7,6 +7,7 @@ public enum ExecutionStatus {
     RUNNING,
     /** 실행 성공 */
     SUCCESS,
+    COMPLETED,
     /** 실행 실패 */
     FAILED
 }
