@@ -91,7 +91,6 @@ public class WorkflowExecutionService {
             if (execution.getStatus() != ExecutionStatus.FAILED
                     && execution.getStatus() != ExecutionStatus.SUCCESS) {
                 execution.fail();
-                workflowExecutionRepository.save(execution);
                 log.warn("[ExecutionService] 실행 상태 FAILED 강제 업데이트 — executionId: {}", executionId);
             }
         });
