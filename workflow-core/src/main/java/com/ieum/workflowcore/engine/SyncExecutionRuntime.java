@@ -24,6 +24,7 @@ import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 워크플로우를 동기식으로 순차 실행하는 런타임.
@@ -59,6 +60,7 @@ public class SyncExecutionRuntime {
      * @param executionId     DB에 저장된 실행 인스턴스 ID (fresh 조회로 detached 문제 방지)
      * @param triggerData     트리거가 전달한 초기 데이터 (TRIGGER 노드 output에 저장)
      */
+    @Transactional
     public void execute(
         WorkflowVersion workflowVersion,
         UUID executionId,
