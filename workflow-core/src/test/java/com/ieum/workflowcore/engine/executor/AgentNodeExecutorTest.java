@@ -201,4 +201,67 @@ class AgentNodeExecutorTest {
         assertThat(recorded.getHeader("X-Google-Access-Token")).isNull();
         verify(googleTokenProvider, never()).getValidAccessToken(any());
     }
+
+    // ── Notion 빌트인 도구 케이스 ─────────────────────────────────────────────
+
+    @Test
+    void Notion_빌트인_도구가_있고_credentialId가_있으면_X_Notion_Token_헤더가_주입된다() throws InterruptedException {
+        // given
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeWithTools("노션에 정리해줘", "CLAUDE", "cred-id",
+            List.of(Map.of("name", "builtin:notion_create_page", "credentialId", "notion-cred-id")));
+        ExecutionCursor cursor = buildCursor();
+
+        // when
+        ExecutorResult result = executor.execute(node, Collections.emptyMap(), cursor);
+
+        // then
+        assertThat(result.isSuccess()).isTrue();
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Notion-Token")).isEqualTo("decrypted-api-key");
+    }
+
+    @Test
+    void Notion_빌트인_도구가_없으면_X_Notion_Token_헤더가_포함되지_않는다() throws InterruptedException {
+        // given
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeWithTools("웹 검색해줘", "CLAUDE", "cred-id",
+            List.of(Map.of("name", "builtin:http_fetch")));
+        ExecutionCursor cursor = buildCursor();
+
+        // when
+        executor.execute(node, Collections.emptyMap(), cursor);
+
+        // then
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Notion-Token")).isNull();
+    }
+
+    @Test
+    void Notion_빌트인_도구가_있지만_credentialId가_없으면_X_Notion_Token_헤더가_포함되지_않는다() throws InterruptedException {
+        // given — credentialId 키 없이 name만 있는 tools config
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeWithTools("노션 읽어줘", "CLAUDE", "cred-id",
+            List.of(Map.of("name", "builtin:notion_read_page")));  // credentialId 없음
+        ExecutionCursor cursor = buildCursor();
+
+        // when
+        executor.execute(node, Collections.emptyMap(), cursor);
+
+        // then — credentialId 없으면 토큰 조회 없이 헤더 미포함으로 진행
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Notion-Token")).isNull();
+    }
 }
