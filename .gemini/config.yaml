@@ -10,7 +10,6 @@ code_review:
     - "**/gradlew.bat"
     - "**/gradle/wrapper/**"
     - "**/build/**"
-    - "**/*.sql"           # Flyway 마이그레이션은 별도 검증 (verify-db-migration 스킬)
     - "**/generated/**"    # QueryDSL Q클래스 자동 생성 파일
 
   # 프로젝트 컨텍스트 — 리뷰어가 이해해야 할 핵심 아키텍처
