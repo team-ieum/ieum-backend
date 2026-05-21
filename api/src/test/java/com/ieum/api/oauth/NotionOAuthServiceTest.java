@@ -137,6 +137,22 @@ class NotionOAuthServiceTest {
     }
 
     @Test
+    @DisplayName("Notion API 응답 body가 null이면 TOKEN_REFRESH_FAILED 예외가 발생한다")
+    void handleCallback_Fail_NullResponseBody() {
+        // given
+        String code = "valid-code";
+        UUID userId = UUID.randomUUID();
+
+        when(restTemplate.postForObject(anyString(), any(HttpEntity.class), any(Class.class)))
+            .thenReturn(null);
+
+        // when & then
+        assertThatThrownBy(() -> notionOAuthService.handleCallback(code, userId))
+            .isInstanceOf(CustomException.class)
+            .hasFieldOrPropertyWithValue("errorCode", ErrorCode.TOKEN_REFRESH_FAILED);
+    }
+
+    @Test
     @DisplayName("RestClientException 발생 시 TOKEN_REFRESH_FAILED 예외로 래핑된다")
     void handleCallback_Fail_NetworkError() {
         // given
