@@ -5,6 +5,7 @@ import static org.hamcrest.Matchers.startsWith;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -106,6 +107,8 @@ class NotionOAuthControllerTest {
                 .param("error", "access_denied"))
             .andExpect(status().isFound())
             .andExpect(header().string("Location", containsString("error=notion_oauth_failed")));
+
+        verify(notionOAuthStateRepository).delete(any(NotionOAuthState.class));
     }
 
     @Test
