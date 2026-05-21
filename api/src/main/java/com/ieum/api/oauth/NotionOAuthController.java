@@ -21,7 +21,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 @RestController
 @RequestMapping("/api/v1/notion/oauth2")
 @RequiredArgsConstructor
-public class NotionOAuthController {
+public class NotionOAuthController implements NotionOAuthControllerDocs {
 
     private final NotionOAuthService notionOAuthService;
     private final NotionOAuthStateRepository notionOAuthStateRepository;
@@ -38,11 +38,6 @@ public class NotionOAuthController {
     @Value("${notion.oauth.frontend-redirect-uri}")
     private String frontendRedirectUri;
 
-    /**
-     * Notion OAuth 인가 URL로 리다이렉트한다.
-     * state를 생성해 Redis에 저장(TTL 300초)하고 Notion 인가 URL에 포함시킨다.
-     * GET /api/v1/notion/oauth2/authorize
-     */
     @GetMapping("/authorize")
     public ResponseEntity<Void> authorizeNotion(
         @AuthenticationPrincipal CustomUserDetails userDetails
@@ -70,11 +65,6 @@ public class NotionOAuthController {
             .build();
     }
 
-    /**
-     * Notion OAuth Callback을 처리한다.
-     * state 검증 후 code를 access_token으로 교환하고 connected_accounts에 저장한다.
-     * GET /api/v1/notion/oauth2/callback
-     */
     @GetMapping("/callback")
     public ResponseEntity<Void> notionCallback(
         @RequestParam String code,
