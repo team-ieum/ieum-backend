@@ -83,15 +83,16 @@ class NotionOAuthControllerTest {
     }
 
     @Test
-    @DisplayName("유효하지 않은 state로 콜백 시 4xx 응답을 반환한다")
-    void notionCallback_Fail_InvalidState_ThrowsException() throws Exception {
+    @DisplayName("유효하지 않은 state로 콜백 시 에러 리다이렉트로 응답한다")
+    void notionCallback_Fail_InvalidState_RedirectsWithError() throws Exception {
         when(notionOAuthStateRepository.findById("bad-state"))
             .thenReturn(Optional.empty());
 
         mockMvc.perform(get("/api/v1/notion/oauth2/callback")
                 .param("code", "valid-code")
                 .param("state", "bad-state"))
-            .andExpect(status().is4xxClientError());
+            .andExpect(status().isFound())
+            .andExpect(header().string("Location", containsString("error=notion_state_expired")));
     }
 
     @Test
