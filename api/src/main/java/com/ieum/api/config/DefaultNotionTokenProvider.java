@@ -2,7 +2,7 @@ package com.ieum.api.config;
 
 import com.ieum.auth.domain.AuthProvider;
 import com.ieum.auth.repository.ConnectedAccountRepository;
-import com.ieum.common.util.AesEncryptor;
+import com.ieum.common.util.AesEncryptionService;
 import com.ieum.workflowcore.engine.executor.NotionTokenProvider;
 import java.util.Optional;
 import java.util.UUID;
@@ -25,7 +25,7 @@ import org.springframework.stereotype.Component;
 public class DefaultNotionTokenProvider implements NotionTokenProvider {
 
     private final ConnectedAccountRepository connectedAccountRepository;
-    private final AesEncryptor aesEncryptor;
+    private final AesEncryptionService aesEncryptionService;
 
     @Override
     public Optional<String> getAccessToken(UUID userId) {
@@ -33,7 +33,7 @@ public class DefaultNotionTokenProvider implements NotionTokenProvider {
             .findByUserIdAndProvider(userId, AuthProvider.NOTION)
             .map(account -> {
                 log.debug("[DefaultNotionTokenProvider] userId={} Notion token 조회", userId);
-                return aesEncryptor.decrypt(account.getAccessToken());
+                return aesEncryptionService.decrypt(account.getAccessToken());
             });
     }
 }
