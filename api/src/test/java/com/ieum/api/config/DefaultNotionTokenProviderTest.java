@@ -1,7 +1,6 @@
 package com.ieum.api.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.when;
 
 import com.ieum.auth.domain.AuthProvider;
@@ -65,9 +64,11 @@ class DefaultNotionTokenProviderTest {
         when(aesEncryptionService.decrypt("corrupt-token"))
             .thenThrow(new RuntimeException("key mismatch"));
 
-        // when & then
-        assertThatCode(() -> provider.getAccessToken(userId)).doesNotThrowAnyException();
-        assertThat(provider.getAccessToken(userId)).isEmpty();
+        // when
+        Optional<String> result = provider.getAccessToken(userId);
+
+        // then
+        assertThat(result).isEmpty();
     }
 
     private ConnectedAccount buildAccount(String encryptedToken) {
