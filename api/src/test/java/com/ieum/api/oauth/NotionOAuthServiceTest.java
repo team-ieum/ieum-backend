@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doReturn;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -34,6 +34,7 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 @ExtendWith(MockitoExtension.class)
+@SuppressWarnings("unchecked")
 class NotionOAuthServiceTest {
 
     @Mock
@@ -66,7 +67,8 @@ class NotionOAuthServiceTest {
         String encryptedToken = "encrypted-token";
 
         ResponseEntity<Map<String, Object>> responseEntity = new ResponseEntity<>(Map.of("access_token", accessToken), HttpStatus.OK);
-        doReturn(responseEntity).when(restTemplate).postForEntity(anyString(), any(HttpEntity.class), any());
+        when(restTemplate.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
+            .thenReturn((ResponseEntity) responseEntity);
         when(aesEncryptionService.encrypt(accessToken)).thenReturn(encryptedToken);
         when(connectedAccountRepository.findByUserIdAndProvider(userId, AuthProvider.NOTION))
             .thenReturn(Optional.empty());
@@ -94,7 +96,8 @@ class NotionOAuthServiceTest {
             .build();
 
         ResponseEntity<Map<String, Object>> responseEntity = new ResponseEntity<>(Map.of("access_token", accessToken), HttpStatus.OK);
-        doReturn(responseEntity).when(restTemplate).postForEntity(anyString(), any(HttpEntity.class), any());
+        when(restTemplate.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
+            .thenReturn((ResponseEntity) responseEntity);
         when(aesEncryptionService.encrypt(accessToken)).thenReturn(encryptedToken);
         when(connectedAccountRepository.findByUserIdAndProvider(userId, AuthProvider.NOTION))
             .thenReturn(Optional.of(existingAccount));
@@ -113,7 +116,7 @@ class NotionOAuthServiceTest {
         String code = "invalid-code";
         UUID userId = UUID.randomUUID();
 
-        when(restTemplate.postForEntity(anyString(), any(HttpEntity.class), any()))
+        when(restTemplate.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
             .thenThrow(new HttpClientErrorException(HttpStatus.UNAUTHORIZED));
 
         // when & then
@@ -131,7 +134,8 @@ class NotionOAuthServiceTest {
 
         Map<String, Object> responseBody = new HashMap<>();
         ResponseEntity<Map<String, Object>> mockResponse = ResponseEntity.ok(responseBody);
-        doReturn(mockResponse).when(restTemplate).postForEntity(anyString(), any(HttpEntity.class), any());
+        when(restTemplate.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
+            .thenReturn((ResponseEntity) mockResponse);
 
         // when & then
         assertThatThrownBy(() -> notionOAuthService.handleCallback(code, userId))
@@ -146,7 +150,7 @@ class NotionOAuthServiceTest {
         String code = "valid-code";
         UUID userId = UUID.randomUUID();
 
-        when(restTemplate.postForEntity(anyString(), any(HttpEntity.class), any()))
+        when(restTemplate.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
             .thenThrow(new ResourceAccessException("Connection refused"));
 
         // when & then
