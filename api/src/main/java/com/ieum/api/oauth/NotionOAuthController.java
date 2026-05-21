@@ -25,6 +25,8 @@ import org.springframework.web.util.UriComponentsBuilder;
 @RequiredArgsConstructor
 public class NotionOAuthController implements NotionOAuthControllerDocs {
 
+    private static final long OAUTH_STATE_TTL_SECONDS = 300L;
+
     private final NotionOAuthService notionOAuthService;
     private final NotionOAuthStateRepository notionOAuthStateRepository;
 
@@ -49,7 +51,7 @@ public class NotionOAuthController implements NotionOAuthControllerDocs {
             NotionOAuthState.builder()
                 .state(state)
                 .userId(userDetails.getId())
-                .ttl(300L)
+                .ttl(OAUTH_STATE_TTL_SECONDS)
                 .build()
         );
 
