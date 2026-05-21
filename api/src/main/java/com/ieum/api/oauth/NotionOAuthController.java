@@ -86,7 +86,15 @@ public class NotionOAuthController implements NotionOAuthControllerDocs {
         }
 
         notionOAuthStateRepository.delete(oAuthState);  // 1회성 소비
-        notionOAuthService.handleCallback(code, oAuthState.getUserId());
+
+        try {
+            notionOAuthService.handleCallback(code, oAuthState.getUserId());
+        } catch (Exception e) {
+            log.error("[NotionOAuthController] Notion token 교환 실패 — userId: {}", oAuthState.getUserId(), e);
+            return ResponseEntity.status(HttpStatus.FOUND)
+                .header(HttpHeaders.LOCATION, frontendRedirectUri + "?error=notion_token_failed")
+                .build();
+        }
 
         return ResponseEntity.status(HttpStatus.FOUND)
             .header(HttpHeaders.LOCATION, frontendRedirectUri)
