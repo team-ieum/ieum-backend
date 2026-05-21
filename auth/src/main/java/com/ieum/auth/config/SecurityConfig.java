@@ -50,11 +50,9 @@ public class SecurityConfig {
             .exceptionHandling(exception ->
                 exception.authenticationEntryPoint(jwtAuthenticationEntryPoint))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/v1/notion/oauth2/authorize").authenticated()
                 .requestMatchers(
                     "/api/v1/auth/**",
                     "/api/v1/oauth2/**",
-                    "/api/v1/notion/oauth2/callback",
                     "/api/v1/providers",
                     "/swagger-ui/**",
                     "/v3/api-docs/**",
@@ -62,6 +60,8 @@ public class SecurityConfig {
                     "/actuator/**",
                     "/ws/**"          // WebSocket 핸드쉐이크 (STOMP 인증은 ChannelInterceptor 담당)
                 ).permitAll()
+                .requestMatchers("/api/v1/notion/oauth2/callback").permitAll()
+                .requestMatchers("/api/v1/notion/**").authenticated()
                 .anyRequest().authenticated())
             .oauth2Login(oauth2 -> oauth2
                 .authorizationEndpoint(auth -> auth
