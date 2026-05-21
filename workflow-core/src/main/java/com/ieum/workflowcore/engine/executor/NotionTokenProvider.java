@@ -14,6 +14,9 @@ public interface NotionTokenProvider {
     /**
      * userId에 해당하는 Notion Access Token(평문)을 반환한다.
      * OAuth 연동이 없으면 Optional.empty()를 반환한다.
+     *
+     * @param userId 조회할 사용자 ID
+     * @return Notion Access Token 원문 (Optional)
      */
     Optional<String> getAccessToken(UUID userId);
 }
