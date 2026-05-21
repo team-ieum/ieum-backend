@@ -13,14 +13,15 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  JAVA_VERSION: ${{ secrets.JAVA_VERSION }}
-  IMAGE_NAME: ${{ secrets.BACKEND_IMAGE_NAME }}
-  CONTAINER_NAME: ${{ secrets.BACKEND_CONTAINER_NAME }}
-  DOCKER_NETWORK: ${{ secrets.DOCKER_NETWORK }}
-  BACKEND_IP: ${{ secrets.BACKEND_IP }}
-  BACKEND_PORT: ${{ secrets.BACKEND_PORT }}
-  SPRING_PROFILES_ACTIVE: ${{ secrets.SPRING_PROFILES_ACTIVE }}
-  ENV_FILE: ${{ secrets.BACKEND_ENV_FILE }}
+  JAVA_VERSION: '21'
+  IMAGE_NAME: ieum-backend-dev
+  CONTAINER_NAME: ieum-backend
+  LEGACY_CONTAINER_NAME: hirescope-backend
+  DOCKER_NETWORK: ieum_net_green
+  BACKEND_IP: 10.10.10.11
+  BACKEND_PORT: '8080'
+  SPRING_PROFILES_ACTIVE: dev
+  ENV_FILE: /home/kwung/deploy/ieum-backend/.env
 
 jobs:
   deploy:
@@ -29,28 +30,46 @@ jobs:
       group: ieum_dev_server
       labels: [self-hosted, linux, x64, ieum-backend]
 
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
+      # 저장소 코드 가져오기
       - name: Checkout
         uses: actions/checkout@v4
 
+      # JDK 21 설치
       - name: Setup JDK
         uses: actions/setup-java@v4
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: temurin
 
+      # Gradle wrapper 실행 권한 부여
       - name: Make Gradle executable
         run: chmod +x gradlew
 
+      # 테스트를 제외하고 실행 가능한 Spring Boot JAR 생성
       - name: Build
         run: ./gradlew :api:bootJar -x test --no-daemon
 
+      # 테스트 실행
       - name: Test
         run: ./gradlew test --no-daemon
 
+      # Docker 이미지에 넣을 Spring Boot JAR 준비
       - name: Prepare boot jar
         run: |
           mkdir -p .deploy
+
           BOOT_JAR="$(find api/build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*plain.jar' | head -n 1)"
 
           if [ -z "$BOOT_JAR" ]; then
@@ -60,6 +79,7 @@ jobs:
 
           cp "$BOOT_JAR" .deploy/app.jar
 
+      # CI 배포용 Dockerfile 생성
       - name: Write Dockerfile
         run: |
           cat > Dockerfile.ci <<'EOF'
@@ -70,21 +90,25 @@ jobs:
           ENTRYPOINT ["java", "-jar", "/app/app.jar"]
           EOF
 
+      # Docker 이미지 빌드
       - name: Build Docker image
         run: |
           docker build \
             -f Dockerfile.ci \
-            -t "$IMAGE_NAME:${{ github.sha }}" \
-            -t "$IMAGE_NAME:latest" .
+            -t $IMAGE_NAME:${{ github.sha }} \
+            -t $IMAGE_NAME:latest .
 
+      # 기존 백엔드 컨테이너 교체
       - name: Restart backend container
         run: |
-          docker network inspect "$DOCKER_NETWORK" >/dev/null 2>&1 
+          docker network inspect "$DOCKER_NETWORK" >/dev/null 2>&1 \
+            || docker network create --subnet 10.10.10.0/24 "$DOCKER_NETWORK"
 
           docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+          docker rm -f "$LEGACY_CONTAINER_NAME" >/dev/null 2>&1 || true
 
           ENV_ARGS=""
-          if [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ]; then
+          if [ -f "$ENV_FILE" ]; then
             ENV_ARGS="--env-file $ENV_FILE"
           fi
 
@@ -97,6 +121,7 @@ jobs:
             $ENV_ARGS \
             "$IMAGE_NAME:latest"
 
+      # 배포 확인
       - name: Health check
         run: |
           for i in $(seq 1 30); do
