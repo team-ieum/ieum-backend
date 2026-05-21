@@ -15,7 +15,7 @@ dependencies {
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.4'
     runtimeOnly 'org.postgresql:postgresql'
     testRuntimeOnly 'com.h2database:h2'
-    testImplementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
     implementation "io.github.openfeign.querydsl:querydsl-jpa:${queryDslVersion}"
     annotationProcessor "io.github.openfeign.querydsl:querydsl-apt:${queryDslVersion}:jpa"
     annotationProcessor 'jakarta.annotation:jakarta.annotation-api'
