@@ -103,6 +103,7 @@ class AgentNodeExecutorTest {
     // ── 기존 케이스 ──────────────────────────────────────────────────────────
 
     @Test
+    @DisplayName("정상 실행 시 success=true 와 출력을 반환한다")
     void execute_success_returnsSuccessResult() throws InterruptedException {
         mockWebServer.enqueue(new MockResponse()
             .setResponseCode(200)
@@ -124,6 +125,7 @@ class AgentNodeExecutorTest {
     }
 
     @Test
+    @DisplayName("서버 에러 발생 시 success=false 와 에러 메시지를 반환한다")
     void execute_serverError_returnsFailureResult() {
         mockWebServer.enqueue(new MockResponse()
             .setResponseCode(500)
@@ -140,6 +142,7 @@ class AgentNodeExecutorTest {
     // ── Google 빌트인 도구 케이스 ─────────────────────────────────────────────
 
     @Test
+    @DisplayName("Google 빌트인 도구가 있을 경우 X-Google-Access-Token 헤더가 주입된다")
     void execute_withGoogleBuiltinTool_injectsGoogleAccessTokenHeader() throws InterruptedException {
         // given
         UUID userId = UUID.randomUUID();
@@ -165,6 +168,7 @@ class AgentNodeExecutorTest {
     }
 
     @Test
+    @DisplayName("Google 빌트인 도구가 없으면 X-Google-Access-Token 헤더가 주입되지 않는다")
     void execute_withoutGoogleTool_noGoogleAccessTokenHeader() throws InterruptedException {
         // given — 일반 도구 (builtin:google_* 아님)
         mockWebServer.enqueue(new MockResponse()
@@ -186,6 +190,7 @@ class AgentNodeExecutorTest {
     }
 
     @Test
+    @DisplayName("Google 빌트인 도구가 있어도 userId가 없으면 토큰이 주입되지 않는다")
     void execute_withGoogleToolButNoUserId_noGoogleAccessTokenHeader() throws InterruptedException {
         // given — Google 도구가 있지만 userId가 없는 커서 (userId=null)
         mockWebServer.enqueue(new MockResponse()
