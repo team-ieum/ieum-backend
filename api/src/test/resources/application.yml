@@ -57,6 +57,8 @@ ieum:
 
 notion:
   oauth:
+    auth-url: https://api.notion.com/v1/oauth/authorize
+    token-url: https://api.notion.com/v1/oauth/token
     client-id: test-notion-client-id
     client-secret: test-notion-client-secret
     redirect-uri: http://localhost/api/v1/notion/oauth2/callback
