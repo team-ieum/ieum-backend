@@ -23,6 +23,7 @@ import org.springframework.web.client.RestTemplate;
 @Slf4j
 @Service
 @RequiredArgsConstructor
+@Transactional(readOnly = true)
 public class NotionOAuthService {
 
     private static final String NOTION_TOKEN_ENDPOINT = "https://api.notion.com/v1/oauth/token";
@@ -42,6 +43,10 @@ public class NotionOAuthService {
 
     @Transactional
     public void handleCallback(String code, UUID userId) {
+        if (code == null || code.isBlank()) {
+            log.warn("[NotionOAuthService] code 파라미터가 비어있음 — userId: {}", userId);
+            throw new CustomException(ErrorCode.INVALID_INPUT);
+        }
         String accessToken = exchangeCodeForToken(code);
         String encryptedToken = aesEncryptionService.encrypt(accessToken);
 
