@@ -50,11 +50,11 @@ public class SecurityConfig {
             .exceptionHandling(exception ->
                 exception.authenticationEntryPoint(jwtAuthenticationEntryPoint))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/v1/notion/oauth2/callback").authenticated()
+                .requestMatchers("/api/v1/notion/oauth2/authorize").authenticated()
                 .requestMatchers(
                     "/api/v1/auth/**",
                     "/api/v1/oauth2/**",
-                    "/api/v1/notion/oauth2/authorize",
+                    "/api/v1/notion/oauth2/callback",
                     "/api/v1/providers",
                     "/swagger-ui/**",
                     "/v3/api-docs/**",

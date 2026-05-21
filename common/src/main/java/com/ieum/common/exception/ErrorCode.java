@@ -68,6 +68,7 @@ public enum ErrorCode {
     ACCOUNT_NOT_CONNECTED(HttpStatus.BAD_REQUEST, "연동된 계정이 없습니다."),
     TOKEN_REFRESH_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "토큰 갱신에 실패했습니다."),
     AUTHENTICATION_REQUIRED(HttpStatus.UNAUTHORIZED, "재인증이 필요합니다. Google 계정을 다시 연동해주세요."),
+    INVALID_OAUTH_STATE(HttpStatus.BAD_REQUEST, "유효하지 않거나 만료된 OAuth state입니다."),
 
     // 채팅
     CHAT_SESSION_NOT_FOUND(HttpStatus.NOT_FOUND, "채팅 세션을 찾을 수 없습니다."),
