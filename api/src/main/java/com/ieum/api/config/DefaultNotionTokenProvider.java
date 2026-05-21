@@ -31,9 +31,14 @@ public class DefaultNotionTokenProvider implements NotionTokenProvider {
     public Optional<String> getAccessToken(UUID userId) {
         return connectedAccountRepository
             .findByUserIdAndProvider(userId, AuthProvider.NOTION)
-            .map(account -> {
-                log.debug("[DefaultNotionTokenProvider] userId={} Notion token 조회", userId);
-                return aesEncryptionService.decrypt(account.getAccessToken());
+            .flatMap(account -> {
+                try {
+                    log.debug("[DefaultNotionTokenProvider] userId={} Notion token 조회", userId);
+                    return Optional.of(aesEncryptionService.decrypt(account.getAccessToken()));
+                } catch (Exception e) {
+                    log.error("[DefaultNotionTokenProvider] userId={} Notion token 복호화 실패", userId, e);
+                    return Optional.empty();
+                }
             });
     }
 }
