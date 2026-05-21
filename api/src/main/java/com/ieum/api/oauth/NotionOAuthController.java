@@ -14,7 +14,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 import com.ieum.auth.security.CustomUserDetails;
 
 @RestController
-@RequestMapping("/api/v1/oauth2")
+@RequestMapping("/api/v1/notion/oauth2")
 @RequiredArgsConstructor
 public class NotionOAuthController {
 
@@ -31,9 +31,9 @@ public class NotionOAuthController {
 
     /**
      * Notion OAuth 인가 URL로 리다이렉트한다.
-     * GET /api/v1/oauth2/authorize/notion
+     * GET /api/v1/notion/oauth2/authorize
      */
-    @GetMapping("/authorize/notion")
+    @GetMapping("/authorize")
     public ResponseEntity<Void> authorizeNotion() {
         String authUrl = UriComponentsBuilder
             .fromUriString("https://api.notion.com/v1/oauth/authorize")
@@ -51,10 +51,10 @@ public class NotionOAuthController {
     /**
      * Notion OAuth Callback을 처리한다.
      * code를 access_token으로 교환하고 connected_accounts에 저장한다.
-     * GET /api/v1/oauth2/callback/notion
+     * GET /api/v1/notion/oauth2/callback
      * 이 엔드포인트는 JWT 인증이 필요하다 (로그인한 사용자가 Notion을 연동하는 흐름).
      */
-    @GetMapping("/callback/notion")
+    @GetMapping("/callback")
     public ResponseEntity<Void> notionCallback(
         @RequestParam String code,
         @AuthenticationPrincipal CustomUserDetails userDetails

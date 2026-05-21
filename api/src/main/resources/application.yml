@@ -62,6 +62,15 @@ server:
 ieum:
   agent:
     url: ${AGENT_SERVICE_URL}
-  scheduler:
-    thread-count: ${QUARTZ_THREAD_COUNT:10}
-    thread-name-prefix: ${QUARTZ_THREAD_NAME_PREFIX:quartz-}
+
+notion:
+  oauth:
+    client-id: ${NOTION_CLIENT_ID}
+    client-secret: ${NOTION_CLIENT_SECRET}
+    auth-url: ${NOTION_AUTH_URL}
+    token-url: ${NOTION_TOKEN_URL}
+    redirect-uri: ${NOTION_REDIRECT_URI}
+    frontend-redirect-uri: ${NOTION_FRONTEND_REDIRECT_URI}
+scheduler:
+  thread-count: ${QUARTZ_THREAD_COUNT:10}
+  thread-name-prefix: ${QUARTZ_THREAD_NAME_PREFIX:quartz-}
