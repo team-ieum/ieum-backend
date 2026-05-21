@@ -3,8 +3,7 @@ package com.ieum.api.oauth;
 import com.ieum.auth.domain.NotionOAuthState;
 import com.ieum.auth.repository.NotionOAuthStateRepository;
 import com.ieum.auth.security.CustomUserDetails;
-import com.ieum.common.exception.CustomException;
-import com.ieum.common.exception.ErrorCode;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -75,8 +74,14 @@ public class NotionOAuthController implements NotionOAuthControllerDocs {
         @RequestParam String state,
         @RequestParam(required = false) String error
     ) {
-        NotionOAuthState oAuthState = notionOAuthStateRepository.findById(state)
-            .orElseThrow(() -> new CustomException(ErrorCode.INVALID_OAUTH_STATE));
+        Optional<NotionOAuthState> oAuthStateOpt = notionOAuthStateRepository.findById(state);
+        if (oAuthStateOpt.isEmpty()) {
+            log.warn("[NotionOAuthController] 유효하지 않은 OAuth state — state: {}", state);
+            return ResponseEntity.status(HttpStatus.FOUND)
+                .header(HttpHeaders.LOCATION, frontendRedirectUri + "?error=notion_state_expired")
+                .build();
+        }
+        NotionOAuthState oAuthState = oAuthStateOpt.get();
 
         if (error != null || code == null || code.isBlank()) {
             log.warn("[NotionOAuthController] Notion OAuth 실패 — error: {}, userId: {}",
