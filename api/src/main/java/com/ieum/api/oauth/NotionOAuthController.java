@@ -7,6 +7,7 @@ import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.util.UriComponentsBuilder;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/v1/notion/oauth2")
 @RequiredArgsConstructor
@@ -67,13 +69,23 @@ public class NotionOAuthController implements NotionOAuthControllerDocs {
 
     @GetMapping("/callback")
     public ResponseEntity<Void> notionCallback(
-        @RequestParam String code,
-        @RequestParam String state
+        @RequestParam(required = false) String code,
+        @RequestParam String state,
+        @RequestParam(required = false) String error
     ) {
         NotionOAuthState oAuthState = notionOAuthStateRepository.findById(state)
             .orElseThrow(() -> new CustomException(ErrorCode.INVALID_OAUTH_STATE));
-        notionOAuthStateRepository.delete(oAuthState);  // 1회성 소비
 
+        if (error != null || code == null || code.isBlank()) {
+            log.warn("[NotionOAuthController] Notion OAuth 실패 — error: {}, userId: {}",
+                error, oAuthState.getUserId());
+            notionOAuthStateRepository.delete(oAuthState);
+            return ResponseEntity.status(HttpStatus.FOUND)
+                .header(HttpHeaders.LOCATION, frontendRedirectUri + "?error=notion_oauth_failed")
+                .build();
+        }
+
+        notionOAuthStateRepository.delete(oAuthState);  // 1회성 소비
         notionOAuthService.handleCallback(code, oAuthState.getUserId());
 
         return ResponseEntity.status(HttpStatus.FOUND)

@@ -29,7 +29,8 @@ public interface NotionOAuthControllerDocs {
         @ApiResponse(responseCode = "400", description = "유효하지 않은 state 또는 code")
     })
     ResponseEntity<Void> notionCallback(
-        @RequestParam String code,
-        @RequestParam String state
+        @RequestParam(required = false) String code,
+        @RequestParam String state,
+        @RequestParam(required = false) String error
     );
 }
