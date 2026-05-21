@@ -50,6 +50,7 @@ public class SecurityConfig {
             .exceptionHandling(exception ->
                 exception.authenticationEntryPoint(jwtAuthenticationEntryPoint))
             .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api/v1/oauth2/callback/notion").authenticated()
                 .requestMatchers(
                     "/api/v1/auth/**",
                     "/api/v1/oauth2/**",
