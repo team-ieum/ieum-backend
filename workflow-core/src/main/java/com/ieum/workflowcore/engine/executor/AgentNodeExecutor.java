@@ -92,7 +92,8 @@ public class AgentNodeExecutor implements NodeExecutor {
             String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
 
             String googleAccessToken = resolveGoogleAccessToken(tools, cursor);
-            Map<String, String> toolAuthHeaders = toolAuthResolver.resolveHeaders(tools);
+            UUID userId = cursor.getContext().getUserId();
+            Map<String, String> toolAuthHeaders = toolAuthResolver.resolveHeaders(tools, userId);
 
             AgentNodeRequest request = AgentNodeRequest.builder()
                 .nodeId(node.getId())
@@ -107,7 +108,7 @@ public class AgentNodeExecutor implements NodeExecutor {
 
             AgentExecutionResult agentResult = callAgentService(
                 request, llmProvider, decryptedApiKey, googleAccessToken,
-                cursor.getContext().getUserId(), toolAuthHeaders);
+                userId, toolAuthHeaders);
 
             if (!agentResult.isSuccess()) {
                 log.error("[AgentNodeExecutor] 에이전트 실행 실패 — nodeId: {}, error: {}",
