@@ -26,11 +26,12 @@ import org.springframework.web.client.RestTemplate;
 @Transactional(readOnly = true)
 public class NotionOAuthService {
 
-    private static final String NOTION_TOKEN_ENDPOINT = "https://api.notion.com/v1/oauth/token";
-
     private final ConnectedAccountRepository connectedAccountRepository;
     private final AesEncryptionService aesEncryptionService;
     private final RestTemplate restTemplate;
+
+    @Value("${notion.oauth.token-url}")
+    private String notionTokenUrl;
 
     @Value("${notion.oauth.client-id}")
     private String clientId;
@@ -86,7 +87,7 @@ public class NotionOAuthService {
 
             HttpEntity<Map<String, String>> request = new HttpEntity<>(body, headers);
             ResponseEntity<Map> response = restTemplate.postForEntity(
-                NOTION_TOKEN_ENDPOINT, request, Map.class
+                notionTokenUrl, request, Map.class
             );
 
             if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {

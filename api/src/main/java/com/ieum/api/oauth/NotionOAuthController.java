@@ -20,6 +20,9 @@ public class NotionOAuthController {
 
     private final NotionOAuthService notionOAuthService;
 
+    @Value("${notion.oauth.auth-url}")
+    private String notionAuthUrl;
+
     @Value("${notion.oauth.client-id}")
     private String notionClientId;
 
@@ -36,7 +39,7 @@ public class NotionOAuthController {
     @GetMapping("/authorize")
     public ResponseEntity<Void> authorizeNotion() {
         String authUrl = UriComponentsBuilder
-            .fromUriString("https://api.notion.com/v1/oauth/authorize")
+            .fromUriString(notionAuthUrl)
             .queryParam("client_id", notionClientId)
             .queryParam("response_type", "code")
             .queryParam("owner", "user")
