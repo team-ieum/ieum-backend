@@ -15,7 +15,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
@@ -44,10 +43,6 @@ public class NotionOAuthService {
 
     @Transactional
     public void handleCallback(String code, UUID userId) {
-        if (code == null || code.isBlank()) {
-            log.warn("[NotionOAuthService] code 파라미터가 비어있음 — userId: {}", userId);
-            throw new CustomException(ErrorCode.INVALID_INPUT);
-        }
         String accessToken = exchangeCodeForToken(code);
         String encryptedToken = aesEncryptionService.encrypt(accessToken);
 
@@ -86,16 +81,17 @@ public class NotionOAuthService {
             );
 
             HttpEntity<Map<String, String>> request = new HttpEntity<>(body, headers);
-            ResponseEntity<Map> response = restTemplate.postForEntity(
+            @SuppressWarnings("unchecked")
+            Map<String, Object> responseBody = restTemplate.postForObject(
                 notionTokenUrl, request, Map.class
             );
 
-            if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
-                log.error("[NotionOAuthService] token exchange 실패: status={}", response.getStatusCode());
+            if (responseBody == null) {
+                log.error("[NotionOAuthService] token exchange 응답 body 없음");
                 throw new CustomException(ErrorCode.TOKEN_REFRESH_FAILED);
             }
 
-            Object token = response.getBody().get("access_token");
+            Object token = responseBody.get("access_token");
             if (token == null) {
                 log.error("[NotionOAuthService] 응답에 access_token 없음");
                 throw new CustomException(ErrorCode.TOKEN_REFRESH_FAILED);
