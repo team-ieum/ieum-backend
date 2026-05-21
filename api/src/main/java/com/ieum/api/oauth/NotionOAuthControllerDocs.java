@@ -25,7 +25,7 @@ public interface NotionOAuthControllerDocs {
     @Operation(summary = "Notion OAuth Callback 처리",
         description = "Notion 인가 후 callback을 처리한다. code와 state를 검증하고 access_token을 저장한다.")
     @ApiResponses({
-        @ApiResponse(responseCode = "302", description = "프론트엔드로 리다이렉트"),
+        @ApiResponse(responseCode = "302", description = "처리 완료 후 프론트엔드로 리다이렉트 (성공 또는 에러 모두 포함)"),
         @ApiResponse(responseCode = "400", description = "유효하지 않은 state 또는 code")
     })
     ResponseEntity<Void> notionCallback(
