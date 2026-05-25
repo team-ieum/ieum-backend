@@ -11,8 +11,6 @@ import com.ieum.workflowcore.chat.repository.ChatMessageRepository;
 import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.WorkflowVersion;
-import com.ieum.workflowcore.engine.executor.CredentialProvider;
-import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -136,7 +134,7 @@ class ChatServiceTest {
 
     @Test
     @DisplayName("AI 노드가 없는 워크플로우는 WORKFLOW_HAS_NO_AI_NODE 예외")
-    void resolveAgentConfig_noAiNode_throwsException() throws Exception {
+    void resolveAgentConfig_noAiNode_throwsException() {
         WorkflowVersion version = buildVersionWithNodesJson("[]");
         given(workflowCrudService.findLatestVersion(workflowId))
             .willReturn(Optional.of(version));
@@ -197,15 +195,19 @@ class ChatServiceTest {
         return msg;
     }
 
-    private WorkflowVersion buildVersionWithNodesJson(String nodesJson) throws Exception {
+    private WorkflowVersion buildVersionWithNodesJson(String nodesJson) {
         WorkflowVersion version = Mockito.mock(WorkflowVersion.class);
-        WorkflowDefinitionDocument mockDef = WorkflowDefinitionDocument.builder()
-            .nodes(objectMapper.readValue(nodesJson, new TypeReference<>() {}))
-            .edges(List.of())
-            .createdAt(LocalDateTime.now())
-            .build();
-        given(workflowCrudService.loadDefinition(any(WorkflowVersion.class)))
-            .willReturn(mockDef);
+        try {
+            WorkflowDefinitionDocument mockDef = WorkflowDefinitionDocument.builder()
+                .nodes(objectMapper.readValue(nodesJson, new TypeReference<>() {}))
+                .edges(List.of())
+                .createdAt(LocalDateTime.now())
+                .build();
+            given(workflowCrudService.loadDefinition(any(WorkflowVersion.class)))
+                .willReturn(mockDef);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new RuntimeException("Test data setup failed: " + e.getMessage(), e);
+        }
         return version;
     }
 }
