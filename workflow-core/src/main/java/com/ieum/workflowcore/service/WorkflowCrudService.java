@@ -242,8 +242,13 @@ public class WorkflowCrudService {
      * @throws CustomException WORKFLOW_NOT_FOUND if the document does not exist
      */
     public WorkflowDefinitionDocument loadDefinition(WorkflowVersion version) {
-        return definitionRepository.findById(version.getMongoDefinitionId())
-            .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+        String mongoId = version.getMongoDefinitionId();
+        return definitionRepository.findById(mongoId)
+            .orElseThrow(() -> {
+                log.error("[WorkflowCrudService] MongoDB 정의 누락 — versionId: {}, mongoId: {}",
+                    version.getId(), mongoId);
+                return new CustomException(ErrorCode.WORKFLOW_DEFINITION_NOT_FOUND);
+            });
     }
 
     // ------------------------------------------------------------------ PRIVATE
