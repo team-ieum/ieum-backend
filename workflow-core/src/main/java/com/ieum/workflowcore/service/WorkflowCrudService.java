@@ -15,6 +15,7 @@ import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowRepository;
 import com.ieum.workflowcore.repository.WorkflowVersionRepository;
 import com.ieum.workflowcore.scheduler.WorkflowScheduler;
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -73,19 +74,26 @@ public class WorkflowCrudService {
             .build();
         workflowRepository.save(workflow);
 
+        UUID preGeneratedVersionId = UUID.randomUUID();
         WorkflowDefinitionDocument savedDoc =
-            definitionRepository.save(buildDefinitionDocument(nodesJson, edgesJson));
+            definitionRepository.save(buildDefinitionDocument(
+                preGeneratedVersionId.toString(), nodesJson, edgesJson));
 
         WorkflowVersion version;
         try {
             version = WorkflowVersion.builder()
+                .id(preGeneratedVersionId)
                 .workflow(workflow)
                 .version(1)
                 .mongoDefinitionId(savedDoc.getId())
                 .build();
             workflowVersionRepository.save(version);
         } catch (Exception e) {
-            definitionRepository.deleteById(savedDoc.getId()); // compensating rollback
+            try {
+                definitionRepository.deleteById(savedDoc.getId());
+            } catch (Exception ignore) {
+                log.warn("[WorkflowCrudService] MongoDB 보상 삭제 실패 — mongoId: {}", savedDoc.getId(), ignore);
+            }
             throw e;
         }
 
@@ -112,19 +120,26 @@ public class WorkflowCrudService {
 
         int nextVersion = workflowVersionRepository.findMaxVersionByWorkflowId(workflowId) + 1;
 
+        UUID preGeneratedVersionId = UUID.randomUUID();
         WorkflowDefinitionDocument savedDoc =
-            definitionRepository.save(buildDefinitionDocument(nodesJson, edgesJson));
+            definitionRepository.save(buildDefinitionDocument(
+                preGeneratedVersionId.toString(), nodesJson, edgesJson));
 
         WorkflowVersion version;
         try {
             version = WorkflowVersion.builder()
+                .id(preGeneratedVersionId)
                 .workflow(workflow)
                 .version(nextVersion)
                 .mongoDefinitionId(savedDoc.getId())
                 .build();
             workflowVersionRepository.save(version);
         } catch (Exception e) {
-            definitionRepository.deleteById(savedDoc.getId());
+            try {
+                definitionRepository.deleteById(savedDoc.getId());
+            } catch (Exception ignore) {
+                log.warn("[WorkflowCrudService] MongoDB 보상 삭제 실패 — mongoId: {}", savedDoc.getId(), ignore);
+            }
             throw e;
         }
 
@@ -158,19 +173,26 @@ public class WorkflowCrudService {
 
         int nextVersion = workflowVersionRepository.findMaxVersionByWorkflowId(workflowId) + 1;
 
+        UUID preGeneratedVersionId = UUID.randomUUID();
         WorkflowDefinitionDocument savedDoc =
-            definitionRepository.save(buildDefinitionDocument(nodesJson, edgesJson));
+            definitionRepository.save(buildDefinitionDocument(
+                preGeneratedVersionId.toString(), nodesJson, edgesJson));
 
         WorkflowVersion version;
         try {
             version = WorkflowVersion.builder()
+                .id(preGeneratedVersionId)
                 .workflow(workflow)
                 .version(nextVersion)
                 .mongoDefinitionId(savedDoc.getId())
                 .build();
             workflowVersionRepository.save(version);
         } catch (Exception e) {
-            definitionRepository.deleteById(savedDoc.getId());
+            try {
+                definitionRepository.deleteById(savedDoc.getId());
+            } catch (Exception ignore) {
+                log.warn("[WorkflowCrudService] MongoDB 보상 삭제 실패 — mongoId: {}", savedDoc.getId(), ignore);
+            }
             throw e;
         }
 
@@ -302,16 +324,17 @@ public class WorkflowCrudService {
 
     @SuppressWarnings("unchecked")
     private WorkflowDefinitionDocument buildDefinitionDocument(
-            String nodesJson, String edgesJson) {
+            String workflowVersionId, String nodesJson, String edgesJson) {
         try {
             List<Map<String, Object>> nodes =
                 objectMapper.readValue(nodesJson, new TypeReference<>() {});
             List<Map<String, Object>> edges =
                 objectMapper.readValue(edgesJson, new TypeReference<>() {});
             return WorkflowDefinitionDocument.builder()
+                .workflowVersionId(workflowVersionId)
                 .nodes(nodes)
                 .edges(edges)
-                .createdAt(java.time.LocalDateTime.now())
+                .createdAt(LocalDateTime.now())
                 .build();
         } catch (Exception e) {
             throw new CustomException(ErrorCode.INVALID_WORKFLOW,
