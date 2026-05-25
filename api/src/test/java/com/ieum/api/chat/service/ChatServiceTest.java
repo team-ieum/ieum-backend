@@ -1,10 +1,7 @@
 package com.ieum.api.chat.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.ieum.api.chat.dto.ChatAgentResponse;
-import com.ieum.api.chat.dto.ChatRequest;
-import com.ieum.api.chat.dto.ChatResponse;
-import com.ieum.api.chat.service.ChatService.AgentConfig;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.chat.domain.ChatMessage;
@@ -12,10 +9,12 @@ import com.ieum.workflowcore.chat.domain.ChatSession;
 import com.ieum.workflowcore.chat.domain.MessageType;
 import com.ieum.workflowcore.chat.repository.ChatMessageRepository;
 import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
+import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.engine.executor.CredentialProvider;
 import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
 import com.ieum.workflowcore.service.WorkflowCrudService;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -45,9 +44,6 @@ class ChatServiceTest {
     @Mock private ChatSessionRepository sessionRepository;
     @Mock private ChatMessageRepository messageRepository;
     @Mock private WorkflowCrudService workflowCrudService;
-    @Mock private CredentialProvider credentialProvider;
-    @Mock private GoogleTokenProvider googleTokenProvider;
-    @Mock private AgentClient agentClient;
 
     @InjectMocks
     private ChatService chatService;
@@ -201,9 +197,15 @@ class ChatServiceTest {
         return msg;
     }
 
-    private WorkflowVersion buildVersionWithNodesJson(String nodesJson) {
+    private WorkflowVersion buildVersionWithNodesJson(String nodesJson) throws Exception {
         WorkflowVersion version = Mockito.mock(WorkflowVersion.class);
-        given(version.getNodesJson()).willReturn(nodesJson);
+        WorkflowDefinitionDocument mockDef = WorkflowDefinitionDocument.builder()
+            .nodes(objectMapper.readValue(nodesJson, new TypeReference<>() {}))
+            .edges(List.of())
+            .createdAt(LocalDateTime.now())
+            .build();
+        given(workflowCrudService.loadDefinition(any(WorkflowVersion.class)))
+            .willReturn(mockDef);
         return version;
     }
 }
