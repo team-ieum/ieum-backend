@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -21,8 +23,9 @@ public class ToolAuthResolver {
     );
 
     private final CredentialProvider credentialProvider;
+    private final NotionTokenProvider notionTokenProvider;
 
-    public Map<String, String> resolveHeaders(List<Map<String, Object>> tools) {
+    public Map<String, String> resolveHeaders(List<Map<String, Object>> tools, UUID userId) {
         if (tools == null || tools.isEmpty()) {
             return Collections.emptyMap();
         }
@@ -39,7 +42,7 @@ public class ToolAuthResolver {
                 continue;
             }
 
-            resolveAuthValue(tool, toolName)
+            resolveAuthValue(tool, toolName, userId)
                 .ifPresentOrElse(
                     value -> headers.put(headerName, value),
                     () -> log.warn("[ToolAuthResolver] 빌트인 도구 사용이지만 auth 설정이 없음 — toolName: {}", toolName)
@@ -56,16 +59,16 @@ public class ToolAuthResolver {
             .findFirst();
     }
 
-    private Optional<String> resolveAuthValue(Map<String, Object> tool, String toolName) {
+    private Optional<String> resolveAuthValue(Map<String, Object> tool, String toolName, UUID userId) {
         Object auth = tool.get("auth");
         if (auth instanceof Map<?, ?> authMap) {
-            return resolveStructuredAuth(authMap, toolName);
+            return resolveStructuredAuth(authMap, toolName, userId);
         }
 
-        return resolveCredential(getString(tool, "credentialId"), toolName);
+        return resolveCredential(getString(tool, "credentialId"), toolName, userId);
     }
 
-    private Optional<String> resolveStructuredAuth(Map<?, ?> auth, String toolName) {
+    private Optional<String> resolveStructuredAuth(Map<?, ?> auth, String toolName, UUID userId) {
         Optional<String> credentialId = getString(auth, "credentialId");
         String type = getString(auth, "type")
             .orElseGet(() -> credentialId.isPresent() ? "credential" : null);
@@ -75,7 +78,7 @@ public class ToolAuthResolver {
         }
 
         return switch (type.toLowerCase(Locale.ROOT)) {
-            case "credential" -> resolveCredential(credentialId, toolName);
+            case "credential" -> resolveCredential(credentialId, toolName, userId);
             case "secret", "plain" -> getString(auth, "value");
             default -> {
                 log.warn("[ToolAuthResolver] 지원하지 않는 도구 auth type — toolName: {}, type: {}", toolName, type);
@@ -84,13 +87,23 @@ public class ToolAuthResolver {
         };
     }
 
-    private Optional<String> resolveCredential(Optional<String> credentialId, String toolName) {
-        return credentialId
-            .filter(id -> !id.isBlank())
-            .map(id -> {
+    private Optional<String> resolveCredential(Optional<String> credentialId, String toolName, UUID userId) {
+        // 1순위: credentialId BYOK 방식 (기존 동작 유지)
+        if (credentialId.isPresent() && !credentialId.get().isBlank()) {
+            return credentialId.map(id -> {
                 log.debug("[ToolAuthResolver] 도구 인증 credential 조회 — toolName: {}", toolName);
                 return credentialProvider.getDecryptedApiKey(id);
             });
+        }
+        // 2순위: OAuth connected_accounts 방식 (Notion 도구인 경우)
+        if (userId != null && toolName.startsWith(NOTION_BUILTIN_PREFIX)) {
+            Optional<String> notionToken = notionTokenProvider.getAccessToken(userId);
+            if (notionToken.isEmpty()) {
+                log.warn("[ToolAuthResolver] Notion OAuth 연동 없음 — userId: {}, toolName: {}", userId, toolName);
+            }
+            return notionToken;
+        }
+        return Optional.empty();
     }
 
     private Optional<String> getString(Map<?, ?> map, String key) {
