@@ -184,14 +184,9 @@ public class WorkflowService {
         List<NodeDto> nodes = Collections.emptyList();
         List<EdgeDto> edges = Collections.emptyList();
         if (version != null) {
-            try {
-                WorkflowDefinitionDocument definition = workflowCrudService.loadDefinition(version);
-                nodes = objectMapper.convertValue(definition.getNodes(), new TypeReference<>() {});
-                edges = objectMapper.convertValue(definition.getEdges(), new TypeReference<>() {});
-            } catch (Exception e) {
-                log.warn("[WorkflowService] MongoDB 정의 로드 실패 — versionId: {}, error: {}",
-                    version.getId(), e.getMessage());
-            }
+            WorkflowDefinitionDocument definition = workflowCrudService.loadDefinition(version);
+            nodes = objectMapper.convertValue(definition.getNodes(), new TypeReference<>() {});
+            edges = objectMapper.convertValue(definition.getEdges(), new TypeReference<>() {});
         }
         return WorkflowResponse.from(workflow, version, nodes, edges);
     }
