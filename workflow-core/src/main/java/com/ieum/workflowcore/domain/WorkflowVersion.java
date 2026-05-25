@@ -54,7 +54,8 @@ public class WorkflowVersion extends BaseEntity {
     private String mongoDefinitionId;
 
     @Builder
-    private WorkflowVersion(Workflow workflow, int version, String mongoDefinitionId) {
+    private WorkflowVersion(UUID id, Workflow workflow, int version, String mongoDefinitionId) {
+        this.id = id;         // nullable: if null, @GeneratedValue(UUID) handles it
         this.workflow = workflow;
         this.version = version;
         this.mongoDefinitionId = mongoDefinitionId;
