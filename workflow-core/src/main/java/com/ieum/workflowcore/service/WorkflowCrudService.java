@@ -282,7 +282,6 @@ public class WorkflowCrudService {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private WorkflowDefinitionDocument buildDefinitionDocument(
             String workflowVersionId, String nodesJson, String edgesJson) {
         try {
