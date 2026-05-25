@@ -1,7 +1,11 @@
 package com.ieum.workflowcore.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
+import com.ieum.workflowcore.document.WorkflowDefinitionRepository;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowVersion;
@@ -49,6 +53,8 @@ public class WorkflowCrudService {
     private final WorkflowExecutionRepository workflowExecutionRepository;
     private final WorkflowExecutionLogRepository workflowExecutionLogRepository;
     private final WorkflowScheduler workflowScheduler;
+    private final WorkflowDefinitionRepository definitionRepository;
+    private final ObjectMapper objectMapper;
 
     // ------------------------------------------------------------------ WRITE
 
@@ -67,13 +73,21 @@ public class WorkflowCrudService {
             .build();
         workflowRepository.save(workflow);
 
-        WorkflowVersion version = WorkflowVersion.builder()
-            .workflow(workflow)
-            .version(1)
-            .nodesJson(nodesJson)
-            .edgesJson(edgesJson)
-            .build();
-        workflowVersionRepository.save(version);
+        WorkflowDefinitionDocument savedDoc =
+            definitionRepository.save(buildDefinitionDocument(nodesJson, edgesJson));
+
+        WorkflowVersion version;
+        try {
+            version = WorkflowVersion.builder()
+                .workflow(workflow)
+                .version(1)
+                .mongoDefinitionId(savedDoc.getId())
+                .build();
+            workflowVersionRepository.save(version);
+        } catch (Exception e) {
+            definitionRepository.deleteById(savedDoc.getId()); // compensating rollback
+            throw e;
+        }
 
         // DB 커밋 후 Quartz Job 등록 — 트랜잭션 롤백 시 Job이 고아로 남는 것을 방지
         if (triggerType == TriggerType.SCHEDULE) {
@@ -97,13 +111,22 @@ public class WorkflowCrudService {
         workflow.updateSchedule(triggerType, cronExpression);
 
         int nextVersion = workflowVersionRepository.findMaxVersionByWorkflowId(workflowId) + 1;
-        WorkflowVersion version = WorkflowVersion.builder()
-            .workflow(workflow)
-            .version(nextVersion)
-            .nodesJson(nodesJson)
-            .edgesJson(edgesJson)
-            .build();
-        workflowVersionRepository.save(version);
+
+        WorkflowDefinitionDocument savedDoc =
+            definitionRepository.save(buildDefinitionDocument(nodesJson, edgesJson));
+
+        WorkflowVersion version;
+        try {
+            version = WorkflowVersion.builder()
+                .workflow(workflow)
+                .version(nextVersion)
+                .mongoDefinitionId(savedDoc.getId())
+                .build();
+            workflowVersionRepository.save(version);
+        } catch (Exception e) {
+            definitionRepository.deleteById(savedDoc.getId());
+            throw e;
+        }
 
         // DB 커밋 후 Job 동기화 — 트랜잭션 롤백 시 Quartz 상태가 DB와 불일치하는 것을 방지
         final Workflow updatedWorkflow = workflow;
@@ -134,13 +157,22 @@ public class WorkflowCrudService {
             .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
 
         int nextVersion = workflowVersionRepository.findMaxVersionByWorkflowId(workflowId) + 1;
-        WorkflowVersion version = WorkflowVersion.builder()
-            .workflow(workflow)
-            .version(nextVersion)
-            .nodesJson(nodesJson)
-            .edgesJson(edgesJson)
-            .build();
-        workflowVersionRepository.save(version);
+
+        WorkflowDefinitionDocument savedDoc =
+            definitionRepository.save(buildDefinitionDocument(nodesJson, edgesJson));
+
+        WorkflowVersion version;
+        try {
+            version = WorkflowVersion.builder()
+                .workflow(workflow)
+                .version(nextVersion)
+                .mongoDefinitionId(savedDoc.getId())
+                .build();
+            workflowVersionRepository.save(version);
+        } catch (Exception e) {
+            definitionRepository.deleteById(savedDoc.getId());
+            throw e;
+        }
 
         log.info("[WorkflowCrudService] AI 생성 버전 저장 — workflowId: {}, version: {}",
             workflowId, nextVersion);
@@ -157,7 +189,19 @@ public class WorkflowCrudService {
             workflowExecutionLogRepository.deleteByExecutionIdIn(executionIds);
         }
         workflowExecutionRepository.deleteByWorkflow(workflow);
+
+        // Collect MongoDB document IDs before deleting PG rows (reference will be gone after)
+        List<String> mongoIds = workflowVersionRepository.findByWorkflowId(workflow.getId())
+            .stream()
+            .map(WorkflowVersion::getMongoDefinitionId)
+            .filter(id -> id != null && !id.isBlank())
+            .toList();
+
         workflowVersionRepository.deleteByWorkflow(workflow);
+
+        // Delete MongoDB documents after PG delete (PG is source of truth)
+        mongoIds.forEach(definitionRepository::deleteById);
+
         workflowRepository.delete(workflow);
 
         // DB 커밋 후 Quartz Job 제거 — DB 롤백 시 Job이 삭제되는 것을 방지
@@ -242,7 +286,38 @@ public class WorkflowCrudService {
             .collect(Collectors.toMap(wv -> wv.getWorkflow().getId(), Function.identity()));
     }
 
+    /**
+     * Loads the WorkflowDefinitionDocument from MongoDB for the given WorkflowVersion.
+     *
+     * @param version WorkflowVersion whose mongoDefinitionId references the MongoDB document
+     * @return WorkflowDefinitionDocument containing nodes and edges as List<Map>
+     * @throws CustomException WORKFLOW_NOT_FOUND if the document does not exist
+     */
+    public WorkflowDefinitionDocument loadDefinition(WorkflowVersion version) {
+        return definitionRepository.findById(version.getMongoDefinitionId())
+            .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+    }
+
     // ------------------------------------------------------------------ PRIVATE
+
+    @SuppressWarnings("unchecked")
+    private WorkflowDefinitionDocument buildDefinitionDocument(
+            String nodesJson, String edgesJson) {
+        try {
+            List<Map<String, Object>> nodes =
+                objectMapper.readValue(nodesJson, new TypeReference<>() {});
+            List<Map<String, Object>> edges =
+                objectMapper.readValue(edgesJson, new TypeReference<>() {});
+            return WorkflowDefinitionDocument.builder()
+                .nodes(nodes)
+                .edges(edges)
+                .createdAt(java.time.LocalDateTime.now())
+                .build();
+        } catch (Exception e) {
+            throw new CustomException(ErrorCode.INVALID_WORKFLOW,
+                "워크플로우 JSON 파싱 실패: " + e.getMessage());
+        }
+    }
 
     /**
      * 현재 트랜잭션 커밋 이후에 action을 실행한다.
