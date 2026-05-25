@@ -2,6 +2,7 @@ spring:
   autoconfigure:
     exclude:
       - org.springframework.boot.autoconfigure.quartz.QuartzAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration
 
   datasource:
     url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=PostgreSQL
@@ -54,3 +55,12 @@ aes:
 ieum:
   agent:
     url: http://localhost:8000
+
+notion:
+  oauth:
+    auth-url: https://api.notion.com/v1/oauth/authorize
+    token-url: https://api.notion.com/v1/oauth/token
+    client-id: test-notion-client-id
+    client-secret: test-notion-client-secret
+    redirect-uri: http://localhost/api/v1/notion/oauth2/callback
+    frontend-redirect-uri: http://localhost/settings
