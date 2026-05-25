@@ -4,9 +4,11 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowExecutionLog;
 import com.ieum.workflowcore.domain.WorkflowVersion;
+import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.domain.enums.ExecutionLogStatus;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.domain.enums.NodeType;
@@ -40,6 +42,7 @@ public class SyncExecutionRuntime {
     private final ObjectMapper objectMapper;
     private final WorkflowExecutionLogRepository executionLogRepository;
     private final WorkflowExecutionRepository workflowExecutionRepository;
+    private final WorkflowCrudService workflowCrudService;
     /** @Component로 등록된 모든 NodeExecutor 구현체를 Spring이 자동 주입 */
     private final List<NodeExecutor> nodeExecutors;
 
@@ -55,7 +58,7 @@ public class SyncExecutionRuntime {
     /**
      * 워크플로우 버전을 파싱하여 동기적으로 실행한다.
      *
-     * @param workflowVersion 실행할 버전 (nodesJson, edgesJson 포함)
+     * @param workflowVersion 실행할 버전 (mongoDefinitionId로 MongoDB에서 nodes/edges 로드)
      * @param executionId     DB에 저장된 실행 인스턴스 ID (fresh 조회로 detached 문제 방지)
      * @param triggerData     트리거가 전달한 초기 데이터 (TRIGGER 노드 output에 저장)
      */
@@ -71,13 +74,14 @@ public class SyncExecutionRuntime {
         log.info("[Runtime] 워크플로우 실행 시작 — executionId: {}, versionId: {}",
             execution.getId(), workflowVersion.getId());
 
-        // 1. JSON 파싱 및 TRIGGER 검증 (start() 이전 — 실패 시 FAILED로 전환)
+        // 1. MongoDB에서 노드/엣지 로드 및 TRIGGER 검증 (start() 이전 — 실패 시 FAILED로 전환)
         List<Node> nodes;
         List<Edge> edges;
         Node triggerNode;
         try {
-            nodes = objectMapper.readValue(workflowVersion.getNodesJson(), new TypeReference<>() {});
-            edges = objectMapper.readValue(workflowVersion.getEdgesJson(), new TypeReference<>() {});
+            WorkflowDefinitionDocument definition = workflowCrudService.loadDefinition(workflowVersion);
+            nodes = objectMapper.convertValue(definition.getNodes(), new TypeReference<>() {});
+            edges = objectMapper.convertValue(definition.getEdges(), new TypeReference<>() {});
             triggerNode = nodes.stream()
                 .filter(n -> n.getType() == NodeType.TRIGGER)
                 .findFirst()

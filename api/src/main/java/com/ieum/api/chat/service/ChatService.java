@@ -3,6 +3,7 @@ package com.ieum.api.chat.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.api.chat.dto.AgentAction;
 import com.ieum.api.chat.dto.AgentResponseType;
 import com.ieum.api.chat.dto.ChatAgentResponse;
@@ -243,9 +244,12 @@ public class ChatService {
 
         List<Node> nodes;
         try {
-            nodes = objectMapper.readValue(version.getNodesJson(), new TypeReference<>() {});
+            WorkflowDefinitionDocument definition = workflowCrudService.loadDefinition(version);
+            nodes = objectMapper.convertValue(definition.getNodes(), new TypeReference<>() {});
+        } catch (CustomException ce) {
+            throw ce;
         } catch (Exception e) {
-            log.error("[ChatService] nodesJson 파싱 실패 — workflowId: {}", workflowId, e);
+            log.error("[ChatService] MongoDB 정의 로드 실패 — workflowId: {}", workflowId, e);
             throw new CustomException(ErrorCode.INVALID_WORKFLOW);
         }
 
