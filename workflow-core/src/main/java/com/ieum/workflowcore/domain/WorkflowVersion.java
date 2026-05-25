@@ -49,19 +49,14 @@ public class WorkflowVersion extends BaseEntity {
     @Column(name = "version", nullable = false)
     private int version;
 
-    /** 노드 목록 JSON 배열 — 자격증명 원문 저장 금지, credential_id 참조만 허용 */
-    @Column(name = "nodes_json", columnDefinition = "TEXT", nullable = false)
-    private String nodesJson;
-
-    /** 엣지 목록 JSON 배열 */
-    @Column(name = "edges_json", columnDefinition = "TEXT", nullable = false)
-    private String edgesJson;
+    /** MongoDB ObjectId referencing the WorkflowDefinitionDocument */
+    @Column(name = "mongo_definition_id", length = 24, nullable = false)
+    private String mongoDefinitionId;
 
     @Builder
-    private WorkflowVersion(Workflow workflow, int version, String nodesJson, String edgesJson) {
+    private WorkflowVersion(Workflow workflow, int version, String mongoDefinitionId) {
         this.workflow = workflow;
         this.version = version;
-        this.nodesJson = nodesJson;
-        this.edgesJson = edgesJson;
+        this.mongoDefinitionId = mongoDefinitionId;
     }
 }
