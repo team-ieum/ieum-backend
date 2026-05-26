@@ -2,7 +2,9 @@ package com.ieum.api.oauth.service;
 
 import com.ieum.auth.domain.AuthProvider;
 import com.ieum.auth.domain.ConnectedAccount;
+import com.ieum.auth.domain.GitHubOAuthState;
 import com.ieum.auth.repository.ConnectedAccountRepository;
+import com.ieum.auth.repository.GitHubOAuthStateRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.common.util.AesEncryptionService;
@@ -20,6 +22,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
 
 @Slf4j
 @Service
@@ -27,7 +30,11 @@ import org.springframework.web.client.RestTemplate;
 @Transactional(readOnly = true)
 public class GitHubOAuthService {
 
+    private static final String GITHUB_AUTH_URL = "https://github.com/login/oauth/authorize";
+    private static final long OAUTH_STATE_TTL_SECONDS = 300L;
+
     private final ConnectedAccountRepository connectedAccountRepository;
+    private final GitHubOAuthStateRepository gitHubOAuthStateRepository;
     private final AesEncryptionService aesEncryptionService;
     private final RestTemplate restTemplate;
 
@@ -39,6 +46,27 @@ public class GitHubOAuthService {
 
     @Value("${github.app.client-secret}")
     private String clientSecret;
+
+    @Value("${github.app.redirect-uri}")
+    private String githubRedirectUri;
+
+    public String generateAuthUrl(UUID userId) {
+        String state = UUID.randomUUID().toString();
+        gitHubOAuthStateRepository.save(
+            GitHubOAuthState.builder()
+                .state(state)
+                .userId(userId)
+                .ttl(OAUTH_STATE_TTL_SECONDS)
+                .build()
+        );
+
+        return UriComponentsBuilder
+            .fromUriString(GITHUB_AUTH_URL)
+            .queryParam("client_id", clientId)
+            .queryParam("redirect_uri", githubRedirectUri)
+            .queryParam("state", state)
+            .build().toUriString();
+    }
 
     @Transactional
     public void handleCallback(String code, UUID userId) {

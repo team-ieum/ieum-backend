@@ -32,6 +32,7 @@ class AgentNodeExecutorTest {
     private AgentNodeExecutor executor;
     private CredentialProvider credentialProvider;
     private NotionTokenProvider notionTokenProvider;
+    private GitHubTokenProvider gitHubTokenProvider;
     private GoogleTokenProvider googleTokenProvider;
 
     @BeforeEach
@@ -40,13 +41,14 @@ class AgentNodeExecutorTest {
         mockWebServer.start();
         credentialProvider = mock(CredentialProvider.class);
         notionTokenProvider = mock(NotionTokenProvider.class);
+        gitHubTokenProvider = mock(GitHubTokenProvider.class);
         googleTokenProvider = mock(GoogleTokenProvider.class);
         when(credentialProvider.getDecryptedApiKey(any())).thenReturn("decrypted-api-key");
         executor = new AgentNodeExecutor(
             mockWebServer.url("/").toString(),
             credentialProvider,
             googleTokenProvider,
-            new ToolAuthResolver(credentialProvider, notionTokenProvider),
+            new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
             30
         );
     }

@@ -4,7 +4,9 @@ import com.ieum.api.oauth.service.GitHubOAuthService;
 import com.ieum.auth.domain.GitHubOAuthState;
 import com.ieum.auth.repository.GitHubOAuthStateRepository;
 import com.ieum.auth.security.CustomUserDetails;
-import java.util.UUID;
+import com.ieum.common.dto.ApiResponse;
+import java.util.Map;
+import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,7 +18,6 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.util.UriComponentsBuilder;
 
 @Slf4j
 @RestController
@@ -24,44 +25,18 @@ import org.springframework.web.util.UriComponentsBuilder;
 @RequiredArgsConstructor
 public class GitHubOAuthController implements GitHubOAuthControllerDocs {
 
-    private static final long OAUTH_STATE_TTL_SECONDS = 300L;
-    private static final String GITHUB_AUTH_URL = "https://github.com/login/oauth/authorize";
-
     private final GitHubOAuthService gitHubOAuthService;
     private final GitHubOAuthStateRepository gitHubOAuthStateRepository;
-
-    @Value("${github.app.client-id}")
-    private String githubClientId;
-
-    @Value("${github.app.redirect-uri}")
-    private String githubRedirectUri;
 
     @Value("${github.app.frontend-redirect-uri}")
     private String frontendRedirectUri;
 
     @GetMapping("/authorize")
-    public ResponseEntity<Void> authorize(
+    public ResponseEntity<ApiResponse<Map<String, String>>> authorize(
         @AuthenticationPrincipal CustomUserDetails userDetails
     ) {
-        String state = UUID.randomUUID().toString();
-        gitHubOAuthStateRepository.save(
-            GitHubOAuthState.builder()
-                .state(state)
-                .userId(userDetails.getId())
-                .ttl(OAUTH_STATE_TTL_SECONDS)
-                .build()
-        );
-
-        String authUrl = UriComponentsBuilder
-            .fromUriString(GITHUB_AUTH_URL)
-            .queryParam("client_id", githubClientId)
-            .queryParam("redirect_uri", githubRedirectUri)
-            .queryParam("state", state)
-            .build().toUriString();
-
-        return ResponseEntity.status(HttpStatus.FOUND)
-            .header(HttpHeaders.LOCATION, authUrl)
-            .build();
+        String authUrl = gitHubOAuthService.generateAuthUrl(userDetails.getId());
+        return ResponseEntity.ok(ApiResponse.ok(Map.of("authUrl", authUrl)));
     }
 
     @GetMapping("/callback")
