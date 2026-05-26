@@ -1,4 +1,4 @@
-package com.ieum.api.oauth;
+package com.ieum.api.oauth.controller;
 
 import com.ieum.auth.security.CustomUserDetails;
 import io.swagger.v3.oas.annotations.Operation;

@@ -1,4 +1,4 @@
-package com.ieum.api.oauth;
+package com.ieum.api.oauth.controller;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.startsWith;
@@ -12,6 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.ieum.api.common.GlobalExceptionHandler;
+import com.ieum.api.oauth.service.NotionOAuthService;
 import com.ieum.auth.domain.NotionOAuthState;
 import com.ieum.auth.repository.NotionOAuthStateRepository;
 import com.ieum.auth.security.CustomUserDetails;

@@ -1,5 +1,6 @@
-package com.ieum.api.oauth;
+package com.ieum.api.oauth.controller;
 
+import com.ieum.api.oauth.service.NotionOAuthService;
 import com.ieum.auth.domain.NotionOAuthState;
 import com.ieum.auth.repository.NotionOAuthStateRepository;
 import com.ieum.auth.security.CustomUserDetails;
