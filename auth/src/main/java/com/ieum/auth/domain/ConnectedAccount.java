@@ -67,4 +67,8 @@ public class ConnectedAccount extends BaseEntity {
         this.tokenExpiresAt = tokenExpiresAt;
         this.refreshTokenExpiresAt = refreshTokenExpiresAt;
     }
+
+    public void updateScopes(String scopes) {
+        this.scopes = scopes;
+    }
 }
