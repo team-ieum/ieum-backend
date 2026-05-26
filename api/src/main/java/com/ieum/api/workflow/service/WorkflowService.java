@@ -2,6 +2,7 @@ package com.ieum.api.workflow.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.api.workflow.dto.CreateWorkflowRequest;
 import com.ieum.api.workflow.dto.EdgeDto;
@@ -180,29 +181,14 @@ public class WorkflowService {
     // ------------------------------------------------------------------ PRIVATE
 
     private WorkflowResponse toResponse(Workflow workflow, WorkflowVersion version) {
-        List<NodeDto> nodes = version != null ? parseNodes(version.getNodesJson()) : Collections.emptyList();
-        List<EdgeDto> edges = version != null ? parseEdges(version.getEdgesJson()) : Collections.emptyList();
+        List<NodeDto> nodes = Collections.emptyList();
+        List<EdgeDto> edges = Collections.emptyList();
+        if (version != null) {
+            WorkflowDefinitionDocument definition = workflowCrudService.loadDefinition(version);
+            nodes = objectMapper.convertValue(definition.getNodes(), new TypeReference<>() {});
+            edges = objectMapper.convertValue(definition.getEdges(), new TypeReference<>() {});
+        }
         return WorkflowResponse.from(workflow, version, nodes, edges);
-    }
-
-    private List<NodeDto> parseNodes(String json) {
-        if (json == null || json.isBlank()) return Collections.emptyList();
-        try {
-            return objectMapper.readValue(json, new TypeReference<>() {});
-        } catch (Exception e) {
-            log.warn("[WorkflowService] nodes JSON 파싱 실패: {}", e.getMessage());
-            return Collections.emptyList();
-        }
-    }
-
-    private List<EdgeDto> parseEdges(String json) {
-        if (json == null || json.isBlank()) return Collections.emptyList();
-        try {
-            return objectMapper.readValue(json, new TypeReference<>() {});
-        } catch (Exception e) {
-            log.warn("[WorkflowService] edges JSON 파싱 실패: {}", e.getMessage());
-            return Collections.emptyList();
-        }
     }
 
     private String toJson(Object obj) {
