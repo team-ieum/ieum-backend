@@ -52,7 +52,7 @@ class WebhookControllerTest {
 
     @Test
     @DisplayName("WEBHOOK 워크플로우 트리거 성공 — 202 Accepted")
-    void trigger_성공_202() throws Exception {
+    void trigger_success_returns202() throws Exception {
         UUID workflowId = UUID.randomUUID();
         WorkflowExecutionResponse response = WorkflowExecutionResponse.builder()
             .id(UUID.randomUUID())
@@ -76,7 +76,7 @@ class WebhookControllerTest {
 
     @Test
     @DisplayName("payload 없이 호출 — 202 Accepted (빈 payload 허용)")
-    void trigger_빈_payload_성공() throws Exception {
+    void trigger_emptyPayload_returns202() throws Exception {
         UUID workflowId = UUID.randomUUID();
         WorkflowExecutionResponse response = WorkflowExecutionResponse.builder()
             .id(UUID.randomUUID())
@@ -96,7 +96,7 @@ class WebhookControllerTest {
 
     @Test
     @DisplayName("WEBHOOK 타입이 아닌 워크플로우 — 400 WEBHOOK_TRIGGER_MISMATCH")
-    void trigger_WEBHOOK_타입_아님_400() throws Exception {
+    void trigger_notWebhookType_returns400() throws Exception {
         UUID workflowId = UUID.randomUUID();
         willThrow(new CustomException(ErrorCode.WEBHOOK_TRIGGER_MISMATCH))
             .given(webhookService).trigger(eq(workflowId), any());
@@ -110,7 +110,7 @@ class WebhookControllerTest {
 
     @Test
     @DisplayName("비활성 워크플로우 — 400 WORKFLOW_NOT_ACTIVE")
-    void trigger_비활성_워크플로우_400() throws Exception {
+    void trigger_inactiveWorkflow_returns400() throws Exception {
         UUID workflowId = UUID.randomUUID();
         willThrow(new CustomException(ErrorCode.WORKFLOW_NOT_ACTIVE))
             .given(webhookService).trigger(eq(workflowId), any());
@@ -124,7 +124,7 @@ class WebhookControllerTest {
 
     @Test
     @DisplayName("존재하지 않는 workflowId — 404 WORKFLOW_NOT_FOUND")
-    void trigger_존재하지_않는_워크플로우_404() throws Exception {
+    void trigger_workflowNotFound_returns404() throws Exception {
         UUID workflowId = UUID.randomUUID();
         willThrow(new CustomException(ErrorCode.WORKFLOW_NOT_FOUND))
             .given(webhookService).trigger(eq(workflowId), any());
