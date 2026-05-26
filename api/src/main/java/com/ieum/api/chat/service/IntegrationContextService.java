@@ -67,8 +67,18 @@ public class IntegrationContextService {
                 }
             );
 
-        // ── Notion OAuth (TODO: AuthProvider.NOTION 추가 후 구현) ────────────
-        unavailable.add(IntegrationInfo.oauthPending("NOTION"));
+        // ── Notion OAuth ─────────────────────────────────────────────────────
+        connectedAccountRepository.findByUserIdAndProvider(userId, AuthProvider.NOTION)
+            .ifPresentOrElse(
+                account -> {
+                    log.debug("[IntegrationContextService] Notion 연동 확인 — userId: {}", userId);
+                    available.add(IntegrationInfo.oauthConnected("NOTION", account.getScopes()));
+                },
+                () -> {
+                    log.debug("[IntegrationContextService] Notion 미연동 — userId: {}", userId);
+                    unavailable.add(IntegrationInfo.oauthPending("NOTION"));
+                }
+            );
 
         // ── Webhook 서비스 (TODO: webhook_credentials 테이블 구현 후) ─────────
         unavailable.add(IntegrationInfo.webhookPending("SLACK"));
