@@ -1,10 +1,12 @@
 package com.ieum.auth.config;
 
+import jakarta.annotation.PostConstruct;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
@@ -41,6 +43,16 @@ public class OAuthScopeConfig {
     /** scope 그룹 맵. key = 그룹명(gmail, sheets, drive, calendar), value = scope URL 목록. */
     private Map<String, List<String>> scopes = new LinkedHashMap<>();
 
+    /** getAllScopes() 결과 캐시 — 설정은 런타임 중 변경되지 않으므로 @PostConstruct에서 1회 계산 */
+    private List<String> cachedAllScopes;
+
+    @PostConstruct
+    void initCache() {
+        List<String> all = new ArrayList<>();
+        scopes.values().forEach(all::addAll);
+        cachedAllScopes = Collections.unmodifiableList(all);
+    }
+
     /**
      * 특정 그룹의 scope 목록을 반환한다.
      *
@@ -52,14 +64,12 @@ public class OAuthScopeConfig {
     }
 
     /**
-     * 모든 scope를 단일 리스트로 반환한다.
+     * 모든 scope를 단일 리스트로 반환한다 (캐시됨).
      *
      * @return 전체 scope URL 목록
      */
     public List<String> getAllScopes() {
-        List<String> all = new ArrayList<>();
-        scopes.values().forEach(all::addAll);
-        return Collections.unmodifiableList(all);
+        return cachedAllScopes;
     }
 
     /**
@@ -67,7 +77,7 @@ public class OAuthScopeConfig {
      *
      * @return 그룹명 집합 (예: [gmail, sheets, drive, calendar])
      */
-    public java.util.Set<String> getScopeGroups() {
+    public Set<String> getScopeGroups() {
         return Collections.unmodifiableSet(scopes.keySet());
     }
 }

@@ -196,7 +196,7 @@ class GoogleTokenServiceTest {
                 .isEqualTo(ErrorCode.ACCOUNT_NOT_CONNECTED));
     }
 
-    // ── 6. tokenExpiresAt 기반: 아직 유효 → 갱신 없이 반환 ─────────────────
+    // ── 6. tokenExpiresAt 기반: 아직 유효 → decrypt만 하고 API 호출 없이 반환 ─
 
     @Test
     void getValidAccessToken_tokenExpiresAtFarFuture_returnsDirectlyWithoutApiCall() {
