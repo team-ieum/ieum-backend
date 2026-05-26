@@ -9,6 +9,7 @@ import com.ieum.api.chat.dto.AgentResponseType;
 import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.api.chat.dto.ChatRequest;
 import com.ieum.api.chat.dto.ChatResponse;
+import com.ieum.api.chat.dto.IntegrationInfo;
 import com.ieum.api.chat.service.IntegrationContextService.IntegrationContext;
 import com.ieum.api.credential.domain.Credential;
 import com.ieum.api.credential.service.CredentialService;
@@ -29,6 +30,7 @@ import com.ieum.workflowcore.service.WorkflowCrudService;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -110,15 +112,17 @@ public class ChatService {
         String googleAccessToken = resolveGoogleAccessToken(agentConfig.tools(), userId);
         String githubToken = resolveGitHubAccessToken(integrationContext, userId);
 
-        // 7. AI 에이전트 호출
+        // 7. AI 에이전트 호출 (agent 스펙 미지원 provider 제거)
         log.info("[ChatService] AI 응답 요청 — workflowId: {}, sessionId: {}",
             workflowId, session.getId());
+        List<IntegrationInfo> agentAvailable = filterAgentSupportedIntegrations(integrationContext.available());
+        List<IntegrationInfo> agentUnavailable = filterAgentSupportedIntegrations(integrationContext.unavailable());
         ChatAgentResponse agentResponse = agentClient.chat(
             request.getPrompt(),
             request.getCurrentNodes(),
             request.getCurrentEdges(),
-            integrationContext.available(),
-            integrationContext.unavailable(),
+            agentAvailable,
+            agentUnavailable,
             agentConfig.llmProvider(),
             agentConfig.decryptedApiKey(),
             googleAccessToken,
@@ -278,6 +282,7 @@ public class ChatService {
         if (fallbackCredentialId == null) {
             throw new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE);
         }
+        log.info("[ChatService][DEBUG] fallbackCredentialId={}, userId={}", fallbackCredentialId, userId);
         Credential credential = credentialService.getByIdAndUserId(fallbackCredentialId, userId);
         String decryptedApiKey = credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString());
         return new AgentConfig(credential.getProvider().name(), decryptedApiKey, null);
@@ -353,6 +358,19 @@ public class ChatService {
         }
     }
 
+    /**
+     * ieum-agent가 지원하지 않는 provider(GITHUB 등)를 필터링한다.
+     * agent 스펙: GOOGLE, NOTION, SLACK, DISCORD만 허용
+     */
+    private static final Set<String> AGENT_SUPPORTED_PROVIDERS =
+        Set.of("GOOGLE", "NOTION", "SLACK", "DISCORD");
+
+    private List<IntegrationInfo> filterAgentSupportedIntegrations(List<IntegrationInfo> list) {
+        return list.stream()
+            .filter(info -> AGENT_SUPPORTED_PROVIDERS.contains(info.getProvider()))
+            .toList();
+    }
+
     private String resolveGitHubAccessToken(IntegrationContext integrationContext, UUID userId) {
         boolean isGitHubConnected = integrationContext.available().stream()
             .anyMatch(info -> "GITHUB".equals(info.getProvider()));
@@ -408,13 +426,18 @@ public class ChatService {
         log.info("[ChatService] 스트림 준비 완료 — workflowId: {}, sessionId: {}",
             workflowId, session.getId());
 
+        IntegrationContext agentContext = new IntegrationContext(
+            filterAgentSupportedIntegrations(integrationContext.available()),
+            filterAgentSupportedIntegrations(integrationContext.unavailable())
+        );
+
         return new StreamSetupResult(
             session.getId(),
             config,
             request.getPrompt(),
             request.getCurrentNodes(),
             request.getCurrentEdges(),
-            integrationContext,
+            agentContext,
             googleToken,
             githubToken
         );
