@@ -49,7 +49,13 @@ public class OAuthScopeConfig {
     @PostConstruct
     void initCache() {
         List<String> all = new ArrayList<>();
-        scopes.values().forEach(all::addAll);
+        Map<String, List<String>> immutableScopes = new LinkedHashMap<>();
+        scopes.forEach((key, value) -> {
+            List<String> immutableList = Collections.unmodifiableList(value);
+            all.addAll(immutableList);
+            immutableScopes.put(key, immutableList);
+        });
+        this.scopes = Collections.unmodifiableMap(immutableScopes);
         cachedAllScopes = Collections.unmodifiableList(all);
     }
 

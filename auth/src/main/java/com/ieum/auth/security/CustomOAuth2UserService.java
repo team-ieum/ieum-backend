@@ -8,6 +8,9 @@ import com.ieum.auth.repository.ConnectedAccountRepository;
 import com.ieum.auth.repository.UserRepository;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.common.util.AesEncryptor;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService;
 import org.springframework.security.oauth2.client.userinfo.OAuth2UserRequest;
@@ -60,14 +63,26 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
         );
         String scopes = String.join(" ", userRequest.getAccessToken().getScopes());
 
+        Instant expiresAtInstant = userRequest.getAccessToken().getExpiresAt();
+        LocalDateTime tokenExpiresAt = expiresAtInstant != null
+            ? LocalDateTime.ofInstant(expiresAtInstant, ZoneId.systemDefault())
+            : null;
+
         connectedAccountRepository.findByUserIdAndProvider(user.getId(), AuthProvider.GOOGLE)
             .ifPresentOrElse(
-                account -> account.updateTokenAndScopes(encryptedToken, scopes),
+                account -> account.updateTokensAndScopes(
+                    encryptedToken,
+                    account.getRefreshToken(),
+                    tokenExpiresAt,
+                    account.getRefreshTokenExpiresAt(),
+                    scopes
+                ),
                 () -> connectedAccountRepository.save(
                     ConnectedAccount.builder()
                         .userId(user.getId())
                         .provider(AuthProvider.GOOGLE)
                         .accessToken(encryptedToken)
+                        .tokenExpiresAt(tokenExpiresAt)
                         .scopes(scopes)
                         .build()
                 )

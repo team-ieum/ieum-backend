@@ -106,11 +106,18 @@ public class GoogleTokenService {
             ? aesEncryptor.encrypt(result.refreshToken())
             : account.getRefreshToken();
 
+        // Token Rotation 발생 시 Google은 refresh_token_expires_in을 제공하지 않으므로
+        // refreshTokenExpiresAt을 null(만료 없음)로 초기화한다.
+        // Rotation 없으면 기존 만료 시각을 그대로 유지한다.
+        LocalDateTime newRefreshTokenExpiresAt = result.refreshToken() != null
+            ? null
+            : account.getRefreshTokenExpiresAt();
+
         account.updateTokens(
             aesEncryptor.encrypt(result.accessToken()),
             refreshTokenToSave,
             newTokenExpiresAt,
-            account.getRefreshTokenExpiresAt()
+            newRefreshTokenExpiresAt
         );
 
         log.info("[GoogleTokenService] userId={} access_token 갱신 완료 (rotation={})",
