@@ -115,6 +115,8 @@ docker-compose up -d                                    # PostgreSQL 16 + Redis 
 | `ai-integration` | AI 모듈 연동 패턴 (Claude, OpenAI 등) |
 | `new-module` | Gradle 서브모듈 추가 절차 |
 | `notion-branch-bootstrap` | Notion 이슈 ID 기반 브랜치 준비, 영향 범위 분석, 커밋 계획 |
+| `notion-branch-doc` | 브랜치 작업 완료 후 Notion 이슈 페이지에 작업 내용 문서화 (연동 플로우, API 변경점, 구현 상세) |
+| `notion-spec-update` | API 명세서 Notion 페이지에 신규/변경 엔드포인트 업데이트 (정밀 수정, 전체 덮어쓰기 금지) |
 | `commit-unit-guide` | 구현 작업을 커밋 단위로 분리, 각 단계 후 멈춤 |
 | `pr-readiness` | PR 전 빌드/품질/Notion 동기화 점검, PR 설명 초안 생성 |
 | `verify-api-response` | API 응답 포맷 및 예외 처리 규칙 검증 |
