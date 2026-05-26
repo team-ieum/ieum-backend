@@ -1,7 +1,11 @@
 package com.ieum.workflowcore.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
+import com.ieum.workflowcore.document.WorkflowDefinitionRepository;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowVersion;
@@ -11,6 +15,7 @@ import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowRepository;
 import com.ieum.workflowcore.repository.WorkflowVersionRepository;
 import com.ieum.workflowcore.scheduler.WorkflowScheduler;
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -49,6 +54,8 @@ public class WorkflowCrudService {
     private final WorkflowExecutionRepository workflowExecutionRepository;
     private final WorkflowExecutionLogRepository workflowExecutionLogRepository;
     private final WorkflowScheduler workflowScheduler;
+    private final WorkflowDefinitionRepository definitionRepository;
+    private final ObjectMapper objectMapper;
 
     // ------------------------------------------------------------------ WRITE
 
@@ -67,13 +74,7 @@ public class WorkflowCrudService {
             .build();
         workflowRepository.save(workflow);
 
-        WorkflowVersion version = WorkflowVersion.builder()
-            .workflow(workflow)
-            .version(1)
-            .nodesJson(nodesJson)
-            .edgesJson(edgesJson)
-            .build();
-        workflowVersionRepository.save(version);
+        WorkflowVersion version = saveVersionWithCompensation(workflow, 1, nodesJson, edgesJson);
 
         // DB 커밋 후 Quartz Job 등록 — 트랜잭션 롤백 시 Job이 고아로 남는 것을 방지
         if (triggerType == TriggerType.SCHEDULE) {
@@ -97,13 +98,7 @@ public class WorkflowCrudService {
         workflow.updateSchedule(triggerType, cronExpression);
 
         int nextVersion = workflowVersionRepository.findMaxVersionByWorkflowId(workflowId) + 1;
-        WorkflowVersion version = WorkflowVersion.builder()
-            .workflow(workflow)
-            .version(nextVersion)
-            .nodesJson(nodesJson)
-            .edgesJson(edgesJson)
-            .build();
-        workflowVersionRepository.save(version);
+        WorkflowVersion version = saveVersionWithCompensation(workflow, nextVersion, nodesJson, edgesJson);
 
         // DB 커밋 후 Job 동기화 — 트랜잭션 롤백 시 Quartz 상태가 DB와 불일치하는 것을 방지
         final Workflow updatedWorkflow = workflow;
@@ -114,33 +109,13 @@ public class WorkflowCrudService {
         return version;
     }
 
-    /**
-     * AI 에이전트가 생성/수정한 노드/엣지를 새 워크플로우 버전으로 저장한다.
-     *
-     * <p>호출 전 소유권 검증이 완료된 상황에서만 호출해야 한다
-     * ({@code ChatService}에서 {@link #resolveAgentConfig} 호출 시 이미 검증됨).
-     *
-     * <p>Workflow 엔티티의 name/description/triggerType은 변경하지 않고 버전만 추가한다.
-     *
-     * @param workflowId 워크플로우 ID
-     * @param nodesJson  AI가 생성한 노드 목록 JSON
-     * @param edgesJson  AI가 생성한 엣지 목록 JSON
-     * @return 저장된 WorkflowVersion
-     * @throws CustomException WORKFLOW_NOT_FOUND — 워크플로우를 찾을 수 없는 경우
-     */
     @Transactional
     public WorkflowVersion saveAgentVersion(UUID workflowId, String nodesJson, String edgesJson) {
         Workflow workflow = workflowRepository.findById(workflowId)
             .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
 
         int nextVersion = workflowVersionRepository.findMaxVersionByWorkflowId(workflowId) + 1;
-        WorkflowVersion version = WorkflowVersion.builder()
-            .workflow(workflow)
-            .version(nextVersion)
-            .nodesJson(nodesJson)
-            .edgesJson(edgesJson)
-            .build();
-        workflowVersionRepository.save(version);
+        WorkflowVersion version = saveVersionWithCompensation(workflow, nextVersion, nodesJson, edgesJson);
 
         log.info("[WorkflowCrudService] AI 생성 버전 저장 — workflowId: {}, version: {}",
             workflowId, nextVersion);
@@ -157,11 +132,28 @@ public class WorkflowCrudService {
             workflowExecutionLogRepository.deleteByExecutionIdIn(executionIds);
         }
         workflowExecutionRepository.deleteByWorkflow(workflow);
+
+        // Collect MongoDB document IDs before deleting PG rows (reference will be gone after)
+        List<String> mongoIds = workflowVersionRepository.findByWorkflowId(workflow.getId())
+            .stream()
+            .map(WorkflowVersion::getMongoDefinitionId)
+            .filter(id -> id != null && !id.isBlank())
+            .toList();
+
         workflowVersionRepository.deleteByWorkflow(workflow);
         workflowRepository.delete(workflow);
 
-        // DB 커밋 후 Quartz Job 제거 — DB 롤백 시 Job이 삭제되는 것을 방지
-        afterCommit(() -> workflowScheduler.deleteJob(workflowId));
+        // Both MongoDB cleanup and Quartz job deletion run after PG transaction commits
+        afterCommit(() -> {
+            mongoIds.forEach(id -> {
+                try {
+                    definitionRepository.deleteById(id);
+                } catch (Exception e) {
+                    log.warn("[WorkflowCrudService] MongoDB doc 삭제 실패 — id: {}", id, e);
+                }
+            });
+            workflowScheduler.deleteJob(workflowId);
+        });
 
         log.info("[WorkflowCrudService] 워크플로우 삭제 — workflowId: {}", workflowId);
     }
@@ -242,7 +234,72 @@ public class WorkflowCrudService {
             .collect(Collectors.toMap(wv -> wv.getWorkflow().getId(), Function.identity()));
     }
 
+    /**
+     * Loads the WorkflowDefinitionDocument from MongoDB for the given WorkflowVersion.
+     *
+     * @param version WorkflowVersion whose mongoDefinitionId references the MongoDB document
+     * @return WorkflowDefinitionDocument containing nodes and edges as List<Map>
+     * @throws CustomException WORKFLOW_NOT_FOUND if the document does not exist
+     */
+    public WorkflowDefinitionDocument loadDefinition(WorkflowVersion version) {
+        String mongoId = version.getMongoDefinitionId();
+        return definitionRepository.findById(mongoId)
+            .orElseThrow(() -> {
+                log.error("[WorkflowCrudService] MongoDB 정의 누락 — versionId: {}, mongoId: {}",
+                    version.getId(), mongoId);
+                return new CustomException(ErrorCode.WORKFLOW_DEFINITION_NOT_FOUND);
+            });
+    }
+
     // ------------------------------------------------------------------ PRIVATE
+
+    /**
+     * Saves a WorkflowDefinitionDocument to MongoDB and a WorkflowVersion to PostgreSQL
+     * with a compensating transaction: if the PG save fails, the MongoDB document is deleted.
+     */
+    private WorkflowVersion saveVersionWithCompensation(
+            Workflow workflow, int versionNumber, String nodesJson, String edgesJson) {
+        UUID preGeneratedVersionId = UUID.randomUUID();
+        WorkflowDefinitionDocument savedDoc = definitionRepository.save(
+            buildDefinitionDocument(preGeneratedVersionId.toString(), nodesJson, edgesJson));
+
+        try {
+            WorkflowVersion version = WorkflowVersion.builder()
+                .id(preGeneratedVersionId)
+                .workflow(workflow)
+                .version(versionNumber)
+                .mongoDefinitionId(savedDoc.getId())
+                .build();
+            return workflowVersionRepository.save(version);
+        } catch (Exception e) {
+            try {
+                definitionRepository.deleteById(savedDoc.getId());
+            } catch (Exception ignore) {
+                log.warn("[WorkflowCrudService] MongoDB 보상 삭제 실패 — mongoId: {}",
+                    savedDoc.getId(), ignore);
+            }
+            throw e;
+        }
+    }
+
+    private WorkflowDefinitionDocument buildDefinitionDocument(
+            String workflowVersionId, String nodesJson, String edgesJson) {
+        try {
+            List<Map<String, Object>> nodes =
+                objectMapper.readValue(nodesJson, new TypeReference<>() {});
+            List<Map<String, Object>> edges =
+                objectMapper.readValue(edgesJson, new TypeReference<>() {});
+            return WorkflowDefinitionDocument.builder()
+                .workflowVersionId(workflowVersionId)
+                .nodes(nodes)
+                .edges(edges)
+                .createdAt(LocalDateTime.now())
+                .build();
+        } catch (Exception e) {
+            throw new CustomException(ErrorCode.INVALID_WORKFLOW,
+                "워크플로우 JSON 파싱 실패: " + e.getMessage());
+        }
+    }
 
     /**
      * 현재 트랜잭션 커밋 이후에 action을 실행한다.
