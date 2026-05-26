@@ -21,9 +21,9 @@ services:
     image: mongo:7
     container_name: ieum-mongo
     environment:
-      MONGO_INITDB_DATABASE: ${MONGO_DEV_DB}
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_DEV_USER}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_DEV_PASSWORD}
+      MONGO_INITDB_DATABASE: ieum
+      MONGO_INITDB_ROOT_USERNAME: ieum
+      MONGO_INITDB_ROOT_PASSWORD: ieum
     ports:
       - "127.0.0.1:27017:27017"
     volumes:
