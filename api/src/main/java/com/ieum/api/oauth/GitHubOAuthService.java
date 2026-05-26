@@ -1,0 +1,134 @@
+package com.ieum.api.oauth;
+
+import com.ieum.auth.domain.AuthProvider;
+import com.ieum.auth.domain.ConnectedAccount;
+import com.ieum.auth.repository.ConnectedAccountRepository;
+import com.ieum.common.exception.CustomException;
+import com.ieum.common.exception.ErrorCode;
+import com.ieum.common.util.AesEncryptionService;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.RestTemplate;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+@Transactional(readOnly = true)
+public class GitHubOAuthService {
+
+    private static final String GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token";
+
+    private final ConnectedAccountRepository connectedAccountRepository;
+    private final AesEncryptionService aesEncryptionService;
+    private final RestTemplate restTemplate;
+
+    @Value("${github.app.client-id}")
+    private String clientId;
+
+    @Value("${github.app.client-secret}")
+    private String clientSecret;
+
+    @Transactional
+    public void handleCallback(String code, UUID userId) {
+        Map<String, Object> tokenResponse = exchangeCodeForTokens(code);
+
+        String accessToken = extractRequired(tokenResponse, "access_token", userId);
+        String refreshToken = extractRequired(tokenResponse, "refresh_token", userId);
+        long expiresIn = toLong(tokenResponse.get("expires_in"), 28800L);
+        long refreshExpiresIn = toLong(tokenResponse.get("refresh_token_expires_in"), 15897600L);
+
+        // Subtract 5 minutes to prevent using an expired token at the edge
+        LocalDateTime tokenExpiresAt = LocalDateTime.now().plusSeconds(expiresIn).minusMinutes(5);
+        LocalDateTime refreshTokenExpiresAt = LocalDateTime.now().plusSeconds(refreshExpiresIn);
+
+        String encryptedAccess = aesEncryptionService.encrypt(accessToken);
+        String encryptedRefresh = aesEncryptionService.encrypt(refreshToken);
+
+        connectedAccountRepository.findByUserIdAndProvider(userId, AuthProvider.GITHUB)
+            .ifPresentOrElse(
+                account -> {
+                    account.updateTokens(encryptedAccess, encryptedRefresh,
+                        tokenExpiresAt, refreshTokenExpiresAt);
+                    log.info("[GitHubOAuthService] userId={} GitHub tokens refreshed", userId);
+                },
+                () -> {
+                    connectedAccountRepository.save(
+                        ConnectedAccount.builder()
+                            .userId(userId)
+                            .provider(AuthProvider.GITHUB)
+                            .accessToken(encryptedAccess)
+                            .refreshToken(encryptedRefresh)
+                            .tokenExpiresAt(tokenExpiresAt)
+                            .refreshTokenExpiresAt(refreshTokenExpiresAt)
+                            .build()
+                    );
+                    log.info("[GitHubOAuthService] userId={} GitHub connected_account created", userId);
+                }
+            );
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> exchangeCodeForTokens(String code) {
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+
+            Map<String, String> body = Map.of(
+                "client_id", clientId,
+                "client_secret", clientSecret,
+                "code", code
+            );
+
+            Map<String, Object> response = restTemplate.postForObject(
+                GITHUB_TOKEN_URL,
+                new HttpEntity<>(body, headers),
+                Map.class
+            );
+
+            if (response == null) {
+                throw new CustomException(ErrorCode.TOKEN_REFRESH_FAILED);
+            }
+            if (response.containsKey("error")) {
+                log.error("[GitHubOAuthService] token exchange error — {}: {}",
+                    response.get("error"), response.get("error_description"));
+                throw new CustomException(ErrorCode.TOKEN_REFRESH_FAILED);
+            }
+            return response;
+
+        } catch (CustomException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("[GitHubOAuthService] token exchange failed", e);
+            throw new CustomException(ErrorCode.TOKEN_REFRESH_FAILED);
+        }
+    }
+
+    private String extractRequired(Map<String, Object> response, String key, UUID userId) {
+        Object value = response.get(key);
+        if (value == null) {
+            log.error("[GitHubOAuthService] missing '{}' in response — userId={}", key, userId);
+            throw new CustomException(ErrorCode.TOKEN_REFRESH_FAILED);
+        }
+        return value.toString();
+    }
+
+    private long toLong(Object value, long defaultValue) {
+        if (value == null) return defaultValue;
+        try {
+            return Long.parseLong(value.toString());
+        } catch (NumberFormatException e) {
+            return defaultValue;
+        }
+    }
+}

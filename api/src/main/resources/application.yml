@@ -76,3 +76,11 @@ notion:
     token-url: ${NOTION_TOKEN_URL}
     redirect-uri: ${NOTION_REDIRECT_URI}
     frontend-redirect-uri: ${NOTION_FRONTEND_REDIRECT_URI}
+
+github:
+  app:
+    client-id: ${GITHUB_APP_CLIENT_ID}
+    client-secret: ${GITHUB_APP_CLIENT_SECRET}
+    redirect-uri: ${GITHUB_APP_REDIRECT_URI}
+    frontend-redirect-uri: ${GITHUB_APP_FRONTEND_REDIRECT_URI}
+    webhook-secret: ${GITHUB_APP_WEBHOOK_SECRET}
