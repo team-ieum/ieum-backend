@@ -10,6 +10,8 @@ import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.api.chat.dto.ChatRequest;
 import com.ieum.api.chat.dto.ChatResponse;
 import com.ieum.api.chat.service.IntegrationContextService.IntegrationContext;
+import com.ieum.api.credential.domain.Credential;
+import com.ieum.api.credential.service.CredentialService;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.chat.domain.ChatMessage;
@@ -67,6 +69,7 @@ public class ChatService {
     private final ChatMessageRepository messageRepository;
     private final WorkflowCrudService workflowCrudService;
     private final CredentialProvider credentialProvider;
+    private final CredentialService credentialService;
     private final GoogleTokenProvider googleTokenProvider;
     private final GitHubTokenProvider gitHubTokenProvider;
     private final IntegrationContextService integrationContextService;
@@ -90,7 +93,7 @@ public class ChatService {
         ChatSession session = createOrGetSession(workflowId, userId, request.getSessionId());
 
         // 2. 워크플로우 AI 노드 설정 로드 (소유권 검증 포함)
-        AgentConfig agentConfig = resolveAgentConfig(workflowId, userId);
+        AgentConfig agentConfig = resolveAgentConfig(workflowId, userId, request.getCredentialId());
 
         // 3. USER 메시지 저장
         saveUserMessage(session, request.getPrompt());
@@ -240,7 +243,7 @@ public class ChatService {
      * @throws CustomException INVALID_WORKFLOW — nodesJson 파싱 실패 시
      */
     @SuppressWarnings("unchecked")
-    public AgentConfig resolveAgentConfig(UUID workflowId, UUID userId) {
+    public AgentConfig resolveAgentConfig(UUID workflowId, UUID userId, UUID fallbackCredentialId) {
         workflowCrudService.getWorkflowByOwner(userId, workflowId);
 
         WorkflowVersion version = workflowCrudService.findLatestVersion(workflowId)
@@ -260,16 +263,24 @@ public class ChatService {
         Node aiNode = nodes.stream()
             .filter(n -> n.getType() == NodeType.AI)
             .findFirst()
-            .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE));
+            .orElse(null);
 
-        Map<String, Object> config = aiNode.getConfig();
-        String llmProvider = (String) config.get("llmProvider");
-        String credentialId = (String) config.get("credentialId");
-        List<Map<String, Object>> tools = (List<Map<String, Object>>) config.get("tools");
+        if (aiNode != null) {
+            Map<String, Object> config = aiNode.getConfig();
+            String llmProvider = (String) config.get("llmProvider");
+            String credentialId = (String) config.get("credentialId");
+            List<Map<String, Object>> tools = (List<Map<String, Object>>) config.get("tools");
+            String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
+            return new AgentConfig(llmProvider, decryptedApiKey, tools);
+        }
 
-        String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
-
-        return new AgentConfig(llmProvider, decryptedApiKey, tools);
+        // AI 노드 없음 → fallbackCredentialId로 기본 설정 사용 (빈 워크플로우 채팅 시)
+        if (fallbackCredentialId == null) {
+            throw new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE);
+        }
+        Credential credential = credentialService.getByIdAndUserId(fallbackCredentialId, userId);
+        String decryptedApiKey = credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString());
+        return new AgentConfig(credential.getProvider().name(), decryptedApiKey, null);
     }
 
     // ─────────────────────────────────────── PRIVATE ──────────────────────────
@@ -382,7 +393,7 @@ public class ChatService {
     @Transactional
     public StreamSetupResult prepareStream(UUID workflowId, UUID userId, ChatRequest request) {
         ChatSession session = createOrGetSession(workflowId, userId, request.getSessionId());
-        AgentConfig config = resolveAgentConfig(workflowId, userId);
+        AgentConfig config = resolveAgentConfig(workflowId, userId, request.getCredentialId());
 
         saveUserMessage(session, request.getPrompt());
 
