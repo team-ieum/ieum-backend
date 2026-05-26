@@ -89,7 +89,7 @@ public class GitHubTokenService {
         long expiresIn = toLong(tokenResponse.get("expires_in"), 28800L);
         long refreshExpiresIn = toLong(tokenResponse.get("refresh_token_expires_in"), 15897600L);
 
-        LocalDateTime tokenExpiresAt = LocalDateTime.now().plusSeconds(expiresIn).minusMinutes(5);
+        LocalDateTime tokenExpiresAt = LocalDateTime.now().plusSeconds(expiresIn);
         LocalDateTime refreshTokenExpiresAt = LocalDateTime.now().plusSeconds(refreshExpiresIn);
 
         // JPA dirty checking으로 트랜잭션 커밋 시 자동 UPDATE
