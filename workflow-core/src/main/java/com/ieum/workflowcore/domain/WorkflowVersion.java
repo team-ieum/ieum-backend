@@ -10,17 +10,13 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
-import jakarta.persistence.PostLoad;
-import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
-import jakarta.persistence.Transient;
 import jakarta.persistence.UniqueConstraint;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
-import org.springframework.data.domain.Persistable;
 
 /**
  * 워크플로우의 버전별 노드/엣지 구성을 저장하는 엔티티.
@@ -38,26 +34,12 @@ import org.springframework.data.domain.Persistable;
 )
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
-public class WorkflowVersion extends BaseEntity implements Persistable<UUID> {
+public class WorkflowVersion extends BaseEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     @Column(name = "id", columnDefinition = "uuid", updatable = false, nullable = false)
     private UUID id;
-
-    @Transient
-    private boolean isNew = true;
-
-    @PostPersist
-    @PostLoad
-    void markNotNew() {
-        this.isNew = false;
-    }
-
-    @Override
-    public boolean isNew() {
-        return isNew;
-    }
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "workflow_id", nullable = false)

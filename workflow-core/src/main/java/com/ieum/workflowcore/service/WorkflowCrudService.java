@@ -259,13 +259,11 @@ public class WorkflowCrudService {
      */
     private WorkflowVersion saveVersionWithCompensation(
             Workflow workflow, int versionNumber, String nodesJson, String edgesJson) {
-        UUID preGeneratedVersionId = UUID.randomUUID();
         WorkflowDefinitionDocument savedDoc = definitionRepository.save(
-            buildDefinitionDocument(preGeneratedVersionId.toString(), nodesJson, edgesJson));
+            buildDefinitionDocument(UUID.randomUUID().toString(), nodesJson, edgesJson));
 
         try {
             WorkflowVersion version = WorkflowVersion.builder()
-                .id(preGeneratedVersionId)
                 .workflow(workflow)
                 .version(versionNumber)
                 .mongoDefinitionId(savedDoc.getId())
