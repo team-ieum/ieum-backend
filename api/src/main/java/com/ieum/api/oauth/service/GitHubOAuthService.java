@@ -7,7 +7,7 @@ import com.ieum.auth.repository.ConnectedAccountRepository;
 import com.ieum.auth.repository.GitHubOAuthStateRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
-import com.ieum.common.util.AesEncryptionService;
+import com.ieum.common.util.AesEncryptor;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -35,7 +35,7 @@ public class GitHubOAuthService {
 
     private final ConnectedAccountRepository connectedAccountRepository;
     private final GitHubOAuthStateRepository gitHubOAuthStateRepository;
-    private final AesEncryptionService aesEncryptionService;
+    private final AesEncryptor aesEncryptor;
     private final RestTemplate restTemplate;
 
     @Value("${github.app.token-url}")
@@ -76,18 +76,20 @@ public class GitHubOAuthService {
         String refreshToken = extractRequired(tokenResponse, "refresh_token", userId);
         long expiresIn = toLong(tokenResponse.get("expires_in"), 28800L);
         long refreshExpiresIn = toLong(tokenResponse.get("refresh_token_expires_in"), 15897600L);
+        String scope = Optional.ofNullable(tokenResponse.get("scope")).map(Object::toString).orElse(null);
 
         LocalDateTime tokenExpiresAt = LocalDateTime.now().plusSeconds(expiresIn);
         LocalDateTime refreshTokenExpiresAt = LocalDateTime.now().plusSeconds(refreshExpiresIn);
 
-        String encryptedAccess = aesEncryptionService.encrypt(accessToken);
-        String encryptedRefresh = aesEncryptionService.encrypt(refreshToken);
+        String encryptedAccess = aesEncryptor.encrypt(accessToken);
+        String encryptedRefresh = aesEncryptor.encrypt(refreshToken);
 
         connectedAccountRepository.findByUserIdAndProvider(userId, AuthProvider.GITHUB)
             .ifPresentOrElse(
                 account -> {
                     account.updateTokens(encryptedAccess, encryptedRefresh,
                         tokenExpiresAt, refreshTokenExpiresAt);
+                    account.updateScopes(scope);
                     log.info("[GitHubOAuthService] userId={} GitHub tokens refreshed", userId);
                 },
                 () -> {
@@ -99,6 +101,7 @@ public class GitHubOAuthService {
                             .refreshToken(encryptedRefresh)
                             .tokenExpiresAt(tokenExpiresAt)
                             .refreshTokenExpiresAt(refreshTokenExpiresAt)
+                            .scopes(scope)
                             .build()
                     );
                     log.info("[GitHubOAuthService] userId={} GitHub connected_account created", userId);
@@ -116,7 +119,8 @@ public class GitHubOAuthService {
             Map<String, String> body = Map.of(
                 "client_id", clientId,
                 "client_secret", clientSecret,
-                "code", code
+                "code", code,
+                "redirect_uri", githubRedirectUri
             );
 
             Map<String, Object> response = restTemplate.postForObject(
