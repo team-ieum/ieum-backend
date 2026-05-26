@@ -105,7 +105,7 @@ public class ChatService {
 
         // 6. Google 빌트인 도구 → Access Token 조회 (없으면 null)
         String googleAccessToken = resolveGoogleAccessToken(agentConfig.tools(), userId);
-        String githubToken = resolveGitHubAccessToken(userId);
+        String githubToken = resolveGitHubAccessToken(integrationContext, userId);
 
         // 7. AI 에이전트 호출
         log.info("[ChatService] AI 응답 요청 — workflowId: {}, sessionId: {}",
@@ -342,7 +342,12 @@ public class ChatService {
         }
     }
 
-    private String resolveGitHubAccessToken(UUID userId) {
+    private String resolveGitHubAccessToken(IntegrationContext integrationContext, UUID userId) {
+        boolean isGitHubConnected = integrationContext.available().stream()
+            .anyMatch(info -> "GITHUB".equals(info.getProvider()));
+        if (!isGitHubConnected) {
+            return null;
+        }
         return gitHubTokenProvider.getAccessToken(userId).orElse(null);
     }
 
@@ -387,7 +392,7 @@ public class ChatService {
 
         IntegrationContext integrationContext = integrationContextService.resolve(userId);
         String googleToken = resolveGoogleAccessToken(config.tools(), userId);
-        String githubToken = resolveGitHubAccessToken(userId);
+        String githubToken = resolveGitHubAccessToken(integrationContext, userId);
 
         log.info("[ChatService] 스트림 준비 완료 — workflowId: {}, sessionId: {}",
             workflowId, session.getId());
