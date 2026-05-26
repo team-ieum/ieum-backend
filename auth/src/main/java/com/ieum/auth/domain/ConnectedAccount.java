@@ -76,4 +76,34 @@ public class ConnectedAccount extends BaseEntity {
         this.refreshTokenExpiresAt = refreshTokenExpiresAt;
         this.scopes = scopes;
     }
+
+    /**
+     * Access Token이 곧 만료되어 갱신이 필요한지 확인한다 (5분 threshold).
+     *
+     * <p>{@code tokenExpiresAt}이 null인 경우 만료 시각을 알 수 없으므로
+     * tokeninfo API 폴백이 필요하다는 의미로 {@code true}를 반환한다.
+     *
+     * @return true면 즉시 갱신 필요 (이미 만료 또는 5분 이내 만료 예정)
+     */
+    public boolean isAccessTokenExpiringSoon() {
+        if (tokenExpiresAt == null) {
+            return true;
+        }
+        return LocalDateTime.now().isAfter(tokenExpiresAt.minusMinutes(5));
+    }
+
+    /**
+     * Refresh Token 자체가 만료되었는지 확인한다.
+     *
+     * <p>{@code refreshTokenExpiresAt}이 null이면 만료 여부 미확인 상태이므로
+     * 만료되지 않은 것으로 간주한다 (기존 데이터 하위 호환).
+     *
+     * @return true면 Refresh Token 만료 → 사용자 재인증 필요
+     */
+    public boolean isRefreshTokenExpired() {
+        if (refreshTokenExpiresAt == null) {
+            return false;
+        }
+        return LocalDateTime.now().isAfter(refreshTokenExpiresAt);
+    }
 }
