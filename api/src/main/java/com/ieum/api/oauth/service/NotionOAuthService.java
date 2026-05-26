@@ -1,4 +1,4 @@
-package com.ieum.api.oauth;
+package com.ieum.api.oauth.service;
 
 import com.ieum.auth.domain.AuthProvider;
 import com.ieum.auth.domain.ConnectedAccount;
@@ -8,6 +8,7 @@ import com.ieum.common.exception.ErrorCode;
 import com.ieum.common.util.AesEncryptionService;
 import java.util.Base64;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -91,13 +92,15 @@ public class NotionOAuthService {
                 throw new CustomException(ErrorCode.TOKEN_REFRESH_FAILED);
             }
 
-            Object token = responseBody.get("access_token");
-            if (token == null) {
+            String token = Optional.ofNullable(responseBody.get("access_token"))
+                .map(Object::toString)
+                .orElse("");
+            if (token.isEmpty()) {
                 log.error("[NotionOAuthService] 응답에 access_token 없음");
                 throw new CustomException(ErrorCode.TOKEN_REFRESH_FAILED);
             }
 
-            return token.toString();
+            return token;
         } catch (CustomException e) {
             throw e;
         } catch (Exception e) {

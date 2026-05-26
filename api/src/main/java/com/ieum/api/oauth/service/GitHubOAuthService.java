@@ -1,4 +1,4 @@
-package com.ieum.api.oauth;
+package com.ieum.api.oauth.service;
 
 import com.ieum.auth.domain.AuthProvider;
 import com.ieum.auth.domain.ConnectedAccount;
@@ -9,6 +9,7 @@ import com.ieum.common.util.AesEncryptionService;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,11 +27,12 @@ import org.springframework.web.client.RestTemplate;
 @Transactional(readOnly = true)
 public class GitHubOAuthService {
 
-    private static final String GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token";
-
     private final ConnectedAccountRepository connectedAccountRepository;
     private final AesEncryptionService aesEncryptionService;
     private final RestTemplate restTemplate;
+
+    @Value("${github.app.token-url}")
+    private String githubTokenUrl;
 
     @Value("${github.app.client-id}")
     private String clientId;
@@ -91,7 +93,7 @@ public class GitHubOAuthService {
             );
 
             Map<String, Object> response = restTemplate.postForObject(
-                GITHUB_TOKEN_URL,
+                githubTokenUrl,
                 new HttpEntity<>(body, headers),
                 Map.class
             );
@@ -115,20 +117,25 @@ public class GitHubOAuthService {
     }
 
     private String extractRequired(Map<String, Object> response, String key, UUID userId) {
-        Object value = response.get(key);
-        if (value == null) {
+        String value = Optional.ofNullable(response.get(key))
+            .map(Object::toString)
+            .orElse("");
+        if (value.isEmpty()) {
             log.error("[GitHubOAuthService] missing '{}' in response — userId={}", key, userId);
             throw new CustomException(ErrorCode.TOKEN_REFRESH_FAILED);
         }
-        return value.toString();
+        return value;
     }
 
     private long toLong(Object value, long defaultValue) {
-        if (value == null) return defaultValue;
-        try {
-            return Long.parseLong(value.toString());
-        } catch (NumberFormatException e) {
-            return defaultValue;
-        }
+        return Optional.ofNullable(value)
+            .map(v -> {
+                try {
+                    return Long.parseLong(v.toString());
+                } catch (NumberFormatException e) {
+                    return defaultValue;
+                }
+            })
+            .orElse(defaultValue);
     }
 }
