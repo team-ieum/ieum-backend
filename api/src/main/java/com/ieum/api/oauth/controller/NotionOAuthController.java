@@ -4,8 +4,9 @@ import com.ieum.api.oauth.service.NotionOAuthService;
 import com.ieum.auth.domain.NotionOAuthState;
 import com.ieum.auth.repository.NotionOAuthStateRepository;
 import com.ieum.auth.security.CustomUserDetails;
+import com.ieum.common.dto.ApiResponse;
+import java.util.Map;
 import java.util.Optional;
-import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,7 +18,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.util.UriComponentsBuilder;
+
 
 @Slf4j
 @RestController
@@ -25,48 +26,18 @@ import org.springframework.web.util.UriComponentsBuilder;
 @RequiredArgsConstructor
 public class NotionOAuthController implements NotionOAuthControllerDocs {
 
-    private static final long OAUTH_STATE_TTL_SECONDS = 300L;
-
     private final NotionOAuthService notionOAuthService;
     private final NotionOAuthStateRepository notionOAuthStateRepository;
-
-    @Value("${notion.oauth.auth-url}")
-    private String notionAuthUrl;
-
-    @Value("${notion.oauth.client-id}")
-    private String notionClientId;
-
-    @Value("${notion.oauth.redirect-uri}")
-    private String notionRedirectUri;
 
     @Value("${notion.oauth.frontend-redirect-uri}")
     private String frontendRedirectUri;
 
     @GetMapping("/authorize")
-    public ResponseEntity<Void> authorizeNotion(
+    public ResponseEntity<ApiResponse<Map<String, String>>> authorizeNotion(
         @AuthenticationPrincipal CustomUserDetails userDetails
     ) {
-        String state = UUID.randomUUID().toString();
-        notionOAuthStateRepository.save(
-            NotionOAuthState.builder()
-                .state(state)
-                .userId(userDetails.getId())
-                .ttl(OAUTH_STATE_TTL_SECONDS)
-                .build()
-        );
-
-        String authUrl = UriComponentsBuilder
-            .fromUriString(notionAuthUrl)
-            .queryParam("client_id", notionClientId)
-            .queryParam("response_type", "code")
-            .queryParam("owner", "user")
-            .queryParam("redirect_uri", notionRedirectUri)
-            .queryParam("state", state)
-            .build().toUriString();
-
-        return ResponseEntity.status(HttpStatus.FOUND)
-            .header(HttpHeaders.LOCATION, authUrl)
-            .build();
+        String authUrl = notionOAuthService.generateAuthUrl(userDetails.getId());
+        return ResponseEntity.ok(ApiResponse.ok(Map.of("authUrl", authUrl)));
     }
 
     @GetMapping("/callback")

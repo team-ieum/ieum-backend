@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.ieum.api.common.GlobalExceptionHandler;
@@ -56,19 +57,19 @@ class NotionOAuthControllerTest {
             new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities())
         );
 
-        ReflectionTestUtils.setField(notionOAuthController, "notionAuthUrl", "https://api.notion.com/v1/oauth/authorize");
-        ReflectionTestUtils.setField(notionOAuthController, "notionClientId", "test-client-id");
-        ReflectionTestUtils.setField(notionOAuthController, "notionRedirectUri", "http://localhost/callback");
         ReflectionTestUtils.setField(notionOAuthController, "frontendRedirectUri", "http://localhost:3000/settings");
     }
 
     @Test
-    @DisplayName("인가 URL 요청 시 302 리다이렉트와 state 파라미터가 포함된다")
-    void authorizeNotion_Success_Redirects302() throws Exception {
+    @DisplayName("인가 URL 요청 시 200 응답과 authUrl이 포함된다")
+    void authorizeNotion_Success_Returns200WithAuthUrl() throws Exception {
+        when(notionOAuthService.generateAuthUrl(userId))
+            .thenReturn("https://api.notion.com/v1/oauth/authorize?client_id=test&state=abc");
+
         mockMvc.perform(get("/api/v1/notion/oauth2/authorize"))
-            .andExpect(status().isFound())
-            .andExpect(header().string("Location", startsWith("https://api.notion.com/v1/oauth/authorize")))
-            .andExpect(header().string("Location", containsString("state=")));
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.authUrl", startsWith("https://api.notion.com/v1/oauth/authorize")))
+            .andExpect(jsonPath("$.data.authUrl", containsString("state=")));
     }
 
     @Test
