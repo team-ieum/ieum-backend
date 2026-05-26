@@ -230,7 +230,6 @@ class GoogleTokenServiceTest {
         );
         given(connectedAccountRepository.findByUserIdAndProvider(userId, AuthProvider.GOOGLE))
             .willReturn(Optional.of(account));
-        given(aesEncryptor.decrypt(ENCRYPTED_ACCESS_TOKEN)).willReturn(PLAIN_ACCESS_TOKEN);
         given(aesEncryptor.decrypt(ENCRYPTED_REFRESH_TOKEN)).willReturn(PLAIN_REFRESH_TOKEN);
         given(aesEncryptor.encrypt(NEW_PLAIN_ACCESS_TOKEN)).willReturn(ENCRYPTED_NEW_ACCESS_TOKEN);
 
