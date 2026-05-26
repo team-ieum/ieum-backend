@@ -7,7 +7,7 @@ import com.ieum.auth.domain.UserRole;
 import com.ieum.auth.repository.ConnectedAccountRepository;
 import com.ieum.auth.repository.UserRepository;
 import com.ieum.common.exception.ErrorCode;
-import com.ieum.common.util.AesEncryptionService;
+import com.ieum.common.util.AesEncryptor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService;
 import org.springframework.security.oauth2.client.userinfo.OAuth2UserRequest;
@@ -22,7 +22,7 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
 
     private final UserRepository userRepository;
     private final ConnectedAccountRepository connectedAccountRepository;
-    private final AesEncryptionService aesEncryptionService;
+    private final AesEncryptor aesEncryptor;
 
     @Override
     @Transactional
@@ -55,7 +55,7 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
     }
 
     private void saveOrUpdateConnectedAccount(User user, OAuth2UserRequest userRequest) {
-        String encryptedToken = aesEncryptionService.encrypt(
+        String encryptedToken = aesEncryptor.encrypt(
             userRequest.getAccessToken().getTokenValue()
         );
         String scopes = String.join(" ", userRequest.getAccessToken().getScopes());
