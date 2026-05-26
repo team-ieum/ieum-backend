@@ -21,6 +21,7 @@ import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.executor.CredentialProvider;
+import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
 import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import java.util.List;
@@ -67,6 +68,7 @@ public class ChatService {
     private final WorkflowCrudService workflowCrudService;
     private final CredentialProvider credentialProvider;
     private final GoogleTokenProvider googleTokenProvider;
+    private final GitHubTokenProvider gitHubTokenProvider;
     private final IntegrationContextService integrationContextService;
     private final AgentClient agentClient;
     private final ObjectMapper objectMapper;
@@ -103,6 +105,7 @@ public class ChatService {
 
         // 6. Google 빌트인 도구 → Access Token 조회 (없으면 null)
         String googleAccessToken = resolveGoogleAccessToken(agentConfig.tools(), userId);
+        String githubToken = resolveGitHubAccessToken(integrationContext, userId);
 
         // 7. AI 에이전트 호출
         log.info("[ChatService] AI 응답 요청 — workflowId: {}, sessionId: {}",
@@ -116,6 +119,7 @@ public class ChatService {
             agentConfig.llmProvider(),
             agentConfig.decryptedApiKey(),
             googleAccessToken,
+            githubToken,
             userId
         );
 
@@ -310,6 +314,7 @@ public class ChatService {
     private String resolveOAuthUrl(String provider) {
         return switch (provider.toUpperCase()) {
             case "GOOGLE" -> "/api/v1/oauth2/authorize/google";
+            case "GITHUB" -> "/api/v1/github/oauth2/authorize";
             // TODO: NOTION OAuth 구현 후 추가
             default -> {
                 log.warn("[ChatService] 알 수 없는 OAuth 프로바이더 — provider: {}", provider);
@@ -335,6 +340,15 @@ public class ChatService {
             log.error("[ChatService] 노드/엣지 직렬화 실패 — workflowId: {}", workflowId, e);
             throw new CustomException(ErrorCode.INVALID_WORKFLOW);
         }
+    }
+
+    private String resolveGitHubAccessToken(IntegrationContext integrationContext, UUID userId) {
+        boolean isGitHubConnected = integrationContext.available().stream()
+            .anyMatch(info -> "GITHUB".equals(info.getProvider()));
+        if (!isGitHubConnected) {
+            return null;
+        }
+        return gitHubTokenProvider.getAccessToken(userId).orElse(null);
     }
 
     private String resolveGoogleAccessToken(List<Map<String, Object>> tools, UUID userId) {
@@ -378,6 +392,7 @@ public class ChatService {
 
         IntegrationContext integrationContext = integrationContextService.resolve(userId);
         String googleToken = resolveGoogleAccessToken(config.tools(), userId);
+        String githubToken = resolveGitHubAccessToken(integrationContext, userId);
 
         log.info("[ChatService] 스트림 준비 완료 — workflowId: {}, sessionId: {}",
             workflowId, session.getId());
@@ -389,7 +404,8 @@ public class ChatService {
             request.getCurrentNodes(),
             request.getCurrentEdges(),
             integrationContext,
-            googleToken
+            googleToken,
+            githubToken
         );
     }
 
@@ -439,6 +455,7 @@ public class ChatService {
         List<Object> currentNodes,
         List<Object> currentEdges,
         IntegrationContext integrationContext,
-        String googleToken
+        String googleToken,
+        String githubToken
     ) {}
 }

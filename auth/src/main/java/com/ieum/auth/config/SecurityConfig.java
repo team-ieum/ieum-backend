@@ -62,6 +62,8 @@ public class SecurityConfig {
                 ).permitAll()
                 .requestMatchers("/api/v1/notion/oauth2/callback").permitAll()
                 .requestMatchers("/api/v1/notion/**").authenticated()
+                .requestMatchers("/api/v1/github/oauth2/callback").permitAll()
+                .requestMatchers("/api/v1/github/**").authenticated()
                 .anyRequest().authenticated())
             .oauth2Login(oauth2 -> oauth2
                 .authorizationEndpoint(auth -> auth

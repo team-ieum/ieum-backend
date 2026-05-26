@@ -1,4 +1,4 @@
-package com.ieum.api.oauth;
+package com.ieum.api.oauth.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;

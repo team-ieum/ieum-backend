@@ -54,6 +54,19 @@ public class IntegrationContextService {
                 }
             );
 
+        // ── GitHub OAuth ─────────────────────────────────────────────────────
+        connectedAccountRepository.findByUserIdAndProvider(userId, AuthProvider.GITHUB)
+            .ifPresentOrElse(
+                account -> {
+                    log.debug("[IntegrationContextService] GitHub connected — userId: {}", userId);
+                    available.add(IntegrationInfo.oauthConnected("GITHUB", account.getScopes()));
+                },
+                () -> {
+                    log.debug("[IntegrationContextService] GitHub not connected — userId: {}", userId);
+                    unavailable.add(IntegrationInfo.oauthPending("GITHUB"));
+                }
+            );
+
         // ── Notion OAuth (TODO: AuthProvider.NOTION 추가 후 구현) ────────────
         unavailable.add(IntegrationInfo.oauthPending("NOTION"));
 

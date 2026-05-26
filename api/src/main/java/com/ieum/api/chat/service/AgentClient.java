@@ -79,6 +79,7 @@ public class AgentClient {
         String llmProvider,
         String apiKey,
         String googleAccessToken,
+        String githubToken,
         UUID userId
     ) {
         log.debug("[AgentClient] chat 요청 — provider: {}, prompt: {}자",
@@ -103,6 +104,10 @@ public class AgentClient {
 
             if (googleAccessToken != null) {
                 requestSpec = requestSpec.header("X-Google-Access-Token", googleAccessToken);
+            }
+            if (githubToken != null) {
+                requestSpec = requestSpec.header("X-GitHub-Token", githubToken);
+                log.debug("[AgentClient] X-GitHub-Token header injected");
             }
 
             ChatAgentResponse response = requestSpec
@@ -159,6 +164,7 @@ public class AgentClient {
         String llmProvider,
         String apiKey,
         String googleAccessToken,
+        String githubToken,
         UUID userId
     ) {
         log.debug("[AgentClient] chatStream 요청 — provider: {}, prompt: {}자",
@@ -169,7 +175,7 @@ public class AgentClient {
                 String content = chat(
                     prompt, currentNodes, currentEdges,
                     availableIntegrations, unavailableIntegrations,
-                    llmProvider, apiKey, googleAccessToken, userId
+                    llmProvider, apiKey, googleAccessToken, githubToken, userId
                 ).getContent();
                 sink.next(content);
                 sink.complete();

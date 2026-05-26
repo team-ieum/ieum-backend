@@ -9,6 +9,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import java.time.LocalDateTime;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -44,12 +45,35 @@ public class ConnectedAccount extends BaseEntity {
     @Column(length = 500)
     private String scopes;
 
+    @Column(name = "token_expires_at")
+    private LocalDateTime tokenExpiresAt;
+
+    @Column(name = "refresh_token_expires_at")
+    private LocalDateTime refreshTokenExpiresAt;
+
     public void updateAccessToken(String accessToken) {
         this.accessToken = accessToken;
     }
 
     public void updateTokenAndScopes(String accessToken, String scopes) {
         this.accessToken = accessToken;
+        this.scopes = scopes;
+    }
+
+    public void updateTokens(String accessToken, String refreshToken,
+            LocalDateTime tokenExpiresAt, LocalDateTime refreshTokenExpiresAt) {
+        this.accessToken = accessToken;
+        this.refreshToken = refreshToken;
+        this.tokenExpiresAt = tokenExpiresAt;
+        this.refreshTokenExpiresAt = refreshTokenExpiresAt;
+    }
+
+    public void updateTokensAndScopes(String accessToken, String refreshToken,
+            LocalDateTime tokenExpiresAt, LocalDateTime refreshTokenExpiresAt, String scopes) {
+        this.accessToken = accessToken;
+        this.refreshToken = refreshToken;
+        this.tokenExpiresAt = tokenExpiresAt;
+        this.refreshTokenExpiresAt = refreshTokenExpiresAt;
         this.scopes = scopes;
     }
 }

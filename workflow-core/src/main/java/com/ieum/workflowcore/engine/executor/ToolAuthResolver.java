@@ -18,12 +18,15 @@ import org.springframework.stereotype.Component;
 public class ToolAuthResolver {
 
     private static final String NOTION_BUILTIN_PREFIX = "builtin:notion_";
+    private static final String GITHUB_BUILTIN_PREFIX = "builtin:github_";
     private static final Map<String, String> HEADER_BY_TOOL_PREFIX = Map.of(
-        NOTION_BUILTIN_PREFIX, "X-Notion-Token"
+        NOTION_BUILTIN_PREFIX, "X-Notion-Token",
+        GITHUB_BUILTIN_PREFIX, "X-GitHub-Token"
     );
 
     private final CredentialProvider credentialProvider;
     private final NotionTokenProvider notionTokenProvider;
+    private final GitHubTokenProvider gitHubTokenProvider;
 
     public Map<String, String> resolveHeaders(List<Map<String, Object>> tools, UUID userId) {
         if (tools == null || tools.isEmpty()) {
@@ -102,6 +105,14 @@ public class ToolAuthResolver {
                 log.warn("[ToolAuthResolver] Notion OAuth 연동 없음 — userId: {}, toolName: {}", userId, toolName);
             }
             return notionToken;
+        }
+        if (userId != null && toolName.startsWith(GITHUB_BUILTIN_PREFIX)) {
+            Optional<String> githubToken = gitHubTokenProvider.getAccessToken(userId);
+            if (githubToken.isEmpty()) {
+                log.warn("[ToolAuthResolver] GitHub not connected — userId: {}, tool: {}",
+                    userId, toolName);
+            }
+            return githubToken;
         }
         return Optional.empty();
     }
