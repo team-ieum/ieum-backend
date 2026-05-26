@@ -77,8 +77,7 @@ public class GitHubOAuthService {
         long expiresIn = toLong(tokenResponse.get("expires_in"), 28800L);
         long refreshExpiresIn = toLong(tokenResponse.get("refresh_token_expires_in"), 15897600L);
 
-        // Subtract 5 minutes to prevent using an expired token at the edge
-        LocalDateTime tokenExpiresAt = LocalDateTime.now().plusSeconds(expiresIn).minusMinutes(5);
+        LocalDateTime tokenExpiresAt = LocalDateTime.now().plusSeconds(expiresIn);
         LocalDateTime refreshTokenExpiresAt = LocalDateTime.now().plusSeconds(refreshExpiresIn);
 
         String encryptedAccess = aesEncryptionService.encrypt(accessToken);
