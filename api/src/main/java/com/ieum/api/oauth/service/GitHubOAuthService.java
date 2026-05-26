@@ -87,9 +87,8 @@ public class GitHubOAuthService {
         connectedAccountRepository.findByUserIdAndProvider(userId, AuthProvider.GITHUB)
             .ifPresentOrElse(
                 account -> {
-                    account.updateTokens(encryptedAccess, encryptedRefresh,
-                        tokenExpiresAt, refreshTokenExpiresAt);
-                    account.updateScopes(scope);
+                    account.updateTokensAndScopes(encryptedAccess, encryptedRefresh,
+                        tokenExpiresAt, refreshTokenExpiresAt, scope);
                     log.info("[GitHubOAuthService] userId={} GitHub tokens refreshed", userId);
                 },
                 () -> {
