@@ -35,7 +35,7 @@ class WorkflowSchedulerTest {
 
     @Test
     @DisplayName("신규 워크플로우 Job 등록 — scheduleJob 호출")
-    void registerJob_신규_Job_등록() throws Exception {
+    void registerJob_new_Job_registration() throws Exception {
         UUID workflowId = UUID.randomUUID();
         JobKey jobKey = JobKeyGenerator.jobKey(workflowId);
 
@@ -49,7 +49,7 @@ class WorkflowSchedulerTest {
 
     @Test
     @DisplayName("기존 Job 재등록 — rescheduleJob으로 Trigger만 교체")
-    void registerJob_기존_Job_재등록() throws Exception {
+    void registerJob_existing_Job_re_register() throws Exception {
         UUID workflowId = UUID.randomUUID();
         JobKey jobKey = JobKeyGenerator.jobKey(workflowId);
         TriggerKey triggerKey = JobKeyGenerator.triggerKey(workflowId);
@@ -64,7 +64,7 @@ class WorkflowSchedulerTest {
 
     @Test
     @DisplayName("스케줄러 예외 발생 시 IllegalStateException으로 변환")
-    void registerJob_스케줄러_예외_변환() throws Exception {
+    void registerJob_scheduler_exception_conversion() throws Exception {
         UUID workflowId = UUID.randomUUID();
         given(scheduler.checkExists(any(JobKey.class))).willThrow(new SchedulerException("연결 실패"));
 
@@ -77,7 +77,7 @@ class WorkflowSchedulerTest {
 
     @Test
     @DisplayName("등록된 Job 삭제 — deleteJob 호출")
-    void deleteJob_등록된_Job_삭제() throws Exception {
+    void deleteJob_registered_Job_delete() throws Exception {
         UUID workflowId = UUID.randomUUID();
         JobKey jobKey = JobKeyGenerator.jobKey(workflowId);
 
@@ -90,7 +90,7 @@ class WorkflowSchedulerTest {
 
     @Test
     @DisplayName("미등록 Job 삭제 요청 — no-op (deleteJob 미호출)")
-    void deleteJob_미등록_Job_noOp() throws Exception {
+    void deleteJob_unregisteredJob_noOp() throws Exception {
         UUID workflowId = UUID.randomUUID();
         JobKey jobKey = JobKeyGenerator.jobKey(workflowId);
 
@@ -103,7 +103,7 @@ class WorkflowSchedulerTest {
 
     @Test
     @DisplayName("삭제 중 스케줄러 예외 발생 시 IllegalStateException으로 변환")
-    void deleteJob_스케줄러_예외_변환() throws Exception {
+    void deleteJob_schedulerException_throwsIllegalState() throws Exception {
         UUID workflowId = UUID.randomUUID();
         given(scheduler.checkExists(any(JobKey.class))).willThrow(new SchedulerException("연결 실패"));
 

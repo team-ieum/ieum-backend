@@ -33,7 +33,7 @@ class ScheduleJobRestorerTest {
 
     @Test
     @DisplayName("활성 SCHEDULE 워크플로우 2개 — 모두 registerJob 호출")
-    void run_복구_대상_2개_전부_등록() throws Exception {
+    void run_twoActiveWorkflows_registersAllJobs() throws Exception {
         UUID id1 = UUID.randomUUID();
         UUID id2 = UUID.randomUUID();
 
@@ -51,7 +51,7 @@ class ScheduleJobRestorerTest {
 
     @Test
     @DisplayName("복구 대상 없음 — registerJob 미호출")
-    void run_복구_대상_없음() throws Exception {
+    void run_noActiveWorkflows_neverRegisters() throws Exception {
         given(workflowCrudService.findActiveScheduleWorkflows()).willReturn(Collections.emptyList());
 
         restorer.run(args);
@@ -62,7 +62,7 @@ class ScheduleJobRestorerTest {
 
     @Test
     @DisplayName("일부 Job 복구 실패 — 나머지 계속 처리 (예외 전파 안 됨)")
-    void run_일부_실패해도_나머지_계속() throws Exception {
+    void run_partialFailure_continuesRemaining() throws Exception {
         UUID id1 = UUID.randomUUID();
         UUID id2 = UUID.randomUUID();
 
