@@ -80,15 +80,12 @@ public class ConnectedAccount extends BaseEntity {
     /**
      * Access Token이 곧 만료되어 갱신이 필요한지 확인한다 (5분 threshold).
      *
-     * <p>{@code tokenExpiresAt}이 null인 경우 만료 시각을 알 수 없으므로
-     * tokeninfo API 폴백이 필요하다는 의미로 {@code true}를 반환한다.
+     * <p>호출 전 {@code tokenExpiresAt != null}을 반드시 확인해야 한다.
+     * null인 경우 tokeninfo API 폴백 경로를 사용한다 ({@link com.ieum.auth.service.GoogleTokenService} 참고).
      *
      * @return true면 즉시 갱신 필요 (이미 만료 또는 5분 이내 만료 예정)
      */
     public boolean isAccessTokenExpiringSoon() {
-        if (tokenExpiresAt == null) {
-            return true;
-        }
         return LocalDateTime.now().isAfter(tokenExpiresAt.minusMinutes(5));
     }
 

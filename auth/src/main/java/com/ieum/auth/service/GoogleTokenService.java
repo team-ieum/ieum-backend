@@ -73,21 +73,22 @@ public class GoogleTokenService {
             .findByUserIdAndProvider(userId, AuthProvider.GOOGLE)
             .orElseThrow(() -> new CustomException(ErrorCode.ACCOUNT_NOT_CONNECTED));
 
-        // 1. Refresh Token 자체 만료 선확인
         if (account.isRefreshTokenExpired()) {
             log.warn("[GoogleTokenService] userId={} refresh_token 만료 — 재인증 필요", userId);
             throw new CustomException(ErrorCode.AUTHENTICATION_REQUIRED);
         }
 
-        String accessToken = aesEncryptor.decrypt(account.getAccessToken());
-
-        // 2. Access Token 만료 여부 확인
-        boolean needsRefresh = account.getTokenExpiresAt() != null
-            ? account.isAccessTokenExpiringSoon()       // tokenExpiresAt 기반 (5분 threshold)
-            : !isTokenValidViaApi(accessToken);          // 기존 레코드 폴백: tokeninfo API
-
-        if (!needsRefresh) {
-            return accessToken;
+        // tokenExpiresAt이 있으면 threshold 기반으로 갱신 여부를 판단하고 불필요한 decrypt를 생략한다.
+        // tokenExpiresAt이 없는 기존 레코드는 tokeninfo API로 폴백하며, 이때 decrypt가 필요하다.
+        if (account.getTokenExpiresAt() != null) {
+            if (!account.isAccessTokenExpiringSoon()) {
+                return aesEncryptor.decrypt(account.getAccessToken());
+            }
+        } else {
+            String accessToken = aesEncryptor.decrypt(account.getAccessToken());
+            if (isTokenValidViaApi(accessToken)) {
+                return accessToken;
+            }
         }
 
         log.info("[GoogleTokenService] userId={} access_token 갱신 필요 — refresh 시도", userId);
@@ -100,15 +101,14 @@ public class GoogleTokenService {
         String refreshTokenPlain = aesEncryptor.decrypt(account.getRefreshToken());
         RefreshResult result = callRefreshEndpoint(userId, refreshTokenPlain);
 
-        // 3. JPA dirty checking — 트랜잭션 커밋 시 자동 UPDATE
         LocalDateTime newTokenExpiresAt = LocalDateTime.now().plusSeconds(result.expiresIn());
-        String encryptedNewRefreshToken = result.refreshToken() != null
+        String refreshTokenToSave = result.refreshToken() != null
             ? aesEncryptor.encrypt(result.refreshToken())
-            : null;
+            : account.getRefreshToken();
 
         account.updateTokens(
             aesEncryptor.encrypt(result.accessToken()),
-            encryptedNewRefreshToken != null ? encryptedNewRefreshToken : account.getRefreshToken(),
+            refreshTokenToSave,
             newTokenExpiresAt,
             account.getRefreshTokenExpiresAt()
         );

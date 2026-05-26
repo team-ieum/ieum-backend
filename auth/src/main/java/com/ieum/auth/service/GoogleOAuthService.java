@@ -9,6 +9,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -53,7 +54,11 @@ public class GoogleOAuthService {
                 if (account.getScopes() == null || account.getScopes().isBlank()) {
                     return Collections.<String>emptyList();
                 }
-                return Arrays.asList(account.getScopes().split(","));
+                // 구분자를 공백/콤마 모두 허용 — OAuth 로그인 시 공백으로 저장되므로 유연하게 파싱
+                return Arrays.stream(account.getScopes().split("[,\\s]+"))
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .toList();
             })
             .orElse(Collections.emptyList());
     }
@@ -110,8 +115,8 @@ public class GoogleOAuthService {
      *
      * @return 그룹명 → scope URL 목록 맵
      */
-    public java.util.Map<String, List<String>> getAvailableScopes() {
-        java.util.Map<String, List<String>> result = new java.util.LinkedHashMap<>();
+    public Map<String, List<String>> getAvailableScopes() {
+        Map<String, List<String>> result = new java.util.LinkedHashMap<>();
         oAuthScopeConfig.getScopeGroups().forEach(group ->
             result.put(group, oAuthScopeConfig.getScopesByGroup(group))
         );
