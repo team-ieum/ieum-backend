@@ -26,6 +26,7 @@ import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.executor.CredentialProvider;
 import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
 import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
+import com.ieum.workflowcore.engine.executor.NotionTokenProvider;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import java.util.List;
 import java.util.Map;
@@ -74,6 +75,7 @@ public class ChatService {
     private final CredentialService credentialService;
     private final GoogleTokenProvider googleTokenProvider;
     private final GitHubTokenProvider gitHubTokenProvider;
+    private final NotionTokenProvider notionTokenProvider;
     private final IntegrationContextService integrationContextService;
     private final AgentClient agentClient;
     private final ObjectMapper objectMapper;
@@ -111,6 +113,7 @@ public class ChatService {
         // 6. Google 빌트인 도구 → Access Token 조회 (없으면 null)
         String googleAccessToken = resolveGoogleAccessToken(agentConfig.tools(), userId);
         String githubToken = resolveGitHubAccessToken(integrationContext, userId);
+        String notionToken = resolveNotionToken(integrationContext, userId);
 
         // 7. AI 에이전트 호출 (agent 스펙 미지원 provider 제거)
         log.info("[ChatService] AI 응답 요청 — workflowId: {}, sessionId: {}",
@@ -127,12 +130,13 @@ public class ChatService {
             agentConfig.decryptedApiKey(),
             googleAccessToken,
             githubToken,
+            notionToken,
             userId
         );
 
         // 8. WORKFLOW_GENERATED/MODIFIED → DB에 새 버전으로 저장
         if (agentResponse.isWorkflowResult()) {
-            saveWorkflowVersion(workflowId, agentResponse);
+            saveWorkflowVersion(workflowId, agentResponse, agentConfig, request.getCredentialId());
         }
 
         // 9. INTEGRATION_REQUIRED → actions에 oauthUrl 주입
@@ -342,12 +346,40 @@ public class ChatService {
     /**
      * AI가 생성/수정한 노드/엣지를 JSON으로 직렬화하여 새 워크플로우 버전으로 저장한다.
      *
-     * @param workflowId    워크플로우 ID
-     * @param agentResponse WORKFLOW_GENERATED 또는 WORKFLOW_MODIFIED 응답
+     * <p>agent가 생성한 AI 노드에는 credentialId가 없으므로,
+     * agentConfig/fallbackCredentialId를 기반으로 AI 노드 config에 주입한다.
      */
-    private void saveWorkflowVersion(UUID workflowId, ChatAgentResponse agentResponse) {
+    @SuppressWarnings("unchecked")
+    private void saveWorkflowVersion(UUID workflowId, ChatAgentResponse agentResponse,
+            AgentConfig agentConfig, UUID fallbackCredentialId) {
         try {
-            String nodesJson = objectMapper.writeValueAsString(agentResponse.getNodes());
+            List<Map<String, Object>> nodes = objectMapper.convertValue(
+                agentResponse.getNodes(), new TypeReference<>() {});
+
+            // AI 노드에 credentialId / llmProvider 주입 (agent가 생성 시 누락하는 경우 보완)
+            for (Map<String, Object> node : nodes) {
+                String nodeType = (String) node.get("type");
+                if ("AI".equals(nodeType)) {
+                    Map<String, Object> config = (Map<String, Object>) node.get("config");
+                    if (config != null) {
+                        String existingCredentialId = (String) config.get("credentialId");
+                        log.info("[ChatService][DEBUG] nodeId={}, existingCredentialId='{}', fallback={}",
+                            node.get("id"), existingCredentialId, fallbackCredentialId);
+                        if ((existingCredentialId == null || existingCredentialId.isBlank())
+                                && fallbackCredentialId != null) {
+                            config.put("credentialId", fallbackCredentialId.toString());
+                            log.info("[ChatService][DEBUG] credentialId 주입 완료 — nodeId={}", node.get("id"));
+                        }
+                        String existingProvider = (String) config.get("llmProvider");
+                        if ((existingProvider == null || existingProvider.isBlank())
+                                && agentConfig.llmProvider() != null) {
+                            config.put("llmProvider", agentConfig.llmProvider());
+                        }
+                    }
+                }
+            }
+
+            String nodesJson = objectMapper.writeValueAsString(nodes);
             String edgesJson = objectMapper.writeValueAsString(agentResponse.getEdges());
             workflowCrudService.saveAgentVersion(workflowId, nodesJson, edgesJson);
             log.info("[ChatService] 워크플로우 버전 저장 완료 — workflowId: {}, type: {}",
@@ -378,6 +410,15 @@ public class ChatService {
             return null;
         }
         return gitHubTokenProvider.getAccessToken(userId).orElse(null);
+    }
+
+    private String resolveNotionToken(IntegrationContext integrationContext, UUID userId) {
+        boolean isNotionConnected = integrationContext.available().stream()
+            .anyMatch(info -> "NOTION".equals(info.getProvider()));
+        if (!isNotionConnected) {
+            return null;
+        }
+        return notionTokenProvider.getAccessToken(userId).orElse(null);
     }
 
     private String resolveGoogleAccessToken(List<Map<String, Object>> tools, UUID userId) {
@@ -422,6 +463,7 @@ public class ChatService {
         IntegrationContext integrationContext = integrationContextService.resolve(userId);
         String googleToken = resolveGoogleAccessToken(config.tools(), userId);
         String githubToken = resolveGitHubAccessToken(integrationContext, userId);
+        String notionToken = resolveNotionToken(integrationContext, userId);
 
         log.info("[ChatService] 스트림 준비 완료 — workflowId: {}, sessionId: {}",
             workflowId, session.getId());
@@ -439,7 +481,8 @@ public class ChatService {
             request.getCurrentEdges(),
             agentContext,
             googleToken,
-            githubToken
+            githubToken,
+            notionToken
         );
     }
 
@@ -490,6 +533,7 @@ public class ChatService {
         List<Object> currentEdges,
         IntegrationContext integrationContext,
         String googleToken,
-        String githubToken
+        String githubToken,
+        String notionToken
     ) {}
 }
