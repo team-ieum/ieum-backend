@@ -140,7 +140,7 @@ class ChatServiceTest {
             .willReturn(Optional.of(version));
 
         assertThatThrownBy(() ->
-            chatService.resolveAgentConfig(workflowId, userId)
+            chatService.resolveAgentConfig(workflowId, userId, null)
         ).isInstanceOf(CustomException.class)
             .hasMessageContaining(ErrorCode.WORKFLOW_HAS_NO_AI_NODE.getMessage());
     }

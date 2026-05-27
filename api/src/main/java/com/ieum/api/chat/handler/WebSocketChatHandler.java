@@ -95,6 +95,7 @@ public class WebSocketChatHandler {
             setup.config().decryptedApiKey(),
             setup.googleToken(),
             setup.githubToken(),
+            setup.notionToken(),
             userId
         ).subscribe(
             token -> {
