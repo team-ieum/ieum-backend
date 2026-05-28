@@ -90,4 +90,8 @@ public class Workflow extends BaseEntity {
         this.triggerType = triggerType != null ? triggerType : TriggerType.MANUAL;
         this.cronExpression = cronExpression;
     }
+
+    public void updateName(String name) {
+        this.name = name;
+    }
 }

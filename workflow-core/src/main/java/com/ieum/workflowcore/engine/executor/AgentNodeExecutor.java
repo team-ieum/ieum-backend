@@ -7,10 +7,12 @@ import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.executor.dto.AgentExecutionResult;
 import com.ieum.workflowcore.engine.executor.dto.AgentNodeRequest;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
@@ -84,7 +86,7 @@ public class AgentNodeExecutor implements NodeExecutor {
             String systemMessage = (String) config.get("systemMessage");
             String model = (String) config.get("model");
             String agentType = (String) config.getOrDefault("agentType", "simple");
-            List<Map<String, Object>> tools = (List<Map<String, Object>>) config.get("tools");
+            List<Map<String, Object>> tools = parseTools(config.get("tools"));
 
             String renderedPrompt = cursor.renderVariables(promptTemplate);
             log.debug("[AgentNodeExecutor] 렌더링된 프롬프트 길이: {}", renderedPrompt.length());
@@ -128,6 +130,26 @@ public class AgentNodeExecutor implements NodeExecutor {
             log.error("[AgentNodeExecutor] 실행 실패 — nodeId: {}", node.getId(), e);
             return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime);
         }
+    }
+
+    /**
+     * config.tools를 {@code List<Map<String, Object>>}로 변환한다.
+     *
+     * <p>LLM이 tools를 {@code ["web_search"]} 형태의 String 배열로 반환하는 경우
+     * {@code [{"name": "web_search"}]} 형태의 Map 배열로 변환한다.
+     */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> parseTools(Object rawTools) {
+        if (rawTools == null) return null;
+        List<?> list = (List<?>) rawTools;
+        if (list.isEmpty()) return new ArrayList<>();
+
+        if (list.get(0) instanceof String) {
+            return list.stream()
+                .map(t -> (Map<String, Object>) Map.of("name", t))
+                .collect(Collectors.toList());
+        }
+        return (List<Map<String, Object>>) rawTools;
     }
 
     /**
