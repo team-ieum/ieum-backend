@@ -55,6 +55,12 @@ public class ChatAgentResponse {
      */
     private String changeDescription;
 
+    /**
+     * AI가 제안하는 워크플로우 이름.
+     * type이 WORKFLOW_GENERATED일 때만 채워지며, 수정 시에는 null이다.
+     */
+    private String workflowName;
+
     /** 편의 메서드 — message 필드를 반환한다 */
     public String getContent() {
         return message;
