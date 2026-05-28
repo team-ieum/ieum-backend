@@ -2,6 +2,12 @@ package com.ieum.api.chat.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.api.chat.dto.ChatAgentResponse;
+import com.ieum.api.chat.dto.ChatRequest;
+import com.ieum.api.chat.service.IntegrationContextService.IntegrationContext;
+import com.ieum.api.credential.domain.AiProvider;
+import com.ieum.api.credential.domain.Credential;
+import com.ieum.api.credential.service.CredentialService;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.chat.domain.ChatMessage;
@@ -11,6 +17,10 @@ import com.ieum.workflowcore.chat.repository.ChatMessageRepository;
 import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.WorkflowVersion;
+import com.ieum.workflowcore.engine.executor.CredentialProvider;
+import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
+import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
+import com.ieum.workflowcore.engine.executor.NotionTokenProvider;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -33,6 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 @ExtendWith(MockitoExtension.class)
@@ -42,6 +53,13 @@ class ChatServiceTest {
     @Mock private ChatSessionRepository sessionRepository;
     @Mock private ChatMessageRepository messageRepository;
     @Mock private WorkflowCrudService workflowCrudService;
+    @Mock private CredentialProvider credentialProvider;
+    @Mock private CredentialService credentialService;
+    @Mock private GoogleTokenProvider googleTokenProvider;
+    @Mock private GitHubTokenProvider gitHubTokenProvider;
+    @Mock private NotionTokenProvider notionTokenProvider;
+    @Mock private IntegrationContextService integrationContextService;
+    @Mock private AgentClient agentClient;
 
     @InjectMocks
     private ChatService chatService;
@@ -174,6 +192,92 @@ class ChatServiceTest {
         assertThat(result.getSenderType()).isEqualTo(MessageType.AGENT);
     }
 
+    // ─────────────────── chat() auto-naming ────────────────────────────────
+
+    @Test
+    @DisplayName("첫 생성(maxVersion == 1)이고 workflowName이 있으면 워크플로우 이름을 업데이트한다")
+    void chat_firstGeneration_autoNamesWorkflow() throws Exception {
+        UUID fallbackCredentialId = UUID.randomUUID();
+
+        ChatSession session = buildSession(workflowId, userId);
+        ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "워크플로우를 생성했습니다");
+        WorkflowVersion version = Mockito.mock(WorkflowVersion.class);
+        Credential credential = Mockito.mock(Credential.class);
+
+        given(credential.getProvider()).willReturn(AiProvider.CLAUDE);
+        given(sessionRepository.save(any())).willReturn(session);
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(workflowCrudService.loadDefinition(version)).willReturn(buildDoc(List.of()));
+        given(credentialService.getByIdAndUserId(fallbackCredentialId, userId)).willReturn(credential);
+        given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString())).willReturn("test-api-key");
+        given(integrationContextService.resolve(userId))
+            .willReturn(new IntegrationContext(List.of(), List.of()));
+        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+            .willReturn(buildAgentResponse("WORKFLOW_GENERATED", "AI 테스트 워크플로우"));
+        given(workflowCrudService.findMaxVersionByWorkflowId(workflowId)).willReturn(1);
+        given(messageRepository.save(any())).willReturn(agentMsg);
+
+        chatService.chat(workflowId, userId, buildRequest("워크플로우 만들어줘", fallbackCredentialId));
+
+        verify(workflowCrudService).updateWorkflowName(workflowId, "AI 테스트 워크플로우");
+    }
+
+    @Test
+    @DisplayName("후속 메시지(maxVersion > 1)이면 workflowName이 있어도 이름을 덮어쓰지 않는다")
+    void chat_subsequentMessage_doesNotOverrideName() throws Exception {
+        UUID fallbackCredentialId = UUID.randomUUID();
+
+        ChatSession session = buildSession(workflowId, userId);
+        ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "수정했습니다");
+        WorkflowVersion version = Mockito.mock(WorkflowVersion.class);
+        Credential credential = Mockito.mock(Credential.class);
+
+        given(credential.getProvider()).willReturn(AiProvider.CLAUDE);
+        given(sessionRepository.save(any())).willReturn(session);
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(workflowCrudService.loadDefinition(version)).willReturn(buildDoc(List.of()));
+        given(credentialService.getByIdAndUserId(fallbackCredentialId, userId)).willReturn(credential);
+        given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString())).willReturn("test-api-key");
+        given(integrationContextService.resolve(userId))
+            .willReturn(new IntegrationContext(List.of(), List.of()));
+        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+            .willReturn(buildAgentResponse("WORKFLOW_GENERATED", "수정된 이름"));
+        given(workflowCrudService.findMaxVersionByWorkflowId(workflowId)).willReturn(2);
+        given(messageRepository.save(any())).willReturn(agentMsg);
+
+        chatService.chat(workflowId, userId, buildRequest("노드 하나 추가해줘", fallbackCredentialId));
+
+        verify(workflowCrudService, never()).updateWorkflowName(any(), any());
+    }
+
+    @Test
+    @DisplayName("agent가 workflowName을 null로 반환하면 이름 업데이트를 호출하지 않는다")
+    void chat_workflowNameIsNull_doesNotUpdateName() throws Exception {
+        UUID fallbackCredentialId = UUID.randomUUID();
+
+        ChatSession session = buildSession(workflowId, userId);
+        ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
+        WorkflowVersion version = Mockito.mock(WorkflowVersion.class);
+        Credential credential = Mockito.mock(Credential.class);
+
+        given(credential.getProvider()).willReturn(AiProvider.CLAUDE);
+        given(sessionRepository.save(any())).willReturn(session);
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(workflowCrudService.loadDefinition(version)).willReturn(buildDoc(List.of()));
+        given(credentialService.getByIdAndUserId(fallbackCredentialId, userId)).willReturn(credential);
+        given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString())).willReturn("test-api-key");
+        given(integrationContextService.resolve(userId))
+            .willReturn(new IntegrationContext(List.of(), List.of()));
+        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+            .willReturn(buildAgentResponse("WORKFLOW_GENERATED", null));
+        given(workflowCrudService.findMaxVersionByWorkflowId(workflowId)).willReturn(1);
+        given(messageRepository.save(any())).willReturn(agentMsg);
+
+        chatService.chat(workflowId, userId, buildRequest("워크플로우 만들어줘", fallbackCredentialId));
+
+        verify(workflowCrudService, never()).updateWorkflowName(any(), any());
+    }
+
     // ─────────────────── 헬퍼 ──────────────────────────────────────────────
 
     private ChatSession buildSession(UUID workflowId, UUID userId) {
@@ -193,6 +297,40 @@ class ChatServiceTest {
             .build();
         ReflectionTestUtils.setField(msg, "id", UUID.randomUUID());
         return msg;
+    }
+
+    private ChatRequest buildRequest(String prompt, UUID credentialId) {
+        ChatRequest request = Mockito.mock(ChatRequest.class);
+        given(request.getPrompt()).willReturn(prompt);
+        given(request.getSessionId()).willReturn(null);
+        given(request.getCredentialId()).willReturn(credentialId);
+        given(request.getCurrentNodes()).willReturn(null);
+        given(request.getCurrentEdges()).willReturn(null);
+        return request;
+    }
+
+    private ChatAgentResponse buildAgentResponse(String type, String workflowName) throws Exception {
+        String nameField = workflowName != null
+            ? "\"workflowName\": \"" + workflowName + "\","
+            : "";
+        String json = """
+            {
+                "message": "응답 메시지",
+                "type": "%s",
+                %s
+                "nodes": [],
+                "edges": []
+            }
+            """.formatted(type, nameField);
+        return objectMapper.readValue(json, ChatAgentResponse.class);
+    }
+
+    private WorkflowDefinitionDocument buildDoc(List<java.util.Map<String, Object>> nodes) {
+        return WorkflowDefinitionDocument.builder()
+            .nodes(nodes)
+            .edges(List.of())
+            .createdAt(LocalDateTime.now())
+            .build();
     }
 
     private WorkflowVersion buildVersionWithNodesJson(String nodesJson) {
