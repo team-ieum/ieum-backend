@@ -135,8 +135,14 @@ public class ChatService {
         );
 
         // 8. WORKFLOW_GENERATED/MODIFIED → DB에 새 버전으로 저장
+        //    첫 생성 여부를 저장 전에 확인 (저장 후에는 version이 증가하므로)
         if (agentResponse.isWorkflowResult()) {
+            int maxVersionBeforeSave = workflowCrudService.findMaxVersionByWorkflowId(workflowId);
             saveWorkflowVersion(workflowId, agentResponse, agentConfig, request.getCredentialId());
+
+            if (maxVersionBeforeSave == 1 && agentResponse.getWorkflowName() != null) {
+                workflowCrudService.updateWorkflowName(workflowId, agentResponse.getWorkflowName());
+            }
         }
 
         // 9. INTEGRATION_REQUIRED → actions에 oauthUrl 주입
