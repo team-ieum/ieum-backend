@@ -125,37 +125,36 @@ public class WorkflowCrudService {
     @Transactional
     public void deleteWorkflow(UUID userId, UUID workflowId) {
         Workflow workflow = getWorkflowByOwner(userId, workflowId);
-
-        List<UUID> executionIds = workflowExecutionRepository.findByWorkflow(workflow)
-            .stream().map(WorkflowExecution::getId).toList();
-        if (!executionIds.isEmpty()) {
-            workflowExecutionLogRepository.deleteByExecutionIdIn(executionIds);
-        }
-        workflowExecutionRepository.deleteByWorkflow(workflow);
-
-        // Collect MongoDB document IDs before deleting PG rows (reference will be gone after)
-        List<String> mongoIds = workflowVersionRepository.findByWorkflowId(workflow.getId())
-            .stream()
-            .map(WorkflowVersion::getMongoDefinitionId)
-            .filter(id -> id != null && !id.isBlank())
-            .toList();
-
-        workflowVersionRepository.deleteByWorkflow(workflow);
-        workflowRepository.delete(workflow);
-
-        // Both MongoDB cleanup and Quartz job deletion run after PG transaction commits
-        afterCommit(() -> {
-            mongoIds.forEach(id -> {
-                try {
-                    definitionRepository.deleteById(id);
-                } catch (Exception e) {
-                    log.warn("[WorkflowCrudService] MongoDB doc 삭제 실패 — id: {}", id, e);
-                }
-            });
-            workflowScheduler.deleteJob(workflowId);
-        });
-
+        deleteWorkflowInternal(workflow);
         log.info("[WorkflowCrudService] 워크플로우 삭제 — workflowId: {}", workflowId);
+    }
+
+    /** 스케줄러 전용 삭제 — userId 소유권 검증 없이 workflowId만으로 완전 삭제한다. */
+    @Transactional
+    public void deleteWorkflowById(UUID workflowId) {
+        Workflow workflow = workflowRepository.findById(workflowId)
+            .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+        deleteWorkflowInternal(workflow);
+        log.info("[WorkflowCrudService] 스케줄러 자동 정리로 워크플로우 완전 삭제 — workflowId: {}", workflowId);
+    }
+
+    /** AI 생성 워크플로우 이름 자동 업데이트 */
+    @Transactional
+    public void updateWorkflowName(UUID workflowId, String name) {
+        Workflow workflow = workflowRepository.findById(workflowId)
+            .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+        workflow.updateName(name);
+        log.info("[WorkflowCrudService] 워크플로우 이름 자동 업데이트 — workflowId: {}, name: {}", workflowId, name);
+    }
+
+    /** 고아 빈 워크플로우 후보 ID 목록 조회 (생성 후 threshold 경과, maxVersion == 1) */
+    public List<UUID> findOrphanCandidates(LocalDateTime threshold) {
+        return workflowRepository.findOrphanCandidates(threshold);
+    }
+
+    /** 현재 최대 버전 번호 조회 — AI 첫 생성 여부 판단에 사용 */
+    public int findMaxVersionByWorkflowId(UUID workflowId) {
+        return workflowVersionRepository.findMaxVersionByWorkflowId(workflowId);
     }
 
     @Transactional
@@ -252,6 +251,43 @@ public class WorkflowCrudService {
     }
 
     // ------------------------------------------------------------------ PRIVATE
+
+    /**
+     * 공통 워크플로우 삭제 로직.
+     * PG(execution log → execution → version → workflow) 삭제 후 커밋 시점에
+     * MongoDB doc과 Quartz Job을 정리한다.
+     */
+    private void deleteWorkflowInternal(Workflow workflow) {
+        UUID workflowId = workflow.getId();
+
+        List<UUID> executionIds = workflowExecutionRepository.findByWorkflow(workflow)
+            .stream().map(WorkflowExecution::getId).toList();
+        if (!executionIds.isEmpty()) {
+            workflowExecutionLogRepository.deleteByExecutionIdIn(executionIds);
+        }
+        workflowExecutionRepository.deleteByWorkflow(workflow);
+
+        // Collect MongoDB document IDs before deleting PG rows (reference will be gone after)
+        List<String> mongoIds = workflowVersionRepository.findByWorkflowId(workflowId)
+            .stream()
+            .map(WorkflowVersion::getMongoDefinitionId)
+            .filter(id -> id != null && !id.isBlank())
+            .toList();
+
+        workflowVersionRepository.deleteByWorkflow(workflow);
+        workflowRepository.delete(workflow);
+
+        afterCommit(() -> {
+            mongoIds.forEach(id -> {
+                try {
+                    definitionRepository.deleteById(id);
+                } catch (Exception e) {
+                    log.warn("[WorkflowCrudService] MongoDB doc 삭제 실패 — id: {}", id, e);
+                }
+            });
+            workflowScheduler.deleteJob(workflowId);
+        });
+    }
 
     /**
      * Saves a WorkflowDefinitionDocument to MongoDB and a WorkflowVersion to PostgreSQL
