@@ -68,18 +68,25 @@ public class GitHubTokenService {
             .findByUserIdAndProvider(userId, AuthProvider.GITHUB)
             .orElseThrow(() -> new CustomException(ErrorCode.ACCOUNT_NOT_CONNECTED));
 
-        String accessToken = aesEncryptor.decrypt(account.getAccessToken());
+        // GitHub App 토큰은 항상 만료 시각이 있으나, null이면 만료로 간주한다.
+        boolean accessTokenExpired = account.getTokenExpiresAt() == null
+            || account.isAccessTokenExpiringSoon();
 
-        if (!isTokenExpired(account)) {
-            return accessToken;
+        if (!accessTokenExpired) {
+            return aesEncryptor.decrypt(account.getAccessToken());
         }
 
         log.info("[GitHubTokenService] userId={} access_token expired — attempting refresh", userId);
 
-        if (isRefreshTokenExpired(account)) {
+        // GitHub App refresh_token도 항상 만료 시각이 있으나, null이면 만료로 간주한다.
+        boolean refreshTokenExpired = account.getRefreshTokenExpiresAt() == null
+            || account.isRefreshTokenExpired();
+        if (refreshTokenExpired) {
             log.warn("[GitHubTokenService] userId={} refresh_token expired — re-auth required", userId);
             throw new CustomException(ErrorCode.AUTHENTICATION_REQUIRED);
         }
+
+        String accessToken = aesEncryptor.decrypt(account.getAccessToken());
 
         String refreshTokenPlain = aesEncryptor.decrypt(account.getRefreshToken());
         Map<String, Object> tokenResponse = callRefreshEndpoint(userId, refreshTokenPlain);
@@ -102,17 +109,6 @@ public class GitHubTokenService {
         log.info("[GitHubTokenService] userId={} tokens refreshed", userId);
 
         return newAccessToken;
-    }
-
-    private boolean isTokenExpired(ConnectedAccount account) {
-        // 5-minute buffer: treat token as expired 5 minutes before actual expiry
-        return account.getTokenExpiresAt() == null
-            || LocalDateTime.now().isAfter(account.getTokenExpiresAt().minusMinutes(5));
-    }
-
-    private boolean isRefreshTokenExpired(ConnectedAccount account) {
-        return account.getRefreshTokenExpiresAt() == null
-            || LocalDateTime.now().isAfter(account.getRefreshTokenExpiresAt());
     }
 
     @SuppressWarnings("unchecked")

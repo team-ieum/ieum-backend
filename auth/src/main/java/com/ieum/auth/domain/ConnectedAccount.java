@@ -76,4 +76,31 @@ public class ConnectedAccount extends BaseEntity {
         this.refreshTokenExpiresAt = refreshTokenExpiresAt;
         this.scopes = scopes;
     }
+
+    /**
+     * Access Token이 곧 만료되어 갱신이 필요한지 확인한다 (5분 threshold).
+     *
+     * <p>호출 전 {@code tokenExpiresAt != null}을 반드시 확인해야 한다.
+     * null인 경우 tokeninfo API 폴백 경로를 사용한다 ({@link com.ieum.auth.service.GoogleTokenService} 참고).
+     *
+     * @return true면 즉시 갱신 필요 (이미 만료 또는 5분 이내 만료 예정)
+     */
+    public boolean isAccessTokenExpiringSoon() {
+        return LocalDateTime.now().isAfter(tokenExpiresAt.minusMinutes(5));
+    }
+
+    /**
+     * Refresh Token 자체가 만료되었는지 확인한다.
+     *
+     * <p>{@code refreshTokenExpiresAt}이 null이면 만료 여부 미확인 상태이므로
+     * 만료되지 않은 것으로 간주한다 (기존 데이터 하위 호환).
+     *
+     * @return true면 Refresh Token 만료 → 사용자 재인증 필요
+     */
+    public boolean isRefreshTokenExpired() {
+        if (refreshTokenExpiresAt == null) {
+            return false;
+        }
+        return LocalDateTime.now().isAfter(refreshTokenExpiresAt);
+    }
 }

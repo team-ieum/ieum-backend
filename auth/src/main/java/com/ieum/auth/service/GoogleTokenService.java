@@ -6,6 +6,7 @@ import com.ieum.auth.repository.ConnectedAccountRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.common.util.AesEncryptor;
+import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -24,13 +25,15 @@ import org.springframework.web.client.RestTemplate;
 /**
  * Google OAuth Access Token 유효성 검사 및 자동 갱신 서비스.
  *
- * <p>흐름:</p>
+ * <h3>갱신 판단 기준</h3>
  * <ol>
- *   <li>{@code connected_accounts}에서 AES 복호화된 access_token을 가져온다.</li>
- *   <li>Google tokeninfo API로 토큰 유효성을 확인한다.</li>
- *   <li>만료된 경우 refresh_token으로 새 access_token을 발급받아 DB에 업데이트한다.</li>
- *   <li>갱신 불가(refresh_token 없음 또는 구글 거절)면 {@code AUTHENTICATION_REQUIRED} 예외를 던진다.</li>
+ *   <li>Refresh Token 만료 여부 선확인 → 만료 시 즉시 {@code AUTHENTICATION_REQUIRED} 예외</li>
+ *   <li>{@code tokenExpiresAt} 있으면 5분 threshold 기반 판단 (Google API 호출 없음)</li>
+ *   <li>{@code tokenExpiresAt} 없는 기존 레코드 → tokeninfo API 폴백</li>
  * </ol>
+ *
+ * <h3>Token Rotation</h3>
+ * Google 갱신 응답에 새 {@code refresh_token}이 포함되면 DB에 교체 저장한다.
  */
 @Slf4j
 @Service
@@ -39,6 +42,9 @@ public class GoogleTokenService {
 
     private static final String TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo";
     private static final String TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
+
+    /** Google Access Token 기본 유효 시간(초). expires_in 파싱 실패 시 폴백. */
+    private static final int DEFAULT_EXPIRES_IN_SECONDS = 3600;
 
     private final ConnectedAccountRepository connectedAccountRepository;
     private final AesEncryptor aesEncryptor;
@@ -53,13 +59,13 @@ public class GoogleTokenService {
     /**
      * userId에 해당하는 유효한 Google Access Token(평문)을 반환한다.
      *
-     * <p>토큰이 만료된 경우 자동으로 갱신하고 DB에 암호화된 값을 업데이트한다.</p>
+     * <p>Access Token이 만료(또는 5분 이내 만료 예정)이면 자동 갱신 후 반환한다.</p>
      *
      * @param userId 조회할 사용자 ID
      * @return 유효한 Google Access Token (평문)
-     * @throws CustomException ACCOUNT_NOT_CONNECTED — Google 연동 계정이 없는 경우
-     * @throws CustomException AUTHENTICATION_REQUIRED — refresh_token 없음 또는 갱신 거절
-     * @throws CustomException TOKEN_REFRESH_FAILED — Google API 호출 중 예기치 않은 오류
+     * @throws CustomException ACCOUNT_NOT_CONNECTED   — Google 연동 계정 없음
+     * @throws CustomException AUTHENTICATION_REQUIRED — Refresh Token 만료 또는 Google 갱신 거절
+     * @throws CustomException TOKEN_REFRESH_FAILED    — 예기치 않은 네트워크/서버 오류
      */
     @Transactional
     public String getValidAccessToken(UUID userId) {
@@ -67,13 +73,25 @@ public class GoogleTokenService {
             .findByUserIdAndProvider(userId, AuthProvider.GOOGLE)
             .orElseThrow(() -> new CustomException(ErrorCode.ACCOUNT_NOT_CONNECTED));
 
-        String accessToken = aesEncryptor.decrypt(account.getAccessToken());
-
-        if (isTokenValid(accessToken)) {
-            return accessToken;
+        if (account.isRefreshTokenExpired()) {
+            log.warn("[GoogleTokenService] userId={} refresh_token 만료 — 재인증 필요", userId);
+            throw new CustomException(ErrorCode.AUTHENTICATION_REQUIRED);
         }
 
-        log.info("[GoogleTokenService] userId={} access_token 만료 — refresh 시도", userId);
+        // tokenExpiresAt이 있으면 threshold 기반으로 갱신 여부를 판단하고 불필요한 decrypt를 생략한다.
+        // tokenExpiresAt이 없는 기존 레코드는 tokeninfo API로 폴백하며, 이때 decrypt가 필요하다.
+        if (account.getTokenExpiresAt() != null) {
+            if (!account.isAccessTokenExpiringSoon()) {
+                return aesEncryptor.decrypt(account.getAccessToken());
+            }
+        } else {
+            String accessToken = aesEncryptor.decrypt(account.getAccessToken());
+            if (isTokenValidViaApi(accessToken)) {
+                return accessToken;
+            }
+        }
+
+        log.info("[GoogleTokenService] userId={} access_token 갱신 필요 — refresh 시도", userId);
 
         if (account.getRefreshToken() == null) {
             log.warn("[GoogleTokenService] userId={} refresh_token 없음 — 재인증 필요", userId);
@@ -81,22 +99,40 @@ public class GoogleTokenService {
         }
 
         String refreshTokenPlain = aesEncryptor.decrypt(account.getRefreshToken());
-        String newAccessToken = callRefreshEndpoint(userId, refreshTokenPlain);
+        RefreshResult result = callRefreshEndpoint(userId, refreshTokenPlain);
 
-        // JPA dirty checking으로 트랜잭션 커밋 시 자동 UPDATE
-        account.updateAccessToken(aesEncryptor.encrypt(newAccessToken));
-        log.info("[GoogleTokenService] userId={} access_token 갱신 완료", userId);
+        LocalDateTime newTokenExpiresAt = LocalDateTime.now().plusSeconds(result.expiresIn());
+        String refreshTokenToSave = result.refreshToken() != null
+            ? aesEncryptor.encrypt(result.refreshToken())
+            : account.getRefreshToken();
 
-        return newAccessToken;
+        // Token Rotation 발생 시 Google은 refresh_token_expires_in을 제공하지 않으므로
+        // refreshTokenExpiresAt을 null(만료 없음)로 초기화한다.
+        // Rotation 없으면 기존 만료 시각을 그대로 유지한다.
+        LocalDateTime newRefreshTokenExpiresAt = result.refreshToken() != null
+            ? null
+            : account.getRefreshTokenExpiresAt();
+
+        account.updateTokens(
+            aesEncryptor.encrypt(result.accessToken()),
+            refreshTokenToSave,
+            newTokenExpiresAt,
+            newRefreshTokenExpiresAt
+        );
+
+        log.info("[GoogleTokenService] userId={} access_token 갱신 완료 (rotation={})",
+            userId, result.refreshToken() != null);
+
+        return result.accessToken();
     }
 
     /**
-     * Google tokeninfo API로 토큰 유효성을 확인한다.
+     * tokenExpiresAt 없는 기존 레코드용 폴백.
+     * Google tokeninfo API(POST)로 토큰 유효성을 확인한다.
      *
-     * <p>POST 방식으로 호출하여 access_token이 URL(서버 액세스 로그)에 노출되지 않도록 한다.
-     * 네트워크 오류 또는 4xx 응답 시 만료로 간주하여 {@code false}를 반환한다.</p>
+     * <p>POST 방식으로 호출하여 access_token이 서버 액세스 로그에 노출되지 않도록 한다.</p>
      */
-    private boolean isTokenValid(String accessToken) {
+    private boolean isTokenValidViaApi(String accessToken) {
         try {
             MultiValueMap<String, String> params = new LinkedMultiValueMap<>();
             params.add("access_token", accessToken);
@@ -108,7 +144,7 @@ public class GoogleTokenService {
             ResponseEntity<Map> response = restTemplate.postForEntity(TOKENINFO_URL, request, Map.class);
             return response.getStatusCode().is2xxSuccessful();
         } catch (Exception e) {
-            log.debug("[GoogleTokenService] tokeninfo 호출 실패 — 만료로 간주: {}", e.getMessage());
+            log.debug("[GoogleTokenService] tokeninfo API 호출 실패 — 만료로 간주: {}", e.getMessage());
             return false;
         }
     }
@@ -116,10 +152,11 @@ public class GoogleTokenService {
     /**
      * Google token endpoint에 refresh_token으로 새 access_token을 요청한다.
      *
-     * @throws CustomException AUTHENTICATION_REQUIRED — Google이 refresh를 거절한 경우 (invalid_grant 등)
-     * @throws CustomException TOKEN_REFRESH_FAILED — 네트워크 오류 등 예기치 않은 실패
+     * @return RefreshResult — 새 access_token, expires_in, rotation된 refresh_token(nullable)
+     * @throws CustomException AUTHENTICATION_REQUIRED — invalid_grant 등 Google 거절
+     * @throws CustomException TOKEN_REFRESH_FAILED    — 네트워크 오류 등 예기치 않은 실패
      */
-    private String callRefreshEndpoint(UUID userId, String refreshToken) {
+    private RefreshResult callRefreshEndpoint(UUID userId, String refreshToken) {
         try {
             MultiValueMap<String, String> params = new LinkedMultiValueMap<>();
             params.add("grant_type", "refresh_token");
@@ -135,17 +172,31 @@ public class GoogleTokenService {
 
             if (response == null || !response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
                 log.warn("[GoogleTokenService] userId={} token endpoint 응답 실패: status={}", userId,
-                    response.getStatusCode());
+                    response != null ? response.getStatusCode() : "null");
                 throw new CustomException(ErrorCode.AUTHENTICATION_REQUIRED);
             }
 
-            Object newToken = response.getBody().get("access_token");
+            Map<?, ?> body = response.getBody();
+
+            Object newToken = body.get("access_token");
             if (newToken == null) {
                 log.warn("[GoogleTokenService] userId={} 응답에 access_token 없음", userId);
                 throw new CustomException(ErrorCode.AUTHENTICATION_REQUIRED);
             }
 
-            return newToken.toString();
+            int expiresIn = DEFAULT_EXPIRES_IN_SECONDS;
+            if (body.get("expires_in") instanceof Number number) {
+                expiresIn = number.intValue();
+            }
+
+            // Token Rotation: Google이 새 refresh_token을 내려주면 교체
+            String newRefreshToken = null;
+            if (body.get("refresh_token") instanceof String rotated) {
+                newRefreshToken = rotated;
+                log.info("[GoogleTokenService] userId={} refresh_token rotation 발생", userId);
+            }
+
+            return new RefreshResult(newToken.toString(), newRefreshToken, expiresIn);
 
         } catch (CustomException e) {
             throw e;
@@ -154,4 +205,13 @@ public class GoogleTokenService {
             throw new CustomException(ErrorCode.TOKEN_REFRESH_FAILED);
         }
     }
+
+    /**
+     * Google token endpoint 갱신 결과.
+     *
+     * @param accessToken  새 Access Token (평문)
+     * @param refreshToken rotation된 새 Refresh Token (평문, null이면 기존 유지)
+     * @param expiresIn    Access Token 유효 시간(초)
+     */
+    private record RefreshResult(String accessToken, String refreshToken, int expiresIn) {}
 }
