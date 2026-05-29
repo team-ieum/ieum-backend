@@ -85,3 +85,16 @@ github:
     redirect-uri: ${GITHUB_APP_REDIRECT_URI}
     frontend-redirect-uri: ${GITHUB_APP_FRONTEND_REDIRECT_URI}
     webhook-secret: ${GITHUB_APP_WEBHOOK_SECRET}
+
+google:
+  oauth:
+    incremental-auth: ${GOOGLE_OAUTH_INCREMENTAL_AUTH:true}
+    scopes:
+      gmail:
+        - https://www.googleapis.com/auth/gmail.modify
+      sheets:
+        - https://www.googleapis.com/auth/spreadsheets
+      drive:
+        - https://www.googleapis.com/auth/drive
+      calendar:
+        - https://www.googleapis.com/auth/calendar
