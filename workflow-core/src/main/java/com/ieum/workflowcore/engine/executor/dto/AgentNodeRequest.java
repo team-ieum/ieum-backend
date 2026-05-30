@@ -1,6 +1,7 @@
 package com.ieum.workflowcore.engine.executor.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 import java.util.Map;
 import lombok.AccessLevel;
@@ -28,4 +29,7 @@ public class AgentNodeRequest {
     private List<Map<String, Object>> tools;
     /** 이전 노드들의 output 전체 — Python ieum-agent의 workflow_context 툴에 전달 (nullable) */
     private Map<String, Map<String, Object>> workflowContext;
+    /** 커스텀 MCP 서버 목록 — ieum-agent의 mcp_servers로 전달 (nullable) */
+    @JsonProperty("mcp_servers")
+    private List<McpServerRef> mcpServers;
 }
