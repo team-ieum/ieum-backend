@@ -44,12 +44,14 @@ public class AgentNodeExecutor implements NodeExecutor {
 
     private static final String GOOGLE_BUILTIN_PREFIX = "builtin:google_";
     private static final String MCP_TOOL_NAME = "mcp";
+    private static final java.util.Set<String> WEBHOOK_TOOL_NAMES = java.util.Set.of("slack", "discord");
 
     private final WebClient webClient;
     private final CredentialProvider credentialProvider;
     private final GoogleTokenProvider googleTokenProvider;
     private final ToolAuthResolver toolAuthResolver;
     private final McpCatalogProvider mcpCatalogProvider;
+    private final WebhookCredentialProvider webhookCredentialProvider;
     private final int agentTimeoutSeconds;
 
     public AgentNodeExecutor(
@@ -58,6 +60,7 @@ public class AgentNodeExecutor implements NodeExecutor {
         GoogleTokenProvider googleTokenProvider,
         ToolAuthResolver toolAuthResolver,
         McpCatalogProvider mcpCatalogProvider,
+        WebhookCredentialProvider webhookCredentialProvider,
         @Value("${ieum.agent.timeout-seconds:120}") int agentTimeoutSeconds
     ) {
         this.webClient = WebClient.builder()
@@ -67,6 +70,7 @@ public class AgentNodeExecutor implements NodeExecutor {
         this.googleTokenProvider = googleTokenProvider;
         this.toolAuthResolver = toolAuthResolver;
         this.mcpCatalogProvider = mcpCatalogProvider;
+        this.webhookCredentialProvider = webhookCredentialProvider;
         this.agentTimeoutSeconds = agentTimeoutSeconds;
     }
 
@@ -102,6 +106,7 @@ public class AgentNodeExecutor implements NodeExecutor {
             UUID userId = cursor.getContext().getUserId();
             Map<String, String> toolAuthHeaders = toolAuthResolver.resolveHeaders(tools, userId);
             List<McpServerRef> mcpServers = resolveMcpServers(tools, userId);
+            injectWebhookUrls(tools, userId);
 
             AgentNodeRequest request = AgentNodeRequest.builder()
                 .nodeId(node.getId())
@@ -206,6 +211,49 @@ public class AgentNodeExecutor implements NodeExecutor {
             return List.of();
         }
         return mcpCatalogProvider.resolveServers(catalogIds, userId);
+    }
+
+    /**
+     * slack/discord 도구의 {@code config.webhookCredentialId}로 복호화된 webhook URL을 조회해
+     * 도구 config에 {@code webhook_url}을 in-place 주입한다.
+     *
+     * <p>웹훅 URL은 노드 config에 영속 저장하지 않고(노출 시 누구나 발송 가능), 실행 시점에만
+     * 자격증명 저장소에서 채워 ieum-agent로 전달한다. agent의 {@code _bind_config}가 webhook_url을
+     * 도구 인자로 바인딩하므로, 매 실행마다 URL 유실 없이 발송된다.
+     *
+     * <p>도구 형식: {@code {"name": "slack"|"discord", "config": {"webhookCredentialId": "<UUID>"}}}.
+     */
+    @SuppressWarnings("unchecked")
+    private void injectWebhookUrls(List<Map<String, Object>> tools, UUID userId) {
+        if (tools == null || tools.isEmpty() || userId == null) {
+            return;
+        }
+
+        for (Map<String, Object> tool : tools) {
+            if (!WEBHOOK_TOOL_NAMES.contains(tool.get("name"))) {
+                continue;
+            }
+            Object cfg = tool.get("config");
+            if (!(cfg instanceof Map<?, ?> configMap)) {
+                continue;
+            }
+            Object rawId = configMap.get("webhookCredentialId");
+            if (rawId == null) {
+                continue;
+            }
+            UUID credentialId;
+            try {
+                credentialId = UUID.fromString(rawId.toString());
+            } catch (IllegalArgumentException e) {
+                log.warn("[AgentNodeExecutor] 잘못된 webhookCredentialId 형식 — value: {}", rawId);
+                continue;
+            }
+            webhookCredentialProvider.resolveWebhookUrl(credentialId, userId)
+                .ifPresentOrElse(
+                    url -> ((Map<String, Object>) configMap).put("webhook_url", url),
+                    () -> log.warn("[AgentNodeExecutor] 웹훅 자격증명 미해결 — credentialId: {}", credentialId)
+                );
+        }
     }
 
     private String resolveGoogleAccessToken(List<Map<String, Object>> tools, ExecutionCursor cursor) {
