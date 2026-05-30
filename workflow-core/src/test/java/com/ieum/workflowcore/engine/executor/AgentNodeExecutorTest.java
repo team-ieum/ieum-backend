@@ -50,6 +50,7 @@ class AgentNodeExecutorTest {
             googleTokenProvider,
             new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
             new StubMcpCatalogProvider(),
+            new StubWebhookCredentialProvider(),
             30
         );
     }
@@ -338,5 +339,49 @@ class AgentNodeExecutorTest {
         // then — credentialId 없으면 토큰 조회 없이 헤더 미포함으로 진행
         RecordedRequest recorded = mockWebServer.takeRequest();
         assertThat(recorded.getHeader("X-Notion-Token")).isNull();
+    }
+
+    @Test
+    @DisplayName("discord 도구의 webhookCredentialId로 복호화된 webhook_url을 도구 config에 주입한다")
+    void execute_withWebhookCredential_injectsWebhookUrlIntoToolConfig() throws InterruptedException {
+        // given — webhookCredentialId를 해결해 URL을 돌려주는 provider로 executor 재구성
+        UUID userId = UUID.randomUUID();
+        UUID credentialId = UUID.randomUUID();
+        String webhookUrl = "https://discord.com/api/webhooks/123/secret-token";
+
+        WebhookCredentialProvider webhookProvider = mock(WebhookCredentialProvider.class);
+        when(webhookProvider.resolveWebhookUrl(credentialId, userId))
+            .thenReturn(java.util.Optional.of(webhookUrl));
+
+        AgentNodeExecutor exec = new AgentNodeExecutor(
+            mockWebServer.url("/").toString(),
+            credentialProvider,
+            googleTokenProvider,
+            new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
+            new StubMcpCatalogProvider(),
+            webhookProvider,
+            30
+        );
+
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Map<String, Object> discordTool = new java.util.HashMap<>();
+        discordTool.put("name", "discord");
+        discordTool.put("config", new java.util.HashMap<>(Map.of("webhookCredentialId", credentialId.toString())));
+        Node node = buildAgentNodeWithTools("디스코드로 보내줘", "CLAUDE", "cred-id",
+            List.of(discordTool));
+        ExecutionCursor cursor = buildCursorWithUserId(userId);
+
+        // when
+        exec.execute(node, Collections.emptyMap(), cursor);
+
+        // then — 요청 body의 discord 도구 config에 webhook_url이 주입되어 있어야 함
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        String body = recorded.getBody().readUtf8();
+        assertThat(body).contains("webhook_url");
+        assertThat(body).contains(webhookUrl);
     }
 }

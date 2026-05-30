@@ -37,4 +37,10 @@ public class ChatAgentRequest {
      * Designer가 적절한 AI 노드에 mcp 도구를 배정하는 데 사용한다(환각 방지).
      */
     private final List<AvailableMcpServer> availableMcpServers;
+
+    /**
+     * 사용자가 보유한 Slack/Discord 웹훅 자격증명 메타(webhookCredentialId/provider/displayName).
+     * Designer가 slack/discord 노드에 webhookCredentialId를 배정하는 데 사용한다(환각 방지).
+     */
+    private final List<AvailableWebhook> availableWebhooks;
 }

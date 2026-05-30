@@ -1,6 +1,7 @@
 package com.ieum.api.chat.service;
 
 import com.ieum.api.chat.dto.AvailableMcpServer;
+import com.ieum.api.chat.dto.AvailableWebhook;
 import com.ieum.api.chat.dto.ChatAgentRequest;
 import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.api.chat.dto.IntegrationInfo;
@@ -83,6 +84,7 @@ public class AgentClient {
         String githubToken,
         String notionToken,
         List<AvailableMcpServer> availableMcpServers,
+        List<AvailableWebhook> availableWebhooks,
         UUID userId
     ) {
         log.debug("[AgentClient] chat 요청 — provider: {}, prompt: {}자",
@@ -95,6 +97,7 @@ public class AgentClient {
             .availableIntegrations(availableIntegrations != null ? availableIntegrations : List.of())
             .unavailableIntegrations(unavailableIntegrations != null ? unavailableIntegrations : List.of())
             .availableMcpServers(availableMcpServers != null ? availableMcpServers : List.of())
+            .availableWebhooks(availableWebhooks != null ? availableWebhooks : List.of())
             .build();
 
 
@@ -175,6 +178,7 @@ public class AgentClient {
         String githubToken,
         String notionToken,
         List<AvailableMcpServer> availableMcpServers,
+        List<AvailableWebhook> availableWebhooks,
         UUID userId
     ) {
         log.debug("[AgentClient] chatStream 요청 — provider: {}, prompt: {}자",
@@ -186,7 +190,7 @@ public class AgentClient {
                     prompt, currentNodes, currentEdges,
                     availableIntegrations, unavailableIntegrations,
                     llmProvider, apiKey, googleAccessToken, githubToken, notionToken,
-                    availableMcpServers, userId
+                    availableMcpServers, availableWebhooks, userId
                 ).getContent();
                 sink.next(content);
                 sink.complete();

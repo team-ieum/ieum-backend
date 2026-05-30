@@ -51,4 +51,9 @@ public class IntegrationInfo {
     public static IntegrationInfo webhookPending(String provider) {
         return new IntegrationInfo(provider, "WEBHOOK", null);
     }
+
+    /** 연동 완료된 Webhook 서비스를 생성한다(웹훅 자격증명 1개 이상 보유). */
+    public static IntegrationInfo webhookConnected(String provider) {
+        return new IntegrationInfo(provider, "WEBHOOK", null);
+    }
 }

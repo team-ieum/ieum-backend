@@ -7,6 +7,7 @@ import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.api.chat.dto.AgentAction;
 import com.ieum.api.chat.dto.AgentResponseType;
 import com.ieum.api.chat.dto.AvailableMcpServer;
+import com.ieum.api.chat.dto.AvailableWebhook;
 import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.api.chat.dto.ChatRequest;
 import com.ieum.api.chat.dto.ChatResponse;
@@ -16,6 +17,8 @@ import com.ieum.api.credential.domain.Credential;
 import com.ieum.api.credential.service.CredentialService;
 import com.ieum.api.mcp.domain.McpServerCatalog;
 import com.ieum.api.mcp.repository.McpServerCatalogRepository;
+import com.ieum.api.webhookcredential.domain.WebhookCredential;
+import com.ieum.api.webhookcredential.repository.WebhookCredentialRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.chat.domain.ChatMessage;
@@ -83,6 +86,7 @@ public class ChatService {
     private final AgentClient agentClient;
     private final ObjectMapper objectMapper;
     private final McpServerCatalogRepository mcpServerCatalogRepository;
+    private final WebhookCredentialRepository webhookCredentialRepository;
 
     // ─────────────────────────────────────── REST 블로킹 ──────────────────────
 
@@ -125,6 +129,7 @@ public class ChatService {
         List<IntegrationInfo> agentAvailable = filterAgentSupportedIntegrations(integrationContext.available());
         List<IntegrationInfo> agentUnavailable = filterAgentSupportedIntegrations(integrationContext.unavailable());
         List<AvailableMcpServer> availableMcpServers = resolveAvailableMcpServers(userId);
+        List<AvailableWebhook> availableWebhooks = resolveAvailableWebhooks(userId);
         ChatAgentResponse agentResponse = agentClient.chat(
             request.getPrompt(),
             request.getCurrentNodes(),
@@ -137,6 +142,7 @@ public class ChatService {
             githubToken,
             notionToken,
             availableMcpServers,
+            availableWebhooks,
             userId
         );
 
@@ -450,6 +456,23 @@ public class ChatService {
             .toList();
     }
 
+    /**
+     * 사용자가 보유한 활성(enabled) Slack/Discord 웹훅 자격증명을 조회해 agent 생성 요청용 메타로 변환한다.
+     *
+     * <p>webhook URL 등 민감 정보는 제외하고 webhookCredentialId/provider/displayName만 전달한다.
+     * agent는 이 목록에 있는 webhookCredentialId만 노드의 slack/discord 도구에 허용한다(환각 차단).
+     */
+    private List<AvailableWebhook> resolveAvailableWebhooks(UUID userId) {
+        return webhookCredentialRepository.findByUserId(userId).stream()
+            .filter(WebhookCredential::isEnabled)
+            .map(w -> new AvailableWebhook(
+                w.getId().toString(),
+                w.getProvider().name(),
+                w.getDisplayName()
+            ))
+            .toList();
+    }
+
     private String resolveGoogleAccessToken(List<Map<String, Object>> tools, UUID userId) {
         if (tools == null || tools.isEmpty()) {
             return null;
@@ -512,7 +535,8 @@ public class ChatService {
             googleToken,
             githubToken,
             notionToken,
-            resolveAvailableMcpServers(userId)
+            resolveAvailableMcpServers(userId),
+            resolveAvailableWebhooks(userId)
         );
     }
 
@@ -565,6 +589,7 @@ public class ChatService {
         String googleToken,
         String githubToken,
         String notionToken,
-        List<AvailableMcpServer> availableMcpServers
+        List<AvailableMcpServer> availableMcpServers,
+        List<AvailableWebhook> availableWebhooks
     ) {}
 }
