@@ -96,6 +96,7 @@ public class WebSocketChatHandler {
             setup.googleToken(),
             setup.githubToken(),
             setup.notionToken(),
+            setup.availableMcpServers(),
             userId
         ).subscribe(
             token -> {

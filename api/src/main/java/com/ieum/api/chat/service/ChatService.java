@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.api.chat.dto.AgentAction;
 import com.ieum.api.chat.dto.AgentResponseType;
+import com.ieum.api.chat.dto.AvailableMcpServer;
 import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.api.chat.dto.ChatRequest;
 import com.ieum.api.chat.dto.ChatResponse;
@@ -13,6 +14,8 @@ import com.ieum.api.chat.dto.IntegrationInfo;
 import com.ieum.api.chat.service.IntegrationContextService.IntegrationContext;
 import com.ieum.api.credential.domain.Credential;
 import com.ieum.api.credential.service.CredentialService;
+import com.ieum.api.mcp.domain.McpServerCatalog;
+import com.ieum.api.mcp.repository.McpServerCatalogRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.chat.domain.ChatMessage;
@@ -79,6 +82,7 @@ public class ChatService {
     private final IntegrationContextService integrationContextService;
     private final AgentClient agentClient;
     private final ObjectMapper objectMapper;
+    private final McpServerCatalogRepository mcpServerCatalogRepository;
 
     // ─────────────────────────────────────── REST 블로킹 ──────────────────────
 
@@ -120,6 +124,7 @@ public class ChatService {
             workflowId, session.getId());
         List<IntegrationInfo> agentAvailable = filterAgentSupportedIntegrations(integrationContext.available());
         List<IntegrationInfo> agentUnavailable = filterAgentSupportedIntegrations(integrationContext.unavailable());
+        List<AvailableMcpServer> availableMcpServers = resolveAvailableMcpServers(userId);
         ChatAgentResponse agentResponse = agentClient.chat(
             request.getPrompt(),
             request.getCurrentNodes(),
@@ -131,6 +136,7 @@ public class ChatService {
             googleAccessToken,
             githubToken,
             notionToken,
+            availableMcpServers,
             userId
         );
 
@@ -427,6 +433,23 @@ public class ChatService {
         return notionTokenProvider.getAccessToken(userId).orElse(null);
     }
 
+    /**
+     * 사용자가 보유한 활성(enabled) MCP 서버 카탈로그를 조회해 agent 생성 요청용 메타로 변환한다.
+     *
+     * <p>serverUrl/암호화 헤더 등 민감 정보는 제외하고 catalogId/name/description만 전달한다.
+     * agent는 이 목록에 있는 catalogId만 노드의 mcp 도구로 허용한다(환각 차단).
+     */
+    private List<AvailableMcpServer> resolveAvailableMcpServers(UUID userId) {
+        return mcpServerCatalogRepository.findByUserId(userId).stream()
+            .filter(McpServerCatalog::isEnabled)
+            .map(c -> new AvailableMcpServer(
+                c.getId().toString(),
+                c.getDisplayName(),
+                c.getDescription()
+            ))
+            .toList();
+    }
+
     private String resolveGoogleAccessToken(List<Map<String, Object>> tools, UUID userId) {
         if (tools == null || tools.isEmpty()) {
             return null;
@@ -488,7 +511,8 @@ public class ChatService {
             agentContext,
             googleToken,
             githubToken,
-            notionToken
+            notionToken,
+            resolveAvailableMcpServers(userId)
         );
     }
 
@@ -540,6 +564,7 @@ public class ChatService {
         IntegrationContext integrationContext,
         String googleToken,
         String githubToken,
-        String notionToken
+        String notionToken,
+        List<AvailableMcpServer> availableMcpServers
     ) {}
 }
