@@ -49,6 +49,7 @@ class AgentNodeExecutorTest {
             credentialProvider,
             googleTokenProvider,
             new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
+            new StubMcpCatalogProvider(),
             30
         );
     }

@@ -6,6 +6,7 @@ import com.ieum.workflowcore.engine.ExecutorResult;
 import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.executor.dto.AgentExecutionResult;
 import com.ieum.workflowcore.engine.executor.dto.AgentNodeRequest;
+import com.ieum.workflowcore.engine.executor.dto.McpServerRef;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -42,11 +43,13 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 public class AgentNodeExecutor implements NodeExecutor {
 
     private static final String GOOGLE_BUILTIN_PREFIX = "builtin:google_";
+    private static final String MCP_TOOL_NAME = "mcp";
 
     private final WebClient webClient;
     private final CredentialProvider credentialProvider;
     private final GoogleTokenProvider googleTokenProvider;
     private final ToolAuthResolver toolAuthResolver;
+    private final McpCatalogProvider mcpCatalogProvider;
     private final int agentTimeoutSeconds;
 
     public AgentNodeExecutor(
@@ -54,6 +57,7 @@ public class AgentNodeExecutor implements NodeExecutor {
         CredentialProvider credentialProvider,
         GoogleTokenProvider googleTokenProvider,
         ToolAuthResolver toolAuthResolver,
+        McpCatalogProvider mcpCatalogProvider,
         @Value("${ieum.agent.timeout-seconds:120}") int agentTimeoutSeconds
     ) {
         this.webClient = WebClient.builder()
@@ -62,6 +66,7 @@ public class AgentNodeExecutor implements NodeExecutor {
         this.credentialProvider = credentialProvider;
         this.googleTokenProvider = googleTokenProvider;
         this.toolAuthResolver = toolAuthResolver;
+        this.mcpCatalogProvider = mcpCatalogProvider;
         this.agentTimeoutSeconds = agentTimeoutSeconds;
     }
 
@@ -96,6 +101,7 @@ public class AgentNodeExecutor implements NodeExecutor {
             String googleAccessToken = resolveGoogleAccessToken(tools, cursor);
             UUID userId = cursor.getContext().getUserId();
             Map<String, String> toolAuthHeaders = toolAuthResolver.resolveHeaders(tools, userId);
+            List<McpServerRef> mcpServers = resolveMcpServers(tools, userId);
 
             AgentNodeRequest request = AgentNodeRequest.builder()
                 .nodeId(node.getId())
@@ -106,6 +112,7 @@ public class AgentNodeExecutor implements NodeExecutor {
                 .agentType(agentType)
                 .tools(tools)
                 .workflowContext(cursor.getContext().getNodeOutputs())
+                .mcpServers(mcpServers.isEmpty() ? null : mcpServers)
                 .build();
 
             AgentExecutionResult agentResult = callAgentService(
@@ -163,6 +170,44 @@ public class AgentNodeExecutor implements NodeExecutor {
      * @param cursor 실행 커서 (userId 포함)
      * @return Google Access Token 원문, 또는 {@code null}
      */
+    /**
+     * 노드 tools에서 'mcp' 도구의 catalogId를 수집하여 카탈로그에서 MCP 서버 정보를 조회한다.
+     *
+     * <p>mcp 도구 형식: {@code {"name": "mcp", "config": {"catalogId": "<UUID>"}}}.
+     * catalogId가 없거나 userId가 없으면 해당 항목을 건너뛰며, 결과가 없으면 빈 리스트를 반환한다.
+     */
+    @SuppressWarnings("unchecked")
+    private List<McpServerRef> resolveMcpServers(List<Map<String, Object>> tools, UUID userId) {
+        if (tools == null || tools.isEmpty() || userId == null) {
+            return List.of();
+        }
+
+        List<UUID> catalogIds = new ArrayList<>();
+        for (Map<String, Object> tool : tools) {
+            if (!MCP_TOOL_NAME.equals(tool.get("name"))) {
+                continue;
+            }
+            Object cfg = tool.get("config");
+            if (!(cfg instanceof Map<?, ?> configMap)) {
+                continue;
+            }
+            Object rawId = configMap.get("catalogId");
+            if (rawId == null) {
+                continue;
+            }
+            try {
+                catalogIds.add(UUID.fromString(rawId.toString()));
+            } catch (IllegalArgumentException e) {
+                log.warn("[AgentNodeExecutor] 잘못된 mcp catalogId 형식 — value: {}", rawId);
+            }
+        }
+
+        if (catalogIds.isEmpty()) {
+            return List.of();
+        }
+        return mcpCatalogProvider.resolveServers(catalogIds, userId);
+    }
+
     private String resolveGoogleAccessToken(List<Map<String, Object>> tools, ExecutionCursor cursor) {
         if (tools == null || tools.isEmpty()) {
             return null;
