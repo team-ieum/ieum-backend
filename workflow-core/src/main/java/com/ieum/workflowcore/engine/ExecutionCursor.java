@@ -166,6 +166,10 @@ public class ExecutionCursor {
             if (current instanceof Map) {
                 current = ((Map<String, Object>) current).get(key);
             } else {
+                if (current != null) {
+                    log.debug("[Cursor] 노드 '{}' fieldPath '{}' 탐색 중 이미 최종 값에 도달하여 탐색을 조기 종료합니다.", nodeId, fieldPath);
+                    return String.valueOf(current);
+                }
                 log.warn("[Cursor] 노드 '{}' fieldPath '{}' 탐색 중 Map이 아닌 값 만남: {}",
                     nodeId, fieldPath, current);
                 return "";

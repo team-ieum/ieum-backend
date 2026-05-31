@@ -34,6 +34,9 @@ public class ChatResponse {
     /** 워크플로우 수정 시 변경 내용 한 줄 요약 (WORKFLOW_MODIFIED 전용) */
     private final String changeDescription;
 
+    /** AI가 제안하는 워크플로우 이름 (WORKFLOW_GENERATED 첫 생성 시 전용) */
+    private final String workflowName;
+
     /** 생성/수정된 노드 목록 (WORKFLOW_GENERATED/MODIFIED 전용) */
     private final List<Object> nodes;
 
@@ -62,6 +65,7 @@ public class ChatResponse {
             .type(agentResponse.getType())
             .content(agentResponse.getContent())
             .changeDescription(agentResponse.getChangeDescription())
+            .workflowName(agentResponse.getWorkflowName())
             .nodes(agentResponse.getNodes())
             .edges(agentResponse.getEdges())
             .actions(agentResponse.getActions())

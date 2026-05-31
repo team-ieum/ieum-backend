@@ -28,6 +28,14 @@ public enum ErrorCode {
     INVALID_API_KEY_FORMAT(HttpStatus.BAD_REQUEST, "API 키 형식이 올바르지 않습니다. 프로바이더별 키 형식을 확인해주세요."),
     CREDENTIAL_DUPLICATE_NAME(HttpStatus.CONFLICT, "같은 프로바이더에 동일한 이름의 크레덴셜이 이미 존재합니다."),
     CREDENTIAL_LIMIT_EXCEEDED(HttpStatus.BAD_REQUEST, "크레덴셜 등록 한도를 초과했습니다."),
+
+    // MCP Server Catalog
+    MCP_SERVER_NOT_FOUND(HttpStatus.NOT_FOUND, "MCP 서버를 찾을 수 없습니다."),
+    MCP_SERVER_DUPLICATE_NAME(HttpStatus.CONFLICT, "동일한 이름의 MCP 서버가 이미 존재합니다."),
+    MCP_SERVER_LIMIT_EXCEEDED(HttpStatus.BAD_REQUEST, "MCP 서버 등록 한도를 초과했습니다."),
+    WEBHOOK_CREDENTIAL_NOT_FOUND(HttpStatus.NOT_FOUND, "웹훅 자격증명을 찾을 수 없습니다."),
+    WEBHOOK_CREDENTIAL_DUPLICATE_NAME(HttpStatus.CONFLICT, "동일한 이름의 웹훅 자격증명이 이미 존재합니다."),
+    WEBHOOK_CREDENTIAL_LIMIT_EXCEEDED(HttpStatus.BAD_REQUEST, "웹훅 자격증명 등록 한도를 초과했습니다."),
     CREDENTIAL_NO_BILLING(HttpStatus.PAYMENT_REQUIRED, "프로바이더 계정에 결제 수단이 등록되어 있지 않습니다. 프로바이더 대시보드에서 결제 설정을 확인해주세요."),
     CREDENTIAL_EXPIRED(HttpStatus.UNAUTHORIZED, "OAuth 토큰이 만료되었습니다."),
     CREDENTIAL_IN_USE(HttpStatus.CONFLICT, "워크플로우에서 사용 중인 크레덴셜입니다."),

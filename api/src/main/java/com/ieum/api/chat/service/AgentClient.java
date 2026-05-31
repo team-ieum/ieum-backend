@@ -1,5 +1,7 @@
 package com.ieum.api.chat.service;
 
+import com.ieum.api.chat.dto.AvailableMcpServer;
+import com.ieum.api.chat.dto.AvailableWebhook;
 import com.ieum.api.chat.dto.ChatAgentRequest;
 import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.api.chat.dto.IntegrationInfo;
@@ -80,6 +82,9 @@ public class AgentClient {
         String apiKey,
         String googleAccessToken,
         String githubToken,
+        String notionToken,
+        List<AvailableMcpServer> availableMcpServers,
+        List<AvailableWebhook> availableWebhooks,
         UUID userId
     ) {
         log.debug("[AgentClient] chat 요청 — provider: {}, prompt: {}자",
@@ -91,6 +96,8 @@ public class AgentClient {
             .currentEdges(currentEdges)
             .availableIntegrations(availableIntegrations != null ? availableIntegrations : List.of())
             .unavailableIntegrations(unavailableIntegrations != null ? unavailableIntegrations : List.of())
+            .availableMcpServers(availableMcpServers != null ? availableMcpServers : List.of())
+            .availableWebhooks(availableWebhooks != null ? availableWebhooks : List.of())
             .build();
 
 
@@ -108,6 +115,10 @@ public class AgentClient {
             if (githubToken != null) {
                 requestSpec = requestSpec.header("X-GitHub-Token", githubToken);
                 log.debug("[AgentClient] X-GitHub-Token header injected");
+            }
+            if (notionToken != null) {
+                requestSpec = requestSpec.header("X-Notion-Token", notionToken);
+                log.debug("[AgentClient] X-Notion-Token header injected");
             }
 
             ChatAgentResponse response = requestSpec
@@ -165,6 +176,9 @@ public class AgentClient {
         String apiKey,
         String googleAccessToken,
         String githubToken,
+        String notionToken,
+        List<AvailableMcpServer> availableMcpServers,
+        List<AvailableWebhook> availableWebhooks,
         UUID userId
     ) {
         log.debug("[AgentClient] chatStream 요청 — provider: {}, prompt: {}자",
@@ -175,7 +189,8 @@ public class AgentClient {
                 String content = chat(
                     prompt, currentNodes, currentEdges,
                     availableIntegrations, unavailableIntegrations,
-                    llmProvider, apiKey, googleAccessToken, githubToken, userId
+                    llmProvider, apiKey, googleAccessToken, githubToken, notionToken,
+                    availableMcpServers, availableWebhooks, userId
                 ).getContent();
                 sink.next(content);
                 sink.complete();

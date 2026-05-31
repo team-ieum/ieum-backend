@@ -40,4 +40,11 @@ public class ChatRequest {
      * null이면 새 세션 자동 생성.
      */
     private UUID sessionId;
+
+    /**
+     * AI 노드가 없는 워크플로우(빈 워크플로우)에서 채팅 시작 시 사용할 Credential ID.
+     * 워크플로우에 AI 노드가 이미 있으면 해당 노드의 설정을 우선 사용하고,
+     * AI 노드가 없을 때만 이 값으로 fallback한다.
+     */
+    private UUID credentialId;
 }

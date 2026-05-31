@@ -1,11 +1,15 @@
 package com.ieum.api.chat.service;
 
 import com.ieum.api.chat.dto.IntegrationInfo;
+import com.ieum.api.webhookcredential.domain.WebhookProvider;
+import com.ieum.api.webhookcredential.repository.WebhookCredentialRepository;
 import com.ieum.auth.domain.AuthProvider;
 import com.ieum.auth.repository.ConnectedAccountRepository;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -19,8 +23,8 @@ import org.springframework.transaction.annotation.Transactional;
  * <ul>
  *   <li>Google OAuth — {@code connected_accounts} 테이블 조회</li>
  *   <li>Notion OAuth — 미구현 (항상 unavailable) TODO: AuthProvider 추가 후 구현</li>
- *   <li>Slack Webhook — 미구현 (항상 unavailable) TODO: webhook_credentials 테이블 구현 후</li>
- *   <li>Discord Webhook — 미구현 (항상 unavailable) TODO: webhook_credentials 테이블 구현 후</li>
+ *   <li>Slack Webhook — {@code webhook_credentials} 테이블 조회 (자격증명 보유 시 available)</li>
+ *   <li>Discord Webhook — {@code webhook_credentials} 테이블 조회 (자격증명 보유 시 available)</li>
  * </ul>
  */
 @Slf4j
@@ -30,6 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class IntegrationContextService {
 
     private final ConnectedAccountRepository connectedAccountRepository;
+    private final WebhookCredentialRepository webhookCredentialRepository;
 
     /**
      * 사용자의 연동 서비스 상태를 조회한다.
@@ -67,12 +72,34 @@ public class IntegrationContextService {
                 }
             );
 
-        // ── Notion OAuth (TODO: AuthProvider.NOTION 추가 후 구현) ────────────
-        unavailable.add(IntegrationInfo.oauthPending("NOTION"));
+        // ── Notion OAuth ─────────────────────────────────────────────────────
+        connectedAccountRepository.findByUserIdAndProvider(userId, AuthProvider.NOTION)
+            .ifPresentOrElse(
+                account -> {
+                    log.debug("[IntegrationContextService] Notion 연동 확인 — userId: {}", userId);
+                    available.add(IntegrationInfo.oauthConnected("NOTION", account.getScopes()));
+                },
+                () -> {
+                    log.debug("[IntegrationContextService] Notion 미연동 — userId: {}", userId);
+                    unavailable.add(IntegrationInfo.oauthPending("NOTION"));
+                }
+            );
 
-        // ── Webhook 서비스 (TODO: webhook_credentials 테이블 구현 후) ─────────
-        unavailable.add(IntegrationInfo.webhookPending("SLACK"));
-        unavailable.add(IntegrationInfo.webhookPending("DISCORD"));
+        // ── Webhook 서비스 (Slack/Discord) ───────────────────────────────────
+        // webhook_credentials에 보유한 provider는 available, 없으면 unavailable.
+        Set<WebhookProvider> connectedWebhookProviders = webhookCredentialRepository.findByUserId(userId).stream()
+            .filter(c -> c.isEnabled())
+            .map(c -> c.getProvider())
+            .collect(Collectors.toSet());
+
+        for (WebhookProvider provider : WebhookProvider.values()) {
+            if (connectedWebhookProviders.contains(provider)) {
+                log.debug("[IntegrationContextService] {} 웹훅 연동 확인 — userId: {}", provider, userId);
+                available.add(IntegrationInfo.webhookConnected(provider.name()));
+            } else {
+                unavailable.add(IntegrationInfo.webhookPending(provider.name()));
+            }
+        }
 
         log.debug("[IntegrationContextService] available: {}개, unavailable: {}개",
             available.size(), unavailable.size());

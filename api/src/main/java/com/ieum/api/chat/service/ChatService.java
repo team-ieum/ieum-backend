@@ -6,10 +6,19 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.api.chat.dto.AgentAction;
 import com.ieum.api.chat.dto.AgentResponseType;
+import com.ieum.api.chat.dto.AvailableMcpServer;
+import com.ieum.api.chat.dto.AvailableWebhook;
 import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.api.chat.dto.ChatRequest;
 import com.ieum.api.chat.dto.ChatResponse;
+import com.ieum.api.chat.dto.IntegrationInfo;
 import com.ieum.api.chat.service.IntegrationContextService.IntegrationContext;
+import com.ieum.api.credential.domain.Credential;
+import com.ieum.api.credential.service.CredentialService;
+import com.ieum.api.mcp.domain.McpServerCatalog;
+import com.ieum.api.mcp.repository.McpServerCatalogRepository;
+import com.ieum.api.webhookcredential.domain.WebhookCredential;
+import com.ieum.api.webhookcredential.repository.WebhookCredentialRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.chat.domain.ChatMessage;
@@ -23,10 +32,12 @@ import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.executor.CredentialProvider;
 import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
 import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
+import com.ieum.workflowcore.engine.executor.NotionTokenProvider;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -67,11 +78,15 @@ public class ChatService {
     private final ChatMessageRepository messageRepository;
     private final WorkflowCrudService workflowCrudService;
     private final CredentialProvider credentialProvider;
+    private final CredentialService credentialService;
     private final GoogleTokenProvider googleTokenProvider;
     private final GitHubTokenProvider gitHubTokenProvider;
+    private final NotionTokenProvider notionTokenProvider;
     private final IntegrationContextService integrationContextService;
     private final AgentClient agentClient;
     private final ObjectMapper objectMapper;
+    private final McpServerCatalogRepository mcpServerCatalogRepository;
+    private final WebhookCredentialRepository webhookCredentialRepository;
 
     // ─────────────────────────────────────── REST 블로킹 ──────────────────────
 
@@ -90,7 +105,7 @@ public class ChatService {
         ChatSession session = createOrGetSession(workflowId, userId, request.getSessionId());
 
         // 2. 워크플로우 AI 노드 설정 로드 (소유권 검증 포함)
-        AgentConfig agentConfig = resolveAgentConfig(workflowId, userId);
+        AgentConfig agentConfig = resolveAgentConfig(workflowId, userId, request.getCredentialId());
 
         // 3. USER 메시지 저장
         saveUserMessage(session, request.getPrompt());
@@ -106,26 +121,40 @@ public class ChatService {
         // 6. Google 빌트인 도구 → Access Token 조회 (없으면 null)
         String googleAccessToken = resolveGoogleAccessToken(agentConfig.tools(), userId);
         String githubToken = resolveGitHubAccessToken(integrationContext, userId);
+        String notionToken = resolveNotionToken(integrationContext, userId);
 
-        // 7. AI 에이전트 호출
+        // 7. AI 에이전트 호출 (agent 스펙 미지원 provider 제거)
         log.info("[ChatService] AI 응답 요청 — workflowId: {}, sessionId: {}",
             workflowId, session.getId());
+        List<IntegrationInfo> agentAvailable = filterAgentSupportedIntegrations(integrationContext.available());
+        List<IntegrationInfo> agentUnavailable = filterAgentSupportedIntegrations(integrationContext.unavailable());
+        List<AvailableMcpServer> availableMcpServers = resolveAvailableMcpServers(userId);
+        List<AvailableWebhook> availableWebhooks = resolveAvailableWebhooks(userId);
         ChatAgentResponse agentResponse = agentClient.chat(
             request.getPrompt(),
             request.getCurrentNodes(),
             request.getCurrentEdges(),
-            integrationContext.available(),
-            integrationContext.unavailable(),
+            agentAvailable,
+            agentUnavailable,
             agentConfig.llmProvider(),
             agentConfig.decryptedApiKey(),
             googleAccessToken,
             githubToken,
+            notionToken,
+            availableMcpServers,
+            availableWebhooks,
             userId
         );
 
         // 8. WORKFLOW_GENERATED/MODIFIED → DB에 새 버전으로 저장
+        //    첫 생성 여부를 저장 전에 확인 (저장 후에는 version이 증가하므로)
         if (agentResponse.isWorkflowResult()) {
-            saveWorkflowVersion(workflowId, agentResponse);
+            int maxVersionBeforeSave = workflowCrudService.findMaxVersionByWorkflowId(workflowId);
+            saveWorkflowVersion(workflowId, agentResponse, agentConfig, request.getCredentialId());
+
+            if (maxVersionBeforeSave <= 1 && agentResponse.getWorkflowName() != null) {
+                workflowCrudService.updateWorkflowName(workflowId, agentResponse.getWorkflowName());
+            }
         }
 
         // 9. INTEGRATION_REQUIRED → actions에 oauthUrl 주입
@@ -240,7 +269,7 @@ public class ChatService {
      * @throws CustomException INVALID_WORKFLOW — nodesJson 파싱 실패 시
      */
     @SuppressWarnings("unchecked")
-    public AgentConfig resolveAgentConfig(UUID workflowId, UUID userId) {
+    public AgentConfig resolveAgentConfig(UUID workflowId, UUID userId, UUID fallbackCredentialId) {
         workflowCrudService.getWorkflowByOwner(userId, workflowId);
 
         WorkflowVersion version = workflowCrudService.findLatestVersion(workflowId)
@@ -260,16 +289,25 @@ public class ChatService {
         Node aiNode = nodes.stream()
             .filter(n -> n.getType() == NodeType.AI)
             .findFirst()
-            .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE));
+            .orElse(null);
 
-        Map<String, Object> config = aiNode.getConfig();
-        String llmProvider = (String) config.get("llmProvider");
-        String credentialId = (String) config.get("credentialId");
-        List<Map<String, Object>> tools = (List<Map<String, Object>>) config.get("tools");
+        if (aiNode != null) {
+            Map<String, Object> config = aiNode.getConfig();
+            String llmProvider = (String) config.get("llmProvider");
+            String credentialId = (String) config.get("credentialId");
+            List<Map<String, Object>> tools = (List<Map<String, Object>>) config.get("tools");
+            String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
+            return new AgentConfig(llmProvider, decryptedApiKey, tools);
+        }
 
-        String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
-
-        return new AgentConfig(llmProvider, decryptedApiKey, tools);
+        // AI 노드 없음 → fallbackCredentialId로 기본 설정 사용 (빈 워크플로우 채팅 시)
+        if (fallbackCredentialId == null) {
+            throw new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE);
+        }
+        log.info("[ChatService][DEBUG] fallbackCredentialId={}, userId={}", fallbackCredentialId, userId);
+        Credential credential = credentialService.getByIdAndUserId(fallbackCredentialId, userId);
+        String decryptedApiKey = credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString());
+        return new AgentConfig(credential.getProvider().name(), decryptedApiKey, null);
     }
 
     // ─────────────────────────────────────── PRIVATE ──────────────────────────
@@ -326,12 +364,40 @@ public class ChatService {
     /**
      * AI가 생성/수정한 노드/엣지를 JSON으로 직렬화하여 새 워크플로우 버전으로 저장한다.
      *
-     * @param workflowId    워크플로우 ID
-     * @param agentResponse WORKFLOW_GENERATED 또는 WORKFLOW_MODIFIED 응답
+     * <p>agent가 생성한 AI 노드에는 credentialId가 없으므로,
+     * agentConfig/fallbackCredentialId를 기반으로 AI 노드 config에 주입한다.
      */
-    private void saveWorkflowVersion(UUID workflowId, ChatAgentResponse agentResponse) {
+    @SuppressWarnings("unchecked")
+    private void saveWorkflowVersion(UUID workflowId, ChatAgentResponse agentResponse,
+            AgentConfig agentConfig, UUID fallbackCredentialId) {
         try {
-            String nodesJson = objectMapper.writeValueAsString(agentResponse.getNodes());
+            List<Map<String, Object>> nodes = objectMapper.convertValue(
+                agentResponse.getNodes(), new TypeReference<>() {});
+
+            // AI 노드에 credentialId / llmProvider 주입 (agent가 생성 시 누락하는 경우 보완)
+            for (Map<String, Object> node : nodes) {
+                String nodeType = (String) node.get("type");
+                if ("AI".equals(nodeType)) {
+                    Map<String, Object> config = (Map<String, Object>) node.get("config");
+                    if (config != null) {
+                        String existingCredentialId = (String) config.get("credentialId");
+                        log.info("[ChatService][DEBUG] nodeId={}, existingCredentialId='{}', fallback={}",
+                            node.get("id"), existingCredentialId, fallbackCredentialId);
+                        if ((existingCredentialId == null || existingCredentialId.isBlank())
+                                && fallbackCredentialId != null) {
+                            config.put("credentialId", fallbackCredentialId.toString());
+                            log.info("[ChatService][DEBUG] credentialId 주입 완료 — nodeId={}", node.get("id"));
+                        }
+                        String existingProvider = (String) config.get("llmProvider");
+                        if ((existingProvider == null || existingProvider.isBlank())
+                                && agentConfig.llmProvider() != null) {
+                            config.put("llmProvider", agentConfig.llmProvider());
+                        }
+                    }
+                }
+            }
+
+            String nodesJson = objectMapper.writeValueAsString(nodes);
             String edgesJson = objectMapper.writeValueAsString(agentResponse.getEdges());
             workflowCrudService.saveAgentVersion(workflowId, nodesJson, edgesJson);
             log.info("[ChatService] 워크플로우 버전 저장 완료 — workflowId: {}, type: {}",
@@ -342,6 +408,19 @@ public class ChatService {
         }
     }
 
+    /**
+     * ieum-agent가 지원하지 않는 provider를 필터링한다.
+     * agent 스펙: GOOGLE, NOTION, SLACK, DISCORD, GITHUB 허용
+     */
+    private static final Set<String> AGENT_SUPPORTED_PROVIDERS =
+        Set.of("GOOGLE", "NOTION", "SLACK", "DISCORD", "GITHUB");
+
+    private List<IntegrationInfo> filterAgentSupportedIntegrations(List<IntegrationInfo> list) {
+        return list.stream()
+            .filter(info -> AGENT_SUPPORTED_PROVIDERS.contains(info.getProvider()))
+            .toList();
+    }
+
     private String resolveGitHubAccessToken(IntegrationContext integrationContext, UUID userId) {
         boolean isGitHubConnected = integrationContext.available().stream()
             .anyMatch(info -> "GITHUB".equals(info.getProvider()));
@@ -349,6 +428,49 @@ public class ChatService {
             return null;
         }
         return gitHubTokenProvider.getAccessToken(userId).orElse(null);
+    }
+
+    private String resolveNotionToken(IntegrationContext integrationContext, UUID userId) {
+        boolean isNotionConnected = integrationContext.available().stream()
+            .anyMatch(info -> "NOTION".equals(info.getProvider()));
+        if (!isNotionConnected) {
+            return null;
+        }
+        return notionTokenProvider.getAccessToken(userId).orElse(null);
+    }
+
+    /**
+     * 사용자가 보유한 활성(enabled) MCP 서버 카탈로그를 조회해 agent 생성 요청용 메타로 변환한다.
+     *
+     * <p>serverUrl/암호화 헤더 등 민감 정보는 제외하고 catalogId/name/description만 전달한다.
+     * agent는 이 목록에 있는 catalogId만 노드의 mcp 도구로 허용한다(환각 차단).
+     */
+    private List<AvailableMcpServer> resolveAvailableMcpServers(UUID userId) {
+        return mcpServerCatalogRepository.findByUserId(userId).stream()
+            .filter(McpServerCatalog::isEnabled)
+            .map(c -> new AvailableMcpServer(
+                c.getId().toString(),
+                c.getDisplayName(),
+                c.getDescription()
+            ))
+            .toList();
+    }
+
+    /**
+     * 사용자가 보유한 활성(enabled) Slack/Discord 웹훅 자격증명을 조회해 agent 생성 요청용 메타로 변환한다.
+     *
+     * <p>webhook URL 등 민감 정보는 제외하고 webhookCredentialId/provider/displayName만 전달한다.
+     * agent는 이 목록에 있는 webhookCredentialId만 노드의 slack/discord 도구에 허용한다(환각 차단).
+     */
+    private List<AvailableWebhook> resolveAvailableWebhooks(UUID userId) {
+        return webhookCredentialRepository.findByUserId(userId).stream()
+            .filter(WebhookCredential::isEnabled)
+            .map(w -> new AvailableWebhook(
+                w.getId().toString(),
+                w.getProvider().name(),
+                w.getDisplayName()
+            ))
+            .toList();
     }
 
     private String resolveGoogleAccessToken(List<Map<String, Object>> tools, UUID userId) {
@@ -382,7 +504,7 @@ public class ChatService {
     @Transactional
     public StreamSetupResult prepareStream(UUID workflowId, UUID userId, ChatRequest request) {
         ChatSession session = createOrGetSession(workflowId, userId, request.getSessionId());
-        AgentConfig config = resolveAgentConfig(workflowId, userId);
+        AgentConfig config = resolveAgentConfig(workflowId, userId, request.getCredentialId());
 
         saveUserMessage(session, request.getPrompt());
 
@@ -393,9 +515,15 @@ public class ChatService {
         IntegrationContext integrationContext = integrationContextService.resolve(userId);
         String googleToken = resolveGoogleAccessToken(config.tools(), userId);
         String githubToken = resolveGitHubAccessToken(integrationContext, userId);
+        String notionToken = resolveNotionToken(integrationContext, userId);
 
         log.info("[ChatService] 스트림 준비 완료 — workflowId: {}, sessionId: {}",
             workflowId, session.getId());
+
+        IntegrationContext agentContext = new IntegrationContext(
+            filterAgentSupportedIntegrations(integrationContext.available()),
+            filterAgentSupportedIntegrations(integrationContext.unavailable())
+        );
 
         return new StreamSetupResult(
             session.getId(),
@@ -403,9 +531,12 @@ public class ChatService {
             request.getPrompt(),
             request.getCurrentNodes(),
             request.getCurrentEdges(),
-            integrationContext,
+            agentContext,
             googleToken,
-            githubToken
+            githubToken,
+            notionToken,
+            resolveAvailableMcpServers(userId),
+            resolveAvailableWebhooks(userId)
         );
     }
 
@@ -456,6 +587,9 @@ public class ChatService {
         List<Object> currentEdges,
         IntegrationContext integrationContext,
         String googleToken,
-        String githubToken
+        String githubToken,
+        String notionToken,
+        List<AvailableMcpServer> availableMcpServers,
+        List<AvailableWebhook> availableWebhooks
     ) {}
 }
