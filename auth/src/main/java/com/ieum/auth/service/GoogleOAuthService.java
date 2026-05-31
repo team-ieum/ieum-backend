@@ -148,7 +148,6 @@ public class GoogleOAuthService {
      * @param scopeGroups 연동할 scope 그룹 목록
      * @return link_token이 포함된 Google OAuth 연동 URL
      */
-    @Transactional
     public String startAccountLinking(UUID userId, List<String> scopeGroups) {
         validateScopeGroups(scopeGroups);
 

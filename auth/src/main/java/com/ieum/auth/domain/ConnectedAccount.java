@@ -36,6 +36,10 @@ public class ConnectedAccount extends BaseEntity {
     @Column(nullable = false, length = 20)
     private AuthProvider provider;
 
+    /** 외부 provider의 고유 계정 식별자 (Google의 경우 OIDC {@code sub}). 중복 연동 검증용. */
+    @Column(name = "provider_account_id", length = 255)
+    private String providerAccountId;
+
     @Column(name = "access_token", nullable = false, columnDefinition = "TEXT")
     private String accessToken;
 
@@ -53,6 +57,11 @@ public class ConnectedAccount extends BaseEntity {
 
     public void updateAccessToken(String accessToken) {
         this.accessToken = accessToken;
+    }
+
+    /** provider 계정 식별자(sub)를 설정한다. 기존 데이터 백필 및 신규 연동 시 사용. */
+    public void assignProviderAccountId(String providerAccountId) {
+        this.providerAccountId = providerAccountId;
     }
 
     public void updateTokenAndScopes(String accessToken, String scopes) {

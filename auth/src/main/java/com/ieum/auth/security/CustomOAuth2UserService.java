@@ -51,7 +51,7 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
             ? linkToExistingUser(linkUserId, providerId)
             : loginOrRegister(email, name, providerId);
 
-        saveOrUpdateConnectedAccount(user, userRequest);
+        saveOrUpdateConnectedAccount(user, providerId, userRequest);
 
         return new CustomOAuth2User(oAuth2User, user);
     }
@@ -88,9 +88,18 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
         User current = userRepository.findById(linkUserId)
             .orElseThrow(() -> new OAuth2AuthenticationException(ErrorCode.INVALID_LINK_TOKEN.name()));
 
+        // 동일 Google 계정(sub)이 다른 유저의 로그인 계정으로 존재하면 거부
         userRepository.findByProviderAndProviderId(AuthProvider.GOOGLE, providerId)
             .ifPresent(existing -> {
                 if (!existing.getId().equals(linkUserId)) {
+                    throw new OAuth2AuthenticationException(ErrorCode.ACCOUNT_ALREADY_LINKED.name());
+                }
+            });
+
+        // 동일 Google 계정(sub)이 다른 유저의 연동 계정으로 이미 연결돼 있으면 거부
+        connectedAccountRepository.findByProviderAndProviderAccountId(AuthProvider.GOOGLE, providerId)
+            .ifPresent(existing -> {
+                if (!existing.getUserId().equals(linkUserId)) {
                     throw new OAuth2AuthenticationException(ErrorCode.ACCOUNT_ALREADY_LINKED.name());
                 }
             });
@@ -126,7 +135,7 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
         return linkToken.getUserId();
     }
 
-    private void saveOrUpdateConnectedAccount(User user, OAuth2UserRequest userRequest) {
+    private void saveOrUpdateConnectedAccount(User user, String providerId, OAuth2UserRequest userRequest) {
         String encryptedToken = aesEncryptor.encrypt(
             userRequest.getAccessToken().getTokenValue()
         );
@@ -140,17 +149,21 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
         connectedAccountRepository.findByUserIdAndProvider(user.getId(), AuthProvider.GOOGLE)
             .ifPresentOrElse(
                 // baseline 로그인 토큰은 기존 grant를 포함하지 않으므로 병합해 scope 축소 방지
-                account -> account.updateTokensAndScopes(
-                    encryptedToken,
-                    account.getRefreshToken(),
-                    tokenExpiresAt,
-                    account.getRefreshTokenExpiresAt(),
-                    mergeScopes(account.getScopes(), grantedScopes)
-                ),
+                account -> {
+                    account.updateTokensAndScopes(
+                        encryptedToken,
+                        account.getRefreshToken(),
+                        tokenExpiresAt,
+                        account.getRefreshTokenExpiresAt(),
+                        mergeScopes(account.getScopes(), grantedScopes)
+                    );
+                    account.assignProviderAccountId(providerId);  // 기존 행 백필
+                },
                 () -> connectedAccountRepository.save(
                     ConnectedAccount.builder()
                         .userId(user.getId())
                         .provider(AuthProvider.GOOGLE)
+                        .providerAccountId(providerId)
                         .accessToken(encryptedToken)
                         .tokenExpiresAt(tokenExpiresAt)
                         .scopes(String.join(" ", grantedScopes))
