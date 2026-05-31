@@ -250,7 +250,11 @@ public class AgentNodeExecutor implements NodeExecutor {
             }
             webhookCredentialProvider.resolveWebhookUrl(credentialId, userId)
                 .ifPresentOrElse(
-                    url -> ((Map<String, Object>) configMap).put("webhook_url", url),
+                    url -> {
+                        Map<String, Object> mutableConfig = new HashMap<>((Map<String, Object>) configMap);
+                        mutableConfig.put("webhook_url", url);
+                        tool.put("config", mutableConfig);
+                    },
                     () -> log.warn("[AgentNodeExecutor] 웹훅 자격증명 미해결 — credentialId: {}", credentialId)
                 );
         }
