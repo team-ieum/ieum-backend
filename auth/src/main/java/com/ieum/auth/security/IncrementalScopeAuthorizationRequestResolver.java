@@ -39,6 +39,12 @@ public class IncrementalScopeAuthorizationRequestResolver implements OAuth2Autho
     /** scope 그룹을 전달받는 요청 파라미터명. */
     static final String SCOPE_GROUPS_PARAM = "scope_groups";
 
+    /** 계정 연동 link token을 전달받는 요청 파라미터명. */
+    static final String LINK_TOKEN_PARAM = "link_token";
+
+    /** 계정 연동 흐름임을 나타내는 OAuth state 프리픽스. 콜백에서 정상 로그인과 구분. */
+    public static final String STATE_LINK_PREFIX = "link:";
+
     /** 증분 승인을 적용할 registration id. (Google 외 provider는 영향받지 않음) */
     private static final String GOOGLE_REGISTRATION_ID = "google";
 
@@ -104,9 +110,16 @@ public class IncrementalScopeAuthorizationRequestResolver implements OAuth2Autho
         log.debug("[IncrementalScopeResolver] 증분 scope 요청 — groups: {}, scopes: {}",
             scopeGroupsParam, scopes);
 
-        return OAuth2AuthorizationRequest.from(authorizationRequest)
+        OAuth2AuthorizationRequest.Builder builder = OAuth2AuthorizationRequest.from(authorizationRequest)
             .scopes(scopes)
-            .additionalParameters(additionalParameters)
-            .build();
+            .additionalParameters(additionalParameters);
+
+        // 계정 연동 흐름이면 link token을 state에 실어 콜백까지 전달 (정상 로그인과 구분)
+        String linkToken = request.getParameter(LINK_TOKEN_PARAM);
+        if (StringUtils.hasText(linkToken)) {
+            builder.state(STATE_LINK_PREFIX + linkToken);
+        }
+
+        return builder.build();
     }
 }

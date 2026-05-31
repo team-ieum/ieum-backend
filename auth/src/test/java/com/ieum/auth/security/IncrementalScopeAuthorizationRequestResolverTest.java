@@ -100,6 +100,18 @@ class IncrementalScopeAuthorizationRequestResolverTest {
     }
 
     @Test
+    @DisplayName("link_token 파라미터가 있으면 OAuth state에 link 프리픽스로 바인딩한다")
+    void bindsLinkTokenToStateWithPrefix() {
+        given(oAuthScopeConfig.getScopesByGroup("gmail")).willReturn(List.of(GMAIL_SCOPE));
+        MockHttpServletRequest request = authorizeRequest("google", "gmail");
+        request.setParameter("link_token", "tok-123");
+
+        OAuth2AuthorizationRequest result = resolver.resolve(request);
+
+        assertThat(result.getState()).isEqualTo("link:tok-123");
+    }
+
+    @Test
     @DisplayName("Google이 아닌 provider 요청은 scope_groups가 있어도 증분 로직을 적용하지 않는다")
     void doesNotApplyToNonGoogleProvider() {
         OAuth2AuthorizationRequest result = resolver.resolve(authorizeRequest("github", "gmail"));
