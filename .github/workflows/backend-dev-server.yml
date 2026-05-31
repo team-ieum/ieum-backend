@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: backend_dev_server
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   JAVA_VERSION: '21'
@@ -125,11 +125,7 @@ jobs:
       - name: Health check
         run: |
           for i in $(seq 1 30); do
-            if curl -fsS "http://$BACKEND_IP:$BACKEND_PORT/actuator/health" >/dev/null 2>&1; then
-              exit 0
-            fi
-
-            if curl -fsS "http://$BACKEND_IP:$BACKEND_PORT/v3/api-docs" >/dev/null 2>&1; then
+            if curl -fsS "http://$BACKEND_IP:$BACKEND_PORT/actuator/health/readiness" >/dev/null 2>&1; then
               exit 0
             fi
 
