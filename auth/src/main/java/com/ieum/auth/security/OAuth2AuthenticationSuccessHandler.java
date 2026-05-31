@@ -36,6 +36,17 @@ public class OAuth2AuthenticationSuccessHandler extends SimpleUrlAuthenticationS
     @Override
     public void onAuthenticationSuccess(HttpServletRequest request, HttpServletResponse response,
         Authentication authentication) throws IOException {
+        // 계정 연동 흐름은 이미 로그인된 유저이므로 JWT 재발급 없이 설정 페이지로 복귀
+        String state = request.getParameter("state");
+        if (state != null
+            && state.startsWith(IncrementalScopeAuthorizationRequestResolver.STATE_LINK_PREFIX)) {
+            String linkedUrl = UriComponentsBuilder.fromUriString(redirectUri)
+                .queryParam("linked", "google")
+                .build().toUriString();
+            getRedirectStrategy().sendRedirect(request, response, linkedUrl);
+            return;
+        }
+
         CustomOAuth2User oAuth2User = (CustomOAuth2User) authentication.getPrincipal();
         User user = oAuth2User.getUser();
 

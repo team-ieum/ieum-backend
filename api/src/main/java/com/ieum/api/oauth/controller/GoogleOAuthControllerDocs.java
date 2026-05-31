@@ -1,6 +1,7 @@
 package com.ieum.api.oauth.controller;
 
 import com.ieum.api.oauth.dto.AvailableScopesResponse;
+import com.ieum.api.oauth.dto.ConnectAccountResponse;
 import com.ieum.api.oauth.dto.MyScopesResponse;
 import com.ieum.api.oauth.dto.ScopeRequestRequest;
 import com.ieum.api.oauth.dto.ScopeRequestResponse;
@@ -47,4 +48,15 @@ public interface GoogleOAuthControllerDocs {
             + "클라이언트는 이 URL로 리다이렉트하여 Google 동의 화면을 진행합니다."
     )
     ResponseEntity<ApiResponse<Map<String, String>>> getAuthorizeUrl();
+
+    @Operation(
+        summary = "Google 계정 연동",
+        description = "현재 로그인된 계정에 Google을 연동하기 위한 OAuth URL을 발급합니다. "
+            + "소셜 회원가입 여부와 무관하게 기존 계정에 Google scope를 연결하며, "
+            + "응답의 authorizationUrl로 리다이렉트하면 동의 후 현재 계정에 연동됩니다."
+    )
+    ResponseEntity<ApiResponse<ConnectAccountResponse>> connect(
+        @AuthenticationPrincipal CustomUserDetails userDetails,
+        @RequestBody ScopeRequestRequest request
+    );
 }

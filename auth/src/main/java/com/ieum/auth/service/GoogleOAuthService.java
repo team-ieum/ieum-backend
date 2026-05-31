@@ -2,7 +2,9 @@ package com.ieum.auth.service;
 
 import com.ieum.auth.config.OAuthScopeConfig;
 import com.ieum.auth.domain.AuthProvider;
+import com.ieum.auth.domain.OAuthLinkToken;
 import com.ieum.auth.repository.ConnectedAccountRepository;
+import com.ieum.auth.repository.OAuthLinkTokenRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import java.net.URLEncoder;
@@ -40,8 +42,12 @@ public class GoogleOAuthService {
     /** Spring Security OAuth2 authorization endpoint base URI (SecurityConfig에서 설정). */
     private static final String OAUTH2_AUTHORIZE_BASE = "/api/v1/oauth2/authorize/google";
 
+    /** 계정 연동 link token TTL (초). */
+    private static final long LINK_TOKEN_TTL_SECONDS = 300L;
+
     private final ConnectedAccountRepository connectedAccountRepository;
     private final OAuthScopeConfig oAuthScopeConfig;
+    private final OAuthLinkTokenRepository oAuthLinkTokenRepository;
 
     /**
      * 사용자가 현재 보유한 Google scope 목록을 반환한다.
@@ -130,6 +136,42 @@ public class GoogleOAuthService {
         String encoded = URLEncoder.encode(groups, StandardCharsets.UTF_8);
         log.debug("[GoogleOAuthService] 증분 authorization URL 생성 — groups: {}", groups);
         return OAUTH2_AUTHORIZE_BASE + "?scope_groups=" + encoded;
+    }
+
+    /**
+     * 인증된 유저가 자신의 계정에 Google을 연동하기 위한 OAuth URL을 생성한다.
+     *
+     * <p>일회용 link token을 발급해 Redis에 저장하고, authorization URL에 {@code link_token}
+     * 파라미터로 함께 전달한다. 콜백에서 이 토큰으로 현재 유저를 식별해 Google 계정을 연동한다.
+     *
+     * @param userId      연동을 요청한 현재 유저 ID
+     * @param scopeGroups 연동할 scope 그룹 목록
+     * @return link_token이 포함된 Google OAuth 연동 URL
+     */
+    public String startAccountLinking(UUID userId, List<String> scopeGroups) {
+        validateScopeGroups(scopeGroups);
+
+        String token = UUID.randomUUID().toString();
+        String groups = String.join(",", scopeGroups);
+        oAuthLinkTokenRepository.save(OAuthLinkToken.builder()
+            .token(token)
+            .userId(userId)
+            .scopeGroups(groups)
+            .ttl(LINK_TOKEN_TTL_SECONDS)
+            .build());
+
+        String encodedGroups = URLEncoder.encode(groups, StandardCharsets.UTF_8);
+        log.info("[GoogleOAuthService] 계정 연동 시작 — userId: {}, groups: {}", userId, groups);
+        return OAUTH2_AUTHORIZE_BASE + "?scope_groups=" + encodedGroups + "&link_token=" + token;
+    }
+
+    private void validateScopeGroups(List<String> scopeGroups) {
+        for (String group : scopeGroups) {
+            if (oAuthScopeConfig.getScopesByGroup(group).isEmpty()) {
+                throw new CustomException(ErrorCode.INVALID_INPUT,
+                    "지원하지 않는 scope 그룹입니다: " + group);
+            }
+        }
     }
 
     /**
