@@ -5,6 +5,8 @@ import com.ieum.auth.domain.AuthProvider;
 import com.ieum.auth.repository.ConnectedAccountRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -108,6 +110,26 @@ public class GoogleOAuthService {
         log.debug("[GoogleOAuthService] authorization URL 생성 — incrementalAuth={}",
             oAuthScopeConfig.isIncrementalAuth());
         return OAUTH2_AUTHORIZE_BASE;
+    }
+
+    /**
+     * 요청된 scope 그룹을 동적으로 요청하는 Google OAuth 재인증 URL을 반환한다.
+     *
+     * <p>{@code scope_groups} 쿼리 파라미터로 그룹을 전달하면
+     * {@code IncrementalScopeAuthorizationRequestResolver}가 해당 그룹의 scope만
+     * baseline(email, profile)에 추가해 동의 화면을 구성한다.
+     *
+     * @param scopeGroups 요청할 scope 그룹명 목록 (예: ["gmail", "sheets"])
+     * @return scope_groups 파라미터가 포함된 재인증 URL
+     */
+    public String getAuthorizationUrl(List<String> scopeGroups) {
+        if (scopeGroups == null || scopeGroups.isEmpty()) {
+            return OAUTH2_AUTHORIZE_BASE;
+        }
+        String groups = String.join(",", scopeGroups);
+        String encoded = URLEncoder.encode(groups, StandardCharsets.UTF_8);
+        log.debug("[GoogleOAuthService] 증분 authorization URL 생성 — groups: {}", groups);
+        return OAUTH2_AUTHORIZE_BASE + "?scope_groups=" + encoded;
     }
 
     /**
