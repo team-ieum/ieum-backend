@@ -61,6 +61,18 @@ springdoc:
 server:
   port: 8080
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: when-authorized
+      group:
+        readiness:
+          include: db, mongo, redis
+
 ieum:
   agent:
     url: ${AGENT_SERVICE_URL}
