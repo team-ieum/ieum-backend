@@ -11,6 +11,9 @@ public interface ConnectedAccountRepository extends JpaRepository<ConnectedAccou
 
     Optional<ConnectedAccount> findByUserIdAndProvider(UUID userId, AuthProvider provider);
 
+    Optional<ConnectedAccount> findByProviderAndProviderAccountId(
+        AuthProvider provider, String providerAccountId);
+
     List<ConnectedAccount> findByUserId(UUID userId);
 
     boolean existsByUserIdAndProvider(UUID userId, AuthProvider provider);
