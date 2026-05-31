@@ -36,11 +36,9 @@ spring:
             client-id: ${GOOGLE_CLIENT_ID}
             client-secret: ${GOOGLE_CLIENT_SECRET}
             redirect-uri: "{baseUrl}/api/v1/oauth2/callback/{registrationId}"
-            scope: email, profile,
-              https://www.googleapis.com/auth/gmail.modify,
-              https://www.googleapis.com/auth/spreadsheets,
-              https://www.googleapis.com/auth/drive,
-              https://www.googleapis.com/auth/calendar
+            # baseline scope만 등록 — 그 외 scope는 google.oauth.scopes 기반으로
+            # IncrementalScopeAuthorizationRequestResolver가 scope_groups 파라미터로 동적 주입
+            scope: email, profile
 oauth2:
   redirect-uri: ${OAUTH2_REDIRECT_URI:http://localhost:3000/oauth2/callback}
 
