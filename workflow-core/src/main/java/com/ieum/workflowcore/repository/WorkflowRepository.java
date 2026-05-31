@@ -24,10 +24,10 @@ public interface WorkflowRepository extends JpaRepository<Workflow, UUID> {
 
     /**
      * 고아 빈 워크플로우 후보 조회.
-     * 생성된 지 threshold 이상 지났고, AI가 워크플로우를 아직 생성하지 않은 것(maxVersion == 1)만 반환한다.
+     * 생성된 지 threshold 이상 지났고, AI가 워크플로우를 아직 생성하지 않은 것(maxVersion <= 1, 버전 0개 포함)만 반환한다.
      * 실제 nodes 비어있는지 여부는 MongoDB에서 2단계로 확인한다.
      */
     @Query("SELECT w.id FROM Workflow w WHERE w.createdAt < :threshold AND " +
-           "(SELECT COALESCE(MAX(wv.version), 0) FROM WorkflowVersion wv WHERE wv.workflow.id = w.id) = 1")
+           "(SELECT COALESCE(MAX(wv.version), 0) FROM WorkflowVersion wv WHERE wv.workflow.id = w.id) <= 1")
     List<UUID> findOrphanCandidates(@Param("threshold") LocalDateTime threshold);
 }

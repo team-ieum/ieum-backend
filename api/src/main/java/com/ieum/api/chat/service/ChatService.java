@@ -152,7 +152,7 @@ public class ChatService {
             int maxVersionBeforeSave = workflowCrudService.findMaxVersionByWorkflowId(workflowId);
             saveWorkflowVersion(workflowId, agentResponse, agentConfig, request.getCredentialId());
 
-            if (maxVersionBeforeSave == 1 && agentResponse.getWorkflowName() != null) {
+            if (maxVersionBeforeSave <= 1 && agentResponse.getWorkflowName() != null) {
                 workflowCrudService.updateWorkflowName(workflowId, agentResponse.getWorkflowName());
             }
         }
