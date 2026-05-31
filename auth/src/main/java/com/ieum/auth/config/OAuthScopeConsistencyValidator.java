@@ -1,9 +1,9 @@
 package com.ieum.auth.config;
 
+import jakarta.annotation.Nullable;
 import jakarta.annotation.PostConstruct;
 import java.util.List;
 import java.util.Set;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
@@ -26,7 +26,6 @@ import org.springframework.stereotype.Component;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class OAuthScopeConsistencyValidator {
 
     private static final String GOOGLE_REGISTRATION_ID = "google";
@@ -34,10 +33,23 @@ public class OAuthScopeConsistencyValidator {
     private final ClientRegistrationRepository clientRegistrationRepository;
     private final OAuthScopeConfig oAuthScopeConfig;
 
+    public OAuthScopeConsistencyValidator(
+        @Nullable ClientRegistrationRepository clientRegistrationRepository,
+        OAuthScopeConfig oAuthScopeConfig
+    ) {
+        this.clientRegistrationRepository = clientRegistrationRepository;
+        this.oAuthScopeConfig = oAuthScopeConfig;
+    }
+
     @PostConstruct
     void validate() {
         List<String> requiredScopes = oAuthScopeConfig.getAllScopes();
         if (requiredScopes.isEmpty()) {
+            return;
+        }
+
+        if (clientRegistrationRepository == null) {
+            log.warn("[OAuthScopeConsistencyValidator] ClientRegistrationRepository 빈 없음 — 검증 생략");
             return;
         }
 
