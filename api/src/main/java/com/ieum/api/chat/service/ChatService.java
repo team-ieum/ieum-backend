@@ -409,11 +409,11 @@ public class ChatService {
     }
 
     /**
-     * ieum-agent가 지원하지 않는 provider(GITHUB 등)를 필터링한다.
-     * agent 스펙: GOOGLE, NOTION, SLACK, DISCORD만 허용
+     * ieum-agent가 지원하지 않는 provider를 필터링한다.
+     * agent 스펙: GOOGLE, NOTION, SLACK, DISCORD, GITHUB 허용
      */
     private static final Set<String> AGENT_SUPPORTED_PROVIDERS =
-        Set.of("GOOGLE", "NOTION", "SLACK", "DISCORD");
+        Set.of("GOOGLE", "NOTION", "SLACK", "DISCORD", "GITHUB");
 
     private List<IntegrationInfo> filterAgentSupportedIntegrations(List<IntegrationInfo> list) {
         return list.stream()
