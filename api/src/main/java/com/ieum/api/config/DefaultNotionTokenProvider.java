@@ -33,8 +33,10 @@ public class DefaultNotionTokenProvider implements NotionTokenProvider {
             .findByUserIdAndProvider(userId, AuthProvider.NOTION)
             .flatMap(account -> {
                 try {
-                    log.debug("[DefaultNotionTokenProvider] userId={} Notion token 조회", userId);
-                    return Optional.of(aesEncryptionService.decrypt(account.getAccessToken()));
+                    String token = aesEncryptionService.decrypt(account.getAccessToken());
+                    log.info("[DefaultNotionTokenProvider] userId={} Notion token 복호화 성공 — length={}",
+                        userId, token.length());
+                    return Optional.of(token);
                 } catch (Exception e) {
                     log.error("[DefaultNotionTokenProvider] userId={} Notion token 복호화 실패", userId, e);
                     return Optional.empty();
