@@ -23,7 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/v1/mcp-servers")
 @RequiredArgsConstructor
-public class McpServerCatalogController {
+public class McpServerCatalogController implements McpServerCatalogControllerDocs {
 
     private final McpServerCatalogService service;
 

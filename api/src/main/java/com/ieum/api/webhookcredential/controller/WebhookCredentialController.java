@@ -23,7 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/v1/webhook-credentials")
 @RequiredArgsConstructor
-public class WebhookCredentialController {
+public class WebhookCredentialController implements WebhookCredentialControllerDocs {
 
     private final WebhookCredentialService service;
 
