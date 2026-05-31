@@ -13,6 +13,7 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.security.oauth2.client.web.DefaultOAuth2AuthorizationRequestResolver;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestResolver;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
+import org.springframework.security.oauth2.core.endpoint.OAuth2ParameterNames;
 import org.springframework.util.StringUtils;
 
 /**
@@ -37,6 +38,9 @@ public class IncrementalScopeAuthorizationRequestResolver implements OAuth2Autho
 
     /** scope 그룹을 전달받는 요청 파라미터명. */
     static final String SCOPE_GROUPS_PARAM = "scope_groups";
+
+    /** 증분 승인을 적용할 registration id. (Google 외 provider는 영향받지 않음) */
+    private static final String GOOGLE_REGISTRATION_ID = "google";
 
     private final OAuth2AuthorizationRequestResolver delegate;
     private final OAuthScopeConfig oAuthScopeConfig;
@@ -65,6 +69,13 @@ public class IncrementalScopeAuthorizationRequestResolver implements OAuth2Autho
         OAuth2AuthorizationRequest authorizationRequest, HttpServletRequest request) {
         if (authorizationRequest == null) {
             return null;
+        }
+
+        // Google 외 OAuth2 provider(GitHub, Notion 등) 요청은 증분 승인 로직을 적용하지 않음
+        String registrationId = (String) authorizationRequest.getAttributes()
+            .get(OAuth2ParameterNames.REGISTRATION_ID);
+        if (!GOOGLE_REGISTRATION_ID.equals(registrationId)) {
+            return authorizationRequest;
         }
 
         String scopeGroupsParam = request.getParameter(SCOPE_GROUPS_PARAM);

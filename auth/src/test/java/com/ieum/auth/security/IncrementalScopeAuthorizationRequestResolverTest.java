@@ -40,13 +40,26 @@ class IncrementalScopeAuthorizationRequestResolverTest {
             .tokenUri("https://oauth2.googleapis.com/token")
             .scope("email", "profile")
             .build();
-        ClientRegistrationRepository repository = new InMemoryClientRegistrationRepository(google);
+        ClientRegistration github = ClientRegistration.withRegistrationId("github")
+            .clientId("test")
+            .clientSecret("secret")
+            .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
+            .redirectUri("{baseUrl}/callback")
+            .authorizationUri("https://github.com/login/oauth/authorize")
+            .tokenUri("https://github.com/login/oauth/access_token")
+            .scope("read:user")
+            .build();
+        ClientRegistrationRepository repository = new InMemoryClientRegistrationRepository(google, github);
         resolver = new IncrementalScopeAuthorizationRequestResolver(repository, oAuthScopeConfig, BASE_URI);
     }
 
     private MockHttpServletRequest authorizeRequest(String scopeGroups) {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", BASE_URI + "/google");
-        request.setServletPath(BASE_URI + "/google");
+        return authorizeRequest("google", scopeGroups);
+    }
+
+    private MockHttpServletRequest authorizeRequest(String registrationId, String scopeGroups) {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", BASE_URI + "/" + registrationId);
+        request.setServletPath(BASE_URI + "/" + registrationId);
         if (scopeGroups != null) {
             request.setParameter("scope_groups", scopeGroups);
         }
@@ -84,5 +97,14 @@ class IncrementalScopeAuthorizationRequestResolverTest {
         OAuth2AuthorizationRequest result = resolver.resolve(authorizeRequest("unknown"));
 
         assertThat(result.getScopes()).containsExactlyInAnyOrder("email", "profile");
+    }
+
+    @Test
+    @DisplayName("Google이 아닌 provider 요청은 scope_groups가 있어도 증분 로직을 적용하지 않는다")
+    void doesNotApplyToNonGoogleProvider() {
+        OAuth2AuthorizationRequest result = resolver.resolve(authorizeRequest("github", "gmail"));
+
+        assertThat(result.getScopes()).containsExactly("read:user");
+        assertThat(result.getAdditionalParameters()).doesNotContainKey("access_type");
     }
 }
