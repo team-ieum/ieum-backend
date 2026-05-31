@@ -9,9 +9,11 @@ import com.ieum.common.util.AesEncryptionService;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -65,6 +67,11 @@ public class WebhookCredentialService {
      * (workflow-core가 slack/discord 도구 실행 시 webhook_url로 주입)
      */
     public String decryptWebhookUrl(WebhookCredential credential) {
-        return aesEncryptionService.decrypt(credential.getEncryptedWebhookUrl());
+        try {
+            return aesEncryptionService.decrypt(credential.getEncryptedWebhookUrl());
+        } catch (Exception e) {
+            log.error("[WebhookCredentialService] 웹훅 URL 복호화 실패 — credentialId: {}", credential.getId(), e);
+            throw new CustomException(ErrorCode.CREDENTIAL_DECRYPT_FAILED);
+        }
     }
 }

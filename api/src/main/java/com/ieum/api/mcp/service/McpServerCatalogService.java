@@ -11,9 +11,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -76,8 +78,9 @@ public class McpServerCatalogService {
         try {
             String json = aesEncryptionService.decrypt(catalog.getEncryptedHeaders());
             return objectMapper.readValue(json, new com.fasterxml.jackson.core.type.TypeReference<Map<String, String>>() {});
-        } catch (JsonProcessingException e) {
-            throw new CustomException(ErrorCode.INTERNAL_SERVER_ERROR);
+        } catch (Exception e) {
+            log.error("[McpServerCatalogService] MCP 헤더 복호화 또는 파싱 실패 — catalogId: {}", catalog.getId(), e);
+            throw new CustomException(ErrorCode.CREDENTIAL_DECRYPT_FAILED);
         }
     }
 
