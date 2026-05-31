@@ -5,6 +5,7 @@ import com.ieum.auth.jwt.JwtAuthenticationFilter;
 import com.ieum.auth.security.CustomOAuth2UserService;
 import com.ieum.auth.security.CustomUserDetailsService;
 import com.ieum.auth.security.HttpCookieOAuth2AuthorizationRequestRepository;
+import com.ieum.auth.security.IncrementalScopeAuthorizationRequestResolver;
 import com.ieum.auth.security.OAuth2AuthenticationFailureHandler;
 import com.ieum.auth.security.OAuth2AuthenticationSuccessHandler;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +18,8 @@ import org.springframework.security.config.annotation.web.configurers.AbstractHt
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestResolver;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
@@ -25,6 +28,9 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 @EnableMethodSecurity
 @RequiredArgsConstructor
 public class SecurityConfig {
+
+    /** OAuth2 authorization endpoint base URI. */
+    private static final String AUTHORIZATION_BASE_URI = "/api/v1/oauth2/authorize";
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint;
@@ -40,7 +46,19 @@ public class SecurityConfig {
     }
 
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    public OAuth2AuthorizationRequestResolver authorizationRequestResolver(
+        ClientRegistrationRepository clientRegistrationRepository,
+        OAuthScopeConfig oAuthScopeConfig
+    ) {
+        return new IncrementalScopeAuthorizationRequestResolver(
+            clientRegistrationRepository, oAuthScopeConfig, AUTHORIZATION_BASE_URI);
+    }
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(
+        HttpSecurity http,
+        OAuth2AuthorizationRequestResolver authorizationRequestResolver
+    ) throws Exception {
         http
             .csrf(AbstractHttpConfigurer::disable)
             .formLogin(AbstractHttpConfigurer::disable)
@@ -67,7 +85,8 @@ public class SecurityConfig {
                 .anyRequest().authenticated())
             .oauth2Login(oauth2 -> oauth2
                 .authorizationEndpoint(auth -> auth
-                    .baseUri("/api/v1/oauth2/authorize")
+                    .baseUri(AUTHORIZATION_BASE_URI)
+                    .authorizationRequestResolver(authorizationRequestResolver)
                     .authorizationRequestRepository(cookieAuthorizationRequestRepository))
                 .redirectionEndpoint(redirect -> redirect
                     .baseUri("/api/v1/oauth2/callback/*"))
