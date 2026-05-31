@@ -70,7 +70,7 @@ public class GoogleOAuthController implements GoogleOAuthControllerDocs {
             return ResponseEntity.ok(ApiResponse.ok(ScopeRequestResponse.noAuthRequired()));
         }
 
-        String authorizationUrl = googleOAuthService.getAuthorizationUrl();
+        String authorizationUrl = googleOAuthService.getAuthorizationUrl(request.getScopeGroups());
         log.info("[GoogleOAuthController] scope 재인증 필요 — userId: {}, missing: {}",
             userDetails.getId(), missingScopes);
         return ResponseEntity.ok(
