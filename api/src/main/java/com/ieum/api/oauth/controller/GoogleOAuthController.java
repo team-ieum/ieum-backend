@@ -1,6 +1,7 @@
 package com.ieum.api.oauth.controller;
 
 import com.ieum.api.oauth.dto.AvailableScopesResponse;
+import com.ieum.api.oauth.dto.ConnectAccountResponse;
 import com.ieum.api.oauth.dto.MyScopesResponse;
 import com.ieum.api.oauth.dto.ScopeRequestRequest;
 import com.ieum.api.oauth.dto.ScopeRequestResponse;
@@ -87,5 +88,21 @@ public class GoogleOAuthController implements GoogleOAuthControllerDocs {
         return ResponseEntity.ok(
             ApiResponse.ok(Map.of("url", googleOAuthService.getAuthorizationUrl()))
         );
+    }
+
+    /**
+     * POST /api/v1/oauth/google/connect
+     * 현재 로그인된 계정에 Google을 연동하기 위한 OAuth URL을 발급한다.
+     * 소셜 회원가입 여부와 무관하게 기존 계정에 Google scope를 연결한다.
+     */
+    @PostMapping("/connect")
+    public ResponseEntity<ApiResponse<ConnectAccountResponse>> connect(
+        @AuthenticationPrincipal CustomUserDetails userDetails,
+        @Valid @RequestBody ScopeRequestRequest request
+    ) {
+        String authorizationUrl = googleOAuthService.startAccountLinking(
+            userDetails.getId(), request.getScopeGroups());
+        log.info("[GoogleOAuthController] 계정 연동 URL 발급 — userId: {}", userDetails.getId());
+        return ResponseEntity.ok(ApiResponse.ok(ConnectAccountResponse.of(authorizationUrl)));
     }
 }
