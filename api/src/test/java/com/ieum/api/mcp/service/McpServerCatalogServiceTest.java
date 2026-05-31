@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
@@ -38,6 +39,7 @@ class McpServerCatalogServiceTest {
     }
 
     @Test
+    @DisplayName("성공 - 헤더 암호화 저장")
     void create_success_encryptsHeaders() {
         when(repository.existsByUserIdAndDisplayName(userId, "내 MCP")).thenReturn(false);
         when(repository.countByUserId(userId)).thenReturn(0L);
@@ -59,6 +61,7 @@ class McpServerCatalogServiceTest {
     }
 
     @Test
+    @DisplayName("헤더 없이 생성 시 null 저장")
     void create_withoutHeaders_storesNull() {
         when(repository.existsByUserIdAndDisplayName(userId, "헤더없음")).thenReturn(false);
         when(repository.countByUserId(userId)).thenReturn(0L);
@@ -72,6 +75,7 @@ class McpServerCatalogServiceTest {
     }
 
     @Test
+    @DisplayName("중복 이름 - 예외 발생")
     void create_duplicateName_throws() {
         when(repository.existsByUserIdAndDisplayName(userId, "중복")).thenReturn(true);
 
@@ -84,6 +88,7 @@ class McpServerCatalogServiceTest {
     }
 
     @Test
+    @DisplayName("등록 한도 초과 - 예외 발생")
     void create_limitExceeded_throws() {
         when(repository.existsByUserIdAndDisplayName(userId, "초과")).thenReturn(false);
         when(repository.countByUserId(userId)).thenReturn(20L);
@@ -97,6 +102,7 @@ class McpServerCatalogServiceTest {
     }
 
     @Test
+    @DisplayName("조회 없음 - 예외 발생")
     void getByIdAndUserId_notFound_throws() {
         UUID id = UUID.randomUUID();
         when(repository.findByIdAndUserId(id, userId)).thenReturn(Optional.empty());
@@ -107,6 +113,7 @@ class McpServerCatalogServiceTest {
     }
 
     @Test
+    @DisplayName("삭제 - 리포지토리 정상 호출")
     void delete_existing_callsRepository() {
         UUID id = UUID.randomUUID();
         McpServerCatalog catalog = McpServerCatalog.builder()
