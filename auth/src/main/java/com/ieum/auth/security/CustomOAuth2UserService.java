@@ -11,6 +11,9 @@ import com.ieum.common.util.AesEncryptor;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService;
 import org.springframework.security.oauth2.client.userinfo.OAuth2UserRequest;
@@ -61,7 +64,7 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
         String encryptedToken = aesEncryptor.encrypt(
             userRequest.getAccessToken().getTokenValue()
         );
-        String scopes = String.join(" ", userRequest.getAccessToken().getScopes());
+        Set<String> grantedScopes = userRequest.getAccessToken().getScopes();
 
         Instant expiresAtInstant = userRequest.getAccessToken().getExpiresAt();
         LocalDateTime tokenExpiresAt = expiresAtInstant != null
@@ -70,12 +73,13 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
 
         connectedAccountRepository.findByUserIdAndProvider(user.getId(), AuthProvider.GOOGLE)
             .ifPresentOrElse(
+                // baseline 로그인 토큰은 기존 grant를 포함하지 않으므로 병합해 scope 축소 방지
                 account -> account.updateTokensAndScopes(
                     encryptedToken,
                     account.getRefreshToken(),
                     tokenExpiresAt,
                     account.getRefreshTokenExpiresAt(),
-                    scopes
+                    mergeScopes(account.getScopes(), grantedScopes)
                 ),
                 () -> connectedAccountRepository.save(
                     ConnectedAccount.builder()
@@ -83,9 +87,27 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
                         .provider(AuthProvider.GOOGLE)
                         .accessToken(encryptedToken)
                         .tokenExpiresAt(tokenExpiresAt)
-                        .scopes(scopes)
+                        .scopes(String.join(" ", grantedScopes))
                         .build()
                 )
             );
+    }
+
+    /**
+     * 기존 저장 scope와 신규 grant scope를 병합한다 (합집합).
+     *
+     * <p>일반 로그인은 baseline scope만 발급받으므로, 병합 없이 덮어쓰면 이전에 승인한
+     * scope 기록이 사라져 증분 승인이 불필요한 재동의를 유발한다.
+     */
+    private String mergeScopes(String existingScopes, Set<String> grantedScopes) {
+        Set<String> merged = new LinkedHashSet<>();
+        if (existingScopes != null && !existingScopes.isBlank()) {
+            Arrays.stream(existingScopes.split("[,\\s]+"))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .forEach(merged::add);
+        }
+        merged.addAll(grantedScopes);
+        return String.join(" ", merged);
     }
 }
