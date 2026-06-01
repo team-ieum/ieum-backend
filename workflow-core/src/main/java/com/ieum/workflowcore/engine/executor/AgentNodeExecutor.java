@@ -225,6 +225,8 @@ public class AgentNodeExecutor implements NodeExecutor {
      */
     @SuppressWarnings("unchecked")
     private void injectWebhookUrls(List<Map<String, Object>> tools, UUID userId) {
+        log.info("[webhook-debug] injectWebhookUrls 진입 — tools 수: {}, userId: {}",
+            tools != null ? tools.size() : 0, userId);
         if (tools == null || tools.isEmpty() || userId == null) {
             return;
         }
@@ -233,12 +235,15 @@ public class AgentNodeExecutor implements NodeExecutor {
             if (!WEBHOOK_TOOL_NAMES.contains(tool.get("name"))) {
                 continue;
             }
+            log.info("[webhook-debug] webhook 도구 발견 — name: {}, config: {}", tool.get("name"), tool.get("config"));
             Object cfg = tool.get("config");
             if (!(cfg instanceof Map<?, ?> configMap)) {
+                log.warn("[webhook-debug] config가 Map이 아님 — name: {}, config: {}", tool.get("name"), cfg);
                 continue;
             }
             Object rawId = configMap.get("webhookCredentialId");
             if (rawId == null) {
+                log.warn("[webhook-debug] config에 webhookCredentialId 없음 — config keys: {}", configMap.keySet());
                 continue;
             }
             UUID credentialId;
