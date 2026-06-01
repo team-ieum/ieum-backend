@@ -34,8 +34,6 @@ public class CredentialService {
             throw new CustomException(ErrorCode.INVALID_INPUT);
         }
 
-        ApiKeyFormatValidator.validate(provider, rawApiKey);
-
         if (credentialQueryRepository.existsByUserIdAndProviderAndDisplayName(userId, provider, displayName)) {
             throw new CustomException(ErrorCode.CREDENTIAL_DUPLICATE_NAME);
         }
