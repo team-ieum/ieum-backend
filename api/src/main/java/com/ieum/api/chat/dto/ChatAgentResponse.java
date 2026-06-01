@@ -50,6 +50,12 @@ public class ChatAgentResponse {
     private List<AgentAction> actions;
 
     /**
+     * 사용자가 고를 수 있는 선택지 목록 (예: GitHub repo, 웹훅).
+     * type이 CLARIFICATION_NEEDED일 때 채워진다.
+     */
+    private List<AgentOption> options;
+
+    /**
      * 워크플로우 수정 내용 한 줄 요약.
      * type이 WORKFLOW_MODIFIED일 때만 사용된다.
      */
