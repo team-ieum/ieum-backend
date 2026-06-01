@@ -40,6 +40,9 @@ spring:
 oauth2:
   redirect-uri: http://localhost:3000/oauth2/callback
 
+cors:
+  allowed-origins: http://localhost:5173,http://localhost:3000
+
 jwt:
   secret: test-secret-key-that-is-long-enough-for-hs256-algorithm-minimum
   expiration: 86400000
