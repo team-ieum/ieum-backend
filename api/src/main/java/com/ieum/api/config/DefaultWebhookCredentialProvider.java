@@ -27,20 +27,37 @@ public class DefaultWebhookCredentialProvider implements WebhookCredentialProvid
 
     @Override
     public Optional<String> resolveWebhookUrl(UUID credentialId, UUID userId) {
+        log.info("[webhook-debug] resolveWebhookUrl 진입 — credentialId: {}, 실행 userId: {}", credentialId, userId);
         if (credentialId == null || userId == null) {
+            log.warn("[webhook-debug] credentialId/userId가 null — credentialId: {}, userId: {}", credentialId, userId);
             return Optional.empty();
         }
 
         WebhookCredential credential = repository.findByIdAndUserId(credentialId, userId).orElse(null);
         if (credential == null) {
-            log.warn("[DefaultWebhookCredentialProvider] 웹훅 자격증명 없음 또는 권한 없음 — userId: {}, credentialId: {}",
-                    userId, credentialId);
+            // 소유자 무관하게 존재 여부를 확인해 '없음' vs '타인 소유'를 구분한다(디버그).
+            repository.findById(credentialId).ifPresentOrElse(
+                other -> log.warn("[webhook-debug] 자격증명 존재하나 소유자 불일치 — credentialId: {}, "
+                        + "소유 userId: {}, 실행 userId: {}", credentialId, other.getUserId(), userId),
+                () -> log.warn("[webhook-debug] 자격증명 자체가 없음(잘못된/오래된 ID) — credentialId: {}", credentialId)
+            );
             return Optional.empty();
         }
+        log.info("[webhook-debug] 자격증명 조회 성공 — credentialId: {}, provider: {}, enabled: {}",
+                credentialId, credential.getProvider(), credential.isEnabled());
         if (!credential.isEnabled()) {
-            log.warn("[DefaultWebhookCredentialProvider] 비활성 웹훅 자격증명 건너뜀 — credentialId: {}", credentialId);
+            log.warn("[webhook-debug] 비활성 웹훅 자격증명 건너뜀 — credentialId: {}", credentialId);
             return Optional.empty();
         }
-        return Optional.of(credentialService.decryptWebhookUrl(credential));
+        try {
+            String url = credentialService.decryptWebhookUrl(credential);
+            log.info("[webhook-debug] 복호화 성공 — credentialId: {}, url 길이: {}, 접두: {}",
+                    credentialId, url != null ? url.length() : 0,
+                    url != null && url.length() > 30 ? url.substring(0, 30) + "..." : url);
+            return Optional.ofNullable(url);
+        } catch (Exception e) {
+            log.warn("[webhook-debug] 복호화 실패 — credentialId: {}, error: {}", credentialId, e.getMessage());
+            return Optional.empty();
+        }
     }
 }
