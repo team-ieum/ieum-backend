@@ -14,6 +14,12 @@ import lombok.Getter;
 @Builder
 public class ChatAgentRequest {
 
+    /**
+     * 대상 워크플로우 ID.
+     * agent는 이 값으로 멀티턴 대화 세션을 키링(user_id + workflow_id)하여 맥락을 유지한다.
+     */
+    private final String workflowId;
+
     /** 사용자 자연어 입력 */
     private final String prompt;
 
