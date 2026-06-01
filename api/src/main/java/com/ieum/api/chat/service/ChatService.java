@@ -131,6 +131,7 @@ public class ChatService {
         List<AvailableMcpServer> availableMcpServers = resolveAvailableMcpServers(userId);
         List<AvailableWebhook> availableWebhooks = resolveAvailableWebhooks(userId);
         ChatAgentResponse agentResponse = agentClient.chat(
+            workflowId,
             request.getPrompt(),
             request.getCurrentNodes(),
             request.getCurrentEdges(),

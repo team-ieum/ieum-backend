@@ -86,6 +86,7 @@ public class WebSocketChatHandler {
         AtomicInteger tokenIndex = new AtomicInteger(0);
 
         agentClient.chatStream(
+            workflowId,
             setup.prompt(),
             setup.currentNodes(),
             setup.currentEdges(),
