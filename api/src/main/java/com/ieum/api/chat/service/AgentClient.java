@@ -73,6 +73,7 @@ public class AgentClient {
      * @return AI 응답
      */
     public ChatAgentResponse chat(
+        UUID workflowId,
         String prompt,
         List<Object> currentNodes,
         List<Object> currentEdges,
@@ -91,6 +92,7 @@ public class AgentClient {
             llmProvider, prompt != null ? prompt.length() : 0);
 
         ChatAgentRequest request = ChatAgentRequest.builder()
+            .workflowId(workflowId != null ? workflowId.toString() : null)
             .prompt(prompt)
             .currentNodes(currentNodes)
             .currentEdges(currentEdges)
@@ -167,6 +169,7 @@ public class AgentClient {
      * 이 메서드를 교체하면 호출부 변경 없이 진짜 스트리밍으로 전환할 수 있다.
      */
     public Flux<String> chatStream(
+        UUID workflowId,
         String prompt,
         List<Object> currentNodes,
         List<Object> currentEdges,
@@ -187,7 +190,7 @@ public class AgentClient {
         return Flux.<String>create(sink -> {
             try {
                 String content = chat(
-                    prompt, currentNodes, currentEdges,
+                    workflowId, prompt, currentNodes, currentEdges,
                     availableIntegrations, unavailableIntegrations,
                     llmProvider, apiKey, googleAccessToken, githubToken, notionToken,
                     availableMcpServers, availableWebhooks, userId

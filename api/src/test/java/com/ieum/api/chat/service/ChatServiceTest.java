@@ -216,7 +216,7 @@ class ChatServiceTest {
         given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString())).willReturn("test-api-key");
         given(integrationContextService.resolve(userId))
             .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
             .willReturn(buildAgentResponse("WORKFLOW_GENERATED", "AI 테스트 워크플로우"));
         given(workflowCrudService.findMaxVersionByWorkflowId(workflowId)).willReturn(1);
         given(messageRepository.save(any())).willReturn(agentMsg);
@@ -244,7 +244,7 @@ class ChatServiceTest {
         given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString())).willReturn("test-api-key");
         given(integrationContextService.resolve(userId))
             .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
             .willReturn(buildAgentResponse("WORKFLOW_GENERATED", "수정된 이름"));
         given(workflowCrudService.findMaxVersionByWorkflowId(workflowId)).willReturn(2);
         given(messageRepository.save(any())).willReturn(agentMsg);
@@ -272,7 +272,7 @@ class ChatServiceTest {
         given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString())).willReturn("test-api-key");
         given(integrationContextService.resolve(userId))
             .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
             .willReturn(buildAgentResponse("WORKFLOW_GENERATED", null));
         given(workflowCrudService.findMaxVersionByWorkflowId(workflowId)).willReturn(1);
         given(messageRepository.save(any())).willReturn(agentMsg);
