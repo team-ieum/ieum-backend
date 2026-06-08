@@ -4,7 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
@@ -81,8 +84,9 @@ class WebSocketChatHandlerTest {
     }
 
     private List<ChatStreamResponse> captureSent(int times) {
+        // 구독이 boundedElastic 스레드에서 비동기 처리되므로 timeout 검증으로 완료를 대기한다.
         ArgumentCaptor<ChatStreamResponse> captor = ArgumentCaptor.forClass(ChatStreamResponse.class);
-        verify(messagingTemplate, times(times))
+        verify(messagingTemplate, timeout(2000).times(times))
             .convertAndSendToUser(eq(userId.toString()), eq(DESTINATION), captor.capture());
         return captor.getAllValues();
     }
@@ -103,8 +107,9 @@ class WebSocketChatHandlerTest {
 
         handler.handleChat(workflowId, request, principal);
 
-        verify(chatService).finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any());
+        // 3개 프레임 전송 완료까지 대기(done 프레임은 finalizeStream 후 전송됨)한 뒤 검증한다.
         List<ChatStreamResponse> sent = captureSent(3);
+        verify(chatService).finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any());
         assertThat(sent.get(0).getType()).isEqualTo(StreamType.STAGE);
         assertThat(sent.get(0).getStage()).isEqualTo("designing");
         assertThat(sent.get(1).getType()).isEqualTo(StreamType.STAGE);
@@ -123,7 +128,7 @@ class WebSocketChatHandlerTest {
         List<ChatStreamResponse> sent = captureSent(1);
         assertThat(sent.get(0).getType()).isEqualTo(StreamType.ERROR);
         assertThat(sent.get(0).getContent()).isEqualTo("AI 응답 중 오류가 발생했습니다.");
-        verify(chatService, org.mockito.Mockito.never())
+        verify(chatService, after(300).never())
             .finalizeStream(any(), any(), any(), any(), any());
     }
 }
