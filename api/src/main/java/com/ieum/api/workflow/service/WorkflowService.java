@@ -195,22 +195,31 @@ public class WorkflowService {
             UUID userId, UUID workflowId, UUID executionId) {
         workflowCrudService.getWorkflowByOwner(userId, workflowId); // 소유권 검증
 
+        // 공유 sink 생성(subscribe) 전에 executionId가 이 workflowId에 속하는지 먼저 검증한다.
+        // 권한 없는 요청이 공유 sink를 생성·오염시키거나, 정리 과정에서 실제 소유자의 라이브
+        // 스트림을 끊는 것을 차단하기 위함이다.
+        WorkflowExecution execution = workflowExecutionService.getExecution(executionId);
+        if (!execution.getWorkflow().getId().equals(workflowId)) {
+            throw new CustomException(ErrorCode.FORBIDDEN);
+        }
+
         // 라이브 구독을 스냅샷 조회보다 먼저 등록(sink 생성)해, 스냅샷 조회 직후 발행되는
-        // 이벤트가 누락되지 않게 한다. 검증 실패 시에는 만들어진 sink를 정리한다.
+        // 이벤트가 누락되지 않게 한다. 검증 실패 시에는 구독자가 없을 때만 sink를 정리한다.
         Flux<ExecutionEvent> live = executionEventPublisher.subscribe(executionId);
 
         ExecutionEventSnapshot snapshot;
         try {
             snapshot = workflowExecutionService.loadEventSnapshot(workflowId, executionId);
         } catch (RuntimeException e) {
-            executionEventPublisher.complete(executionId);
+            executionEventPublisher.cleanUpIfNoSubscribers(executionId);
             throw e;
         }
 
         Flux<ExecutionEvent> events;
         if (snapshot.terminal()) {
-            // 이미 종료된 실행 — 라이브 불필요. 방금 만든 sink를 정리하고 스냅샷만 재생한다.
-            executionEventPublisher.complete(executionId);
+            // 이미 종료된 실행 — 라이브 불필요. 다른 활성 구독자가 없을 때만 sink를 정리하고
+            // 스냅샷만 재생한다(동시 구독 중인 정상 스트림을 끊지 않기 위함).
+            executionEventPublisher.cleanUpIfNoSubscribers(executionId);
             events = Flux.fromIterable(snapshot.events());
         } else {
             // 진행 중 — 과거(스냅샷) → 미래(라이브) 연결. 경계 노드가 중복될 수 있으나

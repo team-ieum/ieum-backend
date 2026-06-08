@@ -53,6 +53,17 @@ public class ExecutionEventPublisher {
         }
     }
 
+    /**
+     * 구독자가 없는 경우에만 안전하게 Sink를 정리한다.
+     *
+     * <p>구독 측에서 검증 실패·이미 종료된 실행을 감지했을 때, 다른 활성 구독자(실제 소유자의
+     * 라이브 스트림)까지 끊지 않도록 {@link #complete} 대신 사용한다.
+     */
+    public void cleanUpIfNoSubscribers(UUID executionId) {
+        sinks.computeIfPresent(executionId, (key, sink) ->
+            sink.currentSubscriberCount() == 0 ? null : sink);
+    }
+
     private Sinks.Many<ExecutionEvent> newSink() {
         return Sinks.many().multicast().onBackpressureBuffer();
     }

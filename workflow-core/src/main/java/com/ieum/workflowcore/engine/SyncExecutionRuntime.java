@@ -100,24 +100,24 @@ public class SyncExecutionRuntime {
             throw e;
         }
 
-        // 2. ExecutionCursor 초기화
-        ExecutionCursor cursor = new ExecutionCursor();
-        cursor.setAllNodes(nodes);
-        cursor.setAllEdges(edges);
-        ExecutionContext context = new ExecutionContext();
-        context.setUserId(execution.getWorkflow().getUserId());
-        cursor.setContext(context);
-
-        cursor.getContext().setNodeOutput(triggerNode.getId(),
-            triggerData != null ? triggerData : new HashMap<>());
-        cursor.setCurrentNodeId(triggerNode.getId());
-        cursor.isCircularReference(triggerNode.getId());
-
-        // 3. RUNNING 상태로 전환
-        execution.start();
-        workflowExecutionRepository.save(execution);
-
         try {
+            // 2. ExecutionCursor 초기화
+            ExecutionCursor cursor = new ExecutionCursor();
+            cursor.setAllNodes(nodes);
+            cursor.setAllEdges(edges);
+            ExecutionContext context = new ExecutionContext();
+            context.setUserId(execution.getWorkflow().getUserId());
+            cursor.setContext(context);
+
+            cursor.getContext().setNodeOutput(triggerNode.getId(),
+                triggerData != null ? triggerData : new HashMap<>());
+            cursor.setCurrentNodeId(triggerNode.getId());
+            cursor.isCircularReference(triggerNode.getId());
+
+            // 3. RUNNING 상태로 전환
+            execution.start();
+            workflowExecutionRepository.save(execution);
+
             // 5. 노드 순회 루프
             while (cursor.getCurrentNode() != null) {
                 Node currentNode = cursor.getCurrentNode();
@@ -193,7 +193,10 @@ public class SyncExecutionRuntime {
 
         } catch (Exception e) {
             log.error("[Runtime] 워크플로우 실행 중 예외 — executionId: {}", execution.getId(), e);
-            if (execution.getStatus() == ExecutionStatus.RUNNING) {
+            // 이미 종료(SUCCESS/FAILED)된 게 아니면 — RUNNING 전환 이전(Cursor 초기화 등)에서
+            // 던진 경우(PENDING)까지 — FAILED로 전환한다.
+            if (execution.getStatus() != ExecutionStatus.SUCCESS
+                    && execution.getStatus() != ExecutionStatus.FAILED) {
                 execution.fail();
                 workflowExecutionRepository.save(execution);
             }
