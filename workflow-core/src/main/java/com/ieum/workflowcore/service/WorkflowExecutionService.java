@@ -6,11 +6,15 @@ import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowExecutionLog;
 import com.ieum.workflowcore.domain.WorkflowVersion;
+import com.ieum.workflowcore.domain.enums.ExecutionLogStatus;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.domain.enums.TriggerType;
+import com.ieum.workflowcore.engine.event.ExecutionEvent;
+import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -83,6 +87,44 @@ public class WorkflowExecutionService {
             throw new CustomException(ErrorCode.FORBIDDEN);
         }
         return workflowExecutionLogRepository.findByExecutionIdOrderByCreatedAtAsc(executionId);
+    }
+
+    /**
+     * 실행 진행 SSE의 늦은 구독 보완용 스냅샷을 로드한다.
+     *
+     * <p>구독 시점까지 DB에 기록된 노드 로그를 이벤트로 변환하고, 실행이 이미 종료된 경우
+     * 종료 이벤트까지 포함한다. 라이브 스트림 연결 여부는 {@code terminal} 플래그로 판단한다.
+     *
+     * @throws CustomException EXECUTION_NOT_FOUND / FORBIDDEN — 실행 미존재 또는 워크플로우 불일치
+     */
+    public ExecutionEventSnapshot loadEventSnapshot(UUID workflowId, UUID executionId) {
+        WorkflowExecution execution = getExecution(executionId);
+        if (!execution.getWorkflow().getId().equals(workflowId)) {
+            throw new CustomException(ErrorCode.FORBIDDEN);
+        }
+
+        List<ExecutionEvent> events = new ArrayList<>();
+        for (WorkflowExecutionLog logEntry :
+                workflowExecutionLogRepository.findByExecutionIdOrderByCreatedAtAsc(executionId)) {
+            events.add(toEvent(logEntry));
+        }
+
+        ExecutionStatus status = execution.getStatus();
+        boolean terminal = status == ExecutionStatus.SUCCESS || status == ExecutionStatus.FAILED;
+        if (terminal) {
+            events.add(ExecutionEvent.executionCompleted(status));
+        }
+        return new ExecutionEventSnapshot(status, terminal, events);
+    }
+
+    private ExecutionEvent toEvent(WorkflowExecutionLog logEntry) {
+        long duration = logEntry.getDurationMs() != null ? logEntry.getDurationMs() : 0L;
+        if (logEntry.getStatus() == ExecutionLogStatus.FAILED) {
+            return ExecutionEvent.nodeFailed(
+                logEntry.getNodeId(), logEntry.getNodeType(), logEntry.getErrorMessage(), duration);
+        }
+        return ExecutionEvent.nodeCompleted(
+            logEntry.getNodeId(), logEntry.getNodeType(), duration);
     }
 
     @Transactional

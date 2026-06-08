@@ -2,6 +2,14 @@ spring:
   application:
     name: ieum-backend
 
+  mvc:
+    async:
+      # SSE(워크플로우 실행 진행 스트림) 등 비동기 요청의 최대 유지 시간(ms).
+      # 실행이 끝나면 스트림은 complete()로 즉시 정상 종료되며, 이 값은 실행 스레드가 비정상
+      # 종료된 경우의 좀비 연결을 정리하는 안전망이다. 타임아웃으로 끊겨도 프론트는 재연결 시
+      # 진행 스냅샷으로 복구된다. (미설정 시 서블릿 컨테이너 기본값이 SSE를 조기 종료할 수 있음)
+      request-timeout: ${MVC_ASYNC_TIMEOUT_MS:600000}
+
   autoconfigure:
     exclude:
       - org.springframework.boot.autoconfigure.quartz.QuartzAutoConfiguration

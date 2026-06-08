@@ -303,7 +303,13 @@ public class ChatService {
 
         // AI 노드 없음 → fallbackCredentialId로 기본 설정 사용 (빈 워크플로우 채팅 시)
         if (fallbackCredentialId == null) {
-            throw new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE);
+            List<Credential> credentials = credentialService.getByUserId(userId);
+            if (credentials.isEmpty()) {
+                throw new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE);
+            }
+            Credential defaultCredential = credentials.get(0);
+            fallbackCredentialId = defaultCredential.getId();
+            log.info("[ChatService] AI 노드가 없고 fallbackCredentialId가 누락되어 사용자의 기본 크레덴셜을 자동 적용합니다. credentialId: {}", fallbackCredentialId);
         }
         log.info("[ChatService][DEBUG] fallbackCredentialId={}, userId={}", fallbackCredentialId, userId);
         Credential credential = credentialService.getByIdAndUserId(fallbackCredentialId, userId);
