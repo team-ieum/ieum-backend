@@ -567,6 +567,45 @@ public class ChatService {
         return saveAgentMessage(session, content, inputTokens, outputTokens);
     }
 
+    /**
+     * 스트리밍 완료(done) 시 후처리를 수행한다 — 블로킹 {@link #chat}의 8~10단계와 동일하다.
+     *
+     * <ol>
+     *   <li>WORKFLOW_GENERATED/MODIFIED → 새 워크플로우 버전 저장 (+ 첫 생성 시 이름 설정)</li>
+     *   <li>INTEGRATION_REQUIRED → actions에 oauthUrl 주입</li>
+     *   <li>AGENT 메시지 저장</li>
+     * </ol>
+     *
+     * <p>소유권은 {@link #prepareStream} 시점에 이미 검증되었으므로 재검증하지 않는다.
+     *
+     * @return 프론트로 전달할 최종 응답 DTO
+     */
+    @Transactional
+    public ChatResponse finalizeStream(UUID workflowId, UUID sessionId,
+            ChatAgentResponse agentResponse, AgentConfig config, UUID fallbackCredentialId) {
+        if (agentResponse.isWorkflowResult()) {
+            int maxVersionBeforeSave = workflowCrudService.findMaxVersionByWorkflowId(workflowId);
+            saveWorkflowVersion(workflowId, agentResponse, config, fallbackCredentialId);
+
+            if (maxVersionBeforeSave <= 1 && agentResponse.getWorkflowName() != null) {
+                workflowCrudService.updateWorkflowName(workflowId, agentResponse.getWorkflowName());
+            }
+        }
+
+        if (agentResponse.getType() == AgentResponseType.INTEGRATION_REQUIRED) {
+            injectOAuthUrls(agentResponse.getActions());
+        }
+
+        ChatMessage agentMessage = saveAgentMessageById(
+            sessionId,
+            agentResponse.getContent(),
+            agentResponse.getInputTokens(),
+            agentResponse.getOutputTokens()
+        );
+
+        return ChatResponse.from(agentMessage, sessionId, agentResponse);
+    }
+
     // ─────────────────────────────────────── 내부 DTO ─────────────────────────
 
     public record AgentConfig(

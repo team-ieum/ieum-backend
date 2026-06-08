@@ -1,6 +1,8 @@
 package com.ieum.api.chat.handler;
 
 import com.ieum.api.chat.dto.ChatRequest;
+import com.ieum.api.chat.dto.ChatResponse;
+import com.ieum.api.chat.dto.ChatStreamEvent;
 import com.ieum.api.chat.dto.ChatStreamResponse;
 import com.ieum.api.chat.service.AgentClient;
 import com.ieum.api.chat.service.ChatService;
@@ -8,7 +10,6 @@ import com.ieum.api.chat.service.ChatService.StreamSetupResult;
 import com.ieum.common.exception.CustomException;
 import java.security.Principal;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicInteger;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
@@ -81,10 +82,7 @@ public class WebSocketChatHandler {
             return;
         }
 
-        // 2. 스트리밍 구독 (비동기)
-        StringBuilder fullContent = new StringBuilder();
-        AtomicInteger tokenIndex = new AtomicInteger(0);
-
+        // 2. 스트리밍 구독 (비동기) — agent SSE 이벤트를 STAGE/DONE/ERROR로 분기 전달
         agentClient.chatStream(
             workflowId,
             setup.prompt(),
@@ -101,35 +99,39 @@ public class WebSocketChatHandler {
             setup.availableWebhooks(),
             userId
         ).subscribe(
-            token -> {
-                fullContent.append(token);
-                sendToUser(userName,
-                    ChatStreamResponse.token(token, tokenIndex.getAndIncrement()));
-            },
+            event -> handleStreamEvent(userName, workflowId, request, setup, event),
             error -> {
                 log.error("[WS] 스트리밍 오류 — sessionId: {}", setup.sessionId(), error);
-                String errMsg = error instanceof CustomException ce
-                    ? ce.getMessage()
-                    : "AI 응답 중 오류가 발생했습니다.";
-                sendToUser(userName, ChatStreamResponse.error(errMsg));
-            },
-            () -> {
-                String content = fullContent.toString();
-                log.info("[WS] 스트리밍 완료 — sessionId: {}, tokens: {}",
-                    setup.sessionId(), tokenIndex.get());
-
-                try {
-                    // inputTokens/outputTokens: /v1/chat 응답에 토큰 정보가 없으므로 null 저장
-                    chatService.saveAgentMessageById(
-                        setup.sessionId(), content, null, null);
-                } catch (Exception e) {
-                    log.error("[WS] AGENT 메시지 저장 실패 — sessionId: {}", setup.sessionId(), e);
-                }
-
-                // totalTokens: 전송한 WebSocket 청크 수 (현재는 단일 청크이므로 항상 1)
-                sendToUser(userName, ChatStreamResponse.complete(tokenIndex.get()));
+                sendToUser(userName, ChatStreamResponse.error("AI 응답 중 오류가 발생했습니다."));
             }
         );
+    }
+
+    /**
+     * agent SSE 이벤트를 사용자 큐로 분기 전달한다.
+     * DONE 수신 시 워크플로우/메시지를 저장({@code finalizeStream})하고 최종 응답을 전달한다.
+     */
+    private void handleStreamEvent(String userName, UUID workflowId, ChatRequest request,
+            StreamSetupResult setup, ChatStreamEvent event) {
+        switch (event.type()) {
+            case STAGE -> sendToUser(userName, ChatStreamResponse.stage(event.stage()));
+            case DONE -> {
+                try {
+                    ChatResponse response = chatService.finalizeStream(
+                        workflowId,
+                        setup.sessionId(),
+                        event.response(),
+                        setup.config(),
+                        request.getCredentialId()
+                    );
+                    sendToUser(userName, ChatStreamResponse.done(response));
+                } catch (Exception e) {
+                    log.error("[WS] done 처리(저장) 실패 — sessionId: {}", setup.sessionId(), e);
+                    sendToUser(userName, ChatStreamResponse.error("응답 저장 중 오류가 발생했습니다."));
+                }
+            }
+            case ERROR -> sendToUser(userName, ChatStreamResponse.error(event.errorMessage()));
+        }
     }
 
     private void sendToUser(String userName, ChatStreamResponse response) {
