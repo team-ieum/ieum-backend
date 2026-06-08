@@ -17,6 +17,7 @@ import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.SimpMessageSendingOperations;
 import org.springframework.stereotype.Controller;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * WebSocket STOMP 채팅 핸들러.
@@ -98,7 +99,11 @@ public class WebSocketChatHandler {
             setup.availableMcpServers(),
             setup.availableWebhooks(),
             userId
-        ).subscribe(
+        )
+        // finalizeStream은 동기 blocking(JPA) 작업이므로 Netty EventLoop 스레드에서 실행되면
+        // Thread Starvation을 유발한다. boundedElastic로 전환해 별도 스레드 풀에서 처리한다.
+        .publishOn(Schedulers.boundedElastic())
+        .subscribe(
             event -> handleStreamEvent(userName, workflowId, request, setup, event),
             error -> {
                 log.error("[WS] 스트리밍 오류 — sessionId: {}", setup.sessionId(), error);

@@ -244,8 +244,10 @@ public class AgentClient {
                 default -> null;
             };
         } catch (Exception e) {
-            log.warn("[AgentClient] SSE 이벤트 파싱 실패 — event: {}, data: {}", event, data, e);
-            return null;
+            // null 반환 시 mapNotNull로 유실된다. done 프레임 파싱 실패 시 finalizeStream이
+            // 아예 실행되지 않는 silent failure를 막기 위해 error 이벤트로 변환해 구독자에게 알린다.
+            log.error("[AgentClient] SSE 이벤트 파싱 실패 — event: {}, data: {}", event, data, e);
+            return ChatStreamEvent.error("AI 응답 데이터를 처리하는 중 오류가 발생했습니다.");
         }
     }
 
