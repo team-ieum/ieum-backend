@@ -12,6 +12,8 @@ import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.domain.enums.ExecutionLogStatus;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.domain.enums.NodeType;
+import com.ieum.workflowcore.engine.event.ExecutionEvent;
+import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
@@ -43,6 +45,7 @@ public class SyncExecutionRuntime {
     private final WorkflowExecutionLogRepository executionLogRepository;
     private final WorkflowExecutionRepository workflowExecutionRepository;
     private final WorkflowCrudService workflowCrudService;
+    private final ExecutionEventPublisher eventPublisher;
     /** @Component로 등록된 모든 NodeExecutor 구현체를 Spring이 자동 주입 */
     private final List<NodeExecutor> nodeExecutors;
 
@@ -91,6 +94,9 @@ public class SyncExecutionRuntime {
                 execution.getId(), e.getMessage());
             execution.fail();
             workflowExecutionRepository.save(execution);
+            eventPublisher.publish(executionId,
+                ExecutionEvent.executionCompleted(ExecutionStatus.FAILED));
+            eventPublisher.complete(executionId);
             throw e;
         }
 
@@ -118,6 +124,9 @@ public class SyncExecutionRuntime {
                 log.info("[Runtime] 노드 실행 — nodeId: {}, type: {}",
                     currentNode.getId(), currentNode.getType());
 
+                eventPublisher.publish(executionId,
+                    ExecutionEvent.nodeStarted(currentNode.getId(), currentNode.getType()));
+
                 long nodeStartTime = System.currentTimeMillis();
 
                 // 5-1. 입력값 변수 치환
@@ -142,10 +151,19 @@ public class SyncExecutionRuntime {
                 if (!result.isSuccess()) {
                     log.error("[Runtime] 노드 실패로 워크플로우 중단 — nodeId: {}, error: {}",
                         currentNode.getId(), result.getErrorMessage());
+                    eventPublisher.publish(executionId, ExecutionEvent.nodeFailed(
+                        currentNode.getId(), currentNode.getType(),
+                        result.getErrorMessage(), nodeDurationMs));
                     execution.fail();
                     workflowExecutionRepository.save(execution);
+                    eventPublisher.publish(executionId,
+                        ExecutionEvent.executionCompleted(ExecutionStatus.FAILED));
                     return;
                 }
+
+                // 5-4b. 노드 성공 알림
+                eventPublisher.publish(executionId, ExecutionEvent.nodeCompleted(
+                    currentNode.getId(), currentNode.getType(), nodeDurationMs));
 
                 // 5-5. 컨텍스트에 output 저장
                 cursor.updateContext(currentNode.getId(), result.getOutput());
@@ -170,6 +188,8 @@ public class SyncExecutionRuntime {
             execution.complete();
             workflowExecutionRepository.save(execution);
             log.info("[Runtime] 워크플로우 성공 — executionId: {}", execution.getId());
+            eventPublisher.publish(executionId,
+                ExecutionEvent.executionCompleted(ExecutionStatus.SUCCESS));
 
         } catch (Exception e) {
             log.error("[Runtime] 워크플로우 실행 중 예외 — executionId: {}", execution.getId(), e);
@@ -177,7 +197,12 @@ public class SyncExecutionRuntime {
                 execution.fail();
                 workflowExecutionRepository.save(execution);
             }
+            eventPublisher.publish(executionId,
+                ExecutionEvent.executionCompleted(ExecutionStatus.FAILED));
             throw e;
+        } finally {
+            // 성공·노드 실패(return)·예외 등 모든 종료 경로에서 SSE 스트림을 닫는다.
+            eventPublisher.complete(executionId);
         }
     }
 
