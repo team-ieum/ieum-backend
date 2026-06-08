@@ -160,11 +160,37 @@ class ChatServiceTest {
         WorkflowVersion version = buildVersionWithNodesJson("[]");
         given(workflowCrudService.findLatestVersion(workflowId))
             .willReturn(Optional.of(version));
+        given(credentialService.getByUserId(userId))
+            .willReturn(List.of());
 
         assertThatThrownBy(() ->
             chatService.resolveAgentConfig(workflowId, userId, null)
         ).isInstanceOf(CustomException.class)
             .hasMessageContaining(ErrorCode.WORKFLOW_HAS_NO_AI_NODE.getMessage());
+    }
+
+    @Test
+    @DisplayName("AI 노드가 없고 fallbackCredentialId가 null일 때, 등록된 크레덴셜이 있으면 자동으로 사용하여 AgentConfig를 반환한다")
+    void resolveAgentConfig_noAiNode_autoFallbackToUserCredential() {
+        WorkflowVersion version = buildVersionWithNodesJson("[]");
+        UUID autoCredentialId = UUID.randomUUID();
+        Credential credential = Mockito.mock(Credential.class);
+
+        given(workflowCrudService.findLatestVersion(workflowId))
+            .willReturn(Optional.of(version));
+        given(credential.getId()).willReturn(autoCredentialId);
+        given(credential.getProvider()).willReturn(AiProvider.CLAUDE);
+        given(credentialService.getByUserId(userId))
+            .willReturn(List.of(credential));
+        given(credentialService.getByIdAndUserId(autoCredentialId, userId))
+            .willReturn(credential);
+        given(credentialProvider.getDecryptedApiKey(autoCredentialId.toString()))
+            .willReturn("auto-decrypted-key");
+
+        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null);
+
+        assertThat(result.llmProvider()).isEqualTo("CLAUDE");
+        assertThat(result.decryptedApiKey()).isEqualTo("auto-decrypted-key");
     }
 
     // ─────────────────── saveUserMessage ───────────────────────────────────

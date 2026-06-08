@@ -9,6 +9,7 @@ import com.ieum.api.workflow.dto.WorkflowResponse;
 import com.ieum.auth.security.CustomUserDetails;
 import com.ieum.common.dto.ApiResponse;
 import com.ieum.common.dto.PageResponse;
+import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -20,7 +21,9 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.security.access.prepost.PreAuthorize;
+import reactor.core.publisher.Flux;
 
 @Tag(name = "워크플로우", description = "워크플로우 생성·관리·실행")
 @SecurityRequirement(name = "BearerAuth")
@@ -284,6 +287,15 @@ public interface WorkflowControllerDocs {
     @Operation(summary = "실행 로그 조회")
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<List<WorkflowExecutionLogResponse>>> getExecutionLogs(
+            CustomUserDetails userDetails,
+            @Parameter(description = "워크플로우 ID") UUID id,
+            @Parameter(description = "실행 ID") UUID executionId);
+
+    @Operation(summary = "실행 진행 이벤트 SSE 스트림",
+        description = "워크플로우 실행의 노드별 진행 상태(시작/완료/실패)를 SSE로 실시간 전송한다. "
+            + "늦게 구독해도 진행 스냅샷을 먼저 재생한 뒤 라이브 이벤트를 잇는다.")
+    @PreAuthorize("hasRole('USER')")
+    Flux<ServerSentEvent<ExecutionEvent>> streamExecutionEvents(
             CustomUserDetails userDetails,
             @Parameter(description = "워크플로우 ID") UUID id,
             @Parameter(description = "실행 ID") UUID executionId);

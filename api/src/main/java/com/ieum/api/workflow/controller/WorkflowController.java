@@ -10,11 +10,14 @@ import com.ieum.api.workflow.service.WorkflowService;
 import com.ieum.auth.security.CustomUserDetails;
 import com.ieum.common.dto.ApiResponse;
 import com.ieum.common.dto.PageResponse;
+import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -25,6 +28,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import reactor.core.publisher.Flux;
 
 @RestController
 @RequestMapping("/api/v1/workflows")
@@ -134,5 +138,15 @@ public class WorkflowController implements WorkflowControllerDocs {
         List<WorkflowExecutionLogResponse> response =
             workflowService.getExecutionLogs(userDetails.getId(), id, executionId);
         return ResponseEntity.ok(ApiResponse.ok(response));
+    }
+
+    @GetMapping(value = "/{id}/executions/{executionId}/events",
+        produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<ExecutionEvent>> streamExecutionEvents(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable UUID id,
+            @PathVariable UUID executionId) {
+
+        return workflowService.streamExecutionEvents(userDetails.getId(), id, executionId);
     }
 }
