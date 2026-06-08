@@ -19,6 +19,9 @@ import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.domain.enums.TriggerType;
+import com.ieum.workflowcore.engine.event.ExecutionEvent;
+import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
+import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.util.Collections;
@@ -27,10 +30,12 @@ import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import reactor.core.publisher.Flux;
 
 /**
  * API 레이어 워크플로우 서비스.
@@ -48,6 +53,7 @@ public class WorkflowService {
     private final WorkflowCrudService workflowCrudService;
     private final WorkflowExecutionService workflowExecutionService;
     private final WorkflowExecutionRunner workflowExecutionRunner;
+    private final ExecutionEventPublisher executionEventPublisher;
     private final ObjectMapper objectMapper;
 
     // ------------------------------------------------------------------ CRUD
@@ -176,6 +182,45 @@ public class WorkflowService {
         return workflowExecutionService.listExecutionLogs(workflowId, executionId).stream()
             .map(WorkflowExecutionLogResponse::from)
             .toList();
+    }
+
+    /**
+     * 워크플로우 실행 진행 상황을 SSE 스트림으로 반환한다.
+     *
+     * <p>늦은 구독 보완을 위해 {@code WorkflowExecutionLog} 스냅샷(과거 이벤트)을 먼저 흘린 뒤,
+     * 실행이 진행 중이면 라이브 이벤트({@link ExecutionEventPublisher})를 이어 붙인다.
+     * 이미 종료된 실행은 스냅샷만 재생하고 스트림을 종료한다.
+     */
+    public Flux<ServerSentEvent<ExecutionEvent>> streamExecutionEvents(
+            UUID userId, UUID workflowId, UUID executionId) {
+        workflowCrudService.getWorkflowByOwner(userId, workflowId); // 소유권 검증
+
+        // 라이브 구독을 스냅샷 조회보다 먼저 등록(sink 생성)해, 스냅샷 조회 직후 발행되는
+        // 이벤트가 누락되지 않게 한다. 검증 실패 시에는 만들어진 sink를 정리한다.
+        Flux<ExecutionEvent> live = executionEventPublisher.subscribe(executionId);
+
+        ExecutionEventSnapshot snapshot;
+        try {
+            snapshot = workflowExecutionService.loadEventSnapshot(workflowId, executionId);
+        } catch (RuntimeException e) {
+            executionEventPublisher.complete(executionId);
+            throw e;
+        }
+
+        Flux<ExecutionEvent> events;
+        if (snapshot.terminal()) {
+            // 이미 종료된 실행 — 라이브 불필요. 방금 만든 sink를 정리하고 스냅샷만 재생한다.
+            executionEventPublisher.complete(executionId);
+            events = Flux.fromIterable(snapshot.events());
+        } else {
+            // 진행 중 — 과거(스냅샷) → 미래(라이브) 연결. 경계 노드가 중복될 수 있으나
+            // 프론트가 nodeId+type로 멱등 처리한다(누락보다 중복이 안전).
+            events = Flux.fromIterable(snapshot.events()).concatWith(live);
+        }
+
+        return events.map(event -> ServerSentEvent.<ExecutionEvent>builder(event)
+            .event(event.type().name())
+            .build());
     }
 
     // ------------------------------------------------------------------ PRIVATE
