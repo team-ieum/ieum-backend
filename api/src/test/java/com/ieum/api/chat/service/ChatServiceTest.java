@@ -2,8 +2,10 @@ package com.ieum.api.chat.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.api.chat.dto.AgentResponseType;
 import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.api.chat.dto.ChatRequest;
+import com.ieum.api.chat.dto.ChatResponse;
 import com.ieum.api.chat.service.IntegrationContextService.IntegrationContext;
 import com.ieum.api.credential.domain.AiProvider;
 import com.ieum.api.credential.domain.Credential;
@@ -44,6 +46,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -306,6 +309,60 @@ class ChatServiceTest {
         chatService.chat(workflowId, userId, buildRequest("워크플로우 만들어줘", fallbackCredentialId));
 
         verify(workflowCrudService, never()).updateWorkflowName(any(), any());
+    }
+
+    // ─────────────────── finalizeStream (스트리밍 done 후처리) ──────────────
+
+    @Test
+    @DisplayName("finalizeStream — WORKFLOW_GENERATED는 워크플로우 버전 저장 + 이름 설정 + 메시지 저장")
+    void finalizeStream_workflowGenerated() {
+        ChatAgentResponse resp = Mockito.mock(ChatAgentResponse.class);
+        given(resp.isWorkflowResult()).willReturn(true);
+        given(resp.getType()).willReturn(AgentResponseType.WORKFLOW_GENERATED);
+        given(resp.getNodes()).willReturn(List.of());
+        given(resp.getEdges()).willReturn(List.of());
+        given(resp.getWorkflowName()).willReturn("테스트 WF");
+        given(resp.getContent()).willReturn("완성됐어요");
+
+        given(workflowCrudService.findMaxVersionByWorkflowId(workflowId)).willReturn(1);
+        ChatSession session = buildSession(workflowId, userId);
+        given(sessionRepository.findById(sessionId)).willReturn(Optional.of(session));
+        ChatMessage saved = buildMessage(session, MessageType.AGENT, "완성됐어요");
+        given(messageRepository.save(any(ChatMessage.class))).willReturn(saved);
+
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null);
+
+        ChatResponse result = chatService.finalizeStream(
+            workflowId, sessionId, resp, config, UUID.randomUUID());
+
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any());
+        verify(workflowCrudService).updateWorkflowName(workflowId, "테스트 WF");
+        verify(messageRepository).save(any(ChatMessage.class));
+        assertThat(result.getType()).isEqualTo(AgentResponseType.WORKFLOW_GENERATED);
+        assertThat(result.getContent()).isEqualTo("완성됐어요");
+    }
+
+    @Test
+    @DisplayName("finalizeStream — CLARIFICATION_NEEDED는 워크플로우를 저장하지 않고 메시지만 저장")
+    void finalizeStream_clarificationNeeded() {
+        ChatAgentResponse resp = Mockito.mock(ChatAgentResponse.class);
+        given(resp.isWorkflowResult()).willReturn(false);
+        given(resp.getType()).willReturn(AgentResponseType.CLARIFICATION_NEEDED);
+        given(resp.getContent()).willReturn("좀 더 알려주세요");
+
+        ChatSession session = buildSession(workflowId, userId);
+        given(sessionRepository.findById(sessionId)).willReturn(Optional.of(session));
+        ChatMessage saved = buildMessage(session, MessageType.AGENT, "좀 더 알려주세요");
+        given(messageRepository.save(any(ChatMessage.class))).willReturn(saved);
+
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null);
+
+        ChatResponse result = chatService.finalizeStream(
+            workflowId, sessionId, resp, config, UUID.randomUUID());
+
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any());
+        verify(messageRepository).save(any(ChatMessage.class));
+        assertThat(result.getContent()).isEqualTo("좀 더 알려주세요");
     }
 
     // ─────────────────── 헬퍼 ──────────────────────────────────────────────
