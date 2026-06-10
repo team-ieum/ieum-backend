@@ -132,6 +132,13 @@ public class SyncExecutionRuntime {
             // 2-1. 구조적 순환 검사(위상정렬 불가 = 사이클)
             assertNoCycle(nodes, edges);
 
+            // 2-2. 모든 노드 Executor 존재 사전 검증 (디스패치 도중 throw로 인한 고아 태스크 방지)
+            for (Node n : nodes) {
+                if (!executorMap.containsKey(n.getType())) {
+                    throw new IllegalStateException("NodeExecutor 없음 — type: " + n.getType());
+                }
+            }
+
             // 3. RUNNING 상태로 전환
             execution.start();
             workflowExecutionRepository.save(execution);
@@ -146,63 +153,67 @@ public class SyncExecutionRuntime {
             Set<String> resolved = new HashSet<>();   // 실행 완료 ∪ skip
 
             // 5. fan-out 병렬 실행 (워커=노드실행, 메인=상태/JPA 독점)
-            ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, parallelism));
-            CompletionService<NodeOutcome> completion = new ExecutorCompletionService<>(pool);
+            // ExecutorService는 try-with-resources로 관리 — 블록 종료 시 close()가 자동 shutdown+종료 대기.
             boolean failed = false;
-            int inFlight = 0;
-            try {
-                Deque<Node> ready = new ArrayDeque<>();
-                ready.add(triggerNode);   // 트리거는 incoming 0 → 최초 ready
-                inFlight += dispatch(ready, cursor, completion, executionId);
+            try (ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, parallelism))) {
+                CompletionService<NodeOutcome> completion = new ExecutorCompletionService<>(pool);
+                int inFlight = 0;
+                try {
+                    Deque<Node> ready = new ArrayDeque<>();
+                    ready.add(triggerNode);   // 트리거는 incoming 0 → 최초 ready
+                    inFlight += dispatch(ready, cursor, completion, executionId);
 
-                while (inFlight > 0) {
-                    NodeOutcome outcome = completion.take().get();
-                    inFlight--;
-                    Node node = outcome.node();
-                    ExecutorResult result = outcome.result();
-                    long durMs = outcome.durationMs();
-                    log.info("[Runtime] 노드 완료 — nodeId: {}, success: {}, durationMs: {}",
-                        node.getId(), result.isSuccess(), durMs);
+                    while (inFlight > 0) {
+                        NodeOutcome outcome = completion.take().get();
+                        inFlight--;
+                        Node node = outcome.node();
+                        ExecutorResult result = outcome.result();
+                        long durMs = outcome.durationMs();
+                        log.info("[Runtime] 노드 완료 — nodeId: {}, success: {}, durationMs: {}",
+                            node.getId(), result.isSuccess(), durMs);
 
-                    // 5-1. 실행 로그 저장(메인 스레드)
-                    saveExecutionLog(execution, node, outcome.input(), result, durMs);
+                        // 5-1. 실행 로그 저장(메인 스레드)
+                        saveExecutionLog(execution, node, outcome.input(), result, durMs);
 
-                    // 5-2. 실패 시 전체 중단(신규 디스패치 멈춤 → finally에서 in-flight 드레인)
-                    if (!result.isSuccess()) {
-                        log.error("[Runtime] 노드 실패로 워크플로우 중단 — nodeId: {}, error: {}",
-                            node.getId(), result.getErrorMessage());
-                        eventPublisher.publish(executionId, ExecutionEvent.nodeFailed(
-                            node.getId(), node.getType(), result.getErrorMessage(), durMs));
-                        failed = true;
-                        break;
+                        // 5-2. 실패 시 전체 중단(신규 디스패치 멈춤 → finally에서 in-flight 드레인)
+                        if (!result.isSuccess()) {
+                            log.error("[Runtime] 노드 실패로 워크플로우 중단 — nodeId: {}, error: {}",
+                                node.getId(), result.getErrorMessage());
+                            eventPublisher.publish(executionId, ExecutionEvent.nodeFailed(
+                                node.getId(), node.getType(), result.getErrorMessage(), durMs));
+                            failed = true;
+                            break;
+                        }
+
+                        // 5-3. 성공 처리: 이벤트 + 컨텍스트 저장
+                        eventPublisher.publish(executionId,
+                            ExecutionEvent.nodeCompleted(node.getId(), node.getType(), durMs));
+                        cursor.updateContext(node.getId(), result.getOutput());
+                        resolved.add(node.getId());
+
+                        // 5-4. 엣지 전파 → 새로 준비된(모든 입력 해소+live) 노드 디스패치
+                        Deque<Node> newReady = new ArrayDeque<>();
+                        propagate(node, cursor, pending, hasLive, resolved, newReady);
+                        inFlight += dispatch(newReady, cursor, completion, executionId);
                     }
-
-                    // 5-3. 성공 처리: 이벤트 + 컨텍스트 저장
-                    eventPublisher.publish(executionId,
-                        ExecutionEvent.nodeCompleted(node.getId(), node.getType(), durMs));
-                    cursor.updateContext(node.getId(), result.getOutput());
-                    resolved.add(node.getId());
-
-                    // 5-4. 엣지 전파 → 새로 준비된(모든 입력 해소+live) 노드 디스패치
-                    Deque<Node> newReady = new ArrayDeque<>();
-                    propagate(node, cursor, pending, hasLive, resolved, newReady);
-                    inFlight += dispatch(newReady, cursor, completion, executionId);
-                }
-            } finally {
-                // 실패/예외 시 남은 in-flight 작업 드레인(완료 대기, 결과 무시) 후 풀 종료.
-                // (외부 AI/HTTP 호출은 강제 취소가 불가하므로 인터럽트 대신 드레인)
-                while (inFlight > 0) {
-                    try {
-                        completion.take().get();
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    } catch (Exception ignored) {
-                        // 드레인 중 워커 예외는 무시(이미 실패로 종료 처리 중)
+                } finally {
+                    // 실패/예외 시 남은 in-flight 작업 드레인(완료 대기) 후 close()로 풀 종료.
+                    // 드레인된 노드는 이미 실행돼 부수효과가 발생했으므로 성공/실패 무관하게 로그를 남긴다(감사).
+                    // (외부 AI/HTTP 호출은 강제 취소가 불가하므로 인터럽트 대신 드레인)
+                    while (inFlight > 0) {
+                        try {
+                            NodeOutcome drained = completion.take().get();
+                            saveExecutionLog(execution, drained.node(), drained.input(),
+                                drained.result(), drained.durationMs());
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        } catch (Exception ex) {
+                            log.debug("[Runtime] 드레인 중 워커 결과 회수 실패 — 무시", ex);
+                        }
+                        inFlight--;
                     }
-                    inFlight--;
                 }
-                pool.shutdown();
             }
 
             // 6. 종료 처리
@@ -254,6 +265,7 @@ public class SyncExecutionRuntime {
         int count = 0;
         while (!ready.isEmpty()) {
             Node node = ready.poll();
+            // executor 존재는 execute() 진입부에서 사전 검증됨 — 여기선 안전망.
             NodeExecutor executor = executorMap.get(node.getType());
             if (executor == null) {
                 throw new IllegalStateException("NodeExecutor 없음 — type: " + node.getType());
@@ -268,7 +280,7 @@ public class SyncExecutionRuntime {
                 try {
                     r = executor.execute(node, input, cursor);
                 } catch (Exception ex) {
-                    r = ExecutorResult.failure(ex.getMessage(), System.currentTimeMillis() - t);
+                    r = ExecutorResult.failure(ex.toString(), System.currentTimeMillis() - t);
                 }
                 return new NodeOutcome(node, input, r, System.currentTimeMillis() - t);
             });
