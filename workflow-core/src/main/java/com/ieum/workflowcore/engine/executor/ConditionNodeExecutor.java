@@ -13,8 +13,8 @@ import org.springframework.stereotype.Component;
  *
  * <p>config의 {@code operator}, {@code leftValue}, {@code rightValue}를 평가하여
  * output에 {@code result: true|false}를 반환한다.
- * {@link com.ieum.workflowcore.engine.ExecutionCursor#getNextNode}가 이 결과로
- * 분기 경로를 선택한다.
+ * {@link com.ieum.workflowcore.engine.ExecutionCursor#liveOutgoingEdges}가 이 결과로
+ * live 분기 경로를 선택한다.
  *
  * <p>지원 연산자: equals, notEquals, contains, notContains,
  * greaterThan, lessThan, greaterThanOrEqual, lessThanOrEqual, isEmpty, isNotEmpty

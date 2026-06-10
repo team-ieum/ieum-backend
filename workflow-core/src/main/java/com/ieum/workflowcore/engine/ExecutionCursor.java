@@ -1,10 +1,8 @@
 package com.ieum.workflowcore.engine;
 
 import com.ieum.workflowcore.domain.enums.NodeType;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import lombok.Getter;
@@ -12,8 +10,11 @@ import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * 워크플로우 실행 중 현재 위치와 상태를 추적하는 커서.
- * 변수 치환({@code {{nodes.<id>.output.<field>}}})과 다음 노드 결정을 담당한다.
+ * 워크플로우 실행 중 그래프 구조 조회와 변수 치환을 담당하는 커서.
+ *
+ * <p>fan-out 실행을 위해 단일 경로 순회({@code getNextNode}) 대신 그래프 헬퍼
+ * ({@link #outgoingEdges}, {@link #incomingEdges}, {@link #liveOutgoingEdges})를 제공한다.
+ * 실제 위상 스케줄링은 {@code SyncExecutionRuntime}이 담당한다.
  */
 @Slf4j
 @Getter
@@ -27,74 +28,53 @@ public class ExecutionCursor {
     /** 무한 치환 루프 방지를 위한 최대 치환 반복 횟수 */
     private static final int MAX_RENDER_DEPTH = 5;
 
-    private String currentNodeId;
     private ExecutionContext context;
-    private final Set<String> visitedNodeIds = new HashSet<>();
     private List<Node> allNodes;
     private List<Edge> allEdges;
 
     // ──────────────────────────────────────────────────────────────────────
-    // 노드 조회
+    // 그래프 조회 (fan-out 위상 스케줄링용)
     // ──────────────────────────────────────────────────────────────────────
 
-    /** 현재 실행 위치의 노드 객체를 반환한다. 찾지 못하면 null. */
-    public Node getCurrentNode() {
-        if (currentNodeId == null) {
-            return null;
-        }
+    /** nodeId로 노드를 조회한다. 없으면 null. */
+    public Node findNode(String nodeId) {
         return allNodes.stream()
-            .filter(n -> n.getId().equals(currentNodeId))
+            .filter(n -> n.getId().equals(nodeId))
             .findFirst()
             .orElse(null);
     }
 
-    /**
-     * 현재 노드 실행 완료 후 이동할 다음 노드를 결정한다.
-     *
-     * <p>CONDITION 노드인 경우 컨텍스트에 저장된 {@code result} 값(true/false)과
-     * 엣지의 {@code conditionType}을 비교하여 분기 경로를 선택한다.
-     *
-     * @param currentNode 방금 실행을 마친 노드
-     * @return 다음 노드, 없으면 null (마지막 노드)
-     */
-    public Node getNextNode(Node currentNode) {
-        List<Edge> outgoingEdges = allEdges.stream()
-            .filter(e -> e.getSource().equals(currentNode.getId()))
+    /** 해당 노드에서 나가는 outgoing 엣지 목록. */
+    public List<Edge> outgoingEdges(String nodeId) {
+        return allEdges.stream()
+            .filter(e -> e.getSource().equals(nodeId))
             .toList();
+    }
 
-        if (outgoingEdges.isEmpty()) {
-            log.debug("[Cursor] 노드 '{}' 이후 연결된 엣지 없음 — 실행 종료", currentNode.getId());
-            return null;
+    /** 해당 노드로 들어오는 incoming 엣지 목록. */
+    public List<Edge> incomingEdges(String nodeId) {
+        return allEdges.stream()
+            .filter(e -> e.getTarget().equals(nodeId))
+            .toList();
+    }
+
+    /**
+     * 방금 실행을 마친 노드의 '살아있는(live)' outgoing 엣지를 반환한다.
+     *
+     * <p>CONDITION 노드는 컨텍스트의 {@code result}(true/false)와 일치하는 conditionType 엣지만 live이고,
+     * 그 외 노드는 모든 outgoing 엣지가 live다. 죽은(dead) 엣지의 타깃은 스케줄러가 가지치기한다.
+     */
+    public List<Edge> liveOutgoingEdges(Node node) {
+        List<Edge> outgoing = outgoingEdges(node.getId());
+        if (node.getType() != NodeType.CONDITION) {
+            return outgoing;
         }
-
-        Edge selectedEdge;
-
-        if (currentNode.getType() == NodeType.CONDITION) {
-            // 조건 노드: 실행 결과의 result 필드로 분기 방향 결정
-            Object conditionResult = context.getNodeOutput(currentNode.getId()).get("result");
-            String conditionType = Boolean.TRUE.equals(conditionResult) ? "true" : "false";
-
-            log.debug("[Cursor] CONDITION 노드 '{}' 분기 방향: {}", currentNode.getId(), conditionType);
-
-            selectedEdge = outgoingEdges.stream()
-                .filter(e -> conditionType.equals(e.getConditionType()))
-                .findFirst()
-                .orElse(null);
-
-            if (selectedEdge == null) {
-                log.warn("[Cursor] CONDITION 노드 '{}'의 {} 경로에 연결된 엣지 없음",
-                    currentNode.getId(), conditionType);
-                return null;
-            }
-        } else {
-            // 일반 노드: 첫 번째 엣지 선택 (단일 경로)
-            selectedEdge = outgoingEdges.get(0);
-        }
-
-        return allNodes.stream()
-            .filter(n -> n.getId().equals(selectedEdge.getTarget()))
-            .findFirst()
-            .orElse(null);
+        Object conditionResult = context.getNodeOutput(node.getId()).get("result");
+        String conditionType = Boolean.TRUE.equals(conditionResult) ? "true" : "false";
+        log.debug("[Cursor] CONDITION 노드 '{}' 분기 방향: {}", node.getId(), conditionType);
+        return outgoing.stream()
+            .filter(e -> conditionType.equals(e.getConditionType()))
+            .toList();
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -192,22 +172,5 @@ public class ExecutionCursor {
         context.setNodeOutput(nodeId, output);
         log.debug("[Cursor] 컨텍스트 업데이트 — nodeId: {}, outputKeys: {}",
             nodeId, output != null ? output.keySet() : "null");
-    }
-
-    /**
-     * 다음 노드 이동 전 순환 참조 여부를 확인한다.
-     * 순환이 아니면 방문 기록에 추가한다.
-     *
-     * @param nextNodeId 이동할 노드 ID
-     * @return 이미 방문한 노드이면 true
-     */
-    public boolean isCircularReference(String nextNodeId) {
-        if (visitedNodeIds.contains(nextNodeId)) {
-            log.error("[Cursor] 순환 참조 감지 — nodeId: {}, visitedNodes: {}",
-                nextNodeId, visitedNodeIds);
-            return true;
-        }
-        visitedNodeIds.add(nextNodeId);
-        return false;
     }
 }
