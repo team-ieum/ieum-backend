@@ -51,6 +51,7 @@ class AgentNodeExecutorTest {
             new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
             new StubMcpCatalogProvider(),
             new StubWebhookCredentialProvider(),
+            uid -> null,
             30
         );
     }
@@ -360,6 +361,7 @@ class AgentNodeExecutorTest {
             new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
             new StubMcpCatalogProvider(),
             webhookProvider,
+            uid -> null,
             30
         );
 

@@ -93,7 +93,8 @@ public class AgentClient {
         String notionToken,
         List<AvailableMcpServer> availableMcpServers,
         List<AvailableWebhook> availableWebhooks,
-        UUID userId
+        UUID userId,
+        String userRole
     ) {
         log.debug("[AgentClient] chat 요청 — provider: {}, prompt: {}자",
             llmProvider, prompt != null ? prompt.length() : 0);
@@ -118,6 +119,9 @@ public class AgentClient {
                 .header("X-LLM-Api-Key", apiKey)
                 .header("X-User-Id", userId.toString());
 
+            if (userRole != null) {
+                requestSpec = requestSpec.header("X-User-Role", userRole);
+            }
             if (googleAccessToken != null) {
                 requestSpec = requestSpec.header("X-Google-Access-Token", googleAccessToken);
             }
@@ -185,7 +189,8 @@ public class AgentClient {
         String notionToken,
         List<AvailableMcpServer> availableMcpServers,
         List<AvailableWebhook> availableWebhooks,
-        UUID userId
+        UUID userId,
+        String userRole
     ) {
         log.debug("[AgentClient] chatStream(SSE) 요청 — provider: {}, prompt: {}자",
             llmProvider, prompt != null ? prompt.length() : 0);
@@ -209,6 +214,9 @@ public class AgentClient {
             .header("X-LLM-Api-Key", apiKey)
             .header("X-User-Id", userId.toString());
 
+        if (userRole != null) {
+            spec = spec.header("X-User-Role", userRole);
+        }
         if (googleAccessToken != null) {
             spec = spec.header("X-Google-Access-Token", googleAccessToken);
         }

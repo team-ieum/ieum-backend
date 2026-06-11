@@ -52,6 +52,7 @@ public class AgentNodeExecutor implements NodeExecutor {
     private final ToolAuthResolver toolAuthResolver;
     private final McpCatalogProvider mcpCatalogProvider;
     private final WebhookCredentialProvider webhookCredentialProvider;
+    private final UserRoleProvider userRoleProvider;
     private final int agentTimeoutSeconds;
 
     public AgentNodeExecutor(
@@ -61,6 +62,7 @@ public class AgentNodeExecutor implements NodeExecutor {
         ToolAuthResolver toolAuthResolver,
         McpCatalogProvider mcpCatalogProvider,
         WebhookCredentialProvider webhookCredentialProvider,
+        UserRoleProvider userRoleProvider,
         @Value("${ieum.agent.timeout-seconds:120}") int agentTimeoutSeconds
     ) {
         this.webClient = WebClient.builder()
@@ -71,6 +73,7 @@ public class AgentNodeExecutor implements NodeExecutor {
         this.toolAuthResolver = toolAuthResolver;
         this.mcpCatalogProvider = mcpCatalogProvider;
         this.webhookCredentialProvider = webhookCredentialProvider;
+        this.userRoleProvider = userRoleProvider;
         this.agentTimeoutSeconds = agentTimeoutSeconds;
     }
 
@@ -302,6 +305,10 @@ public class AgentNodeExecutor implements NodeExecutor {
 
             if (userId != null) {
                 requestSpec = requestSpec.header("X-User-Id", userId.toString());
+                String userRole = userRoleProvider.findRoleByUserId(userId);
+                if (userRole != null) {
+                    requestSpec = requestSpec.header("X-User-Role", userRole);
+                }
             }
 
             if (googleAccessToken != null) {

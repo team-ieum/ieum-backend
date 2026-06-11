@@ -79,7 +79,7 @@ class WebSocketChatHandlerTest {
     private void mockChatStream(ChatStreamEvent... events) {
         given(agentClient.chatStream(
             any(), any(), any(), any(), any(), any(), any(),
-            any(), any(), any(), any(), any(), any(), any()
+            any(), any(), any(), any(), any(), any(), any(), any()
         )).willReturn(Flux.just(events));
     }
 

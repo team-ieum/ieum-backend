@@ -50,7 +50,7 @@ public class ChatController implements ChatControllerDocs {
         @PathVariable UUID workflowId,
         @RequestBody @Valid ChatRequest request
     ) {
-        ChatResponse response = chatService.chat(workflowId, userDetails.getId(), request);
+        ChatResponse response = chatService.chat(workflowId, userDetails.getId(), userDetails.getRole(), request);
         return ResponseEntity.ok(ApiResponse.ok(response));
     }
 

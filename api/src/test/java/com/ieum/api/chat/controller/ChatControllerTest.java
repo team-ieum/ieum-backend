@@ -97,7 +97,7 @@ class ChatControllerTest {
             .tokens(new TokenUsage(10, 20))
             .build();
 
-        given(chatService.chat(eq(workflowId), eq(userId), any())).willReturn(response);
+        given(chatService.chat(eq(workflowId), eq(userId), any(), any())).willReturn(response);
 
         mockMvc.perform(post("/api/v1/workflows/{workflowId}/chat", workflowId)
                 .contentType(MediaType.APPLICATION_JSON)
@@ -132,7 +132,7 @@ class ChatControllerTest {
     @Test
     @DisplayName("존재하지 않는 세션 ID 전달 시 404 반환")
     void chat_sessionNotFound_returns404() throws Exception {
-        given(chatService.chat(eq(workflowId), eq(userId), any()))
+        given(chatService.chat(eq(workflowId), eq(userId), any(), any()))
             .willThrow(new CustomException(ErrorCode.CHAT_SESSION_NOT_FOUND));
 
         mockMvc.perform(post("/api/v1/workflows/{workflowId}/chat", workflowId)
@@ -147,7 +147,7 @@ class ChatControllerTest {
     @Test
     @DisplayName("AI 노드 없는 워크플로우 — 400 반환")
     void chat_noAiNode_returns400() throws Exception {
-        given(chatService.chat(eq(workflowId), eq(userId), any()))
+        given(chatService.chat(eq(workflowId), eq(userId), any(), any()))
             .willThrow(new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE));
 
         mockMvc.perform(post("/api/v1/workflows/{workflowId}/chat", workflowId)
