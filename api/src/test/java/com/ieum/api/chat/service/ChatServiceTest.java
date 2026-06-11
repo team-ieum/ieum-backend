@@ -245,12 +245,12 @@ class ChatServiceTest {
         given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString())).willReturn("test-api-key");
         given(integrationContextService.resolve(userId))
             .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
             .willReturn(buildAgentResponse("WORKFLOW_GENERATED", "AI 테스트 워크플로우"));
         given(workflowCrudService.findMaxVersionByWorkflowId(workflowId)).willReturn(1);
         given(messageRepository.save(any())).willReturn(agentMsg);
 
-        chatService.chat(workflowId, userId, buildRequest("워크플로우 만들어줘", fallbackCredentialId));
+        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("워크플로우 만들어줘", fallbackCredentialId));
 
         verify(workflowCrudService).updateWorkflowName(workflowId, "AI 테스트 워크플로우");
     }
@@ -273,12 +273,12 @@ class ChatServiceTest {
         given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString())).willReturn("test-api-key");
         given(integrationContextService.resolve(userId))
             .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
             .willReturn(buildAgentResponse("WORKFLOW_GENERATED", "수정된 이름"));
         given(workflowCrudService.findMaxVersionByWorkflowId(workflowId)).willReturn(2);
         given(messageRepository.save(any())).willReturn(agentMsg);
 
-        chatService.chat(workflowId, userId, buildRequest("노드 하나 추가해줘", fallbackCredentialId));
+        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("노드 하나 추가해줘", fallbackCredentialId));
 
         verify(workflowCrudService, never()).updateWorkflowName(any(), any());
     }
@@ -301,12 +301,12 @@ class ChatServiceTest {
         given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString())).willReturn("test-api-key");
         given(integrationContextService.resolve(userId))
             .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
             .willReturn(buildAgentResponse("WORKFLOW_GENERATED", null));
         given(workflowCrudService.findMaxVersionByWorkflowId(workflowId)).willReturn(1);
         given(messageRepository.save(any())).willReturn(agentMsg);
 
-        chatService.chat(workflowId, userId, buildRequest("워크플로우 만들어줘", fallbackCredentialId));
+        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("워크플로우 만들어줘", fallbackCredentialId));
 
         verify(workflowCrudService, never()).updateWorkflowName(any(), any());
     }

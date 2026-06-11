@@ -99,7 +99,7 @@ public class ChatService {
      * @return AI AGENT 응답 메시지 DTO
      */
     @Transactional
-    public ChatResponse chat(UUID workflowId, UUID userId, ChatRequest request) {
+    public ChatResponse chat(UUID workflowId, UUID userId, String userRole, ChatRequest request) {
 
         // 1. 세션 찾거나 새로 생성
         ChatSession session = createOrGetSession(workflowId, userId, request.getSessionId());
@@ -144,7 +144,8 @@ public class ChatService {
             notionToken,
             availableMcpServers,
             availableWebhooks,
-            userId
+            userId,
+            userRole
         );
 
         // 8. WORKFLOW_GENERATED/MODIFIED → DB에 새 버전으로 저장

@@ -16,6 +16,7 @@ import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.SimpMessageSendingOperations;
+import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Controller;
 import reactor.core.scheduler.Schedulers;
 
@@ -66,6 +67,10 @@ public class WebSocketChatHandler {
     ) {
         String userName = principal.getName();  // userId.toString()
         UUID userId = UUID.fromString(userName);
+        // WebSocketAuthInterceptor가 setUser(Authentication)로 role을 authorities에 담아둔다.
+        String userRole = (principal instanceof Authentication auth && !auth.getAuthorities().isEmpty())
+            ? auth.getAuthorities().iterator().next().getAuthority()
+            : null;
 
         log.info("[WS] 채팅 메시지 수신 — workflowId: {}, userId: {}", workflowId, userId);
 
@@ -98,7 +103,8 @@ public class WebSocketChatHandler {
             setup.notionToken(),
             setup.availableMcpServers(),
             setup.availableWebhooks(),
-            userId
+            userId,
+            userRole
         )
         // finalizeStream은 동기 blocking(JPA) 작업이므로 Netty EventLoop 스레드에서 실행되면
         // Thread Starvation을 유발한다. boundedElastic로 전환해 별도 스레드 풀에서 처리한다.

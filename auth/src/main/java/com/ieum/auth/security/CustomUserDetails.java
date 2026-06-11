@@ -41,4 +41,12 @@ public class CustomUserDetails implements UserDetails {
     public String getUsername() {
         return email;
     }
+
+    /** 단일 권한(role) 문자열(예: "ROLE_TESTER")을 반환한다. agent로 전달할 X-User-Role 헤더 값에 사용한다. */
+    public String getRole() {
+        return authorities.stream()
+            .findFirst()
+            .map(GrantedAuthority::getAuthority)
+            .orElse(null);
+    }
 }
