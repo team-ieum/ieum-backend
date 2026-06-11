@@ -65,6 +65,10 @@ public class WebSocketChatHandler {
         @Payload ChatRequest request,
         Principal principal
     ) {
+        if (principal == null) {
+            log.warn("[WS] 인증 정보(principal)가 없어 메시지를 처리할 수 없습니다 — workflowId: {}", workflowId);
+            return;
+        }
         String userName = principal.getName();  // userId.toString()
         UUID userId = UUID.fromString(userName);
         // WebSocketAuthInterceptor가 setUser(Authentication)로 role을 authorities에 담아둔다.

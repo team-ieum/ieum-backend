@@ -4,6 +4,7 @@ import com.ieum.auth.repository.UserRepository;
 import com.ieum.workflowcore.engine.executor.UserRoleProvider;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 /**
@@ -16,6 +17,7 @@ import org.springframework.stereotype.Component;
  * <p>이 빈이 등록되면 workflow-core의 {@code StubUserRoleProvider}는
  * {@code @ConditionalOnMissingBean}에 의해 자동으로 비활성화된다.
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class DefaultUserRoleProvider implements UserRoleProvider {
@@ -26,6 +28,10 @@ public class DefaultUserRoleProvider implements UserRoleProvider {
     public String findRoleByUserId(UUID userId) {
         return userRepository.findById(userId)
             .map(user -> user.getRole().name())
-            .orElse(null);
+            .orElseGet(() -> {
+                // 정상 인증된 userId인데 User가 없는 건 비정상 상태 — 조용히 일반 유저로 처리되지 않도록 경고를 남긴다.
+                log.warn("[DefaultUserRoleProvider] 인증된 userId의 User를 찾을 수 없습니다 — userId: {}", userId);
+                return null;
+            });
     }
 }
