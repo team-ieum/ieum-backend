@@ -116,8 +116,11 @@ public class AgentClient {
                 .uri("/v1/chat")
                 .contentType(MediaType.APPLICATION_JSON)
                 .header("X-LLM-Provider", llmProvider)
-                .header("X-LLM-Api-Key", apiKey)
                 .header("X-User-Id", userId.toString());
+
+            if (apiKey != null) {
+                requestSpec = requestSpec.header("X-LLM-Api-Key", apiKey);
+            }
 
             if (userRole != null) {
                 requestSpec = requestSpec.header("X-User-Role", userRole);
@@ -211,8 +214,11 @@ public class AgentClient {
             .contentType(MediaType.APPLICATION_JSON)
             .accept(MediaType.TEXT_EVENT_STREAM)
             .header("X-LLM-Provider", llmProvider)
-            .header("X-LLM-Api-Key", apiKey)
             .header("X-User-Id", userId.toString());
+
+        if (apiKey != null) {
+            spec = spec.header("X-LLM-Api-Key", apiKey);
+        }
 
         if (userRole != null) {
             spec = spec.header("X-User-Role", userRole);
