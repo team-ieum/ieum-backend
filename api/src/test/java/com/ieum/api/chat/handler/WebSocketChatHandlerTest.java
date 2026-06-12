@@ -72,7 +72,7 @@ class WebSocketChatHandlerTest {
             null, null, null,
             List.of(), List.of()
         );
-        given(chatService.prepareStream(workflowId, userId, request)).willReturn(setup);
+        given(chatService.prepareStream(eq(workflowId), eq(userId), any(), eq(request))).willReturn(setup);
     }
 
     @SuppressWarnings("unchecked")

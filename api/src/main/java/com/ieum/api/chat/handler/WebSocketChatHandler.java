@@ -81,7 +81,7 @@ public class WebSocketChatHandler {
         // 1. 트랜잭션 처리 (세션/메시지 저장, 에이전트 설정 로드)
         StreamSetupResult setup;
         try {
-            setup = chatService.prepareStream(workflowId, userId, request);
+            setup = chatService.prepareStream(workflowId, userId, userRole, request);
         } catch (CustomException e) {
             log.warn("[WS] prepareStream 실패 — userId: {}, error: {}", userId, e.getMessage());
             sendToUser(userName, ChatStreamResponse.error(e.getMessage()));

@@ -105,7 +105,7 @@ public class ChatService {
         ChatSession session = createOrGetSession(workflowId, userId, request.getSessionId());
 
         // 2. 워크플로우 AI 노드 설정 로드 (소유권 검증 포함)
-        AgentConfig agentConfig = resolveAgentConfig(workflowId, userId, request.getCredentialId());
+        AgentConfig agentConfig = resolveAgentConfig(workflowId, userId, request.getCredentialId(), userRole);
 
         // 3. USER 메시지 저장
         saveUserMessage(session, request.getPrompt());
@@ -271,7 +271,7 @@ public class ChatService {
      * @throws CustomException INVALID_WORKFLOW — nodesJson 파싱 실패 시
      */
     @SuppressWarnings("unchecked")
-    public AgentConfig resolveAgentConfig(UUID workflowId, UUID userId, UUID fallbackCredentialId) {
+    public AgentConfig resolveAgentConfig(UUID workflowId, UUID userId, UUID fallbackCredentialId, String userRole) {
         workflowCrudService.getWorkflowByOwner(userId, workflowId);
 
         WorkflowVersion version = workflowCrudService.findLatestVersion(workflowId)
@@ -298,6 +298,10 @@ public class ChatService {
             String llmProvider = (String) config.get("llmProvider");
             String credentialId = (String) config.get("credentialId");
             List<Map<String, Object>> tools = (List<Map<String, Object>>) config.get("tools");
+            // 개발/테스트 계정은 credential 없이 자체 호스팅 LLM을 사용할 수 있다 — 키 없이 전달하면 agent가 라우팅/차단을 판단한다
+            if ((credentialId == null || credentialId.isBlank()) && isSelfHostedEligible(userRole)) {
+                return new AgentConfig(llmProvider, null, tools);
+            }
             String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
             return new AgentConfig(llmProvider, decryptedApiKey, tools);
         }
@@ -306,6 +310,10 @@ public class ChatService {
         if (fallbackCredentialId == null) {
             List<Credential> credentials = credentialService.getByUserId(userId);
             if (credentials.isEmpty()) {
+                if (isSelfHostedEligible(userRole)) {
+                    // 크레덴셜이 하나도 없어도 개발/테스트 계정은 자체 호스팅 LLM으로 채팅 가능
+                    return new AgentConfig("CLAUDE", null, null);
+                }
                 throw new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE);
             }
             Credential defaultCredential = credentials.get(0);
@@ -316,6 +324,11 @@ public class ChatService {
         Credential credential = credentialService.getByIdAndUserId(fallbackCredentialId, userId);
         String decryptedApiKey = credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString());
         return new AgentConfig(credential.getProvider().name(), decryptedApiKey, null);
+    }
+
+    /** 자체 호스팅 LLM(키 없음) 경로 자격 — 최종 게이트는 agent의 credential 검증이 담당한다. */
+    private static boolean isSelfHostedEligible(String userRole) {
+        return "ROLE_ADMIN".equals(userRole) || "ROLE_TESTER".equals(userRole);
     }
 
     // ─────────────────────────────────────── PRIVATE ──────────────────────────
@@ -506,13 +519,14 @@ public class ChatService {
      *
      * @param workflowId 워크플로우 ID
      * @param userId     현재 인증된 사용자 ID
+     * @param userRole   현재 인증된 사용자 role (자체 호스팅 LLM keyless 자격 판단)
      * @param request    ChatRequest (prompt + optional currentNodes/currentEdges + optional sessionId)
      * @return 스트리밍에 필요한 컨텍스트
      */
     @Transactional
-    public StreamSetupResult prepareStream(UUID workflowId, UUID userId, ChatRequest request) {
+    public StreamSetupResult prepareStream(UUID workflowId, UUID userId, String userRole, ChatRequest request) {
         ChatSession session = createOrGetSession(workflowId, userId, request.getSessionId());
-        AgentConfig config = resolveAgentConfig(workflowId, userId, request.getCredentialId());
+        AgentConfig config = resolveAgentConfig(workflowId, userId, request.getCredentialId(), userRole);
 
         saveUserMessage(session, request.getPrompt());
 

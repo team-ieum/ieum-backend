@@ -167,9 +167,25 @@ class ChatServiceTest {
             .willReturn(List.of());
 
         assertThatThrownBy(() ->
-            chatService.resolveAgentConfig(workflowId, userId, null)
+            chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER")
         ).isInstanceOf(CustomException.class)
             .hasMessageContaining(ErrorCode.WORKFLOW_HAS_NO_AI_NODE.getMessage());
+    }
+
+    @Test
+    @DisplayName("크레덴셜이 없어도 ROLE_TESTER는 키 없는 AgentConfig로 채팅할 수 있다 (자체 호스팅 LLM 경로)")
+    void resolveAgentConfig_noCredential_selfHostedEligible() {
+        WorkflowVersion version = buildVersionWithNodesJson("[]");
+
+        given(workflowCrudService.findLatestVersion(workflowId))
+            .willReturn(Optional.of(version));
+        given(credentialService.getByUserId(userId))
+            .willReturn(List.of());
+
+        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_TESTER");
+
+        assertThat(result.llmProvider()).isEqualTo("CLAUDE");
+        assertThat(result.decryptedApiKey()).isNull();
     }
 
     @Test
@@ -190,7 +206,7 @@ class ChatServiceTest {
         given(credentialProvider.getDecryptedApiKey(autoCredentialId.toString()))
             .willReturn("auto-decrypted-key");
 
-        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null);
+        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER");
 
         assertThat(result.llmProvider()).isEqualTo("CLAUDE");
         assertThat(result.decryptedApiKey()).isEqualTo("auto-decrypted-key");
