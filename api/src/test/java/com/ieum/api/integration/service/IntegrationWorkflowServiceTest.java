@@ -79,4 +79,29 @@ class IntegrationWorkflowServiceTest {
             .extracting(e -> ((CustomException) e).getErrorCode())
             .isEqualTo(ErrorCode.INVALID_CURSOR);
     }
+
+    @Test
+    @DisplayName("빈 문자열 cursor는 첫 페이지(0)로 처리한다")
+    void getWorkflowsByService_blankCursor() {
+        // given
+        given(integrationWorkflowQueryService.findByBrand(userId, "discord", 0, 20))
+            .willReturn(new BrandWorkflowPage(List.of(), false));
+
+        // when
+        PageResponse<WorkflowSummaryResponse> response =
+            service.getWorkflowsByService(userId, IntegrationServiceType.DISCORD, "  ", 20);
+
+        // then — 빈 커서가 page 0으로 조회되어 정상 응답
+        assertThat(response.getContent()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("음수 cursor는 INVALID_CURSOR 예외를 던진다")
+    void getWorkflowsByService_negativeCursor() {
+        assertThatThrownBy(() ->
+            service.getWorkflowsByService(userId, IntegrationServiceType.DISCORD, "-1", 20))
+            .isInstanceOf(CustomException.class)
+            .extracting(e -> ((CustomException) e).getErrorCode())
+            .isEqualTo(ErrorCode.INVALID_CURSOR);
+    }
 }
