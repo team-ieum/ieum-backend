@@ -3,6 +3,7 @@ package com.ieum.workflowcore.repository;
 import static com.ieum.workflowcore.domain.QWorkflow.workflow;
 import static com.ieum.workflowcore.domain.QWorkflowExecution.workflowExecution;
 import static com.ieum.workflowcore.domain.QWorkflowExecutionLog.workflowExecutionLog;
+import static com.ieum.workflowcore.domain.QWorkflowVersion.workflowVersion;
 
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.enums.ExecutionLogStatus;
@@ -185,6 +186,63 @@ public class WorkflowQueryRepository {
             .offset((long) page * size)
             .limit(size)
             .fetch();
+    }
+
+    /**
+     * 주어진 MongoDB 정의 ID({@code mongoDefinitionId}) 집합 중, 각 워크플로우의 <b>최신 버전</b>
+     * 이면서 해당 사용자 소유인 워크플로우를 페이징 조회합니다. (연동 서비스별 워크플로우 목록 2단계)
+     *
+     * <p>반환 Tuple = [Workflow, WorkflowVersion(최신)]. WorkflowVersion.mongoDefinitionId로
+     * usedNodeCount를 매핑합니다. 정렬은 워크플로우 생성일 내림차순.
+     */
+    public List<Tuple> findOwnedLatestVersions(UUID userId, List<String> mongoDefinitionIds, int page, int size) {
+        return queryFactory
+            .select(workflow, workflowVersion)
+            .from(workflowVersion)
+            .join(workflowVersion.workflow, workflow)
+            .where(
+                workflow.userId.eq(userId),
+                workflowVersion.mongoDefinitionId.in(mongoDefinitionIds),
+                isLatestVersion()
+            )
+            .orderBy(workflow.createdAt.desc())
+            .offset((long) page * size)
+            .limit(size)
+            .fetch();
+    }
+
+    /**
+     * 연동 서비스별 워크플로우 목록 조회 시 다음 페이지 존재 여부를 확인합니다.
+     */
+    public boolean hasNextOwnedLatestVersions(UUID userId, List<String> mongoDefinitionIds, int page, int size) {
+        Integer result = queryFactory
+            .selectOne()
+            .from(workflowVersion)
+            .join(workflowVersion.workflow, workflow)
+            .where(
+                workflow.userId.eq(userId),
+                workflowVersion.mongoDefinitionId.in(mongoDefinitionIds),
+                isLatestVersion()
+            )
+            .orderBy(workflow.createdAt.desc())
+            .offset((long) (page + 1) * size)
+            .limit(1)
+            .fetchFirst();
+        return result != null;
+    }
+
+    /**
+     * 현재 행의 WorkflowVersion이 그 워크플로우의 최신(최대 version) 버전인지 판별하는 조건식.
+     */
+    private com.querydsl.core.types.dsl.BooleanExpression isLatestVersion() {
+        com.ieum.workflowcore.domain.QWorkflowVersion subVersion =
+            new com.ieum.workflowcore.domain.QWorkflowVersion("subVersion");
+        return workflowVersion.version.eq(
+            JPAExpressions
+                .select(subVersion.version.max())
+                .from(subVersion)
+                .where(subVersion.workflow.eq(workflow))
+        );
     }
 
     /**
