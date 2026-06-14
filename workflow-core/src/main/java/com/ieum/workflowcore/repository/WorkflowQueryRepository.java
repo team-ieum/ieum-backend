@@ -194,6 +194,9 @@ public class WorkflowQueryRepository {
      *
      * <p>반환 Tuple = [Workflow, WorkflowVersion(최신)]. WorkflowVersion.mongoDefinitionId로
      * usedNodeCount를 매핑합니다. 정렬은 워크플로우 생성일 내림차순.
+     *
+     * <p>다음 페이지 존재 여부 판별을 위해 {@code size + 1}개를 조회한다. 별도 count 쿼리 없이
+     * 호출자가 {@code 결과 크기 > size}로 {@code hasNext}를 판단하고 초과분을 잘라낸다.
      */
     public List<Tuple> findOwnedLatestVersions(UUID userId, List<String> mongoDefinitionIds, int page, int size) {
         return queryFactory
@@ -207,28 +210,8 @@ public class WorkflowQueryRepository {
             )
             .orderBy(workflow.createdAt.desc())
             .offset((long) page * size)
-            .limit(size)
+            .limit(size + 1L)
             .fetch();
-    }
-
-    /**
-     * 연동 서비스별 워크플로우 목록 조회 시 다음 페이지 존재 여부를 확인합니다.
-     */
-    public boolean hasNextOwnedLatestVersions(UUID userId, List<String> mongoDefinitionIds, int page, int size) {
-        Integer result = queryFactory
-            .selectOne()
-            .from(workflowVersion)
-            .join(workflowVersion.workflow, workflow)
-            .where(
-                workflow.userId.eq(userId),
-                workflowVersion.mongoDefinitionId.in(mongoDefinitionIds),
-                isLatestVersion()
-            )
-            .orderBy(workflow.createdAt.desc())
-            .offset((long) (page + 1) * size)
-            .limit(1)
-            .fetchFirst();
-        return result != null;
     }
 
     /**

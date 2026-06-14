@@ -51,10 +51,12 @@ public class IntegrationWorkflowQueryService {
         List<String> mongoDefinitionIds = List.copyOf(usedNodeCountByMongoId.keySet());
 
         // 2단계 — PostgreSQL: 최신 버전 + 소유권 필터 페이징
+        // size+1개를 조회해 별도 count 쿼리 없이 hasNext를 판별하고, 초과분(1개)은 잘라낸다.
         List<Tuple> rows = workflowQueryRepository.findOwnedLatestVersions(userId, mongoDefinitionIds, page, size);
-        boolean hasNext = workflowQueryRepository.hasNextOwnedLatestVersions(userId, mongoDefinitionIds, page, size);
+        boolean hasNext = rows.size() > size;
+        List<Tuple> pageRows = hasNext ? rows.subList(0, size) : rows;
 
-        List<ServiceWorkflow> items = rows.stream()
+        List<ServiceWorkflow> items = pageRows.stream()
             .map(row -> {
                 Workflow workflow = row.get(0, Workflow.class);
                 WorkflowVersion version = row.get(1, WorkflowVersion.class);

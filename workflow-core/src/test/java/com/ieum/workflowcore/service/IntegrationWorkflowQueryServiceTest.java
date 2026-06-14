@@ -81,10 +81,9 @@ class IntegrationWorkflowQueryServiceTest {
         given(tuple.get(0, Workflow.class)).willReturn(workflow);
         given(tuple.get(1, WorkflowVersion.class)).willReturn(version);
 
+        // size(20)보다 적게(1개) 반환 → hasNext=false
         given(workflowQueryRepository.findOwnedLatestVersions(userId, List.of(mongoId), 0, 20))
             .willReturn(List.of(tuple));
-        given(workflowQueryRepository.hasNextOwnedLatestVersions(userId, List.of(mongoId), 0, 20))
-            .willReturn(false);
 
         // when
         BrandWorkflowPage result = service.findByBrand(userId, "discord", 0, 20);
@@ -97,9 +96,9 @@ class IntegrationWorkflowQueryServiceTest {
     }
 
     @Test
-    @DisplayName("PG 결과에 hasNext=true이면 그대로 전달한다")
-    void findByBrand_hasNextPropagated() {
-        // given
+    @DisplayName("size+1개가 조회되면 hasNext=true이고 초과분은 잘라낸다")
+    void findByBrand_sizePlusOne_hasNextTrueAndTrimmed() {
+        // given — size=1 요청에 2개(size+1) 반환
         String mongoId = "6a282dfc42e3a69df23ec991";
         BrandVersionCount count = mock(BrandVersionCount.class);
         given(count.getMongoDefinitionId()).willReturn(mongoId);
@@ -110,19 +109,19 @@ class IntegrationWorkflowQueryServiceTest {
         Workflow workflow = Workflow.builder().userId(userId).name("w").isActive(true).build();
         WorkflowVersion version = WorkflowVersion.builder().id(UUID.randomUUID()).version(1)
             .mongoDefinitionId(mongoId).build();
-        Tuple tuple = mock(Tuple.class);
-        given(tuple.get(0, Workflow.class)).willReturn(workflow);
-        given(tuple.get(1, WorkflowVersion.class)).willReturn(version);
+        Tuple firstRow = mock(Tuple.class);
+        given(firstRow.get(0, Workflow.class)).willReturn(workflow);
+        given(firstRow.get(1, WorkflowVersion.class)).willReturn(version);
+        Tuple overflowRow = mock(Tuple.class); // 초과분 — subList로 잘려 매핑되지 않음
 
-        given(workflowQueryRepository.findOwnedLatestVersions(userId, List.of(mongoId), 0, 20))
-            .willReturn(List.of(tuple));
-        given(workflowQueryRepository.hasNextOwnedLatestVersions(userId, List.of(mongoId), 0, 20))
-            .willReturn(true);
+        given(workflowQueryRepository.findOwnedLatestVersions(userId, List.of(mongoId), 0, 1))
+            .willReturn(List.of(firstRow, overflowRow));
 
         // when
-        BrandWorkflowPage result = service.findByBrand(userId, "slack", 0, 20);
+        BrandWorkflowPage result = service.findByBrand(userId, "slack", 0, 1);
 
         // then
         assertThat(result.hasNext()).isTrue();
+        assertThat(result.items()).hasSize(1);
     }
 }

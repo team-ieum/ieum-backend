@@ -42,9 +42,13 @@ public class IntegrationWorkflowService {
     }
 
     private int parseCursor(String cursor) {
-        if (cursor == null) return 0;
+        if (cursor == null || cursor.isBlank()) return 0;
         try {
-            return Integer.parseInt(cursor);
+            int page = Integer.parseInt(cursor.trim());
+            if (page < 0) {
+                throw new CustomException(ErrorCode.INVALID_CURSOR);
+            }
+            return page;
         } catch (NumberFormatException e) {
             throw new CustomException(ErrorCode.INVALID_CURSOR);
         }

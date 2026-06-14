@@ -20,6 +20,9 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class IntegrationWorkflowController implements IntegrationWorkflowControllerDocs {
 
+    /** 페이지 크기 상한 — 과도한 size 요청으로 인한 메모리 급증(OOM) 방어 */
+    private static final int MAX_PAGE_SIZE = 100;
+
     private final IntegrationWorkflowService integrationWorkflowService;
 
     @Override
@@ -30,9 +33,10 @@ public class IntegrationWorkflowController implements IntegrationWorkflowControl
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "20") int size) {
 
+        int pageSize = Math.max(1, Math.min(size, MAX_PAGE_SIZE));
         PageResponse<WorkflowSummaryResponse> response =
             integrationWorkflowService.getWorkflowsByService(
-                userDetails.getId(), IntegrationServiceType.from(serviceType), cursor, size);
+                userDetails.getId(), IntegrationServiceType.from(serviceType), cursor, pageSize);
         return ResponseEntity.ok(ApiResponse.ok(response));
     }
 }
