@@ -101,7 +101,7 @@ integration  → auth
 - 신규 서비스 메서드에는 단위 테스트를 작성한다
 - `@SpringBootTest`는 통합 테스트에만 사용한다
 - 단위 테스트는 `@ExtendWith(MockitoExtension.class)`를 사용한다
-- 테스트 메서드명은 한글로 작성한다 (예: `크레덴셜_저장_성공`)
+- 테스트 메서드명은 영어로 작성하고, `@DisplayName`으로 한글 설명을 단다 (예: 메서드 `saveCredential_success` + `@DisplayName("크레덴셜 저장 성공")`)
 
 ---
 
