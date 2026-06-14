@@ -35,6 +35,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.simp.SimpMessageSendingOperations;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import reactor.core.publisher.Flux;
 
 @ExtendWith(MockitoExtension.class)
@@ -60,7 +61,9 @@ class WebSocketChatHandlerTest {
         workflowId = UUID.randomUUID();
         userId = UUID.randomUUID();
         sessionId = UUID.randomUUID();
-        principal = new UsernamePasswordAuthenticationToken(userId.toString(), null);
+        principal = new UsernamePasswordAuthenticationToken(
+            userId.toString(), null,
+            List.of(new SimpleGrantedAuthority("ROLE_USER")));
         request = mock(ChatRequest.class);
 
         setup = new StreamSetupResult(
@@ -72,7 +75,7 @@ class WebSocketChatHandlerTest {
             null, null, null,
             List.of(), List.of()
         );
-        given(chatService.prepareStream(eq(workflowId), eq(userId), any(), eq(request))).willReturn(setup);
+        given(chatService.prepareStream(eq(workflowId), eq(userId), eq("ROLE_USER"), eq(request))).willReturn(setup);
     }
 
     @SuppressWarnings("unchecked")
