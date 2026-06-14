@@ -299,8 +299,12 @@ public class ChatService {
             String credentialId = (String) config.get("credentialId");
             List<Map<String, Object>> tools = (List<Map<String, Object>>) config.get("tools");
             // 개발/테스트 계정은 credential 없이 자체 호스팅 LLM을 사용할 수 있다 — 키 없이 전달하면 agent가 라우팅/차단을 판단한다
-            if ((credentialId == null || credentialId.isBlank()) && isSelfHostedEligible(userRole)) {
-                return new AgentConfig(llmProvider, null, tools);
+            if (credentialId == null || credentialId.isBlank()) {
+                if (isSelfHostedEligible(userRole)) {
+                    return new AgentConfig(llmProvider != null ? llmProvider : "CLAUDE", null, tools);
+                }
+                // 자격 없는 사용자가 키 없는 AI 노드를 실행하면 명시적 예외 — 복호화 단계의 NPE 방지
+                throw new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE);
             }
             String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
             return new AgentConfig(llmProvider, decryptedApiKey, tools);

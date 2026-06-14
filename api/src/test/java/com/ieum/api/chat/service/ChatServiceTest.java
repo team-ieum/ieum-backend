@@ -189,6 +189,36 @@ class ChatServiceTest {
     }
 
     @Test
+    @DisplayName("AI 노드의 credentialId가 비어 있어도 ROLE_TESTER는 노드의 llmProvider로 키 없는 AgentConfig를 반환한다")
+    void resolveAgentConfig_aiNodeBlankCredential_selfHostedEligible() {
+        WorkflowVersion version = buildVersionWithNodesJson(
+            "[{\"id\":\"n1\",\"type\":\"AI\",\"label\":\"ai\","
+                + "\"config\":{\"llmProvider\":\"OPENAI\",\"credentialId\":\"\"}}]");
+        given(workflowCrudService.findLatestVersion(workflowId))
+            .willReturn(Optional.of(version));
+
+        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_TESTER");
+
+        assertThat(result.llmProvider()).isEqualTo("OPENAI");
+        assertThat(result.decryptedApiKey()).isNull();
+    }
+
+    @Test
+    @DisplayName("AI 노드의 credentialId가 비어 있고 자격 없는 ROLE_USER면 WORKFLOW_HAS_NO_AI_NODE 예외")
+    void resolveAgentConfig_aiNodeBlankCredential_notEligible_throwsException() {
+        WorkflowVersion version = buildVersionWithNodesJson(
+            "[{\"id\":\"n1\",\"type\":\"AI\",\"label\":\"ai\","
+                + "\"config\":{\"llmProvider\":\"OPENAI\",\"credentialId\":\"\"}}]");
+        given(workflowCrudService.findLatestVersion(workflowId))
+            .willReturn(Optional.of(version));
+
+        assertThatThrownBy(() ->
+            chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER")
+        ).isInstanceOf(CustomException.class)
+            .hasMessageContaining(ErrorCode.WORKFLOW_HAS_NO_AI_NODE.getMessage());
+    }
+
+    @Test
     @DisplayName("AI 노드가 없고 fallbackCredentialId가 null일 때, 등록된 크레덴셜이 있으면 자동으로 사용하여 AgentConfig를 반환한다")
     void resolveAgentConfig_noAiNode_autoFallbackToUserCredential() {
         WorkflowVersion version = buildVersionWithNodesJson("[]");
