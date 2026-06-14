@@ -103,7 +103,10 @@ public class AgentNodeExecutor implements NodeExecutor {
             String renderedPrompt = cursor.renderVariables(promptTemplate);
             log.debug("[AgentNodeExecutor] 렌더링된 프롬프트 길이: {}", renderedPrompt.length());
 
-            String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
+            // credentialId가 없으면 키 없이 전달 — 자체 호스팅 LLM 자격(role)은 agent가 판단해 라우팅/차단한다
+            String decryptedApiKey = (credentialId == null || credentialId.isBlank())
+                ? null
+                : credentialProvider.getDecryptedApiKey(credentialId);
 
             String googleAccessToken = resolveGoogleAccessToken(tools, cursor);
             UUID userId = cursor.getContext().getUserId();
@@ -300,8 +303,11 @@ public class AgentNodeExecutor implements NodeExecutor {
             WebClient.RequestBodySpec requestSpec = webClient.post()
                 .uri("/v1/execute")
                 .contentType(MediaType.APPLICATION_JSON)
-                .header("X-LLM-Provider", llmProvider)
-                .header("X-LLM-Api-Key", llmApiKey);
+                .header("X-LLM-Provider", llmProvider);
+
+            if (llmApiKey != null) {
+                requestSpec = requestSpec.header("X-LLM-Api-Key", llmApiKey);
+            }
 
             if (userId != null) {
                 requestSpec = requestSpec.header("X-User-Id", userId.toString());
