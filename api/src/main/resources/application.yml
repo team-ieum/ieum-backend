@@ -24,8 +24,10 @@ spring:
       # parallelism 4)와 HTTP API·Quartz·SSE가 단일 풀을 공유하므로, 기본 풀(10)로는
       # 동시 실행 폭을 감당하지 못해 고갈됐다. 동시 워커 상한 대비 여유를 둔다.
       # 운영 시 PostgreSQL max_connections와 backend 인스턴스 수를 고려해 환경변수로 조정.
+      # minimum-idle을 maximum-pool-size와 동일하게 두어 고정 크기 풀(fixed-size)로 운영한다.
+      # HikariCP 권장 사항으로, 부하 급증 시 커넥션 동적 생성에 따른 latency spike를 방지한다.
       maximum-pool-size: ${DB_POOL_MAX_SIZE:30}
-      minimum-idle: ${DB_POOL_MIN_IDLE:10}
+      minimum-idle: ${DB_POOL_MIN_IDLE:30}
       connection-timeout: ${DB_POOL_CONNECTION_TIMEOUT_MS:20000}
       max-lifetime: ${DB_POOL_MAX_LIFETIME_MS:1800000}
       idle-timeout: ${DB_POOL_IDLE_TIMEOUT_MS:600000}
@@ -100,13 +102,14 @@ ieum:
     thread-count: ${QUARTZ_THREAD_COUNT:10}
     thread-name-prefix: ${QUARTZ_THREAD_NAME_PREFIX:quartz-}
   workflow:
-    # [IEUM-BE-42] 워크플로 동시 실행 스레드풀. 동시 실행 워크플로 수를 풀(아래 hikari)에
-    # 정합시키기 위해 max-pool-size를 8 → 6으로 낮춘다. ThreadPoolTaskExecutor는
-    # core-pool-size까지 즉시 실행 후 queue에 적재하므로, 이 값이 동시 실행 게이트 역할을 한다.
-    # 피크 커넥션 추산: max-pool(6) × parallelism(3) ≈ 18 노드 워커 + 메인/로그 + HTTP/Quartz
+    # [IEUM-BE-42] 워크플로 동시 실행 스레드풀. 동시 실행 워크플로 수를 풀(아래 hikari)에 정합한다.
+    # ThreadPoolTaskExecutor(ThreadPoolExecutor)는 core-pool-size까지만 즉시 실행하고, 초과분은
+    # queue가 가득 차기 전까지 max-pool-size로 확장하지 않는다. 따라서 의도한 동시 실행 6을
+    # 실제로 보장하려면 core-pool-size = max-pool-size = 6 으로 둔다(고정 크기 스레드풀).
+    # 피크 커넥션 추산: 동시 워크플로(6) × parallelism(3) ≈ 18 노드 워커 + 메인/로그 + HTTP/Quartz
     #                  ≈ 25 < hikari.maximum-pool-size(30).
     executor:
-      core-pool-size: ${WORKFLOW_EXECUTOR_CORE_POOL_SIZE:4}
+      core-pool-size: ${WORKFLOW_EXECUTOR_CORE_POOL_SIZE:6}
       max-pool-size: ${WORKFLOW_EXECUTOR_MAX_POOL_SIZE:6}
       queue-capacity: ${WORKFLOW_EXECUTOR_QUEUE_CAPACITY:30}
 
