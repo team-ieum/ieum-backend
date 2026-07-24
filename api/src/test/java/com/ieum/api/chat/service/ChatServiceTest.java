@@ -21,6 +21,7 @@ import com.ieum.workflowcore.chat.repository.ChatMessageRepository;
 import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.WorkflowVersion;
+import com.ieum.workflowcore.engine.executor.BetaPlatformProvider;
 import com.ieum.workflowcore.engine.executor.CredentialProvider;
 import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
 import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
@@ -46,6 +47,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
@@ -67,6 +70,7 @@ class ChatServiceTest {
     @Mock private AgentClient agentClient;
     @Mock private McpServerCatalogRepository mcpServerCatalogRepository;
     @Mock private WebhookCredentialRepository webhookCredentialRepository;
+    @Mock private BetaPlatformProvider betaPlatformProvider;
 
     @InjectMocks
     private ChatService chatService;
@@ -219,6 +223,78 @@ class ChatServiceTest {
     }
 
     @Test
+    @DisplayName("AI 노드의 credentialId가 비어 있고 self-hosted 자격은 없어도 베타 자격이면 platform 키로 AgentConfig를 반환한다")
+    void resolveAgentConfig_aiNodeBlankCredential_betaEligible() {
+        WorkflowVersion version = buildVersionWithNodesJson(
+            "[{\"id\":\"n1\",\"type\":\"AI\",\"label\":\"ai\","
+                + "\"config\":{\"llmProvider\":\"OPENAI\",\"credentialId\":\"\"}}]");
+        given(workflowCrudService.findLatestVersion(workflowId))
+            .willReturn(Optional.of(version));
+        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
+
+        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER");
+
+        assertThat(result.llmProvider()).isEqualTo("OPENAI");
+        assertThat(result.decryptedApiKey()).isNull();
+        assertThat(result.useBetaPlatformKey()).isTrue();
+        verify(betaPlatformProvider).reserveQuota(userId);
+    }
+
+    @Test
+    @DisplayName("AI 노드가 없고 크레덴셜도 없지만 베타 자격이면 platform 키로 AgentConfig를 반환한다")
+    void resolveAgentConfig_noCredential_betaEligible() {
+        WorkflowVersion version = buildVersionWithNodesJson("[]");
+        given(workflowCrudService.findLatestVersion(workflowId))
+            .willReturn(Optional.of(version));
+        given(credentialService.getByUserId(userId))
+            .willReturn(List.of());
+        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
+
+        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER");
+
+        assertThat(result.llmProvider()).isEqualTo("CLAUDE");
+        assertThat(result.decryptedApiKey()).isNull();
+        assertThat(result.useBetaPlatformKey()).isTrue();
+        verify(betaPlatformProvider).reserveQuota(userId);
+    }
+
+    @Test
+    @DisplayName("베타 쿼터 초과 시 BETA_QUOTA_EXCEEDED가 그대로 전파된다")
+    void resolveAgentConfig_betaEligible_quotaExceeded_throws() {
+        WorkflowVersion version = buildVersionWithNodesJson("[]");
+        given(workflowCrudService.findLatestVersion(workflowId))
+            .willReturn(Optional.of(version));
+        given(credentialService.getByUserId(userId))
+            .willReturn(List.of());
+        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
+        Mockito.doThrow(new CustomException(ErrorCode.BETA_QUOTA_EXCEEDED))
+            .when(betaPlatformProvider).reserveQuota(userId);
+
+        assertThatThrownBy(() ->
+            chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER")
+        ).isInstanceOf(CustomException.class)
+            .hasFieldOrPropertyWithValue("errorCode", ErrorCode.BETA_QUOTA_EXCEEDED);
+    }
+
+    @Test
+    @DisplayName("credentialId(BYOK)가 있으면 베타 자격이어도 platform 미적용, betaPlatformProvider 미호출")
+    void resolveAgentConfig_credentialPresent_ignoresBetaEligibility() {
+        WorkflowVersion version = buildVersionWithNodesJson(
+            "[{\"id\":\"n1\",\"type\":\"AI\",\"label\":\"ai\","
+                + "\"config\":{\"llmProvider\":\"OPENAI\",\"credentialId\":\"cred-1\"}}]");
+        given(workflowCrudService.findLatestVersion(workflowId))
+            .willReturn(Optional.of(version));
+        given(credentialProvider.getDecryptedApiKey("cred-1")).willReturn("decrypted-key");
+
+        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER");
+
+        assertThat(result.decryptedApiKey()).isEqualTo("decrypted-key");
+        assertThat(result.useBetaPlatformKey()).isFalse();
+        verify(betaPlatformProvider, never()).isBetaEligible(any());
+        verify(betaPlatformProvider, never()).reserveQuota(any());
+    }
+
+    @Test
     @DisplayName("AI 노드가 없고 fallbackCredentialId가 null일 때, 등록된 크레덴셜이 있으면 자동으로 사용하여 AgentConfig를 반환한다")
     void resolveAgentConfig_noAiNode_autoFallbackToUserCredential() {
         WorkflowVersion version = buildVersionWithNodesJson("[]");
@@ -291,7 +367,7 @@ class ChatServiceTest {
         given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString())).willReturn("test-api-key");
         given(integrationContextService.resolve(userId))
             .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyBoolean()))
             .willReturn(buildAgentResponse("WORKFLOW_GENERATED", "AI 테스트 워크플로우"));
         given(workflowCrudService.findMaxVersionByWorkflowId(workflowId)).willReturn(1);
         given(messageRepository.save(any())).willReturn(agentMsg);
@@ -319,7 +395,7 @@ class ChatServiceTest {
         given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString())).willReturn("test-api-key");
         given(integrationContextService.resolve(userId))
             .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyBoolean()))
             .willReturn(buildAgentResponse("WORKFLOW_GENERATED", "수정된 이름"));
         given(workflowCrudService.findMaxVersionByWorkflowId(workflowId)).willReturn(2);
         given(messageRepository.save(any())).willReturn(agentMsg);
@@ -347,7 +423,7 @@ class ChatServiceTest {
         given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString())).willReturn("test-api-key");
         given(integrationContextService.resolve(userId))
             .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyBoolean()))
             .willReturn(buildAgentResponse("WORKFLOW_GENERATED", null));
         given(workflowCrudService.findMaxVersionByWorkflowId(workflowId)).willReturn(1);
         given(messageRepository.save(any())).willReturn(agentMsg);
@@ -355,6 +431,108 @@ class ChatServiceTest {
         chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("워크플로우 만들어줘", fallbackCredentialId));
 
         verify(workflowCrudService, never()).updateWorkflowName(any(), any());
+    }
+
+    // ─────────────────── chat() 베타 platform 키 ───────────────────────────
+
+    @Test
+    @DisplayName("베타 platform 키 사용 시 agentClient.chat에 useBetaPlatformKey=true로 전달되고 쿼터를 예약한다")
+    void chat_betaPlatformKey_passesFlagToAgentClient() throws Exception {
+        ChatSession session = buildSession(workflowId, userId);
+        ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
+        WorkflowVersion version = buildVersionWithNodesJson("[]");
+
+        given(sessionRepository.save(any())).willReturn(session);
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(credentialService.getByUserId(userId)).willReturn(List.of());
+        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
+        given(integrationContextService.resolve(userId))
+            .willReturn(new IntegrationContext(List.of(), List.of()));
+        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyBoolean()))
+            .willReturn(buildAgentResponse("CLARIFICATION_NEEDED", null));
+        given(messageRepository.save(any())).willReturn(agentMsg);
+
+        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("안녕", null));
+
+        verify(betaPlatformProvider).reserveQuota(userId);
+        verify(agentClient).chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+            eq(userId), eq("ROLE_USER"), eq(true));
+    }
+
+    @Test
+    @DisplayName("베타 platform 키 사용 + 응답에 토큰 정보가 있으면 recordTokens를 호출한다 (agent usage 대비 관용 배선)")
+    void chat_betaPlatformKey_recordsTokensWhenUsagePresent() {
+        ChatSession session = buildSession(workflowId, userId);
+        ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
+        WorkflowVersion version = buildVersionWithNodesJson("[]");
+        ChatAgentResponse resp = Mockito.mock(ChatAgentResponse.class);
+        given(resp.isWorkflowResult()).willReturn(false);
+        given(resp.getType()).willReturn(AgentResponseType.CLARIFICATION_NEEDED);
+        given(resp.getContent()).willReturn("응답");
+        given(resp.getInputTokens()).willReturn(100);
+        given(resp.getOutputTokens()).willReturn(50);
+
+        given(sessionRepository.save(any())).willReturn(session);
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(credentialService.getByUserId(userId)).willReturn(List.of());
+        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
+        given(integrationContextService.resolve(userId))
+            .willReturn(new IntegrationContext(List.of(), List.of()));
+        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyBoolean()))
+            .willReturn(resp);
+        given(messageRepository.save(any())).willReturn(agentMsg);
+
+        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("안녕", null));
+
+        verify(betaPlatformProvider).recordTokens(userId, 150L);
+    }
+
+    @Test
+    @DisplayName("베타 platform 키 사용 + 응답 usage가 null(현재 agent /v1/chat 하드코딩)이면 recordTokens를 호출하지 않는다")
+    void chat_betaPlatformKey_skipsRecordTokensWhenUsageNull() throws Exception {
+        ChatSession session = buildSession(workflowId, userId);
+        ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
+        WorkflowVersion version = buildVersionWithNodesJson("[]");
+
+        given(sessionRepository.save(any())).willReturn(session);
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(credentialService.getByUserId(userId)).willReturn(List.of());
+        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
+        given(integrationContextService.resolve(userId))
+            .willReturn(new IntegrationContext(List.of(), List.of()));
+        // buildAgentResponse는 실제 ChatAgentResponse — getInputTokens/getOutputTokens는 하드코딩 null
+        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyBoolean()))
+            .willReturn(buildAgentResponse("CLARIFICATION_NEEDED", null));
+        given(messageRepository.save(any())).willReturn(agentMsg);
+
+        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("안녕", null));
+
+        verify(betaPlatformProvider, never()).recordTokens(any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("chat() — 베타 쿼터 초과 시 BETA_QUOTA_EXCEEDED가 그대로 전파되고 agentClient는 호출되지 않는다")
+    void chat_betaQuotaExceeded_propagatesException() {
+        WorkflowVersion version = buildVersionWithNodesJson("[]");
+        given(sessionRepository.save(any())).willReturn(buildSession(workflowId, userId));
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(credentialService.getByUserId(userId)).willReturn(List.of());
+        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
+        Mockito.doThrow(new CustomException(ErrorCode.BETA_QUOTA_EXCEEDED))
+            .when(betaPlatformProvider).reserveQuota(userId);
+        // resolveAgentConfig 단계에서 예외가 발생해 request.getPrompt() 등은 호출되지 않으므로
+        // 필요한 최소 스텁만 둔다(buildRequest는 strict stubbing에서 미사용 스텁으로 실패한다).
+        ChatRequest request = Mockito.mock(ChatRequest.class);
+        given(request.getSessionId()).willReturn(null);
+        given(request.getCredentialId()).willReturn(null);
+
+        assertThatThrownBy(() ->
+            chatService.chat(workflowId, userId, "ROLE_USER", request)
+        ).isInstanceOf(CustomException.class)
+            .hasFieldOrPropertyWithValue("errorCode", ErrorCode.BETA_QUOTA_EXCEEDED);
+
+        verify(agentClient, never()).chat(
+            any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyBoolean());
     }
 
     // ─────────────────── finalizeStream (스트리밍 done 후처리) ──────────────
@@ -376,10 +554,10 @@ class ChatServiceTest {
         ChatMessage saved = buildMessage(session, MessageType.AGENT, "완성됐어요");
         given(messageRepository.save(any(ChatMessage.class))).willReturn(saved);
 
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
 
         ChatResponse result = chatService.finalizeStream(
-            workflowId, sessionId, resp, config, UUID.randomUUID());
+            workflowId, sessionId, resp, config, UUID.randomUUID(), userId);
 
         verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any());
         verify(workflowCrudService).updateWorkflowName(workflowId, "테스트 WF");
@@ -401,10 +579,10 @@ class ChatServiceTest {
         ChatMessage saved = buildMessage(session, MessageType.AGENT, "좀 더 알려주세요");
         given(messageRepository.save(any(ChatMessage.class))).willReturn(saved);
 
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
 
         ChatResponse result = chatService.finalizeStream(
-            workflowId, sessionId, resp, config, UUID.randomUUID());
+            workflowId, sessionId, resp, config, UUID.randomUUID(), userId);
 
         verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any());
         verify(messageRepository).save(any(ChatMessage.class));

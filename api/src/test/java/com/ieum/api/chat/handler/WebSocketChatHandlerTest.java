@@ -2,6 +2,7 @@ package com.ieum.api.chat.handler;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.after;
@@ -68,7 +69,7 @@ class WebSocketChatHandlerTest {
 
         setup = new StreamSetupResult(
             sessionId,
-            new AgentConfig("CLAUDE", "key", null),
+            new AgentConfig("CLAUDE", "key", null, false),
             "워크플로우 만들어줘",
             null, null,
             new IntegrationContext(List.of(), List.of()),
@@ -82,7 +83,7 @@ class WebSocketChatHandlerTest {
     private void mockChatStream(ChatStreamEvent... events) {
         given(agentClient.chatStream(
             any(), any(), any(), any(), any(), any(), any(),
-            any(), any(), any(), any(), any(), any(), any(), any()
+            any(), any(), any(), any(), any(), any(), any(), any(), anyBoolean()
         )).willReturn(Flux.just(events));
     }
 
@@ -99,7 +100,7 @@ class WebSocketChatHandlerTest {
     void stage_then_done() {
         ChatAgentResponse agentResponse = mock(ChatAgentResponse.class);
         ChatResponse finalResponse = mock(ChatResponse.class);
-        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any()))
+        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any(), any()))
             .willReturn(finalResponse);
 
         mockChatStream(
@@ -112,7 +113,7 @@ class WebSocketChatHandlerTest {
 
         // 3개 프레임 전송 완료까지 대기(done 프레임은 finalizeStream 후 전송됨)한 뒤 검증한다.
         List<ChatStreamResponse> sent = captureSent(3);
-        verify(chatService).finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any());
+        verify(chatService).finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any(), any());
         assertThat(sent.get(0).getType()).isEqualTo(StreamType.STAGE);
         assertThat(sent.get(0).getStage()).isEqualTo("designing");
         assertThat(sent.get(1).getType()).isEqualTo(StreamType.STAGE);
@@ -132,6 +133,6 @@ class WebSocketChatHandlerTest {
         assertThat(sent.get(0).getType()).isEqualTo(StreamType.ERROR);
         assertThat(sent.get(0).getContent()).isEqualTo("AI 응답 중 오류가 발생했습니다.");
         verify(chatService, after(300).never())
-            .finalizeStream(any(), any(), any(), any(), any());
+            .finalizeStream(any(), any(), any(), any(), any(), any());
     }
 }

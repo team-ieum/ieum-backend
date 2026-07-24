@@ -108,7 +108,8 @@ public class WebSocketChatHandler {
             setup.availableMcpServers(),
             setup.availableWebhooks(),
             userId,
-            userRole
+            userRole,
+            setup.config().useBetaPlatformKey()
         )
         // finalizeStream은 동기 blocking(JPA) 작업이므로 Netty EventLoop 스레드에서 실행되면
         // Thread Starvation을 유발한다. boundedElastic로 전환해 별도 스레드 풀에서 처리한다.
@@ -132,12 +133,14 @@ public class WebSocketChatHandler {
             case STAGE -> sendToUser(userName, ChatStreamResponse.stage(event.stage()));
             case DONE -> {
                 try {
+                    // userName == userId.toString() (handleChat 진입부 참고) — 별도 파라미터 없이 복원한다.
                     ChatResponse response = chatService.finalizeStream(
                         workflowId,
                         setup.sessionId(),
                         event.response(),
                         setup.config(),
-                        request.getCredentialId()
+                        request.getCredentialId(),
+                        UUID.fromString(userName)
                     );
                     sendToUser(userName, ChatStreamResponse.done(response));
                 } catch (Exception e) {

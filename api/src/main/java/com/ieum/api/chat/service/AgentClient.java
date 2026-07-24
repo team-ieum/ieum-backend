@@ -32,6 +32,7 @@ import reactor.core.publisher.Flux;
  *   <li>{@code X-LLM-Api-Key} — 복호화된 API Key</li>
  *   <li>{@code X-User-Id} — 사용자 UUID</li>
  *   <li>{@code X-Google-Access-Token} — Google 빌트인 도구 사용 시 (optional)</li>
+ *   <li>{@code X-Key-Mode: platform} — 베타 플랫폼 키 위임 시 (credentialId 없음 + 베타 자격, 키 헤더 생략)</li>
  * </ul>
  *
  * <h3>요청 body</h3>
@@ -77,6 +78,7 @@ public class AgentClient {
      * @param apiKey            복호화된 API Key
      * @param googleAccessToken Google 빌트인 도구 사용 시 필요한 Access Token (nullable)
      * @param userId            현재 인증된 사용자 ID
+     * @param useBetaPlatformKey credentialId 없음 + 베타 자격 — X-Key-Mode:platform 위임(키 헤더 생략)
      * @return AI 응답
      */
     public ChatAgentResponse chat(
@@ -94,7 +96,8 @@ public class AgentClient {
         List<AvailableMcpServer> availableMcpServers,
         List<AvailableWebhook> availableWebhooks,
         UUID userId,
-        String userRole
+        String userRole,
+        boolean useBetaPlatformKey
     ) {
         log.debug("[AgentClient] chat 요청 — provider: {}, prompt: {}자",
             llmProvider, prompt != null ? prompt.length() : 0);
@@ -112,30 +115,10 @@ public class AgentClient {
 
 
         try {
-            var requestSpec = webClient.post()
-                .uri("/v1/chat")
-                .contentType(MediaType.APPLICATION_JSON)
-                .header("X-LLM-Provider", llmProvider)
-                .header("X-User-Id", userId.toString());
-
-            if (apiKey != null) {
-                requestSpec = requestSpec.header("X-LLM-Api-Key", apiKey);
-            }
-
-            if (userRole != null) {
-                requestSpec = requestSpec.header("X-User-Role", userRole);
-            }
-            if (googleAccessToken != null) {
-                requestSpec = requestSpec.header("X-Google-Access-Token", googleAccessToken);
-            }
-            if (githubToken != null) {
-                requestSpec = requestSpec.header("X-GitHub-Token", githubToken);
-                log.debug("[AgentClient] X-GitHub-Token header injected");
-            }
-            if (notionToken != null) {
-                requestSpec = requestSpec.header("X-Notion-Token", notionToken);
-                log.debug("[AgentClient] X-Notion-Token header injected");
-            }
+            WebClient.RequestBodySpec requestSpec = applyCredentialHeaders(
+                webClient.post().uri("/v1/chat").contentType(MediaType.APPLICATION_JSON),
+                llmProvider, apiKey, useBetaPlatformKey, userId, userRole,
+                googleAccessToken, githubToken, notionToken);
 
             ChatAgentResponse response = requestSpec
                 .bodyValue(request)
@@ -193,7 +176,8 @@ public class AgentClient {
         List<AvailableMcpServer> availableMcpServers,
         List<AvailableWebhook> availableWebhooks,
         UUID userId,
-        String userRole
+        String userRole,
+        boolean useBetaPlatformKey
     ) {
         log.debug("[AgentClient] chatStream(SSE) 요청 — provider: {}, prompt: {}자",
             llmProvider, prompt != null ? prompt.length() : 0);
@@ -209,29 +193,12 @@ public class AgentClient {
             .availableWebhooks(availableWebhooks != null ? availableWebhooks : List.of())
             .build();
 
-        WebClient.RequestBodySpec spec = webClient.post()
-            .uri("/v1/chat/stream")
-            .contentType(MediaType.APPLICATION_JSON)
-            .accept(MediaType.TEXT_EVENT_STREAM)
-            .header("X-LLM-Provider", llmProvider)
-            .header("X-User-Id", userId.toString());
-
-        if (apiKey != null) {
-            spec = spec.header("X-LLM-Api-Key", apiKey);
-        }
-
-        if (userRole != null) {
-            spec = spec.header("X-User-Role", userRole);
-        }
-        if (googleAccessToken != null) {
-            spec = spec.header("X-Google-Access-Token", googleAccessToken);
-        }
-        if (githubToken != null) {
-            spec = spec.header("X-GitHub-Token", githubToken);
-        }
-        if (notionToken != null) {
-            spec = spec.header("X-Notion-Token", notionToken);
-        }
+        WebClient.RequestBodySpec spec = applyCredentialHeaders(
+            webClient.post().uri("/v1/chat/stream")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.TEXT_EVENT_STREAM),
+            llmProvider, apiKey, useBetaPlatformKey, userId, userRole,
+            googleAccessToken, githubToken, notionToken);
 
         return spec.bodyValue(request)
             .retrieve()
@@ -263,6 +230,46 @@ public class AgentClient {
             log.error("[AgentClient] SSE 이벤트 파싱 실패 — event: {}, data: {}", event, data, e);
             return ChatStreamEvent.error("AI 응답 데이터를 처리하는 중 오류가 발생했습니다.");
         }
+    }
+
+    /**
+     * 크레덴셜/사용자 관련 요청 헤더를 조립한다. {@code chat()}/{@code chatStream()}이 공유한다.
+     *
+     * <p>{@code useBetaPlatformKey}가 true면(credentialId 없음 + 베타 자격) provider를 GEMINI로 고정하고
+     * {@code X-Key-Mode: platform}을 실어 보내며 키 헤더는 생략한다 — 사용자키/self-hosted 우선순위의
+     * 최종 판단은 ieum-agent 크레덴셜 미들웨어가 X-User-Role로 다시 확인한다(유닛 2와 동일).
+     */
+    private WebClient.RequestBodySpec applyCredentialHeaders(
+        WebClient.RequestBodySpec spec, String llmProvider, String apiKey, boolean useBetaPlatformKey,
+        UUID userId, String userRole, String googleAccessToken, String githubToken, String notionToken
+    ) {
+        spec = spec
+            .header("X-LLM-Provider", useBetaPlatformKey ? "GEMINI" : llmProvider)
+            .header("X-User-Id", userId.toString());
+
+        if (useBetaPlatformKey) {
+            // ponytail: 베타=플랫폼 키 전제(self-hosted는 베타 범위 밖·현재 비활성). self-hosted 겸
+            // 베타 사용자의 쿼터 정합은 agent가 응답에 실제 keyMode를 반환하는 후속(§5.4 keyMode)에서 다룬다.
+            spec = spec.header("X-Key-Mode", "platform");
+        } else if (apiKey != null) {
+            spec = spec.header("X-LLM-Api-Key", apiKey);
+        }
+
+        if (userRole != null) {
+            spec = spec.header("X-User-Role", userRole);
+        }
+        if (googleAccessToken != null) {
+            spec = spec.header("X-Google-Access-Token", googleAccessToken);
+        }
+        if (githubToken != null) {
+            spec = spec.header("X-GitHub-Token", githubToken);
+            log.debug("[AgentClient] X-GitHub-Token header injected");
+        }
+        if (notionToken != null) {
+            spec = spec.header("X-Notion-Token", notionToken);
+            log.debug("[AgentClient] X-Notion-Token header injected");
+        }
+        return spec;
     }
 
     /** HTTP/연결 오류를 ERROR 이벤트로 변환해 스트림을 정상 종료한다. */

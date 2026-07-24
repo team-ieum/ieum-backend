@@ -29,6 +29,7 @@ import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
 import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.Node;
+import com.ieum.workflowcore.engine.executor.BetaPlatformProvider;
 import com.ieum.workflowcore.engine.executor.CredentialProvider;
 import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
 import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
@@ -87,6 +88,7 @@ public class ChatService {
     private final ObjectMapper objectMapper;
     private final McpServerCatalogRepository mcpServerCatalogRepository;
     private final WebhookCredentialRepository webhookCredentialRepository;
+    private final BetaPlatformProvider betaPlatformProvider;
 
     // ─────────────────────────────────────── REST 블로킹 ──────────────────────
 
@@ -145,8 +147,10 @@ public class ChatService {
             availableMcpServers,
             availableWebhooks,
             userId,
-            userRole
+            userRole,
+            agentConfig.useBetaPlatformKey()
         );
+        recordBetaTokensIfPresent(agentConfig, userId, agentResponse);
 
         // 8. WORKFLOW_GENERATED/MODIFIED → DB에 새 버전으로 저장
         //    첫 생성 여부를 저장 전에 확인 (저장 후에는 version이 증가하므로)
@@ -298,16 +302,21 @@ public class ChatService {
             String llmProvider = (String) config.get("llmProvider");
             String credentialId = (String) config.get("credentialId");
             List<Map<String, Object>> tools = (List<Map<String, Object>>) config.get("tools");
-            // 개발/테스트 계정은 credential 없이 자체 호스팅 LLM을 사용할 수 있다 — 키 없이 전달하면 agent가 라우팅/차단을 판단한다
+            // 개발/테스트 계정은 credential 없이 자체 호스팅 LLM을 사용할 수 있다 — 키 없이 전달하면 agent가 라우팅/차단을 판단한다.
+            // self-hosted 자격이 없으면 베타 자격(User.betaAccess + kill-switch)을 확인해 플랫폼 Gemini 키로 폴백한다.
             if (credentialId == null || credentialId.isBlank()) {
                 if (isSelfHostedEligible(userRole)) {
-                    return new AgentConfig(llmProvider != null ? llmProvider : "CLAUDE", null, tools);
+                    return new AgentConfig(llmProvider != null ? llmProvider : "CLAUDE", null, tools, false);
+                }
+                if (isBetaEligible(userId)) {
+                    betaPlatformProvider.reserveQuota(userId);
+                    return new AgentConfig(llmProvider != null ? llmProvider : "CLAUDE", null, tools, true);
                 }
                 // 자격 없는 사용자가 키 없는 AI 노드를 실행하면 명시적 예외 — 복호화 단계의 NPE 방지
                 throw new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE);
             }
             String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
-            return new AgentConfig(llmProvider, decryptedApiKey, tools);
+            return new AgentConfig(llmProvider, decryptedApiKey, tools, false);
         }
 
         // AI 노드 없음 → fallbackCredentialId로 기본 설정 사용 (빈 워크플로우 채팅 시)
@@ -316,7 +325,11 @@ public class ChatService {
             if (credentials.isEmpty()) {
                 if (isSelfHostedEligible(userRole)) {
                     // 크레덴셜이 하나도 없어도 개발/테스트 계정은 자체 호스팅 LLM으로 채팅 가능
-                    return new AgentConfig("CLAUDE", null, null);
+                    return new AgentConfig("CLAUDE", null, null, false);
+                }
+                if (isBetaEligible(userId)) {
+                    betaPlatformProvider.reserveQuota(userId);
+                    return new AgentConfig("CLAUDE", null, null, true);
                 }
                 throw new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE);
             }
@@ -327,12 +340,42 @@ public class ChatService {
         log.info("[ChatService][DEBUG] fallbackCredentialId={}, userId={}", fallbackCredentialId, userId);
         Credential credential = credentialService.getByIdAndUserId(fallbackCredentialId, userId);
         String decryptedApiKey = credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString());
-        return new AgentConfig(credential.getProvider().name(), decryptedApiKey, null);
+        return new AgentConfig(credential.getProvider().name(), decryptedApiKey, null, false);
     }
 
     /** 자체 호스팅 LLM(키 없음) 경로 자격 — 최종 게이트는 agent의 credential 검증이 담당한다. */
     private static boolean isSelfHostedEligible(String userRole) {
         return "ROLE_ADMIN".equals(userRole) || "ROLE_TESTER".equals(userRole);
+    }
+
+    /** 베타 플랫폼 키(Gemini) 폴백 자격 — self-hosted 자격이 없을 때만 폴백 순위로 확인한다. */
+    private boolean isBetaEligible(UUID userId) {
+        return userId != null && betaPlatformProvider.isBetaEligible(userId);
+    }
+
+    /**
+     * 베타 플랫폼 키를 사용한 호출이면 응답 토큰 수로 사용량을 사후 차감한다 (best-effort).
+     *
+     * <p>ponytail: agent {@code /v1/chat} 응답은 아직 usage를 채우지 않아
+     * {@link ChatAgentResponse#getInputTokens()}/{@link ChatAgentResponse#getOutputTokens()}가
+     * 하드코딩 null이다. 지금은 배선만 해두고(둘 다 null이면 skip) 실질 쿼터 제한은 일일 호출 캡으로만 건다.
+     * agent가 usage를 채우기 시작하면(§5.4) 이 경로가 자동으로 활성화된다.
+     */
+    private void recordBetaTokensIfPresent(AgentConfig config, UUID userId, ChatAgentResponse agentResponse) {
+        if (!config.useBetaPlatformKey() || userId == null) {
+            return;
+        }
+        Integer inputTokens = agentResponse.getInputTokens();
+        Integer outputTokens = agentResponse.getOutputTokens();
+        if (inputTokens == null && outputTokens == null) {
+            return;
+        }
+        long totalTokens = (inputTokens != null ? inputTokens : 0) + (outputTokens != null ? outputTokens : 0);
+        try {
+            betaPlatformProvider.recordTokens(userId, totalTokens);
+        } catch (Exception e) {
+            log.warn("[ChatService] 베타 토큰 사용량 기록 실패 — userId: {}", userId, e);
+        }
     }
 
     // ─────────────────────────────────────── PRIVATE ──────────────────────────
@@ -601,7 +644,9 @@ public class ChatService {
      */
     @Transactional
     public ChatResponse finalizeStream(UUID workflowId, UUID sessionId,
-            ChatAgentResponse agentResponse, AgentConfig config, UUID fallbackCredentialId) {
+            ChatAgentResponse agentResponse, AgentConfig config, UUID fallbackCredentialId, UUID userId) {
+        recordBetaTokensIfPresent(config, userId, agentResponse);
+
         if (agentResponse.isWorkflowResult()) {
             int maxVersionBeforeSave = workflowCrudService.findMaxVersionByWorkflowId(workflowId);
             saveWorkflowVersion(workflowId, agentResponse, config, fallbackCredentialId);
@@ -630,7 +675,8 @@ public class ChatService {
     public record AgentConfig(
         String llmProvider,
         String decryptedApiKey,
-        List<Map<String, Object>> tools
+        List<Map<String, Object>> tools,
+        boolean useBetaPlatformKey
     ) {
         /** 로그/디버그 출력 시 복호화된 API Key가 노출되지 않도록 마스킹한다. */
         @Override
