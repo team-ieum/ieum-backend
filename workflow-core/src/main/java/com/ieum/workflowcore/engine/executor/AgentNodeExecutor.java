@@ -53,6 +53,7 @@ public class AgentNodeExecutor implements NodeExecutor {
     private final McpCatalogProvider mcpCatalogProvider;
     private final WebhookCredentialProvider webhookCredentialProvider;
     private final UserRoleProvider userRoleProvider;
+    private final BetaPlatformProvider betaPlatformProvider;
     private final int agentTimeoutSeconds;
 
     public AgentNodeExecutor(
@@ -63,6 +64,7 @@ public class AgentNodeExecutor implements NodeExecutor {
         McpCatalogProvider mcpCatalogProvider,
         WebhookCredentialProvider webhookCredentialProvider,
         UserRoleProvider userRoleProvider,
+        BetaPlatformProvider betaPlatformProvider,
         @Value("${ieum.agent.timeout-seconds:120}") int agentTimeoutSeconds
     ) {
         this.webClient = WebClient.builder()
@@ -74,6 +76,7 @@ public class AgentNodeExecutor implements NodeExecutor {
         this.mcpCatalogProvider = mcpCatalogProvider;
         this.webhookCredentialProvider = webhookCredentialProvider;
         this.userRoleProvider = userRoleProvider;
+        this.betaPlatformProvider = betaPlatformProvider;
         this.agentTimeoutSeconds = agentTimeoutSeconds;
     }
 
@@ -103,13 +106,21 @@ public class AgentNodeExecutor implements NodeExecutor {
             String renderedPrompt = cursor.renderVariables(promptTemplate);
             log.debug("[AgentNodeExecutor] 렌더링된 프롬프트 길이: {}", renderedPrompt.length());
 
-            // credentialId가 없으면 키 없이 전달 — 자체 호스팅 LLM 자격(role)은 agent가 판단해 라우팅/차단한다
-            String decryptedApiKey = (credentialId == null || credentialId.isBlank())
-                ? null
-                : credentialProvider.getDecryptedApiKey(credentialId);
+            UUID userId = cursor.getContext().getUserId();
+
+            // credentialId가 없으면 키 없이 전달 — 자체 호스팅 LLM 자격(role)은 agent가 판단해 라우팅/차단한다.
+            // 베타 자격(User.betaAccess)이 있고 쿼터가 남아 있으면 플랫폼 Gemini 키로 폴백한다.
+            // 사용자키/self-hosted 우선순위는 agent 미들웨어가 X-User-Role로 최종 재확인하므로 여기서 재검증하지 않는다.
+            boolean useBetaPlatformKey = false;
+            String decryptedApiKey = null;
+            if (credentialId != null && !credentialId.isBlank()) {
+                decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
+            } else if (userId != null && betaPlatformProvider.isBetaEligible(userId)) {
+                betaPlatformProvider.reserveQuota(userId);
+                useBetaPlatformKey = true;
+            }
 
             String googleAccessToken = resolveGoogleAccessToken(tools, cursor);
-            UUID userId = cursor.getContext().getUserId();
             Map<String, String> toolAuthHeaders = toolAuthResolver.resolveHeaders(tools, userId);
             List<McpServerRef> mcpServers = resolveMcpServers(tools, userId);
             injectWebhookUrls(tools, userId);
@@ -128,13 +139,26 @@ public class AgentNodeExecutor implements NodeExecutor {
 
             AgentExecutionResult agentResult = callAgentService(
                 request, llmProvider, decryptedApiKey, googleAccessToken,
-                userId, toolAuthHeaders);
+                userId, toolAuthHeaders, useBetaPlatformKey);
 
             if (!agentResult.isSuccess()) {
                 log.error("[AgentNodeExecutor] 에이전트 실행 실패 — nodeId: {}, error: {}",
                     node.getId(), agentResult.getErrorMessage());
                 return ExecutorResult.failure(agentResult.getErrorMessage(),
                     System.currentTimeMillis() - startTime);
+            }
+
+            // 베타 플랫폼 키를 사용했다면 응답 usage.totalTokens로 사용량을 사후 차감한다.
+            // best-effort — 이미 성공(과금)한 호출을 토큰 회계 실패로 실패 반환시키지 않는다.
+            // (호출 전 reserveQuota는 반대로 예외를 그대로 전파해 사전 차단한다.)
+            if (useBetaPlatformKey && userId != null && agentResult.getUsage() != null
+                && agentResult.getUsage().getTotalTokens() != null) {
+                try {
+                    betaPlatformProvider.recordTokens(userId, agentResult.getUsage().getTotalTokens());
+                } catch (Exception e) {
+                    log.warn("[AgentNodeExecutor] 베타 토큰 사용량 기록 실패 — nodeId: {}, userId: {}",
+                        node.getId(), userId, e);
+                }
             }
 
             Map<String, Object> output = new HashMap<>();
@@ -297,15 +321,20 @@ public class AgentNodeExecutor implements NodeExecutor {
 
     private AgentExecutionResult callAgentService(
         AgentNodeRequest request, String llmProvider, String llmApiKey,
-        String googleAccessToken, UUID userId, Map<String, String> toolAuthHeaders
+        String googleAccessToken, UUID userId, Map<String, String> toolAuthHeaders,
+        boolean useBetaPlatformKey
     ) {
         try {
             WebClient.RequestBodySpec requestSpec = webClient.post()
                 .uri("/v1/execute")
                 .contentType(MediaType.APPLICATION_JSON)
-                .header("X-LLM-Provider", llmProvider);
+                .header("X-LLM-Provider", useBetaPlatformKey ? "GEMINI" : llmProvider);
 
-            if (llmApiKey != null) {
+            if (useBetaPlatformKey) {
+                // ponytail: 베타=플랫폼 키 전제(self-hosted는 베타 범위 밖·현재 비활성). self-hosted 겸
+                // 베타 사용자의 쿼터 정합은 agent가 응답에 실제 keyMode를 반환하는 후속(§5.4 keyMode)에서 다룬다.
+                requestSpec = requestSpec.header("X-Key-Mode", "platform");
+            } else if (llmApiKey != null) {
                 requestSpec = requestSpec.header("X-LLM-Api-Key", llmApiKey);
             }
 
@@ -338,7 +367,7 @@ public class AgentNodeExecutor implements NodeExecutor {
                 e.getStatusCode(), e.getResponseBodyAsString());
             return new AgentExecutionResult(false, null, null,
                 "에이전트 서비스 오류 (HTTP " + e.getStatusCode().value() + "): "
-                    + e.getResponseBodyAsString());
+                    + e.getResponseBodyAsString(), null);
         }
     }
 }
