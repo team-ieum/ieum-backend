@@ -148,7 +148,11 @@ public class WebSocketChatHandler {
                     sendToUser(userName, ChatStreamResponse.error("응답 저장 중 오류가 발생했습니다."));
                 }
             }
-            case ERROR -> sendToUser(userName, ChatStreamResponse.error(event.errorMessage()));
+            case ERROR -> {
+                // agent 호출 자체가 실패한 경우이므로, 베타 platform 키로 예약(INCR)했던 일일 카운터를 환불한다.
+                chatService.releaseBetaQuotaOnFailure(setup.config(), UUID.fromString(userName));
+                sendToUser(userName, ChatStreamResponse.error(event.errorMessage()));
+            }
         }
     }
 

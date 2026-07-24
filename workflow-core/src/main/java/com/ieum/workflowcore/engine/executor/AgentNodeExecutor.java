@@ -91,6 +91,9 @@ public class AgentNodeExecutor implements NodeExecutor {
         long startTime = System.currentTimeMillis();
         log.info("[AgentNodeExecutor] 노드 실행 — nodeId: {}", node.getId());
 
+        UUID userId = null;
+        boolean useBetaPlatformKey = false;
+
         try {
             Map<String, Object> config = node.getConfig();
 
@@ -106,16 +109,16 @@ public class AgentNodeExecutor implements NodeExecutor {
             String renderedPrompt = cursor.renderVariables(promptTemplate);
             log.debug("[AgentNodeExecutor] 렌더링된 프롬프트 길이: {}", renderedPrompt.length());
 
-            UUID userId = cursor.getContext().getUserId();
+            userId = cursor.getContext().getUserId();
+            String userRole = userId != null ? userRoleProvider.findRoleByUserId(userId) : null;
 
-            // credentialId가 없으면 키 없이 전달 — 자체 호스팅 LLM 자격(role)은 agent가 판단해 라우팅/차단한다.
-            // 베타 자격(User.betaAccess)이 있고 쿼터가 남아 있으면 플랫폼 Gemini 키로 폴백한다.
-            // 사용자키/self-hosted 우선순위는 agent 미들웨어가 X-User-Role로 최종 재확인하므로 여기서 재검증하지 않는다.
-            boolean useBetaPlatformKey = false;
+            // credentialId가 없으면 키 없이 전달 — self-hosted 자격(ADMIN/TESTER role)이 최우선이며,
+            // 이 경우 agent가 라우팅/차단을 판단한다(ChatService.isSelfHostedEligible과 동일 우선순위).
+            // self-hosted 자격이 없을 때만 베타 자격(User.betaAccess)을 확인해 플랫폼 Gemini 키로 폴백한다.
             String decryptedApiKey = null;
             if (credentialId != null && !credentialId.isBlank()) {
                 decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
-            } else if (userId != null && betaPlatformProvider.isBetaEligible(userId)) {
+            } else if (!isSelfHostedEligible(userRole) && userId != null && betaPlatformProvider.isBetaEligible(userId)) {
                 betaPlatformProvider.reserveQuota(userId);
                 useBetaPlatformKey = true;
             }
@@ -139,9 +142,10 @@ public class AgentNodeExecutor implements NodeExecutor {
 
             AgentExecutionResult agentResult = callAgentService(
                 request, llmProvider, decryptedApiKey, googleAccessToken,
-                userId, toolAuthHeaders, useBetaPlatformKey);
+                userId, userRole, toolAuthHeaders, useBetaPlatformKey);
 
             if (!agentResult.isSuccess()) {
+                releaseBetaQuotaOnFailure(useBetaPlatformKey, userId);
                 log.error("[AgentNodeExecutor] 에이전트 실행 실패 — nodeId: {}, error: {}",
                     node.getId(), agentResult.getErrorMessage());
                 return ExecutorResult.failure(agentResult.getErrorMessage(),
@@ -169,8 +173,30 @@ public class AgentNodeExecutor implements NodeExecutor {
             return ExecutorResult.success(output, System.currentTimeMillis() - startTime);
 
         } catch (Exception e) {
+            releaseBetaQuotaOnFailure(useBetaPlatformKey, userId);
             log.error("[AgentNodeExecutor] 실행 실패 — nodeId: {}", node.getId(), e);
             return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime);
+        }
+    }
+
+    /** 자체 호스팅 LLM(키 없음) 경로 자격 — ChatService.isSelfHostedEligible과 동일 판정. */
+    private static boolean isSelfHostedEligible(String userRole) {
+        return "ROLE_ADMIN".equals(userRole) || "ROLE_TESTER".equals(userRole);
+    }
+
+    /**
+     * 베타 platform 키로 쿼터를 예약(INCR)했는데 이후 agent 호출이 실패/예외로 끝난 경우에만
+     * 일일 호출 카운터를 환불한다(best-effort). reserveQuota 자체가 실패(쿼터 초과)한 경우는
+     * useBetaPlatformKey가 true로 세팅되지 않으므로 이 메서드가 호출돼도 자연히 무시된다.
+     */
+    private void releaseBetaQuotaOnFailure(boolean useBetaPlatformKey, UUID userId) {
+        if (!useBetaPlatformKey || userId == null) {
+            return;
+        }
+        try {
+            betaPlatformProvider.releaseDailyCall(userId);
+        } catch (Exception e) {
+            log.warn("[AgentNodeExecutor] 베타 일일 카운터 환불 실패 — userId: {}", userId, e);
         }
     }
 
@@ -321,7 +347,7 @@ public class AgentNodeExecutor implements NodeExecutor {
 
     private AgentExecutionResult callAgentService(
         AgentNodeRequest request, String llmProvider, String llmApiKey,
-        String googleAccessToken, UUID userId, Map<String, String> toolAuthHeaders,
+        String googleAccessToken, UUID userId, String userRole, Map<String, String> toolAuthHeaders,
         boolean useBetaPlatformKey
     ) {
         try {
@@ -331,8 +357,7 @@ public class AgentNodeExecutor implements NodeExecutor {
                 .header("X-LLM-Provider", useBetaPlatformKey ? "GEMINI" : llmProvider);
 
             if (useBetaPlatformKey) {
-                // ponytail: 베타=플랫폼 키 전제(self-hosted는 베타 범위 밖·현재 비활성). self-hosted 겸
-                // 베타 사용자의 쿼터 정합은 agent가 응답에 실제 keyMode를 반환하는 후속(§5.4 keyMode)에서 다룬다.
+                // self-hosted 자격이면 execute()에서 베타 분기 자체에 진입하지 않으므로 여기 도달하지 않는다.
                 requestSpec = requestSpec.header("X-Key-Mode", "platform");
             } else if (llmApiKey != null) {
                 requestSpec = requestSpec.header("X-LLM-Api-Key", llmApiKey);
@@ -340,7 +365,6 @@ public class AgentNodeExecutor implements NodeExecutor {
 
             if (userId != null) {
                 requestSpec = requestSpec.header("X-User-Id", userId.toString());
-                String userRole = userRoleProvider.findRoleByUserId(userId);
                 if (userRole != null) {
                     requestSpec = requestSpec.header("X-User-Role", userRole);
                 }

@@ -406,6 +406,10 @@ class AgentNodeExecutorTest {
             + "\"usage\":{\"promptTokens\":100,\"completionTokens\":50,\"totalTokens\":150}}";
 
     private AgentNodeExecutor buildExecutorWithBetaProvider(BetaPlatformProvider provider) {
+        return buildExecutor(provider, uid -> null);
+    }
+
+    private AgentNodeExecutor buildExecutor(BetaPlatformProvider betaProvider, UserRoleProvider roleProvider) {
         return new AgentNodeExecutor(
             mockWebServer.url("/").toString(),
             credentialProvider,
@@ -413,8 +417,8 @@ class AgentNodeExecutorTest {
             new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
             new StubMcpCatalogProvider(),
             new StubWebhookCredentialProvider(),
-            uid -> null,
-            provider,
+            roleProvider,
+            betaProvider,
             30
         );
     }
@@ -516,6 +520,8 @@ class AgentNodeExecutorTest {
         assertThat(result.getErrorMessage()).isEqualTo(
             com.ieum.common.exception.ErrorCode.BETA_QUOTA_EXCEEDED.getMessage());
         assertThat(mockWebServer.getRequestCount()).isZero();
+        // reserveQuota 자체가 실패(쿼터 초과)했으니 INCR이 반영된 요청이 아니다 — 환불 대상 아님
+        verify(betaProvider, never()).releaseDailyCall(any());
     }
 
     @Test
@@ -558,5 +564,120 @@ class AgentNodeExecutorTest {
         RecordedRequest recorded = mockWebServer.takeRequest();
         assertThat(recorded.getHeader("X-Key-Mode")).isNull();
         verify(betaProvider, never()).isBetaEligible(any());
+    }
+
+    // ── 베타 일일 카운터 환불 (reserve-then-release) ────────────────────────────
+
+    @Test
+    @DisplayName("베타 platform 키 사용 + agent 응답 실패(success=false) - 일일 카운터를 환불한다")
+    void execute_betaPlatformKeyAndAgentResponseFailure_releasesDailyCall() throws InterruptedException {
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
+
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(500)
+            .setHeader("Content-Type", "application/json")
+            .setBody("{\"error\":\"Internal Server Error\"}"));
+
+        Node node = buildAgentNodeNoCredential("요약해줘", "CLAUDE");
+        ExecutorResult result = exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId));
+
+        assertThat(result.isSuccess()).isFalse();
+        verify(betaProvider).reserveQuota(userId);
+        verify(betaProvider).releaseDailyCall(userId);
+    }
+
+    @Test
+    @DisplayName("베타 platform 키 사용 + agent 응답 성공 - 일일 카운터를 환불하지 않는다")
+    void execute_betaPlatformKeyAndAgentResponseSuccess_doesNotReleaseDailyCall() throws InterruptedException {
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
+
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeNoCredential("요약해줘", "CLAUDE");
+        ExecutorResult result = exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId));
+
+        assertThat(result.isSuccess()).isTrue();
+        verify(betaProvider, never()).releaseDailyCall(any());
+    }
+
+    @Test
+    @DisplayName("베타 platform 키 예약 후 예외로 실행 실패(outer catch) - 일일 카운터를 환불한다")
+    void execute_betaPlatformKeyAndUnexpectedException_releasesDailyCall() {
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        when(googleTokenProvider.getValidAccessToken(userId))
+            .thenThrow(new RuntimeException("google token fetch failed"));
+        AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
+
+        Node node = buildAgentNodeWithTools("캘린더 확인해줘", "CLAUDE", null,
+            List.of(Map.of("name", "builtin:google_calendar")));
+        ExecutorResult result = exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId));
+
+        assertThat(result.isSuccess()).isFalse();
+        verify(betaProvider).reserveQuota(userId);
+        verify(betaProvider).releaseDailyCall(userId);
+    }
+
+    // ── self-hosted 우선순위 (ChatService.isSelfHostedEligible과 동일 판정) ─────
+
+    @Test
+    @DisplayName("self-hosted 자격(ROLE_ADMIN)이면 베타 자격이 있어도 베타 분기로 가지 않는다")
+    void execute_selfHostedEligible_skipsBetaBranchEvenIfBetaEligible() throws InterruptedException {
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        AgentNodeExecutor exec = buildExecutor(betaProvider, uid -> "ROLE_ADMIN");
+
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeNoCredential("요약해줘", "CLAUDE");
+        ExecutorResult result = exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId));
+
+        assertThat(result.isSuccess()).isTrue();
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Key-Mode")).isNull();
+        assertThat(recorded.getHeader("X-LLM-Provider")).isEqualTo("CLAUDE");
+        assertThat(recorded.getHeader("X-LLM-Api-Key")).isNull();
+        assertThat(recorded.getHeader("X-User-Role")).isEqualTo("ROLE_ADMIN");
+
+        verify(betaProvider, never()).isBetaEligible(any());
+        verify(betaProvider, never()).reserveQuota(any());
+    }
+
+    @Test
+    @DisplayName("self-hosted 자격 없는(ROLE_USER) 베타 대상자는 기존대로 베타 platform 분기로 간다")
+    void execute_notSelfHostedEligible_stillUsesBetaBranch() throws InterruptedException {
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        AgentNodeExecutor exec = buildExecutor(betaProvider, uid -> "ROLE_USER");
+
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeNoCredential("요약해줘", "CLAUDE");
+        ExecutorResult result = exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId));
+
+        assertThat(result.isSuccess()).isTrue();
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Key-Mode")).isEqualTo("platform");
+        assertThat(recorded.getHeader("X-LLM-Provider")).isEqualTo("GEMINI");
+
+        verify(betaProvider).reserveQuota(userId);
     }
 }

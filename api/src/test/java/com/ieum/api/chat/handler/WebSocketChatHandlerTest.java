@@ -134,5 +134,8 @@ class WebSocketChatHandlerTest {
         assertThat(sent.get(0).getContent()).isEqualTo("AI 응답 중 오류가 발생했습니다.");
         verify(chatService, after(300).never())
             .finalizeStream(any(), any(), any(), any(), any(), any());
+        // agent 호출 실패(ERROR 이벤트) 시 베타 platform 키로 예약했던 일일 카운터 환불을 시도한다
+        // (실제 환불 여부는 ChatService.releaseBetaQuotaOnFailure의 useBetaPlatformKey 가드가 판단)
+        verify(chatService).releaseBetaQuotaOnFailure(eq(setup.config()), eq(userId));
     }
 }

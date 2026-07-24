@@ -60,6 +60,21 @@ public class BetaQuotaService {
         }
     }
 
+    /**
+     * 일일 호출 카운터를 DECR한다(환불). reserveQuota로 INCR했지만 이후 agent 호출이 실패해
+     * 실제로는 소비되지 않은 호출권을 되돌려줄 때만 호출한다 — reserveQuota 자체가 실패(쿼터 초과 등)한
+     * 경우는 대상이 아니다(그 경우 애초에 INCR 반영 요청이 아니다).
+     */
+    public void releaseDailyCall(UUID userId) {
+        String key = dailyCallsKey(userId);
+        Long count = redisTemplate.opsForValue().decrement(key);
+        if (count != null && count < 0) {
+            // ponytail: 음수 방지 보정 — 동시 환불 경쟁 시 완벽한 원자성은 아니지만 일일 쿼터
+            // 규모(수십 건)에선 오차 무시 가능. 처리량이 문제되면 Lua 스크립트로 원자화.
+            redisTemplate.opsForValue().increment(key);
+        }
+    }
+
     /** 응답 usage의 totalTokens만큼 누적 토큰 사용량에 사후 가산한다. */
     public void addUsedTokens(UUID userId, long totalTokens) {
         if (totalTokens <= 0) {

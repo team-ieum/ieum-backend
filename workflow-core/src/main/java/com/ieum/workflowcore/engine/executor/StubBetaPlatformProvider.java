@@ -31,4 +31,9 @@ public class StubBetaPlatformProvider implements BetaPlatformProvider {
     public void recordTokens(UUID userId, long totalTokens) {
         // no-op
     }
+
+    @Override
+    public void releaseDailyCall(UUID userId) {
+        // no-op
+    }
 }

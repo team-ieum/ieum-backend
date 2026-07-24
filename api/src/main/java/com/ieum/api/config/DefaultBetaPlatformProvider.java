@@ -46,4 +46,9 @@ public class DefaultBetaPlatformProvider implements BetaPlatformProvider {
     public void recordTokens(UUID userId, long totalTokens) {
         betaQuotaService.addUsedTokens(userId, totalTokens);
     }
+
+    @Override
+    public void releaseDailyCall(UUID userId) {
+        betaQuotaService.releaseDailyCall(userId);
+    }
 }

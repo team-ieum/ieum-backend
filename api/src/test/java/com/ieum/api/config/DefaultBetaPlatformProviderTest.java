@@ -112,4 +112,12 @@ class DefaultBetaPlatformProviderTest {
         verify(betaQuotaService).addUsedTokens(userId, 1234L);
         verify(betaQuotaService, never()).checkQuota(Mockito.any());
     }
+
+    @Test
+    @DisplayName("releaseDailyCall - BetaQuotaService.releaseDailyCall로 위임")
+    void releaseDailyCall_delegatesToQuotaService() {
+        provider.releaseDailyCall(userId);
+
+        verify(betaQuotaService).releaseDailyCall(userId);
+    }
 }

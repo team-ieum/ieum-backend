@@ -37,4 +37,12 @@ public interface BetaPlatformProvider {
      * @param totalTokens 이번 호출에서 소비한 총 토큰 수
      */
     void recordTokens(UUID userId, long totalTokens);
+
+    /**
+     * reserveQuota로 예약(INCR)했지만 이후 agent 호출이 실패해 실제로는 쓰이지 않은 일일 호출권을 환불한다.
+     * reserveQuota 자체가 쿼터 초과 등으로 실패한 경우는 호출하지 않는다(그 경우는 예약이 반영되지 않았다).
+     *
+     * @param userId 사용자 UUID
+     */
+    void releaseDailyCall(UUID userId);
 }

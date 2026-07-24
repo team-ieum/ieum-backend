@@ -165,6 +165,36 @@ class BetaQuotaServiceTest {
         verify(valueOperations, never()).increment(dailyKey());
     }
 
+    @Test
+    @DisplayName("releaseDailyCall - 일일 카운터를 DECR한다")
+    void releaseDailyCall_decrementsCounter() {
+        when(valueOperations.decrement(dailyKey())).thenReturn(0L);
+
+        service.releaseDailyCall(userId);
+
+        verify(valueOperations).decrement(dailyKey());
+    }
+
+    @Test
+    @DisplayName("releaseDailyCall - DECR 결과가 음수면 0으로 보정(INCR)한다")
+    void releaseDailyCall_negativeResult_correctsToZero() {
+        when(valueOperations.decrement(dailyKey())).thenReturn(-1L);
+
+        service.releaseDailyCall(userId);
+
+        verify(valueOperations).increment(dailyKey());
+    }
+
+    @Test
+    @DisplayName("releaseDailyCall - DECR 결과가 0 이상이면 보정하지 않는다")
+    void releaseDailyCall_nonNegativeResult_doesNotCorrect() {
+        when(valueOperations.decrement(dailyKey())).thenReturn(5L);
+
+        service.releaseDailyCall(userId);
+
+        verify(valueOperations, never()).increment(dailyKey());
+    }
+
     private String dailyKey() {
         return "beta:calls:%s:%s".formatted(userId, LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd")));
     }

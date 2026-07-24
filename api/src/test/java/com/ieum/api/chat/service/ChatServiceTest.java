@@ -533,6 +533,65 @@ class ChatServiceTest {
 
         verify(agentClient, never()).chat(
             any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyBoolean());
+        // reserveQuota 자체가 실패(쿼터 초과)했으니 INCR이 반영된 요청이 아니다 — 환불 대상 아님
+        verify(betaPlatformProvider, never()).releaseDailyCall(any());
+    }
+
+    @Test
+    @DisplayName("chat() — 베타 platform 키 예약 후 agentClient 호출이 실패하면 일일 카운터를 환불한다")
+    void chat_betaPlatformKey_agentClientThrows_releasesDailyCall() {
+        WorkflowVersion version = buildVersionWithNodesJson("[]");
+        given(sessionRepository.save(any())).willReturn(buildSession(workflowId, userId));
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(credentialService.getByUserId(userId)).willReturn(List.of());
+        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
+        given(integrationContextService.resolve(userId))
+            .willReturn(new IntegrationContext(List.of(), List.of()));
+        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyBoolean()))
+            .willThrow(new CustomException(ErrorCode.PROVIDER_ERROR));
+
+        assertThatThrownBy(() ->
+            chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("안녕", null))
+        ).isInstanceOf(CustomException.class)
+            .hasFieldOrPropertyWithValue("errorCode", ErrorCode.PROVIDER_ERROR);
+
+        verify(betaPlatformProvider).reserveQuota(userId);
+        verify(betaPlatformProvider).releaseDailyCall(userId);
+    }
+
+    @Test
+    @DisplayName("chat() — 베타 platform 키 예약 후 agentClient 호출이 성공하면 일일 카운터를 환불하지 않는다")
+    void chat_betaPlatformKey_agentClientSucceeds_doesNotReleaseDailyCall() throws Exception {
+        ChatSession session = buildSession(workflowId, userId);
+        ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
+        WorkflowVersion version = buildVersionWithNodesJson("[]");
+
+        given(sessionRepository.save(any())).willReturn(session);
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(credentialService.getByUserId(userId)).willReturn(List.of());
+        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
+        given(integrationContextService.resolve(userId))
+            .willReturn(new IntegrationContext(List.of(), List.of()));
+        given(agentClient.chat(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyBoolean()))
+            .willReturn(buildAgentResponse("CLARIFICATION_NEEDED", null));
+        given(messageRepository.save(any())).willReturn(agentMsg);
+
+        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("안녕", null));
+
+        verify(betaPlatformProvider, never()).releaseDailyCall(any());
+    }
+
+    @Test
+    @DisplayName("releaseBetaQuotaOnFailure — useBetaPlatformKey=false/userId 없음이면 아무 것도 하지 않는다")
+    void releaseBetaQuotaOnFailure_guardsNoOp() {
+        ChatService.AgentConfig nonBeta = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        chatService.releaseBetaQuotaOnFailure(nonBeta, userId);
+        chatService.releaseBetaQuotaOnFailure(null, userId);
+        chatService.releaseBetaQuotaOnFailure(
+            new ChatService.AgentConfig("GEMINI", null, null, true), null);
+
+        verify(betaPlatformProvider, never()).releaseDailyCall(any());
     }
 
     // ─────────────────── finalizeStream (스트리밍 done 후처리) ──────────────

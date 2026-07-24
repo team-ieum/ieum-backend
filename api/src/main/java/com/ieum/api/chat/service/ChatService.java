@@ -132,24 +132,32 @@ public class ChatService {
         List<IntegrationInfo> agentUnavailable = filterAgentSupportedIntegrations(integrationContext.unavailable());
         List<AvailableMcpServer> availableMcpServers = resolveAvailableMcpServers(userId);
         List<AvailableWebhook> availableWebhooks = resolveAvailableWebhooks(userId);
-        ChatAgentResponse agentResponse = agentClient.chat(
-            workflowId,
-            request.getPrompt(),
-            request.getCurrentNodes(),
-            request.getCurrentEdges(),
-            agentAvailable,
-            agentUnavailable,
-            agentConfig.llmProvider(),
-            agentConfig.decryptedApiKey(),
-            googleAccessToken,
-            githubToken,
-            notionToken,
-            availableMcpServers,
-            availableWebhooks,
-            userId,
-            userRole,
-            agentConfig.useBetaPlatformKey()
-        );
+        ChatAgentResponse agentResponse;
+        try {
+            agentResponse = agentClient.chat(
+                workflowId,
+                request.getPrompt(),
+                request.getCurrentNodes(),
+                request.getCurrentEdges(),
+                agentAvailable,
+                agentUnavailable,
+                agentConfig.llmProvider(),
+                agentConfig.decryptedApiKey(),
+                googleAccessToken,
+                githubToken,
+                notionToken,
+                availableMcpServers,
+                availableWebhooks,
+                userId,
+                userRole,
+                agentConfig.useBetaPlatformKey()
+            );
+        } catch (RuntimeException e) {
+            // reserveQuota로 예약(INCR)했지만 agent 호출 자체가 실패한 경우에만 환불 — 성공 응답을 받은 뒤의
+            // 실패(메시지 저장 등)는 이미 실제 호출이 일어났으므로 환불 대상이 아니다.
+            releaseBetaQuotaOnFailure(agentConfig, userId);
+            throw e;
+        }
         recordBetaTokensIfPresent(agentConfig, userId, agentResponse);
 
         // 8. WORKFLOW_GENERATED/MODIFIED → DB에 새 버전으로 저장
@@ -375,6 +383,25 @@ public class ChatService {
             betaPlatformProvider.recordTokens(userId, totalTokens);
         } catch (Exception e) {
             log.warn("[ChatService] 베타 토큰 사용량 기록 실패 — userId: {}", userId, e);
+        }
+    }
+
+    /**
+     * 베타 platform 키로 쿼터를 예약(INCR)했는데 이후 agent 호출이 실패/예외로 끝난 경우에만
+     * 일일 호출 카운터를 환불한다(best-effort). reserveQuota 자체가 실패(쿼터 초과)한 경우는
+     * {@code config.useBetaPlatformKey()}가 true가 되지 않으므로 이 메서드가 호출돼도 자연히 무시된다.
+     *
+     * <p>{@code chat()}(블로킹)에서는 agent 호출 예외 시 직접 호출하고, chatStream(스트리밍) 실패는
+     * {@code WebSocketChatHandler}가 ERROR 이벤트 수신 시 이 메서드를 호출한다.
+     */
+    public void releaseBetaQuotaOnFailure(AgentConfig config, UUID userId) {
+        if (config == null || !config.useBetaPlatformKey() || userId == null) {
+            return;
+        }
+        try {
+            betaPlatformProvider.releaseDailyCall(userId);
+        } catch (Exception e) {
+            log.warn("[ChatService] 베타 일일 카운터 환불 실패 — userId: {}", userId, e);
         }
     }
 
