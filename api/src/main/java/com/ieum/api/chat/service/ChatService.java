@@ -133,29 +133,39 @@ public class ChatService {
         List<AvailableMcpServer> availableMcpServers = resolveAvailableMcpServers(userId);
         List<AvailableWebhook> availableWebhooks = resolveAvailableWebhooks(userId);
         ChatAgentResponse agentResponse;
+        boolean betaReserved = false;
         try {
-            agentResponse = agentClient.chat(
-                workflowId,
-                request.getPrompt(),
-                request.getCurrentNodes(),
-                request.getCurrentEdges(),
-                agentAvailable,
-                agentUnavailable,
-                agentConfig.llmProvider(),
-                agentConfig.decryptedApiKey(),
-                googleAccessToken,
-                githubToken,
-                notionToken,
-                availableMcpServers,
-                availableWebhooks,
-                userId,
-                userRole,
-                agentConfig.useBetaPlatformKey()
-            );
+            // 쿼터 예약(INCR)은 사전작업이 모두 끝난 뒤, agent 호출 바로 직전에 한다 — 그 앞에서 예외가 나면
+            // INCR 자체가 없으므로 환불이 필요 없다. reserveQuota가 쿼터 초과로 거부되면(BETA_QUOTA_EXCEEDED)
+            // BetaQuotaService가 스스로 카운터를 원복하므로 여기서도 별도 환불을 시도하지 않는다(betaReserved=false 유지).
+            if (agentConfig.useBetaPlatformKey()) {
+                betaPlatformProvider.reserveQuota(userId);
+                betaReserved = true;
+            }
+            agentResponse = agentClient.chat(AgentClient.AgentChatCallParams.builder()
+                .workflowId(workflowId)
+                .prompt(request.getPrompt())
+                .currentNodes(request.getCurrentNodes())
+                .currentEdges(request.getCurrentEdges())
+                .availableIntegrations(agentAvailable)
+                .unavailableIntegrations(agentUnavailable)
+                .llmProvider(agentConfig.llmProvider())
+                .apiKey(agentConfig.decryptedApiKey())
+                .googleAccessToken(googleAccessToken)
+                .githubToken(githubToken)
+                .notionToken(notionToken)
+                .availableMcpServers(availableMcpServers)
+                .availableWebhooks(availableWebhooks)
+                .userId(userId)
+                .userRole(userRole)
+                .useBetaPlatformKey(agentConfig.useBetaPlatformKey())
+                .build());
         } catch (RuntimeException e) {
-            // reserveQuota로 예약(INCR)했지만 agent 호출 자체가 실패한 경우에만 환불 — 성공 응답을 받은 뒤의
-            // 실패(메시지 저장 등)는 이미 실제 호출이 일어났으므로 환불 대상이 아니다.
-            releaseBetaQuotaOnFailure(agentConfig, userId);
+            // 예약(INCR)까지는 성공했는데 agent 호출 자체가 실패한 경우에만 환불한다. 성공 응답을 받은 뒤의
+            // 후처리 실패(메시지 저장 등)는 이미 실제 호출이 일어났으므로 환불 대상이 아니다.
+            if (betaReserved) {
+                releaseBetaQuotaOnFailure(agentConfig, userId);
+            }
             throw e;
         }
         recordBetaTokensIfPresent(agentConfig, userId, agentResponse);
@@ -312,12 +322,13 @@ public class ChatService {
             List<Map<String, Object>> tools = (List<Map<String, Object>>) config.get("tools");
             // 개발/테스트 계정은 credential 없이 자체 호스팅 LLM을 사용할 수 있다 — 키 없이 전달하면 agent가 라우팅/차단을 판단한다.
             // self-hosted 자격이 없으면 베타 자격(User.betaAccess + kill-switch)을 확인해 플랫폼 Gemini 키로 폴백한다.
+            // 여기서는 자격(eligibility) 판정만 한다 — 실제 쿼터 예약(INCR)은 agent 호출 직전(chat()/스트림 subscribe 직전)에서
+            // 수행해, 그 사이의 사전작업(메시지 저장/연동 조회/토큰 조회 등) 예외가 불필요한 환불 대상을 만들지 않게 한다.
             if (credentialId == null || credentialId.isBlank()) {
                 if (isSelfHostedEligible(userRole)) {
                     return new AgentConfig(llmProvider != null ? llmProvider : "CLAUDE", null, tools, false);
                 }
                 if (isBetaEligible(userId)) {
-                    betaPlatformProvider.reserveQuota(userId);
                     return new AgentConfig(llmProvider != null ? llmProvider : "CLAUDE", null, tools, true);
                 }
                 // 자격 없는 사용자가 키 없는 AI 노드를 실행하면 명시적 예외 — 복호화 단계의 NPE 방지
@@ -336,7 +347,6 @@ public class ChatService {
                     return new AgentConfig("CLAUDE", null, null, false);
                 }
                 if (isBetaEligible(userId)) {
-                    betaPlatformProvider.reserveQuota(userId);
                     return new AgentConfig("CLAUDE", null, null, true);
                 }
                 throw new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE);
@@ -387,12 +397,27 @@ public class ChatService {
     }
 
     /**
+     * 베타 platform 키 쿼터를 예약(INCR)한다. {@code config.useBetaPlatformKey()}가 아니면 no-op.
+     *
+     * <p>{@code WebSocketChatHandler}가 {@code agentClient.chatStream(...)}을 subscribe하기 바로 직전에
+     * 호출한다 — 그 앞의 사전작업(prepareStream)은 예약 없이 끝나므로 실패해도 환불 대상이 아니다.
+     * 쿼터 초과 시 예외(BETA_QUOTA_EXCEEDED)가 그대로 전파되며, BetaQuotaService가 스스로 카운터를
+     * 원복하므로 별도 환불이 필요 없다.
+     */
+    public void reserveBetaQuota(AgentConfig config, UUID userId) {
+        if (config != null && config.useBetaPlatformKey()) {
+            betaPlatformProvider.reserveQuota(userId);
+        }
+    }
+
+    /**
      * 베타 platform 키로 쿼터를 예약(INCR)했는데 이후 agent 호출이 실패/예외로 끝난 경우에만
      * 일일 호출 카운터를 환불한다(best-effort). reserveQuota 자체가 실패(쿼터 초과)한 경우는
      * {@code config.useBetaPlatformKey()}가 true가 되지 않으므로 이 메서드가 호출돼도 자연히 무시된다.
      *
-     * <p>{@code chat()}(블로킹)에서는 agent 호출 예외 시 직접 호출하고, chatStream(스트리밍) 실패는
-     * {@code WebSocketChatHandler}가 ERROR 이벤트 수신 시 이 메서드를 호출한다.
+     * <p>{@code chat()}(블로킹)에서는 agent 호출 예외 시 직접 호출한다. chatStream(스트리밍)은
+     * {@code WebSocketChatHandler}가 리액티브 체인의 {@code doFinally}에서 정확히 1회 호출해
+     * error/cancel(클라 disconnect)/비성공-complete를 모두 커버한다.
      */
     public void releaseBetaQuotaOnFailure(AgentConfig config, UUID userId) {
         if (config == null || !config.useBetaPlatformKey() || userId == null) {

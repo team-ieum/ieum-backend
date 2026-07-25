@@ -48,7 +48,13 @@ public class BetaQuotaService {
         }
     }
 
-    /** 일일 호출 카운터를 INCR하고, 첫 증가라면 TTL 48h를 설정한다. 쿼터 초과 시 차단한다. */
+    /**
+     * 일일 호출 카운터를 INCR하고, 첫 증가라면 TTL 48h를 설정한다. 쿼터 초과 시 차단한다.
+     *
+     * <p>원자성: 초과로 거부되는 호출은 카운터를 소모하지 않는다 — INCR 직후 초과가 확인되면
+     * 즉시 DECR로 되돌리고 나서 예외를 던진다. 그래야 거부된 요청이 반복돼도 카운터가 계속
+     * 불어나 이후 정상 요청까지 연쇄로 막히는 과다카운트를 막는다.
+     */
     public void incrementAndCheckDailyCalls(UUID userId) {
         String key = dailyCallsKey(userId);
         Long count = redisTemplate.opsForValue().increment(key);
@@ -56,6 +62,7 @@ public class BetaQuotaService {
             redisTemplate.expire(key, DAILY_KEY_TTL);
         }
         if (count != null && count > properties.getDailyCallQuota()) {
+            redisTemplate.opsForValue().decrement(key);
             throw new CustomException(ErrorCode.BETA_QUOTA_EXCEEDED);
         }
     }

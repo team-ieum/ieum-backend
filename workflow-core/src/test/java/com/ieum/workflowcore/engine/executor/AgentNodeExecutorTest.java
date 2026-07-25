@@ -612,15 +612,24 @@ class AgentNodeExecutorTest {
     @Test
     @DisplayName("베타 platform 키 예약 후 예외로 실행 실패(outer catch) - 일일 카운터를 환불한다")
     void execute_betaPlatformKeyAndUnexpectedException_releasesDailyCall() {
+        // 사전작업(google/tool/mcp/webhook)은 reserveQuota보다 먼저 실행되므로, reserve 이후에만
+        // 발생하는 실패를 재현하려면 agent 호출 자체가 예외로 끝나야 한다 — 연결 불가 포트로 그 상황을 만든다.
         UUID userId = UUID.randomUUID();
         BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
         when(betaProvider.isBetaEligible(userId)).thenReturn(true);
-        when(googleTokenProvider.getValidAccessToken(userId))
-            .thenThrow(new RuntimeException("google token fetch failed"));
-        AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
+        AgentNodeExecutor exec = new AgentNodeExecutor(
+            "http://127.0.0.1:1", // 아무도 리스닝하지 않는 포트 — 즉시 연결 거부(WebClientRequestException)
+            credentialProvider,
+            googleTokenProvider,
+            new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
+            new StubMcpCatalogProvider(),
+            new StubWebhookCredentialProvider(),
+            uid -> null,
+            betaProvider,
+            5
+        );
 
-        Node node = buildAgentNodeWithTools("캘린더 확인해줘", "CLAUDE", null,
-            List.of(Map.of("name", "builtin:google_calendar")));
+        Node node = buildAgentNodeNoCredential("요약해줘", "CLAUDE");
         ExecutorResult result = exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId));
 
         assertThat(result.isSuccess()).isFalse();

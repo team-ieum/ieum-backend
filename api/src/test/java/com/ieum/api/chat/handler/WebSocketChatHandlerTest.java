@@ -2,14 +2,12 @@ package com.ieum.api.chat.handler;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import com.ieum.api.chat.dto.ChatAgentResponse;
@@ -19,10 +17,13 @@ import com.ieum.api.chat.dto.ChatStreamEvent;
 import com.ieum.api.chat.dto.ChatStreamResponse;
 import com.ieum.api.chat.dto.ChatStreamResponse.StreamType;
 import com.ieum.api.chat.service.AgentClient;
+import com.ieum.api.chat.service.AgentClient.AgentChatCallParams;
 import com.ieum.api.chat.service.ChatService;
 import com.ieum.api.chat.service.ChatService.AgentConfig;
 import com.ieum.api.chat.service.ChatService.StreamSetupResult;
 import com.ieum.api.chat.service.IntegrationContextService.IntegrationContext;
+import com.ieum.common.exception.CustomException;
+import com.ieum.common.exception.ErrorCode;
 import java.security.Principal;
 import java.util.List;
 import java.util.UUID;
@@ -38,6 +39,7 @@ import org.springframework.messaging.simp.SimpMessageSendingOperations;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import reactor.core.publisher.Flux;
+import reactor.test.StepVerifier;
 
 @ExtendWith(MockitoExtension.class)
 class WebSocketChatHandlerTest {
@@ -76,15 +78,15 @@ class WebSocketChatHandlerTest {
             null, null, null,
             List.of(), List.of()
         );
+    }
+
+    /** handleChat() 전체 흐름을 도는 테스트에서만 필요 — withBetaQuotaRefund 단위 테스트는 handleChat을 거치지 않는다. */
+    private void mockPrepareStream() {
         given(chatService.prepareStream(eq(workflowId), eq(userId), eq("ROLE_USER"), eq(request))).willReturn(setup);
     }
 
-    @SuppressWarnings("unchecked")
     private void mockChatStream(ChatStreamEvent... events) {
-        given(agentClient.chatStream(
-            any(), any(), any(), any(), any(), any(), any(),
-            any(), any(), any(), any(), any(), any(), any(), any(), anyBoolean()
-        )).willReturn(Flux.just(events));
+        given(agentClient.chatStream(any(AgentChatCallParams.class))).willReturn(Flux.just(events));
     }
 
     private List<ChatStreamResponse> captureSent(int times) {
@@ -95,9 +97,12 @@ class WebSocketChatHandlerTest {
         return captor.getAllValues();
     }
 
+    // ─────────────────── handleChat (전체 흐름) ─────────────────────────────
+
     @Test
     @DisplayName("stage → done 흐름: 진행 프레임 전달 후 done 시 finalizeStream으로 저장하고 최종 프레임 전달")
     void stage_then_done() {
+        mockPrepareStream();
         ChatAgentResponse agentResponse = mock(ChatAgentResponse.class);
         ChatResponse finalResponse = mock(ChatResponse.class);
         given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any(), any()))
@@ -120,11 +125,14 @@ class WebSocketChatHandlerTest {
         assertThat(sent.get(1).getStage()).isEqualTo("reviewing");
         assertThat(sent.get(2).getType()).isEqualTo(StreamType.DONE);
         assertThat(sent.get(2).getData()).isEqualTo(finalResponse);
+        // 성공(DONE) 수신 — 베타 쿼터 환불 대상 아님
+        verify(chatService, after(300).never()).releaseBetaQuotaOnFailure(any(), any());
     }
 
     @Test
     @DisplayName("error 이벤트: ERROR 프레임을 전달하고 저장은 하지 않는다")
     void error_event() {
+        mockPrepareStream();
         mockChatStream(ChatStreamEvent.error("AI 응답 중 오류가 발생했습니다."));
 
         handler.handleChat(workflowId, request, principal);
@@ -134,8 +142,72 @@ class WebSocketChatHandlerTest {
         assertThat(sent.get(0).getContent()).isEqualTo("AI 응답 중 오류가 발생했습니다.");
         verify(chatService, after(300).never())
             .finalizeStream(any(), any(), any(), any(), any(), any());
-        // agent 호출 실패(ERROR 이벤트) 시 베타 platform 키로 예약했던 일일 카운터 환불을 시도한다
-        // (실제 환불 여부는 ChatService.releaseBetaQuotaOnFailure의 useBetaPlatformKey 가드가 판단)
+        // ERROR 이벤트 후 스트림이 정상 종료돼도 DONE을 받지 못했으므로 withBetaQuotaRefund의 doFinally가 환불한다.
         verify(chatService).releaseBetaQuotaOnFailure(eq(setup.config()), eq(userId));
+    }
+
+    @Test
+    @DisplayName("베타 쿼터 예약 실패 시 ERROR 프레임만 전달하고 chatStream을 구독하지 않는다")
+    void reserveBetaQuota_throws_doesNotSubscribeToChatStream() {
+        mockPrepareStream();
+        org.mockito.Mockito.doThrow(new CustomException(ErrorCode.BETA_QUOTA_EXCEEDED))
+            .when(chatService).reserveBetaQuota(setup.config(), userId);
+
+        handler.handleChat(workflowId, request, principal);
+
+        List<ChatStreamResponse> sent = captureSent(1);
+        assertThat(sent.get(0).getType()).isEqualTo(StreamType.ERROR);
+        assertThat(sent.get(0).getContent()).isEqualTo(ErrorCode.BETA_QUOTA_EXCEEDED.getMessage());
+        verify(agentClient, never()).chatStream(any(AgentChatCallParams.class));
+    }
+
+    // ─────────────────── withBetaQuotaRefund (exactly-once 환불) ────────────
+
+    @Test
+    @DisplayName("DONE 수신 후 정상 종료 — 환불하지 않는다")
+    void withBetaQuotaRefund_doneThenComplete_doesNotRelease() {
+        ChatAgentResponse agentResponse = mock(ChatAgentResponse.class);
+        Flux<ChatStreamEvent> source = Flux.just(ChatStreamEvent.done(agentResponse));
+
+        StepVerifier.create(handler.withBetaQuotaRefund(source, setup.config(), userId))
+            .expectNextCount(1)
+            .verifyComplete();
+
+        verify(chatService, never()).releaseBetaQuotaOnFailure(any(), any());
+    }
+
+    @Test
+    @DisplayName("ERROR 이벤트 수신 후 정상 종료(complete) — DONE을 못 받았으므로 정확히 1회 환불한다")
+    void withBetaQuotaRefund_errorEventThenComplete_releasesExactlyOnce() {
+        Flux<ChatStreamEvent> source = Flux.just(ChatStreamEvent.error("AI 응답 중 오류가 발생했습니다."));
+
+        StepVerifier.create(handler.withBetaQuotaRefund(source, setup.config(), userId))
+            .expectNextCount(1)
+            .verifyComplete();
+
+        verify(chatService, org.mockito.Mockito.times(1)).releaseBetaQuotaOnFailure(setup.config(), userId);
+    }
+
+    @Test
+    @DisplayName("리액티브 error 시그널 — 정확히 1회 환불한다")
+    void withBetaQuotaRefund_errorSignal_releasesExactlyOnce() {
+        Flux<ChatStreamEvent> source = Flux.error(new RuntimeException("agent 연결 실패"));
+
+        StepVerifier.create(handler.withBetaQuotaRefund(source, setup.config(), userId))
+            .verifyError(RuntimeException.class);
+
+        verify(chatService, org.mockito.Mockito.times(1)).releaseBetaQuotaOnFailure(setup.config(), userId);
+    }
+
+    @Test
+    @DisplayName("cancel(클라 disconnect) — 정확히 1회 환불한다")
+    void withBetaQuotaRefund_cancel_releasesExactlyOnce() {
+        Flux<ChatStreamEvent> source = Flux.never();
+
+        StepVerifier.create(handler.withBetaQuotaRefund(source, setup.config(), userId))
+            .thenCancel()
+            .verify();
+
+        verify(chatService, org.mockito.Mockito.times(1)).releaseBetaQuotaOnFailure(setup.config(), userId);
     }
 }

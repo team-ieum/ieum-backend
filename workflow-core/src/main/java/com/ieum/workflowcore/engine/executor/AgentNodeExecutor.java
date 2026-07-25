@@ -112,17 +112,6 @@ public class AgentNodeExecutor implements NodeExecutor {
             userId = cursor.getContext().getUserId();
             String userRole = userId != null ? userRoleProvider.findRoleByUserId(userId) : null;
 
-            // credentialId가 없으면 키 없이 전달 — self-hosted 자격(ADMIN/TESTER role)이 최우선이며,
-            // 이 경우 agent가 라우팅/차단을 판단한다(ChatService.isSelfHostedEligible과 동일 우선순위).
-            // self-hosted 자격이 없을 때만 베타 자격(User.betaAccess)을 확인해 플랫폼 Gemini 키로 폴백한다.
-            String decryptedApiKey = null;
-            if (credentialId != null && !credentialId.isBlank()) {
-                decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
-            } else if (!isSelfHostedEligible(userRole) && userId != null && betaPlatformProvider.isBetaEligible(userId)) {
-                betaPlatformProvider.reserveQuota(userId);
-                useBetaPlatformKey = true;
-            }
-
             String googleAccessToken = resolveGoogleAccessToken(tools, cursor);
             Map<String, String> toolAuthHeaders = toolAuthResolver.resolveHeaders(tools, userId);
             List<McpServerRef> mcpServers = resolveMcpServers(tools, userId);
@@ -139,6 +128,21 @@ public class AgentNodeExecutor implements NodeExecutor {
                 .workflowContext(cursor.getContext().getNodeOutputs())
                 .mcpServers(mcpServers.isEmpty() ? null : mcpServers)
                 .build();
+
+            // credentialId가 없으면 키 없이 전달 — self-hosted 자격(ADMIN/TESTER role)이 최우선이며,
+            // 이 경우 agent가 라우팅/차단을 판단한다(ChatService.isSelfHostedEligible과 동일 우선순위).
+            // self-hosted 자격이 없을 때만 베타 자격(User.betaAccess)을 확인해 플랫폼 Gemini 키로 폴백한다.
+            // 쿼터 예약(INCR)은 위 사전작업이 모두 끝난 뒤, agent 호출 바로 직전에 한다 — 그 앞에서 예외가
+            // 나면 INCR 자체가 없으므로 환불이 필요 없다. 쿼터 초과로 reserveQuota가 거부하면
+            // BetaQuotaService가 스스로 카운터를 원복하므로 여기서도 별도 환불을 시도하지 않는다
+            // (useBetaPlatformKey는 reserveQuota가 예외 없이 반환한 뒤에만 true가 된다).
+            String decryptedApiKey = null;
+            if (credentialId != null && !credentialId.isBlank()) {
+                decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
+            } else if (!isSelfHostedEligible(userRole) && userId != null && betaPlatformProvider.isBetaEligible(userId)) {
+                betaPlatformProvider.reserveQuota(userId);
+                useBetaPlatformKey = true;
+            }
 
             AgentExecutionResult agentResult = callAgentService(
                 request, llmProvider, decryptedApiKey, googleAccessToken,

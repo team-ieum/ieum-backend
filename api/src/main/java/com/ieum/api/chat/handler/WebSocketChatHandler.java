@@ -5,11 +5,13 @@ import com.ieum.api.chat.dto.ChatResponse;
 import com.ieum.api.chat.dto.ChatStreamEvent;
 import com.ieum.api.chat.dto.ChatStreamResponse;
 import com.ieum.api.chat.service.AgentClient;
+import com.ieum.api.chat.service.AgentClient.AgentChatCallParams;
 import com.ieum.api.chat.service.ChatService;
 import com.ieum.api.chat.service.ChatService.StreamSetupResult;
 import com.ieum.common.exception.CustomException;
 import java.security.Principal;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
@@ -18,6 +20,7 @@ import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.SimpMessageSendingOperations;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Controller;
+import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
 /**
@@ -92,35 +95,72 @@ public class WebSocketChatHandler {
             return;
         }
 
-        // 2. 스트리밍 구독 (비동기) — agent SSE 이벤트를 STAGE/DONE/ERROR로 분기 전달
-        agentClient.chatStream(
-            workflowId,
-            setup.prompt(),
-            setup.currentNodes(),
-            setup.currentEdges(),
-            setup.integrationContext().available(),
-            setup.integrationContext().unavailable(),
-            setup.config().llmProvider(),
-            setup.config().decryptedApiKey(),
-            setup.googleToken(),
-            setup.githubToken(),
-            setup.notionToken(),
-            setup.availableMcpServers(),
-            setup.availableWebhooks(),
-            userId,
-            userRole,
-            setup.config().useBetaPlatformKey()
-        )
-        // finalizeStream은 동기 blocking(JPA) 작업이므로 Netty EventLoop 스레드에서 실행되면
-        // Thread Starvation을 유발한다. boundedElastic로 전환해 별도 스레드 풀에서 처리한다.
-        .publishOn(Schedulers.boundedElastic())
-        .subscribe(
-            event -> handleStreamEvent(userName, workflowId, request, setup, event),
-            error -> {
-                log.error("[WS] 스트리밍 오류 — sessionId: {}", setup.sessionId(), error);
-                sendToUser(userName, ChatStreamResponse.error("AI 응답 중 오류가 발생했습니다."));
-            }
-        );
+        // 2. 베타 platform 키 쿼터 예약 — subscribe 바로 직전(사전작업은 이미 끝났으므로 그 앞 실패는 환불 대상이 아니다).
+        //    쿼터 초과 시 예외가 그대로 전파되며 BetaQuotaService가 스스로 카운터를 원복하므로 별도 환불 불필요.
+        try {
+            chatService.reserveBetaQuota(setup.config(), userId);
+        } catch (CustomException e) {
+            log.warn("[WS] 베타 쿼터 예약 실패 — userId: {}, error: {}", userId, e.getMessage());
+            sendToUser(userName, ChatStreamResponse.error(e.getMessage()));
+            return;
+        }
+
+        // 3. 스트리밍 구독 (비동기) — agent SSE 이벤트를 STAGE/DONE/ERROR로 분기 전달.
+        //    withBetaQuotaRefund가 doFinally로 error/cancel(클라 disconnect)/비성공-complete를
+        //    전부 잡아 정확히 1회 환불한다(§#1~3 강건화).
+        Flux<ChatStreamEvent> chatStream = agentClient.chatStream(AgentChatCallParams.builder()
+            .workflowId(workflowId)
+            .prompt(setup.prompt())
+            .currentNodes(setup.currentNodes())
+            .currentEdges(setup.currentEdges())
+            .availableIntegrations(setup.integrationContext().available())
+            .unavailableIntegrations(setup.integrationContext().unavailable())
+            .llmProvider(setup.config().llmProvider())
+            .apiKey(setup.config().decryptedApiKey())
+            .googleAccessToken(setup.googleToken())
+            .githubToken(setup.githubToken())
+            .notionToken(setup.notionToken())
+            .availableMcpServers(setup.availableMcpServers())
+            .availableWebhooks(setup.availableWebhooks())
+            .userId(userId)
+            .userRole(userRole)
+            .useBetaPlatformKey(setup.config().useBetaPlatformKey())
+            .build());
+
+        withBetaQuotaRefund(chatStream, setup.config(), userId)
+            // finalizeStream은 동기 blocking(JPA) 작업이므로 Netty EventLoop 스레드에서 실행되면
+            // Thread Starvation을 유발한다. boundedElastic로 전환해 별도 스레드 풀에서 처리한다.
+            .publishOn(Schedulers.boundedElastic())
+            .subscribe(
+                event -> handleStreamEvent(userName, workflowId, request, setup, event),
+                error -> {
+                    log.error("[WS] 스트리밍 오류 — sessionId: {}", setup.sessionId(), error);
+                    sendToUser(userName, ChatStreamResponse.error("AI 응답 중 오류가 발생했습니다."));
+                }
+            );
+    }
+
+    /**
+     * 베타 platform 키 일일 카운터를 정확히 1회 환불하도록 스트림에 감시 로직을 덧씌운다.
+     *
+     * <p>DONE(agent 호출 자체의 성공)을 수신했을 때만 {@code succeeded=true}로 표시하고,
+     * {@code doFinally}에서 그렇지 않은 모든 종료 시그널(error/cancel(클라 disconnect)/
+     * ERROR 이벤트 후 정상 종료 포함)에 대해 환불한다. 패키지 전용으로 노출해 StepVerifier로
+     * cancel/error 등 리액티브 종료 시그널별 exactly-once 환불을 직접 검증할 수 있게 한다.
+     */
+    Flux<ChatStreamEvent> withBetaQuotaRefund(Flux<ChatStreamEvent> source, ChatService.AgentConfig config, UUID userId) {
+        AtomicBoolean succeeded = new AtomicBoolean(false);
+        return source
+            .doOnNext(event -> {
+                if (event.type() == ChatStreamEvent.EventType.DONE) {
+                    succeeded.set(true);
+                }
+            })
+            .doFinally(signal -> {
+                if (!succeeded.get()) {
+                    chatService.releaseBetaQuotaOnFailure(config, userId);
+                }
+            });
     }
 
     /**
@@ -148,11 +188,7 @@ public class WebSocketChatHandler {
                     sendToUser(userName, ChatStreamResponse.error("응답 저장 중 오류가 발생했습니다."));
                 }
             }
-            case ERROR -> {
-                // agent 호출 자체가 실패한 경우이므로, 베타 platform 키로 예약(INCR)했던 일일 카운터를 환불한다.
-                chatService.releaseBetaQuotaOnFailure(setup.config(), UUID.fromString(userName));
-                sendToUser(userName, ChatStreamResponse.error(event.errorMessage()));
-            }
+            case ERROR -> sendToUser(userName, ChatStreamResponse.error(event.errorMessage()));
         }
     }
 

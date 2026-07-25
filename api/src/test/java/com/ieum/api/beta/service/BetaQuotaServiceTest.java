@@ -85,6 +85,17 @@ class BetaQuotaServiceTest {
     }
 
     @Test
+    @DisplayName("일일 호출 - 원자성: 초과로 거부된 호출은 DECR로 되돌려 카운터를 소모하지 않는다")
+    void incrementAndCheckDailyCalls_exceeded_decrementsBack() {
+        when(valueOperations.increment(dailyKey())).thenReturn(31L);
+
+        assertThatThrownBy(() -> service.incrementAndCheckDailyCalls(userId))
+                .isInstanceOf(CustomException.class);
+
+        verify(valueOperations).decrement(dailyKey());
+    }
+
+    @Test
     @DisplayName("토큰 예산 - 사용량이 예산 미만이면 통과")
     void checkTokenBudget_withinBudget_passes() {
         when(valueOperations.get(tokenKey())).thenReturn("1000000");

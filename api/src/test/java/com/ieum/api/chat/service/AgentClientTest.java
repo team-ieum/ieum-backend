@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.chat.dto.ChatAgentResponse;
+import com.ieum.api.chat.service.AgentClient.AgentChatCallParams;
 import java.io.IOException;
 import java.util.UUID;
 import okhttp3.mockwebserver.MockResponse;
@@ -35,6 +36,14 @@ class AgentClientTest {
         mockWebServer.shutdown();
     }
 
+    private AgentChatCallParams.AgentChatCallParamsBuilder baseParams() {
+        return AgentChatCallParams.builder()
+            .workflowId(UUID.randomUUID())
+            .prompt("요약해줘")
+            .llmProvider("CLAUDE")
+            .userId(userId);
+    }
+
     @Test
     @DisplayName("chat — useBetaPlatformKey=true면 X-Key-Mode:platform, X-LLM-Provider:GEMINI, 키 헤더 없음")
     void chat_betaPlatformKey_setsHeadersAndOmitsKey() throws InterruptedException {
@@ -43,10 +52,10 @@ class AgentClientTest {
             .setHeader("Content-Type", "application/json")
             .setBody(CHAT_RESPONSE_BODY));
 
-        ChatAgentResponse response = agentClient.chat(
-            UUID.randomUUID(), "요약해줘", null, null, null, null,
-            "CLAUDE", null, null, null, null, null, null,
-            userId, "ROLE_USER", true);
+        ChatAgentResponse response = agentClient.chat(baseParams()
+            .userRole("ROLE_USER")
+            .useBetaPlatformKey(true)
+            .build());
 
         assertThat(response.getContent()).isEqualTo("안녕하세요");
         RecordedRequest recorded = mockWebServer.takeRequest();
@@ -64,10 +73,10 @@ class AgentClientTest {
             .setHeader("Content-Type", "application/json")
             .setBody(CHAT_RESPONSE_BODY));
 
-        agentClient.chat(
-            UUID.randomUUID(), "요약해줘", null, null, null, null,
-            "CLAUDE", "decrypted-api-key", null, null, null, null, null,
-            userId, null, false);
+        agentClient.chat(baseParams()
+            .apiKey("decrypted-api-key")
+            .useBetaPlatformKey(false)
+            .build());
 
         RecordedRequest recorded = mockWebServer.takeRequest();
         assertThat(recorded.getHeader("X-Key-Mode")).isNull();
@@ -83,10 +92,10 @@ class AgentClientTest {
             .setHeader("Content-Type", "text/event-stream")
             .setBody("event: done\ndata: " + CHAT_RESPONSE_BODY + "\n\n"));
 
-        agentClient.chatStream(
-            UUID.randomUUID(), "요약해줘", null, null, null, null,
-            "CLAUDE", null, null, null, null, null, null,
-            userId, "ROLE_USER", true
+        agentClient.chatStream(baseParams()
+            .userRole("ROLE_USER")
+            .useBetaPlatformKey(true)
+            .build()
         ).blockLast();
 
         RecordedRequest recorded = mockWebServer.takeRequest();
