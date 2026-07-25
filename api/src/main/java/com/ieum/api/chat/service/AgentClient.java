@@ -13,6 +13,7 @@ import com.ieum.common.exception.ErrorCode;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
+import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
@@ -32,6 +33,7 @@ import reactor.core.publisher.Flux;
  *   <li>{@code X-LLM-Api-Key} — 복호화된 API Key</li>
  *   <li>{@code X-User-Id} — 사용자 UUID</li>
  *   <li>{@code X-Google-Access-Token} — Google 빌트인 도구 사용 시 (optional)</li>
+ *   <li>{@code X-Key-Mode: platform} — 베타 플랫폼 키 위임 시 (credentialId 없음 + 베타 자격, 키 헤더 생략)</li>
  * </ul>
  *
  * <h3>요청 body</h3>
@@ -68,74 +70,28 @@ public class AgentClient {
     /**
      * AI 에이전트에 채팅 메시지를 전송하고 전체 응답을 블로킹으로 반환한다.
      *
-     * @param prompt            사용자 자연어 입력
-     * @param currentNodes      현재 캔버스 노드 목록 (null = 신규 생성)
-     * @param currentEdges      현재 캔버스 엣지 목록
-     * @param availableIntegrations   연동 완료된 서비스 목록
-     * @param unavailableIntegrations 미연동 서비스 목록
-     * @param llmProvider       LLM 프로바이더 이름 (예: "OPENAI", "CLAUDE")
-     * @param apiKey            복호화된 API Key
-     * @param googleAccessToken Google 빌트인 도구 사용 시 필요한 Access Token (nullable)
-     * @param userId            현재 인증된 사용자 ID
+     * @param params 요청 본문 + 크레덴셜/헤더 파라미터 (nullable String 필드가 많아 위치 인자 실수를
+     *               막기 위해 빌더로 이름을 명시해 구성한다)
      * @return AI 응답
      */
-    public ChatAgentResponse chat(
-        UUID workflowId,
-        String prompt,
-        List<Object> currentNodes,
-        List<Object> currentEdges,
-        List<IntegrationInfo> availableIntegrations,
-        List<IntegrationInfo> unavailableIntegrations,
-        String llmProvider,
-        String apiKey,
-        String googleAccessToken,
-        String githubToken,
-        String notionToken,
-        List<AvailableMcpServer> availableMcpServers,
-        List<AvailableWebhook> availableWebhooks,
-        UUID userId,
-        String userRole
-    ) {
+    public ChatAgentResponse chat(AgentChatCallParams params) {
         log.debug("[AgentClient] chat 요청 — provider: {}, prompt: {}자",
-            llmProvider, prompt != null ? prompt.length() : 0);
+            params.llmProvider(), params.prompt() != null ? params.prompt().length() : 0);
 
         ChatAgentRequest request = ChatAgentRequest.builder()
-            .workflowId(workflowId != null ? workflowId.toString() : null)
-            .prompt(prompt)
-            .currentNodes(currentNodes)
-            .currentEdges(currentEdges)
-            .availableIntegrations(availableIntegrations != null ? availableIntegrations : List.of())
-            .unavailableIntegrations(unavailableIntegrations != null ? unavailableIntegrations : List.of())
-            .availableMcpServers(availableMcpServers != null ? availableMcpServers : List.of())
-            .availableWebhooks(availableWebhooks != null ? availableWebhooks : List.of())
+            .workflowId(params.workflowId() != null ? params.workflowId().toString() : null)
+            .prompt(params.prompt())
+            .currentNodes(params.currentNodes())
+            .currentEdges(params.currentEdges())
+            .availableIntegrations(params.availableIntegrations() != null ? params.availableIntegrations() : List.of())
+            .unavailableIntegrations(params.unavailableIntegrations() != null ? params.unavailableIntegrations() : List.of())
+            .availableMcpServers(params.availableMcpServers() != null ? params.availableMcpServers() : List.of())
+            .availableWebhooks(params.availableWebhooks() != null ? params.availableWebhooks() : List.of())
             .build();
 
-
         try {
-            var requestSpec = webClient.post()
-                .uri("/v1/chat")
-                .contentType(MediaType.APPLICATION_JSON)
-                .header("X-LLM-Provider", llmProvider)
-                .header("X-User-Id", userId.toString());
-
-            if (apiKey != null) {
-                requestSpec = requestSpec.header("X-LLM-Api-Key", apiKey);
-            }
-
-            if (userRole != null) {
-                requestSpec = requestSpec.header("X-User-Role", userRole);
-            }
-            if (googleAccessToken != null) {
-                requestSpec = requestSpec.header("X-Google-Access-Token", googleAccessToken);
-            }
-            if (githubToken != null) {
-                requestSpec = requestSpec.header("X-GitHub-Token", githubToken);
-                log.debug("[AgentClient] X-GitHub-Token header injected");
-            }
-            if (notionToken != null) {
-                requestSpec = requestSpec.header("X-Notion-Token", notionToken);
-                log.debug("[AgentClient] X-Notion-Token header injected");
-            }
+            WebClient.RequestBodySpec requestSpec = applyCredentialHeaders(
+                webClient.post().uri("/v1/chat").contentType(MediaType.APPLICATION_JSON), params);
 
             ChatAgentResponse response = requestSpec
                 .bodyValue(request)
@@ -178,60 +134,26 @@ public class AgentClient {
      * {@code done} → 완성 응답(ChatAgentResponse), {@code error} → 오류.
      * HTTP/연결 오류는 ERROR 이벤트로 변환해 스트림을 정상 종료한다.
      */
-    public Flux<ChatStreamEvent> chatStream(
-        UUID workflowId,
-        String prompt,
-        List<Object> currentNodes,
-        List<Object> currentEdges,
-        List<IntegrationInfo> availableIntegrations,
-        List<IntegrationInfo> unavailableIntegrations,
-        String llmProvider,
-        String apiKey,
-        String googleAccessToken,
-        String githubToken,
-        String notionToken,
-        List<AvailableMcpServer> availableMcpServers,
-        List<AvailableWebhook> availableWebhooks,
-        UUID userId,
-        String userRole
-    ) {
+    public Flux<ChatStreamEvent> chatStream(AgentChatCallParams params) {
         log.debug("[AgentClient] chatStream(SSE) 요청 — provider: {}, prompt: {}자",
-            llmProvider, prompt != null ? prompt.length() : 0);
+            params.llmProvider(), params.prompt() != null ? params.prompt().length() : 0);
 
         ChatAgentRequest request = ChatAgentRequest.builder()
-            .workflowId(workflowId != null ? workflowId.toString() : null)
-            .prompt(prompt)
-            .currentNodes(currentNodes)
-            .currentEdges(currentEdges)
-            .availableIntegrations(availableIntegrations != null ? availableIntegrations : List.of())
-            .unavailableIntegrations(unavailableIntegrations != null ? unavailableIntegrations : List.of())
-            .availableMcpServers(availableMcpServers != null ? availableMcpServers : List.of())
-            .availableWebhooks(availableWebhooks != null ? availableWebhooks : List.of())
+            .workflowId(params.workflowId() != null ? params.workflowId().toString() : null)
+            .prompt(params.prompt())
+            .currentNodes(params.currentNodes())
+            .currentEdges(params.currentEdges())
+            .availableIntegrations(params.availableIntegrations() != null ? params.availableIntegrations() : List.of())
+            .unavailableIntegrations(params.unavailableIntegrations() != null ? params.unavailableIntegrations() : List.of())
+            .availableMcpServers(params.availableMcpServers() != null ? params.availableMcpServers() : List.of())
+            .availableWebhooks(params.availableWebhooks() != null ? params.availableWebhooks() : List.of())
             .build();
 
-        WebClient.RequestBodySpec spec = webClient.post()
-            .uri("/v1/chat/stream")
-            .contentType(MediaType.APPLICATION_JSON)
-            .accept(MediaType.TEXT_EVENT_STREAM)
-            .header("X-LLM-Provider", llmProvider)
-            .header("X-User-Id", userId.toString());
-
-        if (apiKey != null) {
-            spec = spec.header("X-LLM-Api-Key", apiKey);
-        }
-
-        if (userRole != null) {
-            spec = spec.header("X-User-Role", userRole);
-        }
-        if (googleAccessToken != null) {
-            spec = spec.header("X-Google-Access-Token", googleAccessToken);
-        }
-        if (githubToken != null) {
-            spec = spec.header("X-GitHub-Token", githubToken);
-        }
-        if (notionToken != null) {
-            spec = spec.header("X-Notion-Token", notionToken);
-        }
+        WebClient.RequestBodySpec spec = applyCredentialHeaders(
+            webClient.post().uri("/v1/chat/stream")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.TEXT_EVENT_STREAM),
+            params);
 
         return spec.bodyValue(request)
             .retrieve()
@@ -265,6 +187,44 @@ public class AgentClient {
         }
     }
 
+    /**
+     * 크레덴셜/사용자 관련 요청 헤더를 조립한다. {@code chat()}/{@code chatStream()}이 공유한다.
+     *
+     * <p>{@code useBetaPlatformKey}가 true면(credentialId 없음 + 베타 자격) provider를 GEMINI로 고정하고
+     * {@code X-Key-Mode: platform}을 실어 보내며 키 헤더는 생략한다 — 사용자키/self-hosted 우선순위의
+     * 최종 판단은 ieum-agent 크레덴셜 미들웨어가 X-User-Role로 다시 확인한다(유닛 2와 동일).
+     */
+    private WebClient.RequestBodySpec applyCredentialHeaders(WebClient.RequestBodySpec spec, AgentChatCallParams params) {
+        boolean useBetaPlatformKey = params.useBetaPlatformKey();
+        spec = spec
+            .header("X-LLM-Provider", useBetaPlatformKey ? "GEMINI" : params.llmProvider())
+            .header("X-User-Id", params.userId().toString());
+
+        if (useBetaPlatformKey) {
+            // ponytail: 베타=플랫폼 키 전제(self-hosted는 베타 범위 밖·현재 비활성). self-hosted 겸
+            // 베타 사용자의 쿼터 정합은 agent가 응답에 실제 keyMode를 반환하는 후속(§5.4 keyMode)에서 다룬다.
+            spec = spec.header("X-Key-Mode", "platform");
+        } else if (params.apiKey() != null) {
+            spec = spec.header("X-LLM-Api-Key", params.apiKey());
+        }
+
+        if (params.userRole() != null) {
+            spec = spec.header("X-User-Role", params.userRole());
+        }
+        if (params.googleAccessToken() != null) {
+            spec = spec.header("X-Google-Access-Token", params.googleAccessToken());
+        }
+        if (params.githubToken() != null) {
+            spec = spec.header("X-GitHub-Token", params.githubToken());
+            log.debug("[AgentClient] X-GitHub-Token header injected");
+        }
+        if (params.notionToken() != null) {
+            spec = spec.header("X-Notion-Token", params.notionToken());
+            log.debug("[AgentClient] X-Notion-Token header injected");
+        }
+        return spec;
+    }
+
     /** HTTP/연결 오류를 ERROR 이벤트로 변환해 스트림을 정상 종료한다. */
     private Flux<ChatStreamEvent> toErrorEvent(Throwable e) {
         if (e instanceof WebClientResponseException we && we.getStatusCode().value() == 429) {
@@ -273,5 +233,41 @@ public class AgentClient {
         }
         log.error("[AgentClient] chatStream SSE 오류", e);
         return Flux.just(ChatStreamEvent.error("AI 응답 중 오류가 발생했습니다."));
+    }
+
+    /**
+     * {@code chat()}/{@code chatStream()} 공통 파라미터 객체.
+     *
+     * <p>nullable String 필드(apiKey/googleAccessToken/githubToken/notionToken/userRole 등)가 많아
+     * 위치 인자로 호출하면 인접한 두 인자가 뒤바뀌어도 컴파일러가 잡아주지 못하고, 잘못된 토큰이
+     * 엉뚱한 헤더에 실릴 위험이 있었다. 빌더로 이름을 명시해 구성한다.
+     */
+    @Builder
+    public record AgentChatCallParams(
+        UUID workflowId,
+        String prompt,
+        List<Object> currentNodes,
+        List<Object> currentEdges,
+        List<IntegrationInfo> availableIntegrations,
+        List<IntegrationInfo> unavailableIntegrations,
+        String llmProvider,
+        String apiKey,
+        String googleAccessToken,
+        String githubToken,
+        String notionToken,
+        List<AvailableMcpServer> availableMcpServers,
+        List<AvailableWebhook> availableWebhooks,
+        UUID userId,
+        String userRole,
+        boolean useBetaPlatformKey
+    ) {
+        /** 로그/디버그 출력 시 크레덴셜/토큰이 노출되지 않도록 마스킹한다. */
+        @Override
+        public String toString() {
+            return "AgentChatCallParams[workflowId=" + workflowId + ", userId=" + userId
+                + ", llmProvider=" + llmProvider + ", apiKey=***, googleAccessToken=***, "
+                + "githubToken=***, notionToken=***, userRole=" + userRole
+                + ", useBetaPlatformKey=" + useBetaPlatformKey + "]";
+        }
     }
 }

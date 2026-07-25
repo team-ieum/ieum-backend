@@ -112,6 +112,11 @@ ieum:
       core-pool-size: ${WORKFLOW_EXECUTOR_CORE_POOL_SIZE:6}
       max-pool-size: ${WORKFLOW_EXECUTOR_MAX_POOL_SIZE:6}
       queue-capacity: ${WORKFLOW_EXECUTOR_QUEUE_CAPACITY:30}
+  beta:
+    platform-key:
+      enabled: ${BETA_PLATFORM_KEY_ENABLED:false}
+      daily-call-quota: ${BETA_DAILY_CALL_QUOTA:30}
+      token-budget: ${BETA_TOKEN_BUDGET:5000000}
 
 # [IEUM-BE-42] 워크플로 1개 내부에서 동시 실행할 노드 수(fan-out 병렬도).
 # 노드당 DB 쿼리(credential·role·token·webhook)를 쏘므로, 4 → 3으로 낮춰 커넥션 압박을 줄인다.

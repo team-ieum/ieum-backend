@@ -29,6 +29,7 @@ import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
 import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.Node;
+import com.ieum.workflowcore.engine.executor.BetaPlatformProvider;
 import com.ieum.workflowcore.engine.executor.CredentialProvider;
 import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
 import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
@@ -87,6 +88,7 @@ public class ChatService {
     private final ObjectMapper objectMapper;
     private final McpServerCatalogRepository mcpServerCatalogRepository;
     private final WebhookCredentialRepository webhookCredentialRepository;
+    private final BetaPlatformProvider betaPlatformProvider;
 
     // ─────────────────────────────────────── REST 블로킹 ──────────────────────
 
@@ -130,23 +132,40 @@ public class ChatService {
         List<IntegrationInfo> agentUnavailable = filterAgentSupportedIntegrations(integrationContext.unavailable());
         List<AvailableMcpServer> availableMcpServers = resolveAvailableMcpServers(userId);
         List<AvailableWebhook> availableWebhooks = resolveAvailableWebhooks(userId);
-        ChatAgentResponse agentResponse = agentClient.chat(
-            workflowId,
-            request.getPrompt(),
-            request.getCurrentNodes(),
-            request.getCurrentEdges(),
-            agentAvailable,
-            agentUnavailable,
-            agentConfig.llmProvider(),
-            agentConfig.decryptedApiKey(),
-            googleAccessToken,
-            githubToken,
-            notionToken,
-            availableMcpServers,
-            availableWebhooks,
-            userId,
-            userRole
-        );
+        ChatAgentResponse agentResponse;
+        String betaReservationKey = null;
+        try {
+            // 쿼터 예약(INCR)은 사전작업이 모두 끝난 뒤, agent 호출 바로 직전에 한다 — 그 앞에서 예외가 나면
+            // INCR 자체가 없으므로 환불이 필요 없다. reserveQuota가 쿼터 초과로 거부되면(BETA_QUOTA_EXCEEDED)
+            // BetaQuotaService가 스스로 카운터를 원복하므로 여기서도 별도 환불을 시도하지 않는다
+            // (betaReservationKey는 reserveQuota가 예외 없이 반환했을 때만 세팅된다).
+            betaReservationKey = reserveBetaQuota(agentConfig, userId);
+            agentResponse = agentClient.chat(AgentClient.AgentChatCallParams.builder()
+                .workflowId(workflowId)
+                .prompt(request.getPrompt())
+                .currentNodes(request.getCurrentNodes())
+                .currentEdges(request.getCurrentEdges())
+                .availableIntegrations(agentAvailable)
+                .unavailableIntegrations(agentUnavailable)
+                .llmProvider(agentConfig.llmProvider())
+                .apiKey(agentConfig.decryptedApiKey())
+                .googleAccessToken(googleAccessToken)
+                .githubToken(githubToken)
+                .notionToken(notionToken)
+                .availableMcpServers(availableMcpServers)
+                .availableWebhooks(availableWebhooks)
+                .userId(userId)
+                .userRole(userRole)
+                .useBetaPlatformKey(agentConfig.useBetaPlatformKey())
+                .build());
+        } catch (RuntimeException e) {
+            // 예약(INCR)까지는 성공했는데 agent 호출 자체가 실패한 경우에만 환불한다(키가 있을 때만 — 없으면
+            // releaseBetaQuotaOnFailure 내부 가드가 no-op). 성공 응답을 받은 뒤의 후처리 실패(메시지 저장 등)는
+            // 이미 실제 호출이 일어났으므로 환불 대상이 아니다.
+            releaseBetaQuotaOnFailure(betaReservationKey);
+            throw e;
+        }
+        recordBetaTokensIfPresent(agentConfig, userId, agentResponse);
 
         // 8. WORKFLOW_GENERATED/MODIFIED → DB에 새 버전으로 저장
         //    첫 생성 여부를 저장 전에 확인 (저장 후에는 version이 증가하므로)
@@ -298,16 +317,22 @@ public class ChatService {
             String llmProvider = (String) config.get("llmProvider");
             String credentialId = (String) config.get("credentialId");
             List<Map<String, Object>> tools = (List<Map<String, Object>>) config.get("tools");
-            // 개발/테스트 계정은 credential 없이 자체 호스팅 LLM을 사용할 수 있다 — 키 없이 전달하면 agent가 라우팅/차단을 판단한다
+            // 개발/테스트 계정은 credential 없이 자체 호스팅 LLM을 사용할 수 있다 — 키 없이 전달하면 agent가 라우팅/차단을 판단한다.
+            // self-hosted 자격이 없으면 베타 자격(User.betaAccess + kill-switch)을 확인해 플랫폼 Gemini 키로 폴백한다.
+            // 여기서는 자격(eligibility) 판정만 한다 — 실제 쿼터 예약(INCR)은 agent 호출 직전(chat()/스트림 subscribe 직전)에서
+            // 수행해, 그 사이의 사전작업(메시지 저장/연동 조회/토큰 조회 등) 예외가 불필요한 환불 대상을 만들지 않게 한다.
             if (credentialId == null || credentialId.isBlank()) {
                 if (isSelfHostedEligible(userRole)) {
-                    return new AgentConfig(llmProvider != null ? llmProvider : "CLAUDE", null, tools);
+                    return new AgentConfig(llmProvider != null ? llmProvider : "CLAUDE", null, tools, false);
+                }
+                if (isBetaEligible(userId)) {
+                    return new AgentConfig(llmProvider != null ? llmProvider : "CLAUDE", null, tools, true);
                 }
                 // 자격 없는 사용자가 키 없는 AI 노드를 실행하면 명시적 예외 — 복호화 단계의 NPE 방지
                 throw new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE);
             }
             String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
-            return new AgentConfig(llmProvider, decryptedApiKey, tools);
+            return new AgentConfig(llmProvider, decryptedApiKey, tools, false);
         }
 
         // AI 노드 없음 → fallbackCredentialId로 기본 설정 사용 (빈 워크플로우 채팅 시)
@@ -316,7 +341,10 @@ public class ChatService {
             if (credentials.isEmpty()) {
                 if (isSelfHostedEligible(userRole)) {
                     // 크레덴셜이 하나도 없어도 개발/테스트 계정은 자체 호스팅 LLM으로 채팅 가능
-                    return new AgentConfig("CLAUDE", null, null);
+                    return new AgentConfig("CLAUDE", null, null, false);
+                }
+                if (isBetaEligible(userId)) {
+                    return new AgentConfig("CLAUDE", null, null, true);
                 }
                 throw new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE);
             }
@@ -327,12 +355,82 @@ public class ChatService {
         log.info("[ChatService][DEBUG] fallbackCredentialId={}, userId={}", fallbackCredentialId, userId);
         Credential credential = credentialService.getByIdAndUserId(fallbackCredentialId, userId);
         String decryptedApiKey = credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString());
-        return new AgentConfig(credential.getProvider().name(), decryptedApiKey, null);
+        return new AgentConfig(credential.getProvider().name(), decryptedApiKey, null, false);
     }
 
     /** 자체 호스팅 LLM(키 없음) 경로 자격 — 최종 게이트는 agent의 credential 검증이 담당한다. */
     private static boolean isSelfHostedEligible(String userRole) {
         return "ROLE_ADMIN".equals(userRole) || "ROLE_TESTER".equals(userRole);
+    }
+
+    /** 베타 플랫폼 키(Gemini) 폴백 자격 — self-hosted 자격이 없을 때만 폴백 순위로 확인한다. */
+    private boolean isBetaEligible(UUID userId) {
+        return userId != null && betaPlatformProvider.isBetaEligible(userId);
+    }
+
+    /**
+     * 베타 플랫폼 키를 사용한 호출이면 응답 토큰 수로 사용량을 사후 차감한다 (best-effort).
+     *
+     * <p>ponytail: agent {@code /v1/chat} 응답은 아직 usage를 채우지 않아
+     * {@link ChatAgentResponse#getInputTokens()}/{@link ChatAgentResponse#getOutputTokens()}가
+     * 하드코딩 null이다. 지금은 배선만 해두고(둘 다 null이면 skip) 실질 쿼터 제한은 일일 호출 캡으로만 건다.
+     * agent가 usage를 채우기 시작하면(§5.4) 이 경로가 자동으로 활성화된다.
+     */
+    private void recordBetaTokensIfPresent(AgentConfig config, UUID userId, ChatAgentResponse agentResponse) {
+        if (!config.useBetaPlatformKey() || userId == null) {
+            return;
+        }
+        Integer inputTokens = agentResponse.getInputTokens();
+        Integer outputTokens = agentResponse.getOutputTokens();
+        if (inputTokens == null && outputTokens == null) {
+            return;
+        }
+        long totalTokens = (inputTokens != null ? inputTokens : 0) + (outputTokens != null ? outputTokens : 0);
+        try {
+            betaPlatformProvider.recordTokens(userId, totalTokens);
+        } catch (Exception e) {
+            log.warn("[ChatService] 베타 토큰 사용량 기록 실패 — userId: {}", userId, e);
+        }
+    }
+
+    /**
+     * 베타 platform 키 쿼터를 예약(INCR)한다. {@code config.useBetaPlatformKey()}가 아니면 no-op.
+     *
+     * <p>{@code WebSocketChatHandler}가 {@code agentClient.chatStream(...)}을 subscribe하기 바로 직전에
+     * 호출한다 — 그 앞의 사전작업(prepareStream)은 예약 없이 끝나므로 실패해도 환불 대상이 아니다.
+     * 쿼터 초과 시 예외(BETA_QUOTA_EXCEEDED)가 그대로 전파되며, BetaQuotaService가 스스로 카운터를
+     * 원복하므로 별도 환불이 필요 없다.
+     *
+     * @return 예약에 사용된 일일 카운터 키(reservation key), 베타 미적용이면 {@code null}.
+     *     {@link #releaseBetaQuotaOnFailure(String)}에 그대로 넘겨야 자정 경계에서도 동일 날짜 키를 환불한다.
+     */
+    public String reserveBetaQuota(AgentConfig config, UUID userId) {
+        if (config != null && config.useBetaPlatformKey()) {
+            return betaPlatformProvider.reserveQuota(userId);
+        }
+        return null;
+    }
+
+    /**
+     * 베타 platform 키로 쿼터를 예약(INCR)했는데 이후 agent 호출이 실패/예외로 끝난 경우에만
+     * 일일 호출 카운터를 환불한다(best-effort). reserveQuota 자체가 실패(쿼터 초과)한 경우는
+     * 키 자체가 없으므로(null) 이 메서드가 호출돼도 자연히 무시된다.
+     *
+     * <p>{@code chat()}(블로킹)에서는 agent 호출 예외 시 직접 호출한다. chatStream(스트리밍)은
+     * {@code WebSocketChatHandler}가 리액티브 체인의 {@code doFinally}에서 정확히 1회 호출해
+     * error/cancel(클라 disconnect)/비성공-complete를 모두 커버한다.
+     *
+     * @param reservationKey reserveBetaQuota가 반환한 일일 카운터 키 (null이면 no-op)
+     */
+    public void releaseBetaQuotaOnFailure(String reservationKey) {
+        if (reservationKey == null) {
+            return;
+        }
+        try {
+            betaPlatformProvider.releaseDailyCall(reservationKey);
+        } catch (Exception e) {
+            log.warn("[ChatService] 베타 일일 카운터 환불 실패 — key: {}", reservationKey, e);
+        }
     }
 
     // ─────────────────────────────────────── PRIVATE ──────────────────────────
@@ -601,7 +699,9 @@ public class ChatService {
      */
     @Transactional
     public ChatResponse finalizeStream(UUID workflowId, UUID sessionId,
-            ChatAgentResponse agentResponse, AgentConfig config, UUID fallbackCredentialId) {
+            ChatAgentResponse agentResponse, AgentConfig config, UUID fallbackCredentialId, UUID userId) {
+        recordBetaTokensIfPresent(config, userId, agentResponse);
+
         if (agentResponse.isWorkflowResult()) {
             int maxVersionBeforeSave = workflowCrudService.findMaxVersionByWorkflowId(workflowId);
             saveWorkflowVersion(workflowId, agentResponse, config, fallbackCredentialId);
@@ -630,7 +730,8 @@ public class ChatService {
     public record AgentConfig(
         String llmProvider,
         String decryptedApiKey,
-        List<Map<String, Object>> tools
+        List<Map<String, Object>> tools,
+        boolean useBetaPlatformKey
     ) {
         /** 로그/디버그 출력 시 복호화된 API Key가 노출되지 않도록 마스킹한다. */
         @Override

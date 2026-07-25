@@ -48,6 +48,10 @@ public class User extends BaseEntity {
     @Column(nullable = false, length = 20)
     private UserRole role;
 
+    /** 베타 플랫폼 키(Gemini) 체험 자격. role과 직교. 운영이 초대제로 DB 직접 부여. */
+    @Column(name = "beta_access", nullable = false, columnDefinition = "boolean default false")
+    private boolean betaAccess;
+
     public void updateName(String name) {
         this.name = name;
     }

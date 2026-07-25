@@ -34,6 +34,7 @@ class AgentNodeExecutorTest {
     private NotionTokenProvider notionTokenProvider;
     private GitHubTokenProvider gitHubTokenProvider;
     private GoogleTokenProvider googleTokenProvider;
+    private BetaPlatformProvider betaPlatformProvider;
 
     @BeforeEach
     void setUp() throws IOException {
@@ -43,6 +44,7 @@ class AgentNodeExecutorTest {
         notionTokenProvider = mock(NotionTokenProvider.class);
         gitHubTokenProvider = mock(GitHubTokenProvider.class);
         googleTokenProvider = mock(GoogleTokenProvider.class);
+        betaPlatformProvider = new StubBetaPlatformProvider();
         when(credentialProvider.getDecryptedApiKey(any())).thenReturn("decrypted-api-key");
         executor = new AgentNodeExecutor(
             mockWebServer.url("/").toString(),
@@ -52,6 +54,7 @@ class AgentNodeExecutorTest {
             new StubMcpCatalogProvider(),
             new StubWebhookCredentialProvider(),
             uid -> null,
+            betaPlatformProvider,
             30
         );
     }
@@ -81,6 +84,14 @@ class AgentNodeExecutorTest {
         config.put("credentialId", credentialId);
         config.put("prompt", prompt);
         config.put("tools", tools);
+        return new Node("node-1", NodeType.AI, "AI 노드", config);
+    }
+
+    private Node buildAgentNodeNoCredential(String prompt, String llmProvider) {
+        // Map.of()는 null 값을 허용하지 않으므로 credentialId 없는 케이스는 HashMap으로 구성한다.
+        Map<String, Object> config = new java.util.HashMap<>();
+        config.put("llmProvider", llmProvider);
+        config.put("prompt", prompt);
         return new Node("node-1", NodeType.AI, "AI 노드", config);
     }
 
@@ -362,6 +373,7 @@ class AgentNodeExecutorTest {
             new StubMcpCatalogProvider(),
             webhookProvider,
             uid -> null,
+            betaPlatformProvider,
             30
         );
 
@@ -385,5 +397,299 @@ class AgentNodeExecutorTest {
         String body = recorded.getBody().readUtf8();
         assertThat(body).contains("webhook_url");
         assertThat(body).contains(webhookUrl);
+    }
+
+    // ── 베타 플랫폼 키 케이스 ─────────────────────────────────────────────────
+
+    private static final String SUCCESS_RESPONSE_WITH_USAGE =
+        "{\"success\":true,\"output\":\"완료\",\"metadata\":null,\"errorMessage\":null,"
+            + "\"usage\":{\"promptTokens\":100,\"completionTokens\":50,\"totalTokens\":150}}";
+
+    private AgentNodeExecutor buildExecutorWithBetaProvider(BetaPlatformProvider provider) {
+        return buildExecutor(provider, uid -> null);
+    }
+
+    private AgentNodeExecutor buildExecutor(BetaPlatformProvider betaProvider, UserRoleProvider roleProvider) {
+        return new AgentNodeExecutor(
+            mockWebServer.url("/").toString(),
+            credentialProvider,
+            googleTokenProvider,
+            new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
+            new StubMcpCatalogProvider(),
+            new StubWebhookCredentialProvider(),
+            roleProvider,
+            betaProvider,
+            30
+        );
+    }
+
+    @Test
+    @DisplayName("credentialId 없음 + 베타 자격 - X-Key-Mode:platform, X-LLM-Provider:GEMINI, 키 헤더 없음")
+    void execute_credentialIdMissingAndBetaEligible_usesPlatformKeyHeaders() throws InterruptedException {
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
+
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE_WITH_USAGE));
+
+        Node node = buildAgentNodeNoCredential("요약해줘", "CLAUDE");
+        ExecutorResult result = exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId));
+
+        assertThat(result.isSuccess()).isTrue();
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Key-Mode")).isEqualTo("platform");
+        assertThat(recorded.getHeader("X-LLM-Provider")).isEqualTo("GEMINI");
+        assertThat(recorded.getHeader("X-LLM-Api-Key")).isNull();
+
+        verify(betaProvider).reserveQuota(userId);
+        verify(betaProvider).recordTokens(userId, 150L);
+        verify(credentialProvider, never()).getDecryptedApiKey(any());
+    }
+
+    @Test
+    @DisplayName("credentialId 있음(BYOK) - 베타 자격이어도 platform 미적용, 기존 키 헤더 유지")
+    void execute_credentialIdPresent_ignoresBetaEvenIfEligible() throws InterruptedException {
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
+
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNode("요약해줘", "CLAUDE", "cred-id-byok");
+        ExecutorResult result = exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId));
+
+        assertThat(result.isSuccess()).isTrue();
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Key-Mode")).isNull();
+        assertThat(recorded.getHeader("X-LLM-Provider")).isEqualTo("CLAUDE");
+        assertThat(recorded.getHeader("X-LLM-Api-Key")).isEqualTo("decrypted-api-key");
+
+        verify(betaProvider, never()).reserveQuota(any());
+        verify(betaProvider, never()).recordTokens(any(), org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
+    @DisplayName("credentialId 없음 + 베타 비자격 - 기존 keyless(self-hosted) 경로 유지, platform 헤더 없음")
+    void execute_credentialIdMissingAndBetaNotEligible_keepsExistingKeylessBehavior() throws InterruptedException {
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(false);
+        AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
+
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeNoCredential("요약해줘", "CLAUDE");
+        ExecutorResult result = exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId));
+
+        assertThat(result.isSuccess()).isTrue();
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Key-Mode")).isNull();
+        assertThat(recorded.getHeader("X-LLM-Provider")).isEqualTo("CLAUDE");
+        assertThat(recorded.getHeader("X-LLM-Api-Key")).isNull();
+
+        verify(betaProvider, never()).reserveQuota(any());
+        verify(betaProvider, never()).recordTokens(any(), org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
+    @DisplayName("베타 쿼터 초과 - BETA_QUOTA_EXCEEDED가 노드 실행 실패로 전파된다")
+    void execute_betaQuotaExceeded_propagatesAsExecutionFailure() {
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        org.mockito.Mockito.doThrow(
+            new com.ieum.common.exception.CustomException(com.ieum.common.exception.ErrorCode.BETA_QUOTA_EXCEEDED)
+        ).when(betaProvider).reserveQuota(userId);
+        AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
+
+        Node node = buildAgentNodeNoCredential("요약해줘", "CLAUDE");
+        ExecutorResult result = exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId));
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getErrorMessage()).isEqualTo(
+            com.ieum.common.exception.ErrorCode.BETA_QUOTA_EXCEEDED.getMessage());
+        assertThat(mockWebServer.getRequestCount()).isZero();
+        // reserveQuota 자체가 실패(쿼터 초과)했으니 INCR이 반영된 요청이 아니다 — 환불 대상 아님
+        verify(betaProvider, never()).releaseDailyCall(any());
+    }
+
+    @Test
+    @DisplayName("recordTokens 실패(Redis 장애) - 이미 성공한 AI 호출은 실패로 뒤집히지 않는다")
+    void execute_recordTokensThrows_stillReturnsSuccess() throws InterruptedException {
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        org.mockito.Mockito.doThrow(new RuntimeException("Redis 연결 실패"))
+            .when(betaProvider).recordTokens(userId, 150L);
+        AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
+
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE_WITH_USAGE));
+
+        Node node = buildAgentNodeNoCredential("요약해줘", "CLAUDE");
+        ExecutorResult result = exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput().get("output")).isEqualTo("완료");
+        verify(betaProvider).recordTokens(userId, 150L);
+    }
+
+    @Test
+    @DisplayName("credentialId 없음 + userId 없음 - 베타 자격 조회 없이 기존 keyless 경로 유지")
+    void execute_credentialIdMissingAndNoUserId_skipsBetaCheck() throws InterruptedException {
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
+
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeNoCredential("요약해줘", "CLAUDE");
+        exec.execute(node, Collections.emptyMap(), buildCursor()); // userId 없음
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Key-Mode")).isNull();
+        verify(betaProvider, never()).isBetaEligible(any());
+    }
+
+    // ── 베타 일일 카운터 환불 (reserve-then-release) ────────────────────────────
+
+    @Test
+    @DisplayName("베타 platform 키 사용 + agent 응답 실패(success=false) - 일일 카운터를 환불한다")
+    void execute_betaPlatformKeyAndAgentResponseFailure_releasesDailyCall() throws InterruptedException {
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        when(betaProvider.reserveQuota(userId)).thenReturn("beta:calls:" + userId + ":test-key");
+        AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
+
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(500)
+            .setHeader("Content-Type", "application/json")
+            .setBody("{\"error\":\"Internal Server Error\"}"));
+
+        Node node = buildAgentNodeNoCredential("요약해줘", "CLAUDE");
+        ExecutorResult result = exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId));
+
+        assertThat(result.isSuccess()).isFalse();
+        verify(betaProvider).reserveQuota(userId);
+        // reserve가 반환한 바로 그 키로 환불한다(자정 경계에도 동일 날짜 키를 보장하는 A-2 강건화)
+        verify(betaProvider).releaseDailyCall("beta:calls:" + userId + ":test-key");
+    }
+
+    @Test
+    @DisplayName("베타 platform 키 사용 + agent 응답 성공 - 일일 카운터를 환불하지 않는다")
+    void execute_betaPlatformKeyAndAgentResponseSuccess_doesNotReleaseDailyCall() throws InterruptedException {
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
+
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeNoCredential("요약해줘", "CLAUDE");
+        ExecutorResult result = exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId));
+
+        assertThat(result.isSuccess()).isTrue();
+        verify(betaProvider, never()).releaseDailyCall(any());
+    }
+
+    @Test
+    @DisplayName("베타 platform 키 예약 후 예외로 실행 실패(outer catch) - 일일 카운터를 환불한다")
+    void execute_betaPlatformKeyAndUnexpectedException_releasesDailyCall() {
+        // 사전작업(google/tool/mcp/webhook)은 reserveQuota보다 먼저 실행되므로, reserve 이후에만
+        // 발생하는 실패를 재현하려면 agent 호출 자체가 예외로 끝나야 한다 — 연결 불가 포트로 그 상황을 만든다.
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        when(betaProvider.reserveQuota(userId)).thenReturn("beta:calls:" + userId + ":test-key");
+        AgentNodeExecutor exec = new AgentNodeExecutor(
+            "http://127.0.0.1:1", // 아무도 리스닝하지 않는 포트 — 즉시 연결 거부(WebClientRequestException)
+            credentialProvider,
+            googleTokenProvider,
+            new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
+            new StubMcpCatalogProvider(),
+            new StubWebhookCredentialProvider(),
+            uid -> null,
+            betaProvider,
+            5
+        );
+
+        Node node = buildAgentNodeNoCredential("요약해줘", "CLAUDE");
+        ExecutorResult result = exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId));
+
+        assertThat(result.isSuccess()).isFalse();
+        verify(betaProvider).reserveQuota(userId);
+        verify(betaProvider).releaseDailyCall("beta:calls:" + userId + ":test-key");
+    }
+
+    // ── self-hosted 우선순위 (ChatService.isSelfHostedEligible과 동일 판정) ─────
+
+    @Test
+    @DisplayName("self-hosted 자격(ROLE_ADMIN)이면 베타 자격이 있어도 베타 분기로 가지 않는다")
+    void execute_selfHostedEligible_skipsBetaBranchEvenIfBetaEligible() throws InterruptedException {
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        AgentNodeExecutor exec = buildExecutor(betaProvider, uid -> "ROLE_ADMIN");
+
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeNoCredential("요약해줘", "CLAUDE");
+        ExecutorResult result = exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId));
+
+        assertThat(result.isSuccess()).isTrue();
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Key-Mode")).isNull();
+        assertThat(recorded.getHeader("X-LLM-Provider")).isEqualTo("CLAUDE");
+        assertThat(recorded.getHeader("X-LLM-Api-Key")).isNull();
+        assertThat(recorded.getHeader("X-User-Role")).isEqualTo("ROLE_ADMIN");
+
+        verify(betaProvider, never()).isBetaEligible(any());
+        verify(betaProvider, never()).reserveQuota(any());
+    }
+
+    @Test
+    @DisplayName("self-hosted 자격 없는(ROLE_USER) 베타 대상자는 기존대로 베타 platform 분기로 간다")
+    void execute_notSelfHostedEligible_stillUsesBetaBranch() throws InterruptedException {
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        AgentNodeExecutor exec = buildExecutor(betaProvider, uid -> "ROLE_USER");
+
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeNoCredential("요약해줘", "CLAUDE");
+        ExecutorResult result = exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId));
+
+        assertThat(result.isSuccess()).isTrue();
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Key-Mode")).isEqualTo("platform");
+        assertThat(recorded.getHeader("X-LLM-Provider")).isEqualTo("GEMINI");
+
+        verify(betaProvider).reserveQuota(userId);
     }
 }

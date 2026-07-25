@@ -53,6 +53,7 @@ public class AgentNodeExecutor implements NodeExecutor {
     private final McpCatalogProvider mcpCatalogProvider;
     private final WebhookCredentialProvider webhookCredentialProvider;
     private final UserRoleProvider userRoleProvider;
+    private final BetaPlatformProvider betaPlatformProvider;
     private final int agentTimeoutSeconds;
 
     public AgentNodeExecutor(
@@ -63,6 +64,7 @@ public class AgentNodeExecutor implements NodeExecutor {
         McpCatalogProvider mcpCatalogProvider,
         WebhookCredentialProvider webhookCredentialProvider,
         UserRoleProvider userRoleProvider,
+        BetaPlatformProvider betaPlatformProvider,
         @Value("${ieum.agent.timeout-seconds:120}") int agentTimeoutSeconds
     ) {
         this.webClient = WebClient.builder()
@@ -74,6 +76,7 @@ public class AgentNodeExecutor implements NodeExecutor {
         this.mcpCatalogProvider = mcpCatalogProvider;
         this.webhookCredentialProvider = webhookCredentialProvider;
         this.userRoleProvider = userRoleProvider;
+        this.betaPlatformProvider = betaPlatformProvider;
         this.agentTimeoutSeconds = agentTimeoutSeconds;
     }
 
@@ -87,6 +90,10 @@ public class AgentNodeExecutor implements NodeExecutor {
     public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor) {
         long startTime = System.currentTimeMillis();
         log.info("[AgentNodeExecutor] 노드 실행 — nodeId: {}", node.getId());
+
+        UUID userId = null;
+        boolean useBetaPlatformKey = false;
+        String betaReservationKey = null;
 
         try {
             Map<String, Object> config = node.getConfig();
@@ -103,13 +110,10 @@ public class AgentNodeExecutor implements NodeExecutor {
             String renderedPrompt = cursor.renderVariables(promptTemplate);
             log.debug("[AgentNodeExecutor] 렌더링된 프롬프트 길이: {}", renderedPrompt.length());
 
-            // credentialId가 없으면 키 없이 전달 — 자체 호스팅 LLM 자격(role)은 agent가 판단해 라우팅/차단한다
-            String decryptedApiKey = (credentialId == null || credentialId.isBlank())
-                ? null
-                : credentialProvider.getDecryptedApiKey(credentialId);
+            userId = cursor.getContext().getUserId();
+            String userRole = userId != null ? userRoleProvider.findRoleByUserId(userId) : null;
 
             String googleAccessToken = resolveGoogleAccessToken(tools, cursor);
-            UUID userId = cursor.getContext().getUserId();
             Map<String, String> toolAuthHeaders = toolAuthResolver.resolveHeaders(tools, userId);
             List<McpServerRef> mcpServers = resolveMcpServers(tools, userId);
             injectWebhookUrls(tools, userId);
@@ -126,15 +130,44 @@ public class AgentNodeExecutor implements NodeExecutor {
                 .mcpServers(mcpServers.isEmpty() ? null : mcpServers)
                 .build();
 
+            // credentialId가 없으면 키 없이 전달 — self-hosted 자격(ADMIN/TESTER role)이 최우선이며,
+            // 이 경우 agent가 라우팅/차단을 판단한다(ChatService.isSelfHostedEligible과 동일 우선순위).
+            // self-hosted 자격이 없을 때만 베타 자격(User.betaAccess)을 확인해 플랫폼 Gemini 키로 폴백한다.
+            // 쿼터 예약(INCR)은 위 사전작업이 모두 끝난 뒤, agent 호출 바로 직전에 한다 — 그 앞에서 예외가
+            // 나면 INCR 자체가 없으므로 환불이 필요 없다. 쿼터 초과로 reserveQuota가 거부하면
+            // BetaQuotaService가 스스로 카운터를 원복하므로 여기서도 별도 환불을 시도하지 않는다
+            // (useBetaPlatformKey는 reserveQuota가 예외 없이 반환한 뒤에만 true가 된다).
+            String decryptedApiKey = null;
+            if (credentialId != null && !credentialId.isBlank()) {
+                decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
+            } else if (!isSelfHostedEligible(userRole) && userId != null && betaPlatformProvider.isBetaEligible(userId)) {
+                betaReservationKey = betaPlatformProvider.reserveQuota(userId);
+                useBetaPlatformKey = true;
+            }
+
             AgentExecutionResult agentResult = callAgentService(
                 request, llmProvider, decryptedApiKey, googleAccessToken,
-                userId, toolAuthHeaders);
+                userId, userRole, toolAuthHeaders, useBetaPlatformKey);
 
             if (!agentResult.isSuccess()) {
+                releaseBetaQuotaOnFailure(betaReservationKey);
                 log.error("[AgentNodeExecutor] 에이전트 실행 실패 — nodeId: {}, error: {}",
                     node.getId(), agentResult.getErrorMessage());
                 return ExecutorResult.failure(agentResult.getErrorMessage(),
                     System.currentTimeMillis() - startTime);
+            }
+
+            // 베타 플랫폼 키를 사용했다면 응답 usage.totalTokens로 사용량을 사후 차감한다.
+            // best-effort — 이미 성공(과금)한 호출을 토큰 회계 실패로 실패 반환시키지 않는다.
+            // (호출 전 reserveQuota는 반대로 예외를 그대로 전파해 사전 차단한다.)
+            if (useBetaPlatformKey && userId != null && agentResult.getUsage() != null
+                && agentResult.getUsage().getTotalTokens() != null) {
+                try {
+                    betaPlatformProvider.recordTokens(userId, agentResult.getUsage().getTotalTokens());
+                } catch (Exception e) {
+                    log.warn("[AgentNodeExecutor] 베타 토큰 사용량 기록 실패 — nodeId: {}, userId: {}",
+                        node.getId(), userId, e);
+                }
             }
 
             Map<String, Object> output = new HashMap<>();
@@ -145,8 +178,32 @@ public class AgentNodeExecutor implements NodeExecutor {
             return ExecutorResult.success(output, System.currentTimeMillis() - startTime);
 
         } catch (Exception e) {
+            releaseBetaQuotaOnFailure(betaReservationKey);
             log.error("[AgentNodeExecutor] 실행 실패 — nodeId: {}", node.getId(), e);
             return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime);
+        }
+    }
+
+    /** 자체 호스팅 LLM(키 없음) 경로 자격 — ChatService.isSelfHostedEligible과 동일 판정. */
+    private static boolean isSelfHostedEligible(String userRole) {
+        return "ROLE_ADMIN".equals(userRole) || "ROLE_TESTER".equals(userRole);
+    }
+
+    /**
+     * 베타 platform 키로 쿼터를 예약(INCR)했는데 이후 agent 호출이 실패/예외로 끝난 경우에만
+     * 일일 호출 카운터를 환불한다(best-effort). reserveQuota 자체가 실패(쿼터 초과)한 경우는
+     * betaReservationKey가 세팅되지 않으므로 이 메서드가 호출돼도 자연히 무시된다.
+     *
+     * @param betaReservationKey reserveQuota가 반환한 키(자정 경계에도 reserve와 동일한 날짜 키를 환불)
+     */
+    private void releaseBetaQuotaOnFailure(String betaReservationKey) {
+        if (betaReservationKey == null) {
+            return;
+        }
+        try {
+            betaPlatformProvider.releaseDailyCall(betaReservationKey);
+        } catch (Exception e) {
+            log.warn("[AgentNodeExecutor] 베타 일일 카운터 환불 실패 — key: {}", betaReservationKey, e);
         }
     }
 
@@ -297,21 +354,24 @@ public class AgentNodeExecutor implements NodeExecutor {
 
     private AgentExecutionResult callAgentService(
         AgentNodeRequest request, String llmProvider, String llmApiKey,
-        String googleAccessToken, UUID userId, Map<String, String> toolAuthHeaders
+        String googleAccessToken, UUID userId, String userRole, Map<String, String> toolAuthHeaders,
+        boolean useBetaPlatformKey
     ) {
         try {
             WebClient.RequestBodySpec requestSpec = webClient.post()
                 .uri("/v1/execute")
                 .contentType(MediaType.APPLICATION_JSON)
-                .header("X-LLM-Provider", llmProvider);
+                .header("X-LLM-Provider", useBetaPlatformKey ? "GEMINI" : llmProvider);
 
-            if (llmApiKey != null) {
+            if (useBetaPlatformKey) {
+                // self-hosted 자격이면 execute()에서 베타 분기 자체에 진입하지 않으므로 여기 도달하지 않는다.
+                requestSpec = requestSpec.header("X-Key-Mode", "platform");
+            } else if (llmApiKey != null) {
                 requestSpec = requestSpec.header("X-LLM-Api-Key", llmApiKey);
             }
 
             if (userId != null) {
                 requestSpec = requestSpec.header("X-User-Id", userId.toString());
-                String userRole = userRoleProvider.findRoleByUserId(userId);
                 if (userRole != null) {
                     requestSpec = requestSpec.header("X-User-Role", userRole);
                 }
@@ -338,7 +398,7 @@ public class AgentNodeExecutor implements NodeExecutor {
                 e.getStatusCode(), e.getResponseBodyAsString());
             return new AgentExecutionResult(false, null, null,
                 "에이전트 서비스 오류 (HTTP " + e.getStatusCode().value() + "): "
-                    + e.getResponseBodyAsString());
+                    + e.getResponseBodyAsString(), null);
         }
     }
 }
