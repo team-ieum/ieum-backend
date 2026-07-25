@@ -27,8 +27,11 @@ public interface BetaPlatformProvider {
      * 호출 전 쿼터를 예약한다 (일일 호출수 INCR + 토큰 예산 확인). 쿼터 초과 시 예외를 던진다.
      *
      * @param userId 사용자 UUID
+     * @return 이번 예약에 사용된 일일 카운터 키(reservation key) — {@link #releaseDailyCall(String)}에
+     *     그대로 넘겨야 자정 경계에서도 reserve와 동일한 날짜 키를 환불한다. {@code LocalDate.now()}로
+     *     release 시점에 재계산하면 자정을 걸친 요청의 환불이 다른 날짜 키로 새어 나간다.
      */
-    void reserveQuota(UUID userId);
+    String reserveQuota(UUID userId);
 
     /**
      * 응답 usage의 totalTokens만큼 사용량을 사후 기록한다.
@@ -40,9 +43,10 @@ public interface BetaPlatformProvider {
 
     /**
      * reserveQuota로 예약(INCR)했지만 이후 agent 호출이 실패해 실제로는 쓰이지 않은 일일 호출권을 환불한다.
-     * reserveQuota 자체가 쿼터 초과 등으로 실패한 경우는 호출하지 않는다(그 경우는 예약이 반영되지 않았다).
+     * reserveQuota 자체가 쿼터 초과 등으로 실패한 경우는 호출하지 않는다(그 경우는 예약이 반영되지 않았고
+     * 애초에 반환된 키도 없다).
      *
-     * @param userId 사용자 UUID
+     * @param reservationKey reserveQuota가 반환한 일일 카운터 키
      */
-    void releaseDailyCall(UUID userId);
+    void releaseDailyCall(String reservationKey);
 }

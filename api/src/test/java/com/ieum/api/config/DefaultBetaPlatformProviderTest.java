@@ -105,6 +105,16 @@ class DefaultBetaPlatformProviderTest {
     }
 
     @Test
+    @DisplayName("reserveQuota - BetaQuotaService.checkQuota가 반환한 예약 키를 그대로 반환한다")
+    void reserveQuota_returnsKeyFromQuotaService() {
+        when(betaQuotaService.checkQuota(userId)).thenReturn("beta:calls:" + userId + ":20260724");
+
+        String key = provider.reserveQuota(userId);
+
+        assertThat(key).isEqualTo("beta:calls:" + userId + ":20260724");
+    }
+
+    @Test
     @DisplayName("recordTokens - BetaQuotaService.addUsedTokens로 위임")
     void recordTokens_delegatesToQuotaService() {
         provider.recordTokens(userId, 1234L);
@@ -114,10 +124,12 @@ class DefaultBetaPlatformProviderTest {
     }
 
     @Test
-    @DisplayName("releaseDailyCall - BetaQuotaService.releaseDailyCall로 위임")
+    @DisplayName("releaseDailyCall(key) - BetaQuotaService.releaseDailyCall(key)로 위임(자정 경계에도 동일 키)")
     void releaseDailyCall_delegatesToQuotaService() {
-        provider.releaseDailyCall(userId);
+        String reservationKey = "beta:calls:" + userId + ":20260724";
 
-        verify(betaQuotaService).releaseDailyCall(userId);
+        provider.releaseDailyCall(reservationKey);
+
+        verify(betaQuotaService).releaseDailyCall(reservationKey);
     }
 }

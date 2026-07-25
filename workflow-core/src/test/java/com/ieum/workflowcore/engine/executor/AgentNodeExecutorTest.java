@@ -574,6 +574,7 @@ class AgentNodeExecutorTest {
         UUID userId = UUID.randomUUID();
         BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
         when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        when(betaProvider.reserveQuota(userId)).thenReturn("beta:calls:" + userId + ":test-key");
         AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
 
         mockWebServer.enqueue(new MockResponse()
@@ -586,7 +587,8 @@ class AgentNodeExecutorTest {
 
         assertThat(result.isSuccess()).isFalse();
         verify(betaProvider).reserveQuota(userId);
-        verify(betaProvider).releaseDailyCall(userId);
+        // reserve가 반환한 바로 그 키로 환불한다(자정 경계에도 동일 날짜 키를 보장하는 A-2 강건화)
+        verify(betaProvider).releaseDailyCall("beta:calls:" + userId + ":test-key");
     }
 
     @Test
@@ -617,6 +619,7 @@ class AgentNodeExecutorTest {
         UUID userId = UUID.randomUUID();
         BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
         when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        when(betaProvider.reserveQuota(userId)).thenReturn("beta:calls:" + userId + ":test-key");
         AgentNodeExecutor exec = new AgentNodeExecutor(
             "http://127.0.0.1:1", // 아무도 리스닝하지 않는 포트 — 즉시 연결 거부(WebClientRequestException)
             credentialProvider,
@@ -634,7 +637,7 @@ class AgentNodeExecutorTest {
 
         assertThat(result.isSuccess()).isFalse();
         verify(betaProvider).reserveQuota(userId);
-        verify(betaProvider).releaseDailyCall(userId);
+        verify(betaProvider).releaseDailyCall("beta:calls:" + userId + ":test-key");
     }
 
     // ── self-hosted 우선순위 (ChatService.isSelfHostedEligible과 동일 판정) ─────

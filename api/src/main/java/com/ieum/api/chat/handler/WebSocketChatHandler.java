@@ -96,12 +96,20 @@ public class WebSocketChatHandler {
         }
 
         // 2. 베타 platform 키 쿼터 예약 — subscribe 바로 직전(사전작업은 이미 끝났으므로 그 앞 실패는 환불 대상이 아니다).
-        //    쿼터 초과 시 예외가 그대로 전파되며 BetaQuotaService가 스스로 카운터를 원복하므로 별도 환불 불필요.
+        //    쿼터 초과(CustomException)는 예외가 그대로 전파되며 BetaQuotaService가 스스로 카운터를 원복하므로
+        //    별도 환불이 불필요하다. Redis 다운 등 infra RuntimeException도 마찬가지로 INCR 자체가 실패했을
+        //    것이므로(키를 반환받지 못했으므로) 환불할 예약이 없다 — 두 경우 모두 여기서 잡아 error 프레임을
+        //    보내지 않으면 클라이언트가 @MessageMapping 밖으로 탈출한 예외 때문에 응답을 영영 못 받고 멈춘다.
+        String betaReservationKey;
         try {
-            chatService.reserveBetaQuota(setup.config(), userId);
+            betaReservationKey = chatService.reserveBetaQuota(setup.config(), userId);
         } catch (CustomException e) {
             log.warn("[WS] 베타 쿼터 예약 실패 — userId: {}, error: {}", userId, e.getMessage());
             sendToUser(userName, ChatStreamResponse.error(e.getMessage()));
+            return;
+        } catch (Exception e) {
+            log.error("[WS] 베타 쿼터 예약 예외 — userId: {}", userId, e);
+            sendToUser(userName, ChatStreamResponse.error("서버 오류가 발생했습니다."));
             return;
         }
 
@@ -127,7 +135,7 @@ public class WebSocketChatHandler {
             .useBetaPlatformKey(setup.config().useBetaPlatformKey())
             .build());
 
-        withBetaQuotaRefund(chatStream, setup.config(), userId)
+        withBetaQuotaRefund(chatStream, betaReservationKey)
             // finalizeStream은 동기 blocking(JPA) 작업이므로 Netty EventLoop 스레드에서 실행되면
             // Thread Starvation을 유발한다. boundedElastic로 전환해 별도 스레드 풀에서 처리한다.
             .publishOn(Schedulers.boundedElastic())
@@ -147,8 +155,11 @@ public class WebSocketChatHandler {
      * {@code doFinally}에서 그렇지 않은 모든 종료 시그널(error/cancel(클라 disconnect)/
      * ERROR 이벤트 후 정상 종료 포함)에 대해 환불한다. 패키지 전용으로 노출해 StepVerifier로
      * cancel/error 등 리액티브 종료 시그널별 exactly-once 환불을 직접 검증할 수 있게 한다.
+     *
+     * @param betaReservationKey reserveBetaQuota가 반환한 일일 카운터 키. null이면 베타 미적용이라
+     *     환불 대상 자체가 없다(감시는 걸되 doFinally에서 항상 no-op).
      */
-    Flux<ChatStreamEvent> withBetaQuotaRefund(Flux<ChatStreamEvent> source, ChatService.AgentConfig config, UUID userId) {
+    Flux<ChatStreamEvent> withBetaQuotaRefund(Flux<ChatStreamEvent> source, String betaReservationKey) {
         AtomicBoolean succeeded = new AtomicBoolean(false);
         return source
             .doOnNext(event -> {
@@ -157,8 +168,8 @@ public class WebSocketChatHandler {
                 }
             })
             .doFinally(signal -> {
-                if (!succeeded.get()) {
-                    chatService.releaseBetaQuotaOnFailure(config, userId);
+                if (betaReservationKey != null && !succeeded.get()) {
+                    chatService.releaseBetaQuotaOnFailure(betaReservationKey);
                 }
             });
     }

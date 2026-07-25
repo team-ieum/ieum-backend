@@ -133,15 +133,13 @@ public class ChatService {
         List<AvailableMcpServer> availableMcpServers = resolveAvailableMcpServers(userId);
         List<AvailableWebhook> availableWebhooks = resolveAvailableWebhooks(userId);
         ChatAgentResponse agentResponse;
-        boolean betaReserved = false;
+        String betaReservationKey = null;
         try {
             // 쿼터 예약(INCR)은 사전작업이 모두 끝난 뒤, agent 호출 바로 직전에 한다 — 그 앞에서 예외가 나면
             // INCR 자체가 없으므로 환불이 필요 없다. reserveQuota가 쿼터 초과로 거부되면(BETA_QUOTA_EXCEEDED)
-            // BetaQuotaService가 스스로 카운터를 원복하므로 여기서도 별도 환불을 시도하지 않는다(betaReserved=false 유지).
-            if (agentConfig.useBetaPlatformKey()) {
-                betaPlatformProvider.reserveQuota(userId);
-                betaReserved = true;
-            }
+            // BetaQuotaService가 스스로 카운터를 원복하므로 여기서도 별도 환불을 시도하지 않는다
+            // (betaReservationKey는 reserveQuota가 예외 없이 반환했을 때만 세팅된다).
+            betaReservationKey = reserveBetaQuota(agentConfig, userId);
             agentResponse = agentClient.chat(AgentClient.AgentChatCallParams.builder()
                 .workflowId(workflowId)
                 .prompt(request.getPrompt())
@@ -161,11 +159,10 @@ public class ChatService {
                 .useBetaPlatformKey(agentConfig.useBetaPlatformKey())
                 .build());
         } catch (RuntimeException e) {
-            // 예약(INCR)까지는 성공했는데 agent 호출 자체가 실패한 경우에만 환불한다. 성공 응답을 받은 뒤의
-            // 후처리 실패(메시지 저장 등)는 이미 실제 호출이 일어났으므로 환불 대상이 아니다.
-            if (betaReserved) {
-                releaseBetaQuotaOnFailure(agentConfig, userId);
-            }
+            // 예약(INCR)까지는 성공했는데 agent 호출 자체가 실패한 경우에만 환불한다(키가 있을 때만 — 없으면
+            // releaseBetaQuotaOnFailure 내부 가드가 no-op). 성공 응답을 받은 뒤의 후처리 실패(메시지 저장 등)는
+            // 이미 실제 호출이 일어났으므로 환불 대상이 아니다.
+            releaseBetaQuotaOnFailure(betaReservationKey);
             throw e;
         }
         recordBetaTokensIfPresent(agentConfig, userId, agentResponse);
@@ -403,30 +400,36 @@ public class ChatService {
      * 호출한다 — 그 앞의 사전작업(prepareStream)은 예약 없이 끝나므로 실패해도 환불 대상이 아니다.
      * 쿼터 초과 시 예외(BETA_QUOTA_EXCEEDED)가 그대로 전파되며, BetaQuotaService가 스스로 카운터를
      * 원복하므로 별도 환불이 필요 없다.
+     *
+     * @return 예약에 사용된 일일 카운터 키(reservation key), 베타 미적용이면 {@code null}.
+     *     {@link #releaseBetaQuotaOnFailure(String)}에 그대로 넘겨야 자정 경계에서도 동일 날짜 키를 환불한다.
      */
-    public void reserveBetaQuota(AgentConfig config, UUID userId) {
+    public String reserveBetaQuota(AgentConfig config, UUID userId) {
         if (config != null && config.useBetaPlatformKey()) {
-            betaPlatformProvider.reserveQuota(userId);
+            return betaPlatformProvider.reserveQuota(userId);
         }
+        return null;
     }
 
     /**
      * 베타 platform 키로 쿼터를 예약(INCR)했는데 이후 agent 호출이 실패/예외로 끝난 경우에만
      * 일일 호출 카운터를 환불한다(best-effort). reserveQuota 자체가 실패(쿼터 초과)한 경우는
-     * {@code config.useBetaPlatformKey()}가 true가 되지 않으므로 이 메서드가 호출돼도 자연히 무시된다.
+     * 키 자체가 없으므로(null) 이 메서드가 호출돼도 자연히 무시된다.
      *
      * <p>{@code chat()}(블로킹)에서는 agent 호출 예외 시 직접 호출한다. chatStream(스트리밍)은
      * {@code WebSocketChatHandler}가 리액티브 체인의 {@code doFinally}에서 정확히 1회 호출해
      * error/cancel(클라 disconnect)/비성공-complete를 모두 커버한다.
+     *
+     * @param reservationKey reserveBetaQuota가 반환한 일일 카운터 키 (null이면 no-op)
      */
-    public void releaseBetaQuotaOnFailure(AgentConfig config, UUID userId) {
-        if (config == null || !config.useBetaPlatformKey() || userId == null) {
+    public void releaseBetaQuotaOnFailure(String reservationKey) {
+        if (reservationKey == null) {
             return;
         }
         try {
-            betaPlatformProvider.releaseDailyCall(userId);
+            betaPlatformProvider.releaseDailyCall(reservationKey);
         } catch (Exception e) {
-            log.warn("[ChatService] 베타 일일 카운터 환불 실패 — userId: {}", userId, e);
+            log.warn("[ChatService] 베타 일일 카운터 환불 실패 — key: {}", reservationKey, e);
         }
     }
 

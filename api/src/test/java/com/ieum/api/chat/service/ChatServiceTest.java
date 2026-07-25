@@ -548,6 +548,7 @@ class ChatServiceTest {
         given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(credentialService.getByUserId(userId)).willReturn(List.of());
         given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
+        given(betaPlatformProvider.reserveQuota(userId)).willReturn("beta:calls:" + userId + ":test-key");
         given(integrationContextService.resolve(userId))
             .willReturn(new IntegrationContext(List.of(), List.of()));
         given(agentClient.chat(any(AgentChatCallParams.class)))
@@ -559,7 +560,8 @@ class ChatServiceTest {
             .hasFieldOrPropertyWithValue("errorCode", ErrorCode.PROVIDER_ERROR);
 
         verify(betaPlatformProvider).reserveQuota(userId);
-        verify(betaPlatformProvider).releaseDailyCall(userId);
+        // reserve가 반환한 바로 그 키로 환불한다(자정 경계에도 동일 날짜 키를 보장하는 A-2 강건화)
+        verify(betaPlatformProvider).releaseDailyCall("beta:calls:" + userId + ":test-key");
     }
 
     @Test
@@ -585,16 +587,41 @@ class ChatServiceTest {
     }
 
     @Test
-    @DisplayName("releaseBetaQuotaOnFailure — useBetaPlatformKey=false/userId 없음이면 아무 것도 하지 않는다")
-    void releaseBetaQuotaOnFailure_guardsNoOp() {
-        ChatService.AgentConfig nonBeta = new ChatService.AgentConfig("CLAUDE", "key", null, false);
-
-        chatService.releaseBetaQuotaOnFailure(nonBeta, userId);
-        chatService.releaseBetaQuotaOnFailure(null, userId);
-        chatService.releaseBetaQuotaOnFailure(
-            new ChatService.AgentConfig("GEMINI", null, null, true), null);
+    @DisplayName("releaseBetaQuotaOnFailure(key) — key가 null이면 아무 것도 하지 않는다")
+    void releaseBetaQuotaOnFailure_nullKey_noOp() {
+        chatService.releaseBetaQuotaOnFailure(null);
 
         verify(betaPlatformProvider, never()).releaseDailyCall(any());
+    }
+
+    @Test
+    @DisplayName("releaseBetaQuotaOnFailure(key) — key가 있으면 그 키로 환불한다")
+    void releaseBetaQuotaOnFailure_withKey_releasesThatKey() {
+        chatService.releaseBetaQuotaOnFailure("beta:calls:test-key");
+
+        verify(betaPlatformProvider).releaseDailyCall("beta:calls:test-key");
+    }
+
+    @Test
+    @DisplayName("reserveBetaQuota — useBetaPlatformKey=false면 위임 없이 null을 반환한다")
+    void reserveBetaQuota_nonBetaConfig_returnsNullWithoutDelegating() {
+        ChatService.AgentConfig nonBeta = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        String key = chatService.reserveBetaQuota(nonBeta, userId);
+
+        assertThat(key).isNull();
+        verify(betaPlatformProvider, never()).reserveQuota(any());
+    }
+
+    @Test
+    @DisplayName("reserveBetaQuota — useBetaPlatformKey=true면 BetaPlatformProvider가 반환한 키를 그대로 반환한다")
+    void reserveBetaQuota_betaConfig_returnsProviderKey() {
+        ChatService.AgentConfig beta = new ChatService.AgentConfig("GEMINI", null, null, true);
+        given(betaPlatformProvider.reserveQuota(userId)).willReturn("beta:calls:test-key");
+
+        String key = chatService.reserveBetaQuota(beta, userId);
+
+        assertThat(key).isEqualTo("beta:calls:test-key");
     }
 
     // ─────────────────── finalizeStream (스트리밍 done 후처리) ──────────────

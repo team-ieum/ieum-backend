@@ -93,6 +93,7 @@ public class AgentNodeExecutor implements NodeExecutor {
 
         UUID userId = null;
         boolean useBetaPlatformKey = false;
+        String betaReservationKey = null;
 
         try {
             Map<String, Object> config = node.getConfig();
@@ -140,7 +141,7 @@ public class AgentNodeExecutor implements NodeExecutor {
             if (credentialId != null && !credentialId.isBlank()) {
                 decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
             } else if (!isSelfHostedEligible(userRole) && userId != null && betaPlatformProvider.isBetaEligible(userId)) {
-                betaPlatformProvider.reserveQuota(userId);
+                betaReservationKey = betaPlatformProvider.reserveQuota(userId);
                 useBetaPlatformKey = true;
             }
 
@@ -149,7 +150,7 @@ public class AgentNodeExecutor implements NodeExecutor {
                 userId, userRole, toolAuthHeaders, useBetaPlatformKey);
 
             if (!agentResult.isSuccess()) {
-                releaseBetaQuotaOnFailure(useBetaPlatformKey, userId);
+                releaseBetaQuotaOnFailure(betaReservationKey);
                 log.error("[AgentNodeExecutor] 에이전트 실행 실패 — nodeId: {}, error: {}",
                     node.getId(), agentResult.getErrorMessage());
                 return ExecutorResult.failure(agentResult.getErrorMessage(),
@@ -177,7 +178,7 @@ public class AgentNodeExecutor implements NodeExecutor {
             return ExecutorResult.success(output, System.currentTimeMillis() - startTime);
 
         } catch (Exception e) {
-            releaseBetaQuotaOnFailure(useBetaPlatformKey, userId);
+            releaseBetaQuotaOnFailure(betaReservationKey);
             log.error("[AgentNodeExecutor] 실행 실패 — nodeId: {}", node.getId(), e);
             return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime);
         }
@@ -191,16 +192,18 @@ public class AgentNodeExecutor implements NodeExecutor {
     /**
      * 베타 platform 키로 쿼터를 예약(INCR)했는데 이후 agent 호출이 실패/예외로 끝난 경우에만
      * 일일 호출 카운터를 환불한다(best-effort). reserveQuota 자체가 실패(쿼터 초과)한 경우는
-     * useBetaPlatformKey가 true로 세팅되지 않으므로 이 메서드가 호출돼도 자연히 무시된다.
+     * betaReservationKey가 세팅되지 않으므로 이 메서드가 호출돼도 자연히 무시된다.
+     *
+     * @param betaReservationKey reserveQuota가 반환한 키(자정 경계에도 reserve와 동일한 날짜 키를 환불)
      */
-    private void releaseBetaQuotaOnFailure(boolean useBetaPlatformKey, UUID userId) {
-        if (!useBetaPlatformKey || userId == null) {
+    private void releaseBetaQuotaOnFailure(String betaReservationKey) {
+        if (betaReservationKey == null) {
             return;
         }
         try {
-            betaPlatformProvider.releaseDailyCall(userId);
+            betaPlatformProvider.releaseDailyCall(betaReservationKey);
         } catch (Exception e) {
-            log.warn("[AgentNodeExecutor] 베타 일일 카운터 환불 실패 — userId: {}", userId, e);
+            log.warn("[AgentNodeExecutor] 베타 일일 카운터 환불 실패 — key: {}", betaReservationKey, e);
         }
     }
 

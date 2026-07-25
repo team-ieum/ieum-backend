@@ -177,33 +177,57 @@ class BetaQuotaServiceTest {
     }
 
     @Test
-    @DisplayName("releaseDailyCall - 일일 카운터를 DECR한다")
+    @DisplayName("releaseDailyCall(key) - 전달받은 키를 그대로 DECR한다")
     void releaseDailyCall_decrementsCounter() {
         when(valueOperations.decrement(dailyKey())).thenReturn(0L);
 
-        service.releaseDailyCall(userId);
+        service.releaseDailyCall(dailyKey());
 
         verify(valueOperations).decrement(dailyKey());
     }
 
     @Test
-    @DisplayName("releaseDailyCall - DECR 결과가 음수면 0으로 보정(INCR)한다")
+    @DisplayName("releaseDailyCall(key) - DECR 결과가 음수면 0으로 보정(INCR)한다")
     void releaseDailyCall_negativeResult_correctsToZero() {
         when(valueOperations.decrement(dailyKey())).thenReturn(-1L);
 
-        service.releaseDailyCall(userId);
+        service.releaseDailyCall(dailyKey());
 
         verify(valueOperations).increment(dailyKey());
     }
 
     @Test
-    @DisplayName("releaseDailyCall - DECR 결과가 0 이상이면 보정하지 않는다")
+    @DisplayName("releaseDailyCall(key) - DECR 결과가 0 이상이면 보정하지 않는다")
     void releaseDailyCall_nonNegativeResult_doesNotCorrect() {
         when(valueOperations.decrement(dailyKey())).thenReturn(5L);
 
-        service.releaseDailyCall(userId);
+        service.releaseDailyCall(dailyKey());
 
         verify(valueOperations, never()).increment(dailyKey());
+    }
+
+    @Test
+    @DisplayName("checkQuota/incrementAndCheckDailyCalls - 예약에 사용한 일일 카운터 키를 반환한다")
+    void checkQuota_returnsUsedDailyKey() {
+        when(valueOperations.get(tokenKey())).thenReturn("0");
+        when(valueOperations.increment(dailyKey())).thenReturn(1L);
+
+        String key = service.checkQuota(userId);
+
+        assertThat(key).isEqualTo(dailyKey());
+    }
+
+    @Test
+    @DisplayName("releaseDailyCall(key) - 자정 경계: reserve가 반환한(어제 날짜) 키를 그대로 DECR하고 " +
+            "LocalDate.now()로 재계산한 오늘 키는 건드리지 않는다")
+    void releaseDailyCall_midnightBoundary_usesReservedKeyNotToday() {
+        String yesterdayKey = "beta:calls:%s:20260101".formatted(userId);
+        when(valueOperations.decrement(yesterdayKey)).thenReturn(0L);
+
+        service.releaseDailyCall(yesterdayKey);
+
+        verify(valueOperations).decrement(yesterdayKey);
+        verify(valueOperations, never()).decrement(dailyKey());
     }
 
     private String dailyKey() {

@@ -23,8 +23,9 @@ public class StubBetaPlatformProvider implements BetaPlatformProvider {
     }
 
     @Override
-    public void reserveQuota(UUID userId) {
-        // no-op
+    public String reserveQuota(UUID userId) {
+        // no-op — 예약하지 않으므로 환불 대상 키도 없다
+        return null;
     }
 
     @Override
@@ -33,7 +34,7 @@ public class StubBetaPlatformProvider implements BetaPlatformProvider {
     }
 
     @Override
-    public void releaseDailyCall(UUID userId) {
+    public void releaseDailyCall(String reservationKey) {
         // no-op
     }
 }

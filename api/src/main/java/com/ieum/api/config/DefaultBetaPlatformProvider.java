@@ -43,8 +43,8 @@ public class DefaultBetaPlatformProvider implements BetaPlatformProvider {
     }
 
     @Override
-    public void reserveQuota(UUID userId) {
-        betaQuotaService.checkQuota(userId);
+    public String reserveQuota(UUID userId) {
+        return betaQuotaService.checkQuota(userId);
     }
 
     @Override
@@ -53,7 +53,7 @@ public class DefaultBetaPlatformProvider implements BetaPlatformProvider {
     }
 
     @Override
-    public void releaseDailyCall(UUID userId) {
-        betaQuotaService.releaseDailyCall(userId);
+    public void releaseDailyCall(String reservationKey) {
+        betaQuotaService.releaseDailyCall(reservationKey);
     }
 }

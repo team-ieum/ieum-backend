@@ -7,6 +7,7 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 
@@ -34,6 +35,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.simp.SimpMessageSendingOperations;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -45,6 +47,7 @@ import reactor.test.StepVerifier;
 class WebSocketChatHandlerTest {
 
     private static final String DESTINATION = "/queue/chat/stream";
+    private static final String TEST_RESERVATION_KEY = "beta:calls:test-key";
 
     @Mock private ChatService chatService;
     @Mock private AgentClient agentClient;
@@ -126,13 +129,14 @@ class WebSocketChatHandlerTest {
         assertThat(sent.get(2).getType()).isEqualTo(StreamType.DONE);
         assertThat(sent.get(2).getData()).isEqualTo(finalResponse);
         // 성공(DONE) 수신 — 베타 쿼터 환불 대상 아님
-        verify(chatService, after(300).never()).releaseBetaQuotaOnFailure(any(), any());
+        verify(chatService, after(300).never()).releaseBetaQuotaOnFailure(any());
     }
 
     @Test
-    @DisplayName("error 이벤트: ERROR 프레임을 전달하고 저장은 하지 않는다")
+    @DisplayName("error 이벤트: ERROR 프레임을 전달하고 저장은 하지 않는다, 예약했던 키로 환불한다")
     void error_event() {
         mockPrepareStream();
+        given(chatService.reserveBetaQuota(setup.config(), userId)).willReturn(TEST_RESERVATION_KEY);
         mockChatStream(ChatStreamEvent.error("AI 응답 중 오류가 발생했습니다."));
 
         handler.handleChat(workflowId, request, principal);
@@ -142,15 +146,16 @@ class WebSocketChatHandlerTest {
         assertThat(sent.get(0).getContent()).isEqualTo("AI 응답 중 오류가 발생했습니다.");
         verify(chatService, after(300).never())
             .finalizeStream(any(), any(), any(), any(), any(), any());
-        // ERROR 이벤트 후 스트림이 정상 종료돼도 DONE을 받지 못했으므로 withBetaQuotaRefund의 doFinally가 환불한다.
-        verify(chatService).releaseBetaQuotaOnFailure(eq(setup.config()), eq(userId));
+        // ERROR 이벤트 후 스트림이 정상 종료돼도 DONE을 받지 못했으므로 withBetaQuotaRefund의 doFinally가
+        // reserveBetaQuota가 반환한 바로 그 키로 환불한다(자정 경계에도 동일 날짜 키를 보장하는 A-2 강건화).
+        verify(chatService).releaseBetaQuotaOnFailure(TEST_RESERVATION_KEY);
     }
 
     @Test
-    @DisplayName("베타 쿼터 예약 실패 시 ERROR 프레임만 전달하고 chatStream을 구독하지 않는다")
-    void reserveBetaQuota_throws_doesNotSubscribeToChatStream() {
+    @DisplayName("베타 쿼터 예약 실패(쿼터 초과) 시 ERROR 프레임만 전달하고 chatStream을 구독하지 않는다")
+    void reserveBetaQuota_quotaExceeded_doesNotSubscribeToChatStream() {
         mockPrepareStream();
-        org.mockito.Mockito.doThrow(new CustomException(ErrorCode.BETA_QUOTA_EXCEEDED))
+        Mockito.doThrow(new CustomException(ErrorCode.BETA_QUOTA_EXCEEDED))
             .when(chatService).reserveBetaQuota(setup.config(), userId);
 
         handler.handleChat(workflowId, request, principal);
@@ -159,55 +164,85 @@ class WebSocketChatHandlerTest {
         assertThat(sent.get(0).getType()).isEqualTo(StreamType.ERROR);
         assertThat(sent.get(0).getContent()).isEqualTo(ErrorCode.BETA_QUOTA_EXCEEDED.getMessage());
         verify(agentClient, never()).chatStream(any(AgentChatCallParams.class));
+        // 예약(INCR) 자체가 실패했으니 환불할 대상이 없다
+        verify(chatService, never()).releaseBetaQuotaOnFailure(any());
+    }
+
+    @Test
+    @DisplayName("A-1: 베타 쿼터 예약 중 infra RuntimeException(Redis 다운 등)이 나도 error 프레임을 보내고 탈출하지 않는다")
+    void reserveBetaQuota_infraRuntimeException_stillSendsErrorFrame() {
+        mockPrepareStream();
+        Mockito.doThrow(new RuntimeException("RedisConnectionFailureException: Unable to connect"))
+            .when(chatService).reserveBetaQuota(setup.config(), userId);
+
+        // @MessageMapping 밖으로 예외가 탈출하면 이 호출 자체가 던지므로, 던지지 않는 것 자체가 핵심 단언이다.
+        handler.handleChat(workflowId, request, principal);
+
+        List<ChatStreamResponse> sent = captureSent(1);
+        assertThat(sent.get(0).getType()).isEqualTo(StreamType.ERROR);
+        verify(agentClient, never()).chatStream(any(AgentChatCallParams.class));
+        // INCR 자체가 실패했을 가능성이 높아 환불할 예약 키가 없다 — 이중 환불도, 미환불 누락도 아니다.
+        verify(chatService, never()).releaseBetaQuotaOnFailure(any());
     }
 
     // ─────────────────── withBetaQuotaRefund (exactly-once 환불) ────────────
 
     @Test
-    @DisplayName("DONE 수신 후 정상 종료 — 환불하지 않는다")
+    @DisplayName("DONE 수신 후 정상 종료 — 예약된 키가 있어도 환불하지 않는다")
     void withBetaQuotaRefund_doneThenComplete_doesNotRelease() {
         ChatAgentResponse agentResponse = mock(ChatAgentResponse.class);
         Flux<ChatStreamEvent> source = Flux.just(ChatStreamEvent.done(agentResponse));
 
-        StepVerifier.create(handler.withBetaQuotaRefund(source, setup.config(), userId))
+        StepVerifier.create(handler.withBetaQuotaRefund(source, TEST_RESERVATION_KEY))
             .expectNextCount(1)
             .verifyComplete();
 
-        verify(chatService, never()).releaseBetaQuotaOnFailure(any(), any());
+        verify(chatService, never()).releaseBetaQuotaOnFailure(any());
     }
 
     @Test
-    @DisplayName("ERROR 이벤트 수신 후 정상 종료(complete) — DONE을 못 받았으므로 정확히 1회 환불한다")
+    @DisplayName("예약 키가 null(베타 미적용)이면 DONE 여부와 무관하게 환불을 시도하지 않는다")
+    void withBetaQuotaRefund_nullKey_neverReleases() {
+        Flux<ChatStreamEvent> source = Flux.error(new RuntimeException("agent 연결 실패"));
+
+        StepVerifier.create(handler.withBetaQuotaRefund(source, null))
+            .verifyError(RuntimeException.class);
+
+        verify(chatService, never()).releaseBetaQuotaOnFailure(any());
+    }
+
+    @Test
+    @DisplayName("ERROR 이벤트 수신 후 정상 종료(complete) — DONE을 못 받았으므로 예약된 키로 정확히 1회 환불한다")
     void withBetaQuotaRefund_errorEventThenComplete_releasesExactlyOnce() {
         Flux<ChatStreamEvent> source = Flux.just(ChatStreamEvent.error("AI 응답 중 오류가 발생했습니다."));
 
-        StepVerifier.create(handler.withBetaQuotaRefund(source, setup.config(), userId))
+        StepVerifier.create(handler.withBetaQuotaRefund(source, TEST_RESERVATION_KEY))
             .expectNextCount(1)
             .verifyComplete();
 
-        verify(chatService, org.mockito.Mockito.times(1)).releaseBetaQuotaOnFailure(setup.config(), userId);
+        verify(chatService, times(1)).releaseBetaQuotaOnFailure(TEST_RESERVATION_KEY);
     }
 
     @Test
-    @DisplayName("리액티브 error 시그널 — 정확히 1회 환불한다")
+    @DisplayName("리액티브 error 시그널 — 예약된 키로 정확히 1회 환불한다")
     void withBetaQuotaRefund_errorSignal_releasesExactlyOnce() {
         Flux<ChatStreamEvent> source = Flux.error(new RuntimeException("agent 연결 실패"));
 
-        StepVerifier.create(handler.withBetaQuotaRefund(source, setup.config(), userId))
+        StepVerifier.create(handler.withBetaQuotaRefund(source, TEST_RESERVATION_KEY))
             .verifyError(RuntimeException.class);
 
-        verify(chatService, org.mockito.Mockito.times(1)).releaseBetaQuotaOnFailure(setup.config(), userId);
+        verify(chatService, times(1)).releaseBetaQuotaOnFailure(TEST_RESERVATION_KEY);
     }
 
     @Test
-    @DisplayName("cancel(클라 disconnect) — 정확히 1회 환불한다")
+    @DisplayName("cancel(클라 disconnect) — 예약된 키로 정확히 1회 환불한다")
     void withBetaQuotaRefund_cancel_releasesExactlyOnce() {
         Flux<ChatStreamEvent> source = Flux.never();
 
-        StepVerifier.create(handler.withBetaQuotaRefund(source, setup.config(), userId))
+        StepVerifier.create(handler.withBetaQuotaRefund(source, TEST_RESERVATION_KEY))
             .thenCancel()
             .verify();
 
-        verify(chatService, org.mockito.Mockito.times(1)).releaseBetaQuotaOnFailure(setup.config(), userId);
+        verify(chatService, times(1)).releaseBetaQuotaOnFailure(TEST_RESERVATION_KEY);
     }
 }
