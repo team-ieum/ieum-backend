@@ -1,7 +1,8 @@
 # Auth Module Context
 
 ## 역할
-JWT 인증/인가, OAuth2 소셜 로그인 (Google), 사용자 관리를 담당한다.
+JWT 인증/인가, OAuth2 연동 (Google·Notion·GitHub), 사용자 관리를 담당한다.
+OAuth 로그인은 Google만, Notion·GitHub는 연동(커넥터 토큰) 용도다.
 
 ## 핵심 구현 사항
 - **JWT**: Access Token (30분) + Refresh Token (Redis, 7일)
@@ -17,12 +18,15 @@ JWT 인증/인가, OAuth2 소셜 로그인 (Google), 사용자 관리를 담당�
 - `JwtAuthenticationFilter` — 요청별 JWT 검증 (OncePerRequestFilter)
 - `JwtAuthenticationEntryPoint` — 401 응답 처리
 - `CustomUserDetails` / `CustomUserDetailsService` — Spring Security UserDetails 구현
-- `User` 엔티티 — email, password, name, role, authProvider
-- `UserRole` enum — ROLE_USER, ROLE_ADMIN
-- `AuthProvider` enum — LOCAL, GOOGLE
+- `User` 엔티티 — email, passwordHash, name, provider, providerId, role, **betaAccess**(베타 초대 여부, role과 직교)
+- `UserRole` enum — ROLE_USER, ROLE_ADMIN, **ROLE_TESTER** (ADMIN·TESTER는 self-hosted LLM 라우팅 대상)
+- `AuthProvider` enum — LOCAL, GOOGLE, NOTION, GITHUB
+- `ConnectedAccount` — 연동 계정별 OAuth 토큰 (AES-256 암호화)
 - `RefreshToken` — Redis Hash 저장 객체
+- `OAuthAuthorizationCode` / `OAuthLinkToken` / `NotionOAuthState` / `GitHubOAuthState` — OAuth 플로우 단기 상태
 - `TokenInfo` DTO — accessToken, refreshToken 쌍
 - `AuthService` — 회원가입, 로그인, 토큰 갱신 로직
+- `GoogleOAuthService` / `GoogleTokenService` / `GitHubTokenService` — OAuth 인증·토큰 갱신
 - `UserRepository` — JpaRepository (커맨드용)
 - `UserRepositoryCustom` / `UserRepositoryImpl` — QueryDSL 기반 조회용
 - `RefreshTokenRepository` — Redis CrudRepository
@@ -43,10 +47,10 @@ JWT 인증/인가, OAuth2 소셜 로그인 (Google), 사용자 관리를 담당�
 ```
 com.ieum.auth
 ├── config/      # SecurityConfig, RedisRepositoryConfig
-├── domain/      # User, UserRole, AuthProvider, RefreshToken
+├── domain/      # User, UserRole, AuthProvider, ConnectedAccount, RefreshToken, OAuth 상태 객체
 ├── dto/         # TokenInfo
 ├── jwt/         # JwtTokenProvider, JwtAuthenticationFilter, JwtAuthenticationEntryPoint
 ├── repository/  # UserRepository, UserRepositoryCustom, UserRepositoryImpl, RefreshTokenRepository
 ├── security/    # CustomUserDetails, CustomUserDetailsService
-└── service/     # AuthService
+└── service/     # AuthService, GoogleOAuthService, GoogleTokenService, GitHubTokenService
 ```
