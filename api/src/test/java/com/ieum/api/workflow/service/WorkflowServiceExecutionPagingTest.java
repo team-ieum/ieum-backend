@@ -1,6 +1,7 @@
 package com.ieum.api.workflow.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
@@ -10,6 +11,8 @@ import static org.mockito.Mockito.mock;
 import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
 import com.ieum.common.dto.PageResponse;
+import com.ieum.common.exception.CustomException;
+import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowVersion;
@@ -116,5 +119,15 @@ class WorkflowServiceExecutionPagingTest {
 
         assertThat(page.getContent()).isEmpty();
         assertThat(page.isHasNext()).isFalse();
+    }
+
+    @Test
+    @DisplayName("cursor가 음수면 INVALID_CURSOR (offset 음수로 인한 500 방지)")
+    void getExecutions_negativeCursor_throwsInvalidCursor() {
+        assertThatThrownBy(() ->
+            workflowService.getExecutions(userId, workflowId, null, null, null, "-1", 20))
+            .isInstanceOf(CustomException.class)
+            .extracting(e -> ((CustomException) e).getErrorCode())
+            .isEqualTo(ErrorCode.INVALID_CURSOR);
     }
 }

@@ -260,10 +260,15 @@ public class WorkflowService {
 
     private int parseCursor(String cursor) {
         if (cursor == null) return 0;
+        int page;
         try {
-            return Integer.parseInt(cursor);
+            page = Integer.parseInt(cursor);
         } catch (NumberFormatException e) {
             throw new CustomException(ErrorCode.INVALID_CURSOR);
         }
+        if (page < 0) {
+            throw new CustomException(ErrorCode.INVALID_CURSOR);
+        }
+        return page;
     }
 }

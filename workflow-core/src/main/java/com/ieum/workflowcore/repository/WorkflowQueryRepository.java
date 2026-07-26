@@ -144,13 +144,16 @@ public class WorkflowQueryRepository {
             LocalDateTime from, LocalDateTime to, int page, int size) {
         return queryFactory
             .selectFrom(workflowExecution)
+            .leftJoin(workflowExecution.workflowVersion, workflowVersion).fetchJoin()
             .where(
                 workflowExecution.workflow.id.eq(workflowId),
                 statusEq(status),
                 startedAtGoe(from),
                 startedAtLoe(to)
             )
-            .orderBy(workflowExecution.startedAt.desc())
+            // startedAt은 RUNNING 전환 시 재설정되는 가변 값이라 동률이 날 수 있다 —
+            // id를 tie-breaker로 더해 페이지 경계에서 정렬이 결정적이게 한다.
+            .orderBy(workflowExecution.startedAt.desc(), workflowExecution.id.desc())
             .offset((long) page * size)
             .limit(size + 1L)
             .fetch();
