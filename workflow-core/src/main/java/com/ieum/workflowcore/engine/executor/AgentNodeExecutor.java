@@ -147,7 +147,8 @@ public class AgentNodeExecutor implements NodeExecutor {
 
             AgentExecutionResult agentResult = callAgentService(
                 request, llmProvider, decryptedApiKey, googleAccessToken,
-                userId, userRole, toolAuthHeaders, useBetaPlatformKey);
+                userId, userRole, toolAuthHeaders, useBetaPlatformKey,
+                cursor.getContext().getTraceId());
 
             if (!agentResult.isSuccess()) {
                 releaseBetaQuotaOnFailure(betaReservationKey);
@@ -175,7 +176,8 @@ public class AgentNodeExecutor implements NodeExecutor {
             output.put("metadata", agentResult.getMetadata());
 
             log.info("[AgentNodeExecutor] 에이전트 실행 성공 — nodeId: {}", node.getId());
-            return ExecutorResult.success(output, System.currentTimeMillis() - startTime);
+            return ExecutorResult.success(output, System.currentTimeMillis() - startTime,
+                toTokenUsage(agentResult.getUsage()));
 
         } catch (Exception e) {
             releaseBetaQuotaOnFailure(betaReservationKey);
@@ -205,6 +207,15 @@ public class AgentNodeExecutor implements NodeExecutor {
         } catch (Exception e) {
             log.warn("[AgentNodeExecutor] 베타 일일 카운터 환불 실패 — key: {}", betaReservationKey, e);
         }
+    }
+
+    /** agent 응답 usage를 엔진 표준 타입으로 변환한다. usage가 없으면 null. */
+    private static ExecutorResult.TokenUsage toTokenUsage(AgentExecutionResult.Usage usage) {
+        if (usage == null) {
+            return null;
+        }
+        return new ExecutorResult.TokenUsage(
+            usage.getPromptTokens(), usage.getCompletionTokens(), usage.getTotalTokens());
     }
 
     /**
@@ -355,13 +366,20 @@ public class AgentNodeExecutor implements NodeExecutor {
     private AgentExecutionResult callAgentService(
         AgentNodeRequest request, String llmProvider, String llmApiKey,
         String googleAccessToken, UUID userId, String userRole, Map<String, String> toolAuthHeaders,
-        boolean useBetaPlatformKey
+        boolean useBetaPlatformKey, String traceId
     ) {
         try {
             WebClient.RequestBodySpec requestSpec = webClient.post()
                 .uri("/v1/execute")
                 .contentType(MediaType.APPLICATION_JSON)
-                .header("X-LLM-Provider", useBetaPlatformKey ? "GEMINI" : llmProvider);
+                .header("X-LLM-Provider", useBetaPlatformKey ? "GEMINI" : llmProvider)
+                .header("X-Node-Id", request.getNodeId());
+
+            // 실행 단위 상관관계 ID — agent TraceIdMiddleware가 span 속성 ieum.trace_id로 부착한다.
+            // 헤더가 없으면 agent가 자체 uuid4를 생성해버려 BE 이력과 조인이 끊기므로 있을 때만 보낸다.
+            if (traceId != null) {
+                requestSpec = requestSpec.header("X-Trace-Id", traceId);
+            }
 
             if (useBetaPlatformKey) {
                 // self-hosted 자격이면 execute()에서 베타 분기 자체에 진입하지 않으므로 여기 도달하지 않는다.

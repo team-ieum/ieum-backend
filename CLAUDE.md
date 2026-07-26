@@ -40,11 +40,10 @@ QueryDSL (openfeign 7.1), springdoc-openapi 2.8.4, Quartz, Spring @Async (MVP)
 ## Claude Code 워크플로우 규칙
 
 ### 행동 지침
-1. **git 명령 실행 금지** — `git commit`, `git push`, `git checkout` 등 모든 git 명령은 안내만 하고 DoHoon이 직접 실행
-2. **커밋 단위로 멈추기** — 한 커밋 분량의 작업 완료 후 반드시 멈추고 다음 진행 여부 확인
-3. **환경변수는 `.env` 파일** — `application-local.yml`에 작성 금지
-4. **모듈 CLAUDE.md 먼저 읽기** — 해당 모듈 작업 전 반드시 모듈 CLAUDE.md를 읽고 이미 구현된 클래스 확인
-5. **이미 구현된 것 재생성 금지** — ErrorCode, CustomException, ApiResponse, PageResponse, BaseEntity, AesEncryptor 등
+1. **커밋 단위로 멈추기** — 한 커밋 분량의 작업 완료 후 반드시 멈추고 다음 진행 여부 확인
+2. **환경변수는 `.env` 파일** — `application-local.yml`에 작성 금지
+3. **모듈 CLAUDE.md 먼저 읽기** — 해당 모듈 작업 전 반드시 모듈 CLAUDE.md를 읽고 이미 구현된 클래스 확인
+4. **이미 구현된 것 재생성 금지** — ErrorCode, CustomException, ApiResponse, PageResponse, BaseEntity, AesEncryptor 등
 
 ### 구현 순서 원칙
 엔티티+Repository → Service → DTO → Controller → 설정 → 테스트
@@ -53,7 +52,6 @@ QueryDSL (openfeign 7.1), springdoc-openapi 2.8.4, Quartz, Spring @Async (MVP)
 ```
 ✅ Step {N}/{총} 완료: {커밋 메시지}
 📁 생성/수정 파일 목록
-💡 git 명령어 (직접 실행)
 다음 단계 진행할까요?
 ```
 

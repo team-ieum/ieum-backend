@@ -26,6 +26,13 @@ public class ExecutionContext {
     @Setter
     private UUID userId;
 
+    /**
+     * 실행 단위 trace 상관관계 ID(32자 무하이픈 hex).
+     * AI 노드가 agent 호출 시 X-Trace-Id 헤더로 전달해 Phoenix span의 ieum.trace_id와 조인한다.
+     */
+    @Setter
+    private String traceId;
+
     /** key: nodeId, value: 해당 노드의 output Map */
     private final Map<String, Map<String, Object>> nodeOutputs = new ConcurrentHashMap<>();
 

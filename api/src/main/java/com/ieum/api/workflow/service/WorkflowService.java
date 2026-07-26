@@ -18,12 +18,14 @@ import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowVersion;
+import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -162,14 +164,17 @@ public class WorkflowService {
     }
 
     public PageResponse<WorkflowExecutionResponse> getExecutions(UUID userId, UUID workflowId,
-            String cursor, int size) {
+            ExecutionStatus status, LocalDateTime from, LocalDateTime to, String cursor, int size) {
         workflowCrudService.getWorkflowByOwner(userId, workflowId); // 소유권 검증
 
         int page = parseCursor(cursor);
-        List<WorkflowExecution> executions = workflowExecutionService.listExecutions(workflowId, page, size);
-        boolean hasNext = workflowExecutionService.hasNextExecutions(workflowId, page, size);
+        // size + 1개를 받아 초과분 존재로 hasNext를 판단한다 — 별도 count 쿼리가 필요 없다.
+        List<WorkflowExecution> executions =
+            workflowExecutionService.listExecutions(workflowId, status, from, to, page, size);
+        boolean hasNext = executions.size() > size;
 
         List<WorkflowExecutionResponse> responses = executions.stream()
+            .limit(size)
             .map(WorkflowExecutionResponse::from)
             .toList();
 
@@ -254,11 +259,17 @@ public class WorkflowService {
     }
 
     private int parseCursor(String cursor) {
-        if (cursor == null) return 0;
+        // 빈 문자열은 첫 페이지로 본다 — FE가 커서 파라미터를 빈 값으로 초기화해 보내는 경우가 흔하다.
+        if (cursor == null || cursor.isBlank()) return 0;
+        int page;
         try {
-            return Integer.parseInt(cursor);
+            page = Integer.parseInt(cursor);
         } catch (NumberFormatException e) {
             throw new CustomException(ErrorCode.INVALID_CURSOR);
         }
+        if (page < 0) {
+            throw new CustomException(ErrorCode.INVALID_CURSOR);
+        }
+        return page;
     }
 }

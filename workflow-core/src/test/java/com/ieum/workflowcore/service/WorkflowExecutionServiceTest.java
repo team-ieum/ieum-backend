@@ -5,14 +5,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 import com.ieum.common.exception.CustomException;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowExecutionLog;
+import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.domain.enums.ExecutionLogStatus;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.domain.enums.NodeType;
+import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
 import com.ieum.workflowcore.engine.event.ExecutionEventType;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
@@ -23,6 +26,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -86,6 +90,20 @@ class WorkflowExecutionServiceTest {
 
         assertThatThrownBy(() -> service.loadEventSnapshot(workflowId, executionId))
             .isInstanceOf(CustomException.class);
+    }
+
+    @Test
+    @DisplayName("prepareExecution은 32자 무하이픈 hex traceId를 생성한다")
+    void prepareExecution_generatesTraceId() {
+        Workflow workflow = mock(Workflow.class);
+        given(workflow.isActive()).willReturn(true);
+        WorkflowVersion version = mock(WorkflowVersion.class);
+
+        service.prepareExecution(workflow, version, TriggerType.MANUAL);
+
+        ArgumentCaptor<WorkflowExecution> captor = ArgumentCaptor.forClass(WorkflowExecution.class);
+        verify(workflowExecutionRepository).save(captor.capture());
+        assertThat(captor.getValue().getTraceId()).matches("[0-9a-f]{32}");
     }
 
     private WorkflowExecution mockExecution(UUID workflowId, ExecutionStatus status) {

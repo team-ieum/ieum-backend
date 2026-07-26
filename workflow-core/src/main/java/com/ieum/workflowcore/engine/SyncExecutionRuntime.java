@@ -123,6 +123,7 @@ public class SyncExecutionRuntime {
             cursor.setAllEdges(edges);
             ExecutionContext context = new ExecutionContext();
             context.setUserId(execution.getWorkflow().getUserId());
+            context.setTraceId(execution.getTraceId());
             cursor.setContext(context);
 
             // 트리거 입력 데이터 보존(트리거 노드 실행 입력으로 사용)
@@ -438,6 +439,8 @@ public class SyncExecutionRuntime {
                 ? objectMapper.writeValueAsString(maskSensitiveFields(result.getOutput()))
                 : null;
 
+            ExecutorResult.TokenUsage usage = result.getUsage();
+
             WorkflowExecutionLog logEntry = WorkflowExecutionLog.builder()
                 .execution(execution)
                 .nodeId(node.getId())
@@ -447,6 +450,10 @@ public class SyncExecutionRuntime {
                 .outputJson(outputJson)
                 .errorMessage(result.getErrorMessage())
                 .durationMs(durationMs)
+                .traceId(execution.getTraceId())
+                .promptTokens(usage != null ? usage.promptTokens() : null)
+                .completionTokens(usage != null ? usage.completionTokens() : null)
+                .totalTokens(usage != null ? usage.totalTokens() : null)
                 .build();
 
             executionLogRepository.save(logEntry);

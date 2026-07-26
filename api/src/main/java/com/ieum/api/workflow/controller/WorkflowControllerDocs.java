@@ -9,6 +9,7 @@ import com.ieum.api.workflow.dto.WorkflowResponse;
 import com.ieum.auth.security.CustomUserDetails;
 import com.ieum.common.dto.ApiResponse;
 import com.ieum.common.dto.PageResponse;
+import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -18,6 +19,10 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.parameters.RequestBody;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
@@ -174,7 +179,7 @@ public interface WorkflowControllerDocs {
     ))
     ResponseEntity<ApiResponse<WorkflowResponse>> create(
             CustomUserDetails userDetails,
-            CreateWorkflowRequest request);
+            @Valid CreateWorkflowRequest request);
 
     @Operation(summary = "워크플로우 목록 조회")
     @PreAuthorize("hasRole('USER')")
@@ -219,7 +224,7 @@ public interface WorkflowControllerDocs {
     ResponseEntity<ApiResponse<WorkflowResponse>> update(
             CustomUserDetails userDetails,
             @Parameter(description = "워크플로우 ID") UUID id,
-            UpdateWorkflowRequest request);
+            @Valid UpdateWorkflowRequest request);
 
     @Operation(summary = "워크플로우 삭제")
     @PreAuthorize("hasRole('USER')")
@@ -281,8 +286,11 @@ public interface WorkflowControllerDocs {
     ResponseEntity<ApiResponse<PageResponse<WorkflowExecutionResponse>>> getExecutions(
             CustomUserDetails userDetails,
             @Parameter(description = "워크플로우 ID") UUID id,
+            @Parameter(description = "실행 상태 필터 (PENDING/RUNNING/SUCCESS/FAILED)") ExecutionStatus status,
+            @Parameter(description = "시작 시각 하한 (ISO-8601, 예: 2026-07-01T00:00:00)") LocalDateTime from,
+            @Parameter(description = "시작 시각 상한 (ISO-8601)") LocalDateTime to,
             @Parameter(description = "커서 (페이지 번호)") String cursor,
-            @Parameter(description = "페이지 크기") int size);
+            @Parameter(description = "페이지 크기 (1~100)") @Min(1) @Max(100) int size);
 
     @Operation(summary = "실행 로그 조회")
     @PreAuthorize("hasRole('USER')")
