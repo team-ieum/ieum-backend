@@ -67,8 +67,8 @@ class ChatAgentResponseTest {
     }
 
     @Test
-    @DisplayName("usage 내부 필드가 일부만 있어도 있는 값만 반환한다")
-    void partialUsage_returnsPresentFields() throws Exception {
+    @DisplayName("usage에 totalTokens만 있어도 차감 기준값은 살아 있다")
+    void partialUsage_totalTokensSurvives() throws Exception {
         String json = """
             {
               "message": "생성 완료",
@@ -81,5 +81,23 @@ class ChatAgentResponseTest {
 
         assertThat(response.getInputTokens()).isNull();
         assertThat(response.getOutputTokens()).isNull();
+        assertThat(response.getTotalTokens()).isEqualTo(900);
+    }
+
+    @Test
+    @DisplayName("totalTokens는 입출력 합산이 아니라 agent가 보낸 값을 그대로 반환한다")
+    void totalTokens_isNotDerived() throws Exception {
+        // 캐시드·reasoning 토큰이 있는 프로바이더는 total != prompt + completion이다
+        String json = """
+            {
+              "message": "생성 완료",
+              "type": "WORKFLOW_GENERATED",
+              "usage": {"promptTokens": 100, "completionTokens": 50, "totalTokens": 900}
+            }
+            """;
+
+        ChatAgentResponse response = objectMapper.readValue(json, ChatAgentResponse.class);
+
+        assertThat(response.getTotalTokens()).isEqualTo(900);
     }
 }

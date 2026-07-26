@@ -101,6 +101,17 @@ public class ChatAgentResponse {
         return usage != null ? usage.getCompletionTokens() : null;
     }
 
+    /**
+     * 총 토큰 수. 베타 쿼터 차감의 기준값이다.
+     *
+     * <p>입출력 합산이 아니라 agent가 보낸 값을 그대로 쓴다 — 캐시드·reasoning 토큰처럼
+     * {@code total != prompt + completion}인 프로바이더가 있어서다. {@code AgentNodeExecutor}의
+     * execute 경로도 같은 방식으로 {@code totalTokens}를 신뢰한다.
+     */
+    public Integer getTotalTokens() {
+        return usage != null ? usage.getTotalTokens() : null;
+    }
+
     /** 워크플로우 생성 또는 수정 응답인지 확인 */
     public boolean isWorkflowResult() {
         return type == AgentResponseType.WORKFLOW_GENERATED

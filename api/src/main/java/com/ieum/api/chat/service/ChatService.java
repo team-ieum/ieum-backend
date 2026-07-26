@@ -374,22 +374,25 @@ public class ChatService {
      * 베타 플랫폼 키를 사용한 호출이면 응답 토큰 수로 사용량을 사후 차감한다 (best-effort).
      *
      * <p>agent {@code /v1/chat}이 usage를 채우기 시작해(IEUM-AI-48) 이 경로가 실제로 동작한다.
-     * 모델이 토큰을 보고하지 않으면 둘 다 null이고, 그 경우 차감을 건너뛴다(execute 경로와 동일).
+     * 모델이 토큰을 보고하지 않으면 usage가 통째로 null이고, 그 경우 차감을 건너뛴다(execute 경로와 동일).
      *
-     * <p>Redis 기록은 트랜잭션이 열려 있으면 <b>커밋 이후</b>로 미룬다. {@link #finalizeStream}이
-     * {@code @Transactional}이라 JPA 저장이 롤백되면 Redis 증가분만 남아 사용자가 쓰지도 않은
-     * 토큰을 잃기 때문이다. 트랜잭션 밖 호출(동기 chat)은 그대로 즉시 기록한다.
+     * <p>차감 기준은 agent가 보낸 {@code totalTokens}다 — 입출력 합산이 아니다. 캐시드·reasoning
+     * 토큰처럼 {@code total != prompt + completion}인 프로바이더가 있고, {@code AgentNodeExecutor}의
+     * execute 경로도 같은 값을 신뢰한다. {@code totalTokens}가 없을 때만 입출력 합산으로 보정한다.
+     *
+     * <p>Redis 기록은 트랜잭션 동기화가 활성이면 <b>커밋 이후</b>로 미룬다. JPA 저장이 롤백되면
+     * Redis 증가분만 남아 사용자가 쓰지도 않은 토큰을 잃기 때문이다. 현재 호출부인 {@link #chat}과
+     * {@link #finalizeStream}은 <b>둘 다 {@code @Transactional}</b>이라 실제로는 항상 지연 경로를
+     * 탄다. 즉시 기록 분기는 트랜잭션 없이 호출될 미래의 경로(또는 단위 테스트)를 위한 폴백이다.
      */
     private void recordBetaTokensIfPresent(AgentConfig config, UUID userId, ChatAgentResponse agentResponse) {
         if (!config.useBetaPlatformKey() || userId == null) {
             return;
         }
-        Integer inputTokens = agentResponse.getInputTokens();
-        Integer outputTokens = agentResponse.getOutputTokens();
-        if (inputTokens == null && outputTokens == null) {
+        Long totalTokens = resolveTotalTokens(agentResponse);
+        if (totalTokens == null) {
             return;
         }
-        long totalTokens = (inputTokens != null ? inputTokens : 0) + (outputTokens != null ? outputTokens : 0);
 
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
@@ -401,6 +404,22 @@ public class ChatService {
             return;
         }
         recordBetaTokens(userId, totalTokens);
+    }
+
+    /**
+     * 차감할 토큰 수를 정한다. agent의 {@code totalTokens}가 우선이고, 없으면 입출력 합산으로
+     * 보정한다. 합계가 0이거나 값이 아예 없으면 {@code null} — 차감을 건너뛰라는 신호다
+     * (0 토큰 차감은 Redis 왕복만 낭비한다).
+     */
+    private Long resolveTotalTokens(ChatAgentResponse agentResponse) {
+        Integer total = agentResponse.getTotalTokens();
+        if (total != null && total > 0) {
+            return total.longValue();
+        }
+        Integer inputTokens = agentResponse.getInputTokens();
+        Integer outputTokens = agentResponse.getOutputTokens();
+        long sum = (long) (inputTokens != null ? inputTokens : 0) + (outputTokens != null ? outputTokens : 0);
+        return sum > 0 ? sum : null;
     }
 
     /** 토큰 회계 실패가 이미 성공한(과금된) 호출을 실패로 뒤집지 않는다 — warn만 남긴다. */

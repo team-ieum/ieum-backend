@@ -45,4 +45,4 @@ workflow-core가 선언한 포트를 여기서 `Default*`로 구현해 Stub을 �
 ## 크로스레포 계약 (ieum-agent 위임)
 - 크레덴셜 헤더: `X-LLM-Provider`, `X-LLM-Api-Key`
 - 베타 플랫폼 키 모드: `X-Key-Mode: platform` (소문자, ADMIN·TESTER에겐 미전송)
-- agent `/v1/execute` 응답엔 usage 있음, `/v1/chat` 응답엔 아직 없음 → chat 토큰 차감은 일일 호출 캡으로만
+- agent `/v1/execute`·`/v1/chat` 응답 모두 usage 있음(IEUM-AI-48) → chat도 일일 호출 캡 + 토큰 예산 둘 다 적용. 차감 기준은 `usage.totalTokens`(입출력 합산 아님)

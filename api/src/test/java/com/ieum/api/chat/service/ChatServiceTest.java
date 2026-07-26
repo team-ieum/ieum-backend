@@ -693,6 +693,59 @@ class ChatServiceTest {
     }
 
     @Test
+    @DisplayName("차감 기준은 입출력 합산이 아니라 agent가 보낸 totalTokens다")
+    void recordTokens_usesAgentTotalTokens() {
+        ChatSession session = buildSession(workflowId, userId);
+        ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
+        WorkflowVersion version = buildVersionWithNodesJson("[]");
+        ChatAgentResponse resp = Mockito.mock(ChatAgentResponse.class);
+        given(resp.isWorkflowResult()).willReturn(false);
+        given(resp.getType()).willReturn(AgentResponseType.CLARIFICATION_NEEDED);
+        given(resp.getContent()).willReturn("응답");
+        // 캐시드·reasoning 토큰이 있으면 total != prompt + completion이다
+        given(resp.getTotalTokens()).willReturn(900);
+
+        given(sessionRepository.save(any())).willReturn(session);
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(credentialService.getByUserId(userId)).willReturn(List.of());
+        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
+        given(integrationContextService.resolve(userId))
+            .willReturn(new IntegrationContext(List.of(), List.of()));
+        given(agentClient.chat(any(AgentChatCallParams.class))).willReturn(resp);
+        given(messageRepository.save(any())).willReturn(agentMsg);
+
+        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("안녕", null));
+
+        verify(betaPlatformProvider).recordTokens(userId, 900L);
+    }
+
+    @Test
+    @DisplayName("토큰 합계가 0이면 recordTokens를 호출하지 않는다 (무의미한 Redis 왕복 방지)")
+    void recordTokens_skipsWhenZero() {
+        ChatSession session = buildSession(workflowId, userId);
+        ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
+        WorkflowVersion version = buildVersionWithNodesJson("[]");
+        ChatAgentResponse resp = Mockito.mock(ChatAgentResponse.class);
+        given(resp.isWorkflowResult()).willReturn(false);
+        given(resp.getType()).willReturn(AgentResponseType.CLARIFICATION_NEEDED);
+        given(resp.getContent()).willReturn("응답");
+        given(resp.getTotalTokens()).willReturn(0);
+
+        given(sessionRepository.save(any())).willReturn(session);
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(credentialService.getByUserId(userId)).willReturn(List.of());
+        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
+        given(integrationContextService.resolve(userId))
+            .willReturn(new IntegrationContext(List.of(), List.of()));
+        given(agentClient.chat(any(AgentChatCallParams.class))).willReturn(resp);
+        given(messageRepository.save(any())).willReturn(agentMsg);
+
+        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("안녕", null));
+
+        verify(betaPlatformProvider, never()).recordTokens(any(), anyLong());
+    }
+
+    @Test
     @DisplayName("finalizeStream — CLARIFICATION_NEEDED는 워크플로우를 저장하지 않고 메시지만 저장")
     void finalizeStream_clarificationNeeded() {
         ChatAgentResponse resp = Mockito.mock(ChatAgentResponse.class);
