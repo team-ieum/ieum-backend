@@ -259,7 +259,8 @@ public class WorkflowService {
     }
 
     private int parseCursor(String cursor) {
-        if (cursor == null) return 0;
+        // 빈 문자열은 첫 페이지로 본다 — FE가 커서 파라미터를 빈 값으로 초기화해 보내는 경우가 흔하다.
+        if (cursor == null || cursor.isBlank()) return 0;
         int page;
         try {
             page = Integer.parseInt(cursor);

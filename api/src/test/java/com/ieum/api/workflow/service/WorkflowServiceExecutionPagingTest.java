@@ -130,4 +130,17 @@ class WorkflowServiceExecutionPagingTest {
             .extracting(e -> ((CustomException) e).getErrorCode())
             .isEqualTo(ErrorCode.INVALID_CURSOR);
     }
+
+    @Test
+    @DisplayName("cursor가 빈 문자열이면 첫 페이지로 처리한다")
+    void getExecutions_blankCursor_firstPage() {
+        given(workflowExecutionService.listExecutions(workflowId, null, null, null, 0, 20))
+            .willReturn(List.of());
+
+        PageResponse<WorkflowExecutionResponse> page =
+            workflowService.getExecutions(userId, workflowId, null, null, null, "", 20);
+
+        assertThat(page.getContent()).isEmpty();
+        assertThat(page.isHasNext()).isFalse();
+    }
 }
