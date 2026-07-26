@@ -55,6 +55,9 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
 @ExtendWith(MockitoExtension.class)
 @DisplayName("ChatService 단위 테스트")
 class ChatServiceTest {
@@ -472,7 +475,7 @@ class ChatServiceTest {
     }
 
     @Test
-    @DisplayName("베타 platform 키 사용 + 응답 usage가 null(현재 agent /v1/chat 하드코딩)이면 recordTokens를 호출하지 않는다")
+    @DisplayName("베타 platform 키 사용 + 응답 usage가 null(모델이 토큰 미보고)이면 recordTokens를 호출하지 않는다")
     void chat_betaPlatformKey_skipsRecordTokensWhenUsageNull() throws Exception {
         ChatSession session = buildSession(workflowId, userId);
         ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
@@ -653,6 +656,40 @@ class ChatServiceTest {
         verify(messageRepository).save(any(ChatMessage.class));
         assertThat(result.getType()).isEqualTo(AgentResponseType.WORKFLOW_GENERATED);
         assertThat(result.getContent()).isEqualTo("완성됐어요");
+    }
+
+    @Test
+    @DisplayName("finalizeStream — 트랜잭션이 열려 있으면 토큰 기록을 커밋 이후로 미룬다")
+    void finalizeStream_defersTokenRecordUntilAfterCommit() {
+        ChatAgentResponse resp = Mockito.mock(ChatAgentResponse.class);
+        given(resp.isWorkflowResult()).willReturn(false);
+        given(resp.getType()).willReturn(AgentResponseType.CLARIFICATION_NEEDED);
+        given(resp.getContent()).willReturn("응답");
+        given(resp.getInputTokens()).willReturn(100);
+        given(resp.getOutputTokens()).willReturn(50);
+
+        ChatSession session = buildSession(workflowId, userId);
+        given(sessionRepository.findById(sessionId)).willReturn(Optional.of(session));
+        given(messageRepository.save(any(ChatMessage.class)))
+            .willReturn(buildMessage(session, MessageType.AGENT, "응답"));
+
+        ChatService.AgentConfig config = new ChatService.AgentConfig("GEMINI", null, null, true);
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            chatService.finalizeStream(workflowId, sessionId, resp, config, UUID.randomUUID(), userId);
+
+            // 트랜잭션이 아직 안 끝났으므로 Redis에 기록되면 안 된다
+            // (JPA 저장이 롤백되면 사용자가 쓰지도 않은 토큰을 잃는다)
+            verify(betaPlatformProvider, never()).recordTokens(any(), anyLong());
+
+            TransactionSynchronizationManager.getSynchronizations()
+                .forEach(TransactionSynchronization::afterCommit);
+
+            verify(betaPlatformProvider).recordTokens(userId, 150L);
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test

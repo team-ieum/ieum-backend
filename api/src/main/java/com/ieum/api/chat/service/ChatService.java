@@ -46,6 +46,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * 워크플로우 기반 채팅 비즈니스 로직.
@@ -371,10 +373,12 @@ public class ChatService {
     /**
      * 베타 플랫폼 키를 사용한 호출이면 응답 토큰 수로 사용량을 사후 차감한다 (best-effort).
      *
-     * <p>ponytail: agent {@code /v1/chat} 응답은 아직 usage를 채우지 않아
-     * {@link ChatAgentResponse#getInputTokens()}/{@link ChatAgentResponse#getOutputTokens()}가
-     * 하드코딩 null이다. 지금은 배선만 해두고(둘 다 null이면 skip) 실질 쿼터 제한은 일일 호출 캡으로만 건다.
-     * agent가 usage를 채우기 시작하면(§5.4) 이 경로가 자동으로 활성화된다.
+     * <p>agent {@code /v1/chat}이 usage를 채우기 시작해(IEUM-AI-48) 이 경로가 실제로 동작한다.
+     * 모델이 토큰을 보고하지 않으면 둘 다 null이고, 그 경우 차감을 건너뛴다(execute 경로와 동일).
+     *
+     * <p>Redis 기록은 트랜잭션이 열려 있으면 <b>커밋 이후</b>로 미룬다. {@link #finalizeStream}이
+     * {@code @Transactional}이라 JPA 저장이 롤백되면 Redis 증가분만 남아 사용자가 쓰지도 않은
+     * 토큰을 잃기 때문이다. 트랜잭션 밖 호출(동기 chat)은 그대로 즉시 기록한다.
      */
     private void recordBetaTokensIfPresent(AgentConfig config, UUID userId, ChatAgentResponse agentResponse) {
         if (!config.useBetaPlatformKey() || userId == null) {
@@ -386,6 +390,21 @@ public class ChatService {
             return;
         }
         long totalTokens = (inputTokens != null ? inputTokens : 0) + (outputTokens != null ? outputTokens : 0);
+
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    recordBetaTokens(userId, totalTokens);
+                }
+            });
+            return;
+        }
+        recordBetaTokens(userId, totalTokens);
+    }
+
+    /** 토큰 회계 실패가 이미 성공한(과금된) 호출을 실패로 뒤집지 않는다 — warn만 남긴다. */
+    private void recordBetaTokens(UUID userId, long totalTokens) {
         try {
             betaPlatformProvider.recordTokens(userId, totalTokens);
         } catch (Exception e) {
