@@ -13,15 +13,13 @@ import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
+import com.ieum.workflowcore.repository.WorkflowQueryRepository;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,6 +37,7 @@ public class WorkflowExecutionService {
 
     private final WorkflowExecutionRepository workflowExecutionRepository;
     private final WorkflowExecutionLogRepository workflowExecutionLogRepository;
+    private final WorkflowQueryRepository workflowQueryRepository;
 
     /**
      * 실행 전 검증 후 PENDING 상태의 실행 레코드를 생성한다.
@@ -67,14 +66,13 @@ public class WorkflowExecutionService {
         return execution;
     }
 
-    public List<WorkflowExecution> listExecutions(UUID workflowId, int page, int size) {
-        Pageable pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
-        return workflowExecutionRepository.findByWorkflowId(workflowId, pageable);
-    }
-
-    public boolean hasNextExecutions(UUID workflowId, int page, int size) {
-        Pageable pageable = PageRequest.of(page + 1, 1, Sort.by("createdAt").descending());
-        return !workflowExecutionRepository.findByWorkflowId(workflowId, pageable).isEmpty();
+    /**
+     * 실행 이력을 필터·페이징 조회한다. hasNext 판별용으로 {@code size + 1}개를 반환하므로
+     * 호출자가 초과분을 잘라내야 한다.
+     */
+    public List<WorkflowExecution> listExecutions(UUID workflowId, ExecutionStatus status,
+            LocalDateTime from, LocalDateTime to, int page, int size) {
+        return workflowQueryRepository.findExecutions(workflowId, status, from, to, page, size);
     }
 
     public WorkflowExecution getExecution(UUID executionId) {

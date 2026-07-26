@@ -10,11 +10,14 @@ import com.ieum.api.workflow.service.WorkflowService;
 import com.ieum.auth.security.CustomUserDetails;
 import com.ieum.common.dto.ApiResponse;
 import com.ieum.common.dto.PageResponse;
+import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import jakarta.validation.Valid;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
@@ -121,11 +124,16 @@ public class WorkflowController implements WorkflowControllerDocs {
     public ResponseEntity<ApiResponse<PageResponse<WorkflowExecutionResponse>>> getExecutions(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable UUID id,
+            @RequestParam(required = false) ExecutionStatus status,
+            @RequestParam(required = false)
+                @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false)
+                @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "20") int size) {
 
         PageResponse<WorkflowExecutionResponse> response =
-            workflowService.getExecutions(userDetails.getId(), id, cursor, size);
+            workflowService.getExecutions(userDetails.getId(), id, status, from, to, cursor, size);
         return ResponseEntity.ok(ApiResponse.ok(response));
     }
 

@@ -9,6 +9,7 @@ import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.enums.ExecutionLogStatus;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.querydsl.core.Tuple;
+import com.querydsl.core.types.dsl.BooleanExpression;
 import com.querydsl.jpa.JPAExpressions;
 import com.querydsl.jpa.impl.JPAQueryFactory;
 import java.time.LocalDateTime;
@@ -130,6 +131,41 @@ public class WorkflowQueryRepository {
             )
             .groupBy(workflowExecution.startedAt.hour())
             .fetch();
+    }
+
+    /**
+     * 워크플로우 실행 이력을 status·기간 필터와 함께 페이징 조회한다.
+     *
+     * <p>필터 인자가 null이면 그 조건은 무시된다(QueryDSL where의 null 인자 = 조건 없음).
+     * 다음 페이지 존재 판별을 위해 {@code size + 1}개를 조회한다 — 호출자가
+     * {@code 결과 크기 > size}로 hasNext를 판단하고 초과분을 잘라낸다.
+     */
+    public List<WorkflowExecution> findExecutions(UUID workflowId, ExecutionStatus status,
+            LocalDateTime from, LocalDateTime to, int page, int size) {
+        return queryFactory
+            .selectFrom(workflowExecution)
+            .where(
+                workflowExecution.workflow.id.eq(workflowId),
+                statusEq(status),
+                startedAtGoe(from),
+                startedAtLoe(to)
+            )
+            .orderBy(workflowExecution.startedAt.desc())
+            .offset((long) page * size)
+            .limit(size + 1L)
+            .fetch();
+    }
+
+    private BooleanExpression statusEq(ExecutionStatus status) {
+        return status != null ? workflowExecution.status.eq(status) : null;
+    }
+
+    private BooleanExpression startedAtGoe(LocalDateTime from) {
+        return from != null ? workflowExecution.startedAt.goe(from) : null;
+    }
+
+    private BooleanExpression startedAtLoe(LocalDateTime to) {
+        return to != null ? workflowExecution.startedAt.loe(to) : null;
     }
 
     /**
