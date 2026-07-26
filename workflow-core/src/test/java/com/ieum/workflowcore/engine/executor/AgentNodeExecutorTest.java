@@ -151,6 +151,39 @@ class AgentNodeExecutorTest {
         assertThat(recorded.getHeader("X-Node-Id")).isEqualTo("node-1");
     }
 
+    @Test
+    @DisplayName("agent 응답의 usage가 ExecutorResult에 실린다")
+    void execute_mapsUsage() {
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody("{\"success\":true,\"output\":\"완료\",\"metadata\":null,\"errorMessage\":null,"
+                + "\"usage\":{\"promptTokens\":120,\"completionTokens\":30,\"totalTokens\":150}}"));
+
+        ExecutorResult result = executor.execute(
+            buildAgentNode("요약해줘", "CLAUDE", "cred-id-1"), Collections.emptyMap(), buildCursor());
+
+        assertThat(result.getUsage()).isNotNull();
+        assertThat(result.getUsage().promptTokens()).isEqualTo(120);
+        assertThat(result.getUsage().completionTokens()).isEqualTo(30);
+        assertThat(result.getUsage().totalTokens()).isEqualTo(150);
+    }
+
+    @Test
+    @DisplayName("agent 응답에 usage가 없으면 ExecutorResult.usage는 null이다")
+    void execute_noUsage_nullUsage() {
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        ExecutorResult result = executor.execute(
+            buildAgentNode("요약해줘", "CLAUDE", "cred-id-1"), Collections.emptyMap(), buildCursor());
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getUsage()).isNull();
+    }
+
     // ── 기존 케이스 ──────────────────────────────────────────────────────────
 
     @Test

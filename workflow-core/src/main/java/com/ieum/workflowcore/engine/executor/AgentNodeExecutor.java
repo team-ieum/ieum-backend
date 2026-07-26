@@ -176,7 +176,8 @@ public class AgentNodeExecutor implements NodeExecutor {
             output.put("metadata", agentResult.getMetadata());
 
             log.info("[AgentNodeExecutor] 에이전트 실행 성공 — nodeId: {}", node.getId());
-            return ExecutorResult.success(output, System.currentTimeMillis() - startTime);
+            return ExecutorResult.success(output, System.currentTimeMillis() - startTime,
+                toTokenUsage(agentResult.getUsage()));
 
         } catch (Exception e) {
             releaseBetaQuotaOnFailure(betaReservationKey);
@@ -206,6 +207,15 @@ public class AgentNodeExecutor implements NodeExecutor {
         } catch (Exception e) {
             log.warn("[AgentNodeExecutor] 베타 일일 카운터 환불 실패 — key: {}", betaReservationKey, e);
         }
+    }
+
+    /** agent 응답 usage를 엔진 표준 타입으로 변환한다. usage가 없으면 null. */
+    private static ExecutorResult.TokenUsage toTokenUsage(AgentExecutionResult.Usage usage) {
+        if (usage == null) {
+            return null;
+        }
+        return new ExecutorResult.TokenUsage(
+            usage.getPromptTokens(), usage.getCompletionTokens(), usage.getTotalTokens());
     }
 
     /**

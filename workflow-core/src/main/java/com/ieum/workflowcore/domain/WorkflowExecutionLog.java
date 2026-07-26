@@ -77,6 +77,18 @@ public class WorkflowExecutionLog extends BaseEntity {
     @Column(name = "trace_id", length = 32)
     private String traceId;
 
+    /** LLM 입력 토큰 수. AI 노드만 채워진다 */
+    @Column(name = "prompt_tokens")
+    private Integer promptTokens;
+
+    /** LLM 출력 토큰 수. AI 노드만 채워진다 */
+    @Column(name = "completion_tokens")
+    private Integer completionTokens;
+
+    /** LLM 총 토큰 수. AI 노드만 채워진다 */
+    @Column(name = "total_tokens")
+    private Integer totalTokens;
+
     @Builder
     private WorkflowExecutionLog(
         WorkflowExecution execution,
@@ -87,7 +99,10 @@ public class WorkflowExecutionLog extends BaseEntity {
         String outputJson,
         String errorMessage,
         Long durationMs,
-        String traceId
+        String traceId,
+        Integer promptTokens,
+        Integer completionTokens,
+        Integer totalTokens
     ) {
         this.execution = execution;
         this.nodeId = nodeId;
@@ -98,5 +113,8 @@ public class WorkflowExecutionLog extends BaseEntity {
         this.errorMessage = errorMessage;
         this.durationMs = durationMs;
         this.traceId = traceId;
+        this.promptTokens = promptTokens;
+        this.completionTokens = completionTokens;
+        this.totalTokens = totalTokens;
     }
 }

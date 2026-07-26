@@ -17,12 +17,21 @@ public class ExecutorResult {
     /** 실패 시 오류 메시지, 성공 시 null */
     private String errorMessage;
     private long durationMs;
+    /** LLM 토큰 사용량. AI 노드만 채워지고 그 외 노드는 null */
+    private TokenUsage usage;
+
+    /** 노드 실행 1회의 토큰 사용량. agent 응답에 usage가 없으면 각 필드가 null일 수 있다. */
+    public record TokenUsage(Integer promptTokens, Integer completionTokens, Integer totalTokens) {}
 
     public static ExecutorResult success(Map<String, Object> output, long durationMs) {
-        return new ExecutorResult(true, output, null, durationMs);
+        return new ExecutorResult(true, output, null, durationMs, null);
+    }
+
+    public static ExecutorResult success(Map<String, Object> output, long durationMs, TokenUsage usage) {
+        return new ExecutorResult(true, output, null, durationMs, usage);
     }
 
     public static ExecutorResult failure(String errorMessage, long durationMs) {
-        return new ExecutorResult(false, null, errorMessage, durationMs);
+        return new ExecutorResult(false, null, errorMessage, durationMs, null);
     }
 }

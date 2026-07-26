@@ -74,6 +74,10 @@ class SyncExecutionRuntimeTest {
             if (conditionResults.containsKey(node.getId())) {
                 return ExecutorResult.success(Map.of("result", conditionResults.get(node.getId())), 1);
             }
+            if (type == NodeType.AI) {
+                return ExecutorResult.success(Map.of("output", node.getId()), 1,
+                    new ExecutorResult.TokenUsage(120, 30, 150));
+            }
             return ExecutorResult.success(Map.of("output", node.getId()), 1);
         }
     }
@@ -216,6 +220,30 @@ class SyncExecutionRuntimeTest {
         verify(logRepository, times(2)).save(captor.capture());
         assertThat(captor.getAllValues())
             .allMatch(l -> "11112222333344445555666677778888".equals(l.getTraceId()));
+    }
+
+    @Test
+    @DisplayName("AI 노드는 usage 3필드가 node_runs에 저장되고, 비AI 노드는 null이다")
+    void saveLog_includesUsage() throws Exception {
+        stubDefinition(
+            List.of(node("t", "TRIGGER"), node("a", "AI")),
+            List.of(edge("t", "a", null))
+        );
+        run();
+
+        ArgumentCaptor<com.ieum.workflowcore.domain.WorkflowExecutionLog> captor =
+            ArgumentCaptor.forClass(com.ieum.workflowcore.domain.WorkflowExecutionLog.class);
+        verify(logRepository, times(2)).save(captor.capture());
+
+        com.ieum.workflowcore.domain.WorkflowExecutionLog aiLog = captor.getAllValues().stream()
+            .filter(l -> "a".equals(l.getNodeId())).findFirst().orElseThrow();
+        assertThat(aiLog.getPromptTokens()).isEqualTo(120);
+        assertThat(aiLog.getCompletionTokens()).isEqualTo(30);
+        assertThat(aiLog.getTotalTokens()).isEqualTo(150);
+
+        com.ieum.workflowcore.domain.WorkflowExecutionLog triggerLog = captor.getAllValues().stream()
+            .filter(l -> "t".equals(l.getNodeId())).findFirst().orElseThrow();
+        assertThat(triggerLog.getTotalTokens()).isNull();
     }
 
     @Test

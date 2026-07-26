@@ -439,6 +439,8 @@ public class SyncExecutionRuntime {
                 ? objectMapper.writeValueAsString(maskSensitiveFields(result.getOutput()))
                 : null;
 
+            ExecutorResult.TokenUsage usage = result.getUsage();
+
             WorkflowExecutionLog logEntry = WorkflowExecutionLog.builder()
                 .execution(execution)
                 .nodeId(node.getId())
@@ -449,6 +451,9 @@ public class SyncExecutionRuntime {
                 .errorMessage(result.getErrorMessage())
                 .durationMs(durationMs)
                 .traceId(execution.getTraceId())
+                .promptTokens(usage != null ? usage.promptTokens() : null)
+                .completionTokens(usage != null ? usage.completionTokens() : null)
+                .totalTokens(usage != null ? usage.totalTokens() : null)
                 .build();
 
             executionLogRepository.save(logEntry);

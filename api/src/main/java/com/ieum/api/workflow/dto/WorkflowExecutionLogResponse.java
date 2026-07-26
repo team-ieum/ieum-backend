@@ -20,6 +20,9 @@ public class WorkflowExecutionLogResponse {
     private String outputJson;
     private String errorMessage;
     private Long durationMs;
+    private Integer promptTokens;
+    private Integer completionTokens;
+    private Integer totalTokens;
     private LocalDateTime createdAt;
 
     public static WorkflowExecutionLogResponse from(WorkflowExecutionLog log) {
@@ -32,6 +35,9 @@ public class WorkflowExecutionLogResponse {
             .outputJson(log.getOutputJson())
             .errorMessage(log.getErrorMessage())
             .durationMs(log.getDurationMs())
+            .promptTokens(log.getPromptTokens())
+            .completionTokens(log.getCompletionTokens())
+            .totalTokens(log.getTotalTokens())
             .createdAt(log.getCreatedAt())
             .build();
     }
