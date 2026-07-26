@@ -73,6 +73,10 @@ public class WorkflowExecutionLog extends BaseEntity {
     @Column(name = "duration_ms")
     private Long durationMs;
 
+    /** 이 노드가 속한 실행의 traceId. 노드 로그 한 줄에서 바로 Phoenix로 찾아갈 수 있게 중복 저장한다. */
+    @Column(name = "trace_id", length = 32)
+    private String traceId;
+
     @Builder
     private WorkflowExecutionLog(
         WorkflowExecution execution,
@@ -82,7 +86,8 @@ public class WorkflowExecutionLog extends BaseEntity {
         String inputJson,
         String outputJson,
         String errorMessage,
-        Long durationMs
+        Long durationMs,
+        String traceId
     ) {
         this.execution = execution;
         this.nodeId = nodeId;
@@ -92,5 +97,6 @@ public class WorkflowExecutionLog extends BaseEntity {
         this.outputJson = outputJson;
         this.errorMessage = errorMessage;
         this.durationMs = durationMs;
+        this.traceId = traceId;
     }
 }

@@ -58,6 +58,7 @@ public class WorkflowExecutionService {
             .status(ExecutionStatus.PENDING)
             .triggerType(triggerType)
             .startedAt(LocalDateTime.now())
+            .traceId(UUID.randomUUID().toString().replace("-", ""))
             .build();
         workflowExecutionRepository.save(execution);
 

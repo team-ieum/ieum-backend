@@ -32,6 +32,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 
 class SyncExecutionRuntimeTest {
@@ -92,6 +93,7 @@ class SyncExecutionRuntimeTest {
         when(workflow.getUserId()).thenReturn(UUID.randomUUID());
         when(execution.getWorkflow()).thenReturn(workflow);
         when(execution.getStatus()).thenReturn(ExecutionStatus.RUNNING);
+        when(execution.getTraceId()).thenReturn("11112222333344445555666677778888");
         when(executionRepository.findWithWorkflowById(executionId)).thenReturn(Optional.of(execution));
 
         log = new ConcurrentLinkedQueue<>();
@@ -198,6 +200,22 @@ class SyncExecutionRuntimeTest {
         assertThat(log).doesNotContain("b");
         verify(execution).fail();
         verify(execution, never()).complete();
+    }
+
+    @Test
+    @DisplayName("node_runs에 실행 traceId가 함께 저장된다")
+    void saveLog_includesTraceId() throws Exception {
+        stubDefinition(
+            List.of(node("t", "TRIGGER"), node("a", "AI")),
+            List.of(edge("t", "a", null))
+        );
+        run();
+
+        ArgumentCaptor<com.ieum.workflowcore.domain.WorkflowExecutionLog> captor =
+            ArgumentCaptor.forClass(com.ieum.workflowcore.domain.WorkflowExecutionLog.class);
+        verify(logRepository, times(2)).save(captor.capture());
+        assertThat(captor.getAllValues())
+            .allMatch(l -> "11112222333344445555666677778888".equals(l.getTraceId()));
     }
 
     @Test

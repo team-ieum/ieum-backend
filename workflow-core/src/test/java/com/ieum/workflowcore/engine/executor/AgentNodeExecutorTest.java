@@ -116,6 +116,41 @@ class AgentNodeExecutorTest {
     private static final String SUCCESS_RESPONSE =
         "{\"success\":true,\"output\":\"완료\",\"metadata\":null,\"errorMessage\":null}";
 
+    @Test
+    @DisplayName("실행 traceId와 nodeId가 X-Trace-Id·X-Node-Id 헤더로 전송된다")
+    void execute_sendsTraceHeaders() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        ExecutionCursor cursor = buildCursor();
+        cursor.getContext().setTraceId("abcdef0123456789abcdef0123456789");
+
+        executor.execute(buildAgentNode("요약해줘", "CLAUDE", "cred-id-1"),
+            Collections.emptyMap(), cursor);
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Trace-Id")).isEqualTo("abcdef0123456789abcdef0123456789");
+        assertThat(recorded.getHeader("X-Node-Id")).isEqualTo("node-1");
+    }
+
+    @Test
+    @DisplayName("traceId가 없으면 X-Trace-Id 헤더를 보내지 않는다")
+    void execute_noTraceId_omitsHeader() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        executor.execute(buildAgentNode("요약해줘", "CLAUDE", "cred-id-1"),
+            Collections.emptyMap(), buildCursor());
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Trace-Id")).isNull();
+        assertThat(recorded.getHeader("X-Node-Id")).isEqualTo("node-1");
+    }
+
     // ── 기존 케이스 ──────────────────────────────────────────────────────────
 
     @Test

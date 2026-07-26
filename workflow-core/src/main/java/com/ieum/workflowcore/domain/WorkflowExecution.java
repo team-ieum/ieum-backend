@@ -32,7 +32,8 @@ import lombok.NoArgsConstructor;
     indexes = {
         @Index(name = "idx_workflow_runs_workflow_id", columnList = "workflow_id"),
         @Index(name = "idx_workflow_runs_status", columnList = "status"),
-        @Index(name = "idx_workflow_runs_trigger_type", columnList = "trigger_type")
+        @Index(name = "idx_workflow_runs_trigger_type", columnList = "trigger_type"),
+        @Index(name = "idx_workflow_runs_trace_id", columnList = "trace_id")
     }
 )
 @Getter
@@ -67,19 +68,25 @@ public class WorkflowExecution extends BaseEntity {
     @Column(name = "finished_at")
     private LocalDateTime finishedAt;
 
+    /** Phoenix span 속성 ieum.trace_id와 조인하는 실행 단위 상관관계 ID(32자 무하이픈 hex) */
+    @Column(name = "trace_id", length = 32)
+    private String traceId;
+
     @Builder
     private WorkflowExecution(
         Workflow workflow,
         WorkflowVersion workflowVersion,
         ExecutionStatus status,
         TriggerType triggerType,
-        LocalDateTime startedAt
+        LocalDateTime startedAt,
+        String traceId
     ) {
         this.workflow = workflow;
         this.workflowVersion = workflowVersion;
         this.status = status;
         this.triggerType = triggerType;
         this.startedAt = startedAt;
+        this.traceId = traceId;
     }
 
     public void start() {
