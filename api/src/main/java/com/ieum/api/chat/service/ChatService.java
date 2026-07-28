@@ -378,7 +378,8 @@ public class ChatService {
      *
      * <p>차감 기준은 agent가 보낸 {@code totalTokens}다 — 입출력 합산이 아니다. 캐시드·reasoning
      * 토큰처럼 {@code total != prompt + completion}인 프로바이더가 있고, {@code AgentNodeExecutor}의
-     * execute 경로도 같은 값을 신뢰한다. {@code totalTokens}가 없을 때만 입출력 합산으로 보정한다.
+     * execute 경로도 같은 값을 신뢰한다. {@code totalTokens}가 없거나 0 이하일 때만 입출력 합산으로
+     * 보정한다.
      *
      * <p>Redis 기록은 트랜잭션 동기화가 활성이면 <b>커밋 이후</b>로 미룬다. JPA 저장이 롤백되면
      * Redis 증가분만 남아 사용자가 쓰지도 않은 토큰을 잃기 때문이다. 현재 호출부인 {@link #chat}과
@@ -407,9 +408,10 @@ public class ChatService {
     }
 
     /**
-     * 차감할 토큰 수를 정한다. agent의 {@code totalTokens}가 우선이고, 없으면 입출력 합산으로
-     * 보정한다. 합계가 0이거나 값이 아예 없으면 {@code null} — 차감을 건너뛰라는 신호다
-     * (0 토큰 차감은 Redis 왕복만 낭비한다).
+     * 차감할 토큰 수를 정한다. agent의 {@code totalTokens}가 우선이고, 그 값이 없거나 0 이하면
+     * 입출력 합산으로 보정한다. 최종 결과가 0 이하면 {@code null} — 차감을 건너뛰라는 신호다
+     * (0 토큰 차감은 Redis 왕복만 낭비한다). 음수는 정상 응답에 나올 수 없는 값이라 "없음"과
+     * 같이 취급한다.
      */
     private Long resolveTotalTokens(ChatAgentResponse agentResponse) {
         Integer total = agentResponse.getTotalTokens();
