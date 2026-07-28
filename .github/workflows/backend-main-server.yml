@@ -1,0 +1,265 @@
+name: Backend Main Server Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend_main_server
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  JAVA_VERSION: ${{ secrets.JAVA_VERSION }}
+  IMAGE_NAME: ${{ secrets.BACKEND_IMAGE_NAME }}
+  CONTAINER_NAME: ${{ secrets.BACKEND_CONTAINER_NAME }}
+  DOCKER_NETWORK: ${{ secrets.DOCKER_NETWORK }}
+  DOCKER_NETWORK_SUBNET: ${{ secrets.DOCKER_NETWORK_SUBNET }}
+  BACKEND_IP: ${{ secrets.BACKEND_IP }}
+  BACKEND_PORT: ${{ secrets.BACKEND_PORT }}
+  SPRING_PROFILES_ACTIVE: ${{ secrets.SPRING_PROFILES_ACTIVE }}
+
+jobs:
+  deploy:
+    name: Deploy Main to EC2
+    runs-on:
+      group: ieum_main_server
+      labels: [self-hosted, linux, x64, ieum-backend, main, deploy]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate deploy secrets
+        run: |
+          set -euo pipefail
+
+          missing_vars=()
+          for name in \
+            JAVA_VERSION \
+            IMAGE_NAME \
+            CONTAINER_NAME \
+            DOCKER_NETWORK \
+            DOCKER_NETWORK_SUBNET \
+            BACKEND_IP \
+            BACKEND_PORT \
+            SPRING_PROFILES_ACTIVE
+          do
+            [ -n "${!name}" ] || missing_vars+=("$name")
+          done
+
+          if [ ${#missing_vars[@]} -gt 0 ]; then
+            echo "::error::Missing deploy secrets for: ${missing_vars[*]}"
+            exit 1
+          fi
+
+      - name: Validate app secrets
+        env:
+          RDS_DB_URL: ${{ secrets.RDS_DB_URL }}
+          RDS_DB_USERNAME: ${{ secrets.RDS_DB_USERNAME }}
+          RDS_DB_PASSWORD: ${{ secrets.RDS_DB_PASSWORD }}
+          REDIS_HOST: ${{ secrets.REDIS_HOST }}
+          REDIS_PORT: ${{ secrets.REDIS_PORT }}
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          CORS_ALLOWED_ORIGINS: ${{ secrets.CORS_ALLOWED_ORIGINS }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          JWT_EXPIRATION: ${{ secrets.JWT_EXPIRATION }}
+          JWT_REFRESH_EXPIRATION: ${{ secrets.JWT_REFRESH_EXPIRATION }}
+          AES_SECRET_KEY: ${{ secrets.AES_SECRET_KEY }}
+          AGENT_SERVICE_URL: ${{ secrets.AGENT_SERVICE_URL }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          OAUTH2_REDIRECT_URI: ${{ secrets.OAUTH2_REDIRECT_URI }}
+          NOTION_CLIENT_ID: ${{ secrets.NOTION_CLIENT_ID }}
+          NOTION_CLIENT_SECRET: ${{ secrets.NOTION_CLIENT_SECRET }}
+          NOTION_AUTH_URL: ${{ secrets.NOTION_AUTH_URL }}
+          NOTION_TOKEN_URL: ${{ secrets.NOTION_TOKEN_URL }}
+          NOTION_REDIRECT_URI: ${{ secrets.NOTION_REDIRECT_URI }}
+          NOTION_FRONTEND_REDIRECT_URI: ${{ secrets.NOTION_FRONTEND_REDIRECT_URI }}
+          GITHUB_APP_CLIENT_ID: ${{ secrets.GH_APP_CLIENT_ID }}
+          GITHUB_APP_CLIENT_SECRET: ${{ secrets.GH_APP_CLIENT_SECRET }}
+          GITHUB_APP_TOKEN_URL: ${{ secrets.GH_APP_TOKEN_URL }}
+          GITHUB_APP_REDIRECT_URI: ${{ secrets.GH_APP_REDIRECT_URI }}
+          GITHUB_APP_FRONTEND_REDIRECT_URI: ${{ secrets.GH_APP_FRONTEND_REDIRECT_URI }}
+          GITHUB_APP_WEBHOOK_SECRET: ${{ secrets.GH_APP_WEBHOOK_SECRET }}
+        run: |
+          set -euo pipefail
+
+          missing_vars=()
+          for name in \
+            RDS_DB_URL \
+            RDS_DB_USERNAME \
+            RDS_DB_PASSWORD \
+            REDIS_HOST \
+            REDIS_PORT \
+            MONGO_URI \
+            CORS_ALLOWED_ORIGINS \
+            JWT_SECRET \
+            JWT_EXPIRATION \
+            JWT_REFRESH_EXPIRATION \
+            AES_SECRET_KEY \
+            AGENT_SERVICE_URL \
+            GOOGLE_CLIENT_ID \
+            GOOGLE_CLIENT_SECRET \
+            OAUTH2_REDIRECT_URI \
+            NOTION_CLIENT_ID \
+            NOTION_CLIENT_SECRET \
+            NOTION_AUTH_URL \
+            NOTION_TOKEN_URL \
+            NOTION_REDIRECT_URI \
+            NOTION_FRONTEND_REDIRECT_URI \
+            GITHUB_APP_CLIENT_ID \
+            GITHUB_APP_CLIENT_SECRET \
+            GITHUB_APP_TOKEN_URL \
+            GITHUB_APP_REDIRECT_URI \
+            GITHUB_APP_FRONTEND_REDIRECT_URI \
+            GITHUB_APP_WEBHOOK_SECRET
+          do
+            [ -n "${!name}" ] || missing_vars+=("$name")
+          done
+
+          if [ ${#missing_vars[@]} -gt 0 ]; then
+            echo "::error::Missing app secrets for: ${missing_vars[*]}"
+            exit 1
+          fi
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - name: Make Gradle executable
+        run: chmod +x gradlew
+
+      - name: Build
+        run: ./gradlew :api:bootJar -x test --no-daemon
+
+      - name: Prepare boot jar
+        run: |
+          set -euo pipefail
+
+          mkdir -p .deploy
+          BOOT_JAR="$(find api/build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*plain.jar' | head -n 1)"
+
+          if [ -z "$BOOT_JAR" ]; then
+            echo "::error::Spring Boot jar file was not found in api/build/libs"
+            exit 1
+          fi
+
+          cp "$BOOT_JAR" .deploy/app.jar
+
+      - name: Write Dockerfile
+        run: |
+          cat > Dockerfile.ci <<'EOF'
+          FROM eclipse-temurin:21-jre
+          WORKDIR /app
+          COPY .deploy/app.jar /app/app.jar
+          EXPOSE 8080
+          ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+          EOF
+
+      - name: Build Docker image
+        run: |
+          set -euo pipefail
+
+          docker build \
+            -f Dockerfile.ci \
+            -t "$IMAGE_NAME:${{ github.sha }}" \
+            -t "$IMAGE_NAME:latest" .
+
+      - name: Restart backend container
+        env:
+          RDS_DB_URL: ${{ secrets.RDS_DB_URL }}
+          RDS_DB_USERNAME: ${{ secrets.RDS_DB_USERNAME }}
+          RDS_DB_PASSWORD: ${{ secrets.RDS_DB_PASSWORD }}
+          REDIS_HOST: ${{ secrets.REDIS_HOST }}
+          REDIS_PORT: ${{ secrets.REDIS_PORT }}
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          CORS_ALLOWED_ORIGINS: ${{ secrets.CORS_ALLOWED_ORIGINS }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          JWT_EXPIRATION: ${{ secrets.JWT_EXPIRATION }}
+          JWT_REFRESH_EXPIRATION: ${{ secrets.JWT_REFRESH_EXPIRATION }}
+          AES_SECRET_KEY: ${{ secrets.AES_SECRET_KEY }}
+          AGENT_SERVICE_URL: ${{ secrets.AGENT_SERVICE_URL }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          OAUTH2_REDIRECT_URI: ${{ secrets.OAUTH2_REDIRECT_URI }}
+          NOTION_CLIENT_ID: ${{ secrets.NOTION_CLIENT_ID }}
+          NOTION_CLIENT_SECRET: ${{ secrets.NOTION_CLIENT_SECRET }}
+          NOTION_AUTH_URL: ${{ secrets.NOTION_AUTH_URL }}
+          NOTION_TOKEN_URL: ${{ secrets.NOTION_TOKEN_URL }}
+          NOTION_REDIRECT_URI: ${{ secrets.NOTION_REDIRECT_URI }}
+          NOTION_FRONTEND_REDIRECT_URI: ${{ secrets.NOTION_FRONTEND_REDIRECT_URI }}
+          GITHUB_APP_CLIENT_ID: ${{ secrets.GH_APP_CLIENT_ID }}
+          GITHUB_APP_CLIENT_SECRET: ${{ secrets.GH_APP_CLIENT_SECRET }}
+          GITHUB_APP_TOKEN_URL: ${{ secrets.GH_APP_TOKEN_URL }}
+          GITHUB_APP_REDIRECT_URI: ${{ secrets.GH_APP_REDIRECT_URI }}
+          GITHUB_APP_FRONTEND_REDIRECT_URI: ${{ secrets.GH_APP_FRONTEND_REDIRECT_URI }}
+          GITHUB_APP_WEBHOOK_SECRET: ${{ secrets.GH_APP_WEBHOOK_SECRET }}
+        run: |
+          set -euo pipefail
+
+          docker network inspect "$DOCKER_NETWORK" >/dev/null 2>&1 \
+            || docker network create --subnet "$DOCKER_NETWORK_SUBNET" "$DOCKER_NETWORK"
+
+          docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+
+          docker run -d \
+            --name "$CONTAINER_NAME" \
+            --restart unless-stopped \
+            --network "$DOCKER_NETWORK" \
+            --ip "$BACKEND_IP" \
+            -e SPRING_PROFILES_ACTIVE="$SPRING_PROFILES_ACTIVE" \
+            -e DB_URL="$RDS_DB_URL" \
+            -e DB_USERNAME="$RDS_DB_USERNAME" \
+            -e DB_PASSWORD="$RDS_DB_PASSWORD" \
+            -e DB_POOL_MAX_SIZE="10" \
+            -e DB_POOL_MIN_IDLE="2" \
+            -e REDIS_HOST="$REDIS_HOST" \
+            -e REDIS_PORT="$REDIS_PORT" \
+            -e MONGO_URI="$MONGO_URI" \
+            -e CORS_ALLOWED_ORIGINS="$CORS_ALLOWED_ORIGINS" \
+            -e JWT_SECRET="$JWT_SECRET" \
+            -e JWT_EXPIRATION="$JWT_EXPIRATION" \
+            -e JWT_REFRESH_EXPIRATION="$JWT_REFRESH_EXPIRATION" \
+            -e AES_SECRET_KEY="$AES_SECRET_KEY" \
+            -e AGENT_SERVICE_URL="$AGENT_SERVICE_URL" \
+            -e GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
+            -e GOOGLE_CLIENT_SECRET="$GOOGLE_CLIENT_SECRET" \
+            -e OAUTH2_REDIRECT_URI="$OAUTH2_REDIRECT_URI" \
+            -e NOTION_CLIENT_ID="$NOTION_CLIENT_ID" \
+            -e NOTION_CLIENT_SECRET="$NOTION_CLIENT_SECRET" \
+            -e NOTION_AUTH_URL="$NOTION_AUTH_URL" \
+            -e NOTION_TOKEN_URL="$NOTION_TOKEN_URL" \
+            -e NOTION_REDIRECT_URI="$NOTION_REDIRECT_URI" \
+            -e NOTION_FRONTEND_REDIRECT_URI="$NOTION_FRONTEND_REDIRECT_URI" \
+            -e GITHUB_APP_CLIENT_ID="$GITHUB_APP_CLIENT_ID" \
+            -e GITHUB_APP_CLIENT_SECRET="$GITHUB_APP_CLIENT_SECRET" \
+            -e GITHUB_APP_TOKEN_URL="$GITHUB_APP_TOKEN_URL" \
+            -e GITHUB_APP_REDIRECT_URI="$GITHUB_APP_REDIRECT_URI" \
+            -e GITHUB_APP_FRONTEND_REDIRECT_URI="$GITHUB_APP_FRONTEND_REDIRECT_URI" \
+            -e GITHUB_APP_WEBHOOK_SECRET="$GITHUB_APP_WEBHOOK_SECRET" \
+            "$IMAGE_NAME:latest"
+
+      - name: Health check
+        run: |
+          set -euo pipefail
+
+          for i in $(seq 1 30); do
+            if curl -fsS "http://$BACKEND_IP:$BACKEND_PORT/actuator/health/readiness" >/dev/null 2>&1; then
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          docker logs --tail 200 "$CONTAINER_NAME"
+          exit 1
