@@ -21,10 +21,10 @@ env:
   IMAGE_NAME: ${{ secrets.BACKEND_IMAGE_NAME }}
   CONTAINER_NAME: ${{ secrets.BACKEND_CONTAINER_NAME }}
   DOCKER_NETWORK: ${{ secrets.DOCKER_NETWORK }}
+  DOCKER_NETWORK_SUBNET: ${{ secrets.DOCKER_NETWORK_SUBNET }}
   BACKEND_IP: ${{ secrets.BACKEND_IP }}
   BACKEND_PORT: ${{ secrets.BACKEND_PORT }}
   SPRING_PROFILES_ACTIVE: ${{ secrets.SPRING_PROFILES_ACTIVE }}
-  ENV_FILE: ${{ secrets.BACKEND_ENV_FILE }}
 
 jobs:
   deploy:
@@ -47,10 +47,10 @@ jobs:
             IMAGE_NAME \
             CONTAINER_NAME \
             DOCKER_NETWORK \
+            DOCKER_NETWORK_SUBNET \
             BACKEND_IP \
             BACKEND_PORT \
-            SPRING_PROFILES_ACTIVE \
-            ENV_FILE
+            SPRING_PROFILES_ACTIVE
           do
             [ -n "${!name}" ] || missing_vars+=("$name")
           done
@@ -60,50 +60,43 @@ jobs:
             exit 1
           fi
 
-      - name: Render backend env file from GitHub Secrets
+      - name: Validate app secrets
         env:
-          DB_URL: ${{ secrets.DB_URL }}
-          DB_USERNAME: ${{ secrets.DB_USERNAME }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-
+          RDS_DB_URL: ${{ secrets.RDS_DB_URL }}
+          RDS_DB_USERNAME: ${{ secrets.RDS_DB_USERNAME }}
+          RDS_DB_PASSWORD: ${{ secrets.RDS_DB_PASSWORD }}
           REDIS_HOST: ${{ secrets.REDIS_HOST }}
           REDIS_PORT: ${{ secrets.REDIS_PORT }}
           MONGO_URI: ${{ secrets.MONGO_URI }}
-
           CORS_ALLOWED_ORIGINS: ${{ secrets.CORS_ALLOWED_ORIGINS }}
-
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           JWT_EXPIRATION: ${{ secrets.JWT_EXPIRATION }}
           JWT_REFRESH_EXPIRATION: ${{ secrets.JWT_REFRESH_EXPIRATION }}
           AES_SECRET_KEY: ${{ secrets.AES_SECRET_KEY }}
-
           AGENT_SERVICE_URL: ${{ secrets.AGENT_SERVICE_URL }}
-
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           OAUTH2_REDIRECT_URI: ${{ secrets.OAUTH2_REDIRECT_URI }}
-
           NOTION_CLIENT_ID: ${{ secrets.NOTION_CLIENT_ID }}
           NOTION_CLIENT_SECRET: ${{ secrets.NOTION_CLIENT_SECRET }}
           NOTION_AUTH_URL: ${{ secrets.NOTION_AUTH_URL }}
           NOTION_TOKEN_URL: ${{ secrets.NOTION_TOKEN_URL }}
           NOTION_REDIRECT_URI: ${{ secrets.NOTION_REDIRECT_URI }}
           NOTION_FRONTEND_REDIRECT_URI: ${{ secrets.NOTION_FRONTEND_REDIRECT_URI }}
-
-          GITHUB_APP_CLIENT_ID: ${{ secrets.GITHUB_APP_CLIENT_ID }}
-          GITHUB_APP_CLIENT_SECRET: ${{ secrets.GITHUB_APP_CLIENT_SECRET }}
-          GITHUB_APP_TOKEN_URL: ${{ secrets.GITHUB_APP_TOKEN_URL }}
-          GITHUB_APP_REDIRECT_URI: ${{ secrets.GITHUB_APP_REDIRECT_URI }}
-          GITHUB_APP_FRONTEND_REDIRECT_URI: ${{ secrets.GITHUB_APP_FRONTEND_REDIRECT_URI }}
-          GITHUB_APP_WEBHOOK_SECRET: ${{ secrets.GITHUB_APP_WEBHOOK_SECRET }}
+          GITHUB_APP_CLIENT_ID: ${{ secrets.GH_APP_CLIENT_ID }}
+          GITHUB_APP_CLIENT_SECRET: ${{ secrets.GH_APP_CLIENT_SECRET }}
+          GITHUB_APP_TOKEN_URL: ${{ secrets.GH_APP_TOKEN_URL }}
+          GITHUB_APP_REDIRECT_URI: ${{ secrets.GH_APP_REDIRECT_URI }}
+          GITHUB_APP_FRONTEND_REDIRECT_URI: ${{ secrets.GH_APP_FRONTEND_REDIRECT_URI }}
+          GITHUB_APP_WEBHOOK_SECRET: ${{ secrets.GH_APP_WEBHOOK_SECRET }}
         run: |
           set -euo pipefail
 
           missing_vars=()
           for name in \
-            DB_URL \
-            DB_USERNAME \
-            DB_PASSWORD \
+            RDS_DB_URL \
+            RDS_DB_USERNAME \
+            RDS_DB_PASSWORD \
             REDIS_HOST \
             REDIS_PORT \
             MONGO_URI \
@@ -136,51 +129,6 @@ jobs:
             echo "::error::Missing app secrets for: ${missing_vars[*]}"
             exit 1
           fi
-
-          mkdir -p "$(dirname "$ENV_FILE")"
-          umask 077
-          tmp_env="$(mktemp)"
-
-          {
-            printf 'DB_URL=%s\n' "$DB_URL"
-            printf 'DB_USERNAME=%s\n' "$DB_USERNAME"
-            printf 'DB_PASSWORD=%s\n' "$DB_PASSWORD"
-            printf 'DB_POOL_MAX_SIZE=%s\n' "10"
-            printf 'DB_POOL_MIN_IDLE=%s\n' "2"
-
-            printf 'REDIS_HOST=%s\n' "$REDIS_HOST"
-            printf 'REDIS_PORT=%s\n' "$REDIS_PORT"
-            printf 'MONGO_URI=%s\n' "$MONGO_URI"
-
-            printf 'CORS_ALLOWED_ORIGINS=%s\n' "$CORS_ALLOWED_ORIGINS"
-
-            printf 'JWT_SECRET=%s\n' "$JWT_SECRET"
-            printf 'JWT_EXPIRATION=%s\n' "$JWT_EXPIRATION"
-            printf 'JWT_REFRESH_EXPIRATION=%s\n' "$JWT_REFRESH_EXPIRATION"
-            printf 'AES_SECRET_KEY=%s\n' "$AES_SECRET_KEY"
-
-            printf 'AGENT_SERVICE_URL=%s\n' "$AGENT_SERVICE_URL"
-
-            printf 'GOOGLE_CLIENT_ID=%s\n' "$GOOGLE_CLIENT_ID"
-            printf 'GOOGLE_CLIENT_SECRET=%s\n' "$GOOGLE_CLIENT_SECRET"
-            printf 'OAUTH2_REDIRECT_URI=%s\n' "$OAUTH2_REDIRECT_URI"
-
-            printf 'NOTION_CLIENT_ID=%s\n' "$NOTION_CLIENT_ID"
-            printf 'NOTION_CLIENT_SECRET=%s\n' "$NOTION_CLIENT_SECRET"
-            printf 'NOTION_AUTH_URL=%s\n' "$NOTION_AUTH_URL"
-            printf 'NOTION_TOKEN_URL=%s\n' "$NOTION_TOKEN_URL"
-            printf 'NOTION_REDIRECT_URI=%s\n' "$NOTION_REDIRECT_URI"
-            printf 'NOTION_FRONTEND_REDIRECT_URI=%s\n' "$NOTION_FRONTEND_REDIRECT_URI"
-
-            printf 'GITHUB_APP_CLIENT_ID=%s\n' "$GITHUB_APP_CLIENT_ID"
-            printf 'GITHUB_APP_CLIENT_SECRET=%s\n' "$GITHUB_APP_CLIENT_SECRET"
-            printf 'GITHUB_APP_TOKEN_URL=%s\n' "$GITHUB_APP_TOKEN_URL"
-            printf 'GITHUB_APP_REDIRECT_URI=%s\n' "$GITHUB_APP_REDIRECT_URI"
-            printf 'GITHUB_APP_FRONTEND_REDIRECT_URI=%s\n' "$GITHUB_APP_FRONTEND_REDIRECT_URI"
-            printf 'GITHUB_APP_WEBHOOK_SECRET=%s\n' "$GITHUB_APP_WEBHOOK_SECRET"
-          } > "$tmp_env"
-
-          mv "$tmp_env" "$ENV_FILE"
 
       - name: Setup JDK
         uses: actions/setup-java@v4
@@ -228,11 +176,39 @@ jobs:
             -t "$IMAGE_NAME:latest" .
 
       - name: Restart backend container
+        env:
+          RDS_DB_URL: ${{ secrets.RDS_DB_URL }}
+          RDS_DB_USERNAME: ${{ secrets.RDS_DB_USERNAME }}
+          RDS_DB_PASSWORD: ${{ secrets.RDS_DB_PASSWORD }}
+          REDIS_HOST: ${{ secrets.REDIS_HOST }}
+          REDIS_PORT: ${{ secrets.REDIS_PORT }}
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          CORS_ALLOWED_ORIGINS: ${{ secrets.CORS_ALLOWED_ORIGINS }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          JWT_EXPIRATION: ${{ secrets.JWT_EXPIRATION }}
+          JWT_REFRESH_EXPIRATION: ${{ secrets.JWT_REFRESH_EXPIRATION }}
+          AES_SECRET_KEY: ${{ secrets.AES_SECRET_KEY }}
+          AGENT_SERVICE_URL: ${{ secrets.AGENT_SERVICE_URL }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          OAUTH2_REDIRECT_URI: ${{ secrets.OAUTH2_REDIRECT_URI }}
+          NOTION_CLIENT_ID: ${{ secrets.NOTION_CLIENT_ID }}
+          NOTION_CLIENT_SECRET: ${{ secrets.NOTION_CLIENT_SECRET }}
+          NOTION_AUTH_URL: ${{ secrets.NOTION_AUTH_URL }}
+          NOTION_TOKEN_URL: ${{ secrets.NOTION_TOKEN_URL }}
+          NOTION_REDIRECT_URI: ${{ secrets.NOTION_REDIRECT_URI }}
+          NOTION_FRONTEND_REDIRECT_URI: ${{ secrets.NOTION_FRONTEND_REDIRECT_URI }}
+          GITHUB_APP_CLIENT_ID: ${{ secrets.GH_APP_CLIENT_ID }}
+          GITHUB_APP_CLIENT_SECRET: ${{ secrets.GH_APP_CLIENT_SECRET }}
+          GITHUB_APP_TOKEN_URL: ${{ secrets.GH_APP_TOKEN_URL }}
+          GITHUB_APP_REDIRECT_URI: ${{ secrets.GH_APP_REDIRECT_URI }}
+          GITHUB_APP_FRONTEND_REDIRECT_URI: ${{ secrets.GH_APP_FRONTEND_REDIRECT_URI }}
+          GITHUB_APP_WEBHOOK_SECRET: ${{ secrets.GH_APP_WEBHOOK_SECRET }}
         run: |
           set -euo pipefail
 
           docker network inspect "$DOCKER_NETWORK" >/dev/null 2>&1 \
-            || docker network create --subnet 10.10.10.0/24 "$DOCKER_NETWORK"
+            || docker network create --subnet "$DOCKER_NETWORK_SUBNET" "$DOCKER_NETWORK"
 
           docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 
@@ -242,7 +218,35 @@ jobs:
             --network "$DOCKER_NETWORK" \
             --ip "$BACKEND_IP" \
             -e SPRING_PROFILES_ACTIVE="$SPRING_PROFILES_ACTIVE" \
-            --env-file "$ENV_FILE" \
+            -e DB_URL="$RDS_DB_URL" \
+            -e DB_USERNAME="$RDS_DB_USERNAME" \
+            -e DB_PASSWORD="$RDS_DB_PASSWORD" \
+            -e DB_POOL_MAX_SIZE="10" \
+            -e DB_POOL_MIN_IDLE="2" \
+            -e REDIS_HOST="$REDIS_HOST" \
+            -e REDIS_PORT="$REDIS_PORT" \
+            -e MONGO_URI="$MONGO_URI" \
+            -e CORS_ALLOWED_ORIGINS="$CORS_ALLOWED_ORIGINS" \
+            -e JWT_SECRET="$JWT_SECRET" \
+            -e JWT_EXPIRATION="$JWT_EXPIRATION" \
+            -e JWT_REFRESH_EXPIRATION="$JWT_REFRESH_EXPIRATION" \
+            -e AES_SECRET_KEY="$AES_SECRET_KEY" \
+            -e AGENT_SERVICE_URL="$AGENT_SERVICE_URL" \
+            -e GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
+            -e GOOGLE_CLIENT_SECRET="$GOOGLE_CLIENT_SECRET" \
+            -e OAUTH2_REDIRECT_URI="$OAUTH2_REDIRECT_URI" \
+            -e NOTION_CLIENT_ID="$NOTION_CLIENT_ID" \
+            -e NOTION_CLIENT_SECRET="$NOTION_CLIENT_SECRET" \
+            -e NOTION_AUTH_URL="$NOTION_AUTH_URL" \
+            -e NOTION_TOKEN_URL="$NOTION_TOKEN_URL" \
+            -e NOTION_REDIRECT_URI="$NOTION_REDIRECT_URI" \
+            -e NOTION_FRONTEND_REDIRECT_URI="$NOTION_FRONTEND_REDIRECT_URI" \
+            -e GITHUB_APP_CLIENT_ID="$GITHUB_APP_CLIENT_ID" \
+            -e GITHUB_APP_CLIENT_SECRET="$GITHUB_APP_CLIENT_SECRET" \
+            -e GITHUB_APP_TOKEN_URL="$GITHUB_APP_TOKEN_URL" \
+            -e GITHUB_APP_REDIRECT_URI="$GITHUB_APP_REDIRECT_URI" \
+            -e GITHUB_APP_FRONTEND_REDIRECT_URI="$GITHUB_APP_FRONTEND_REDIRECT_URI" \
+            -e GITHUB_APP_WEBHOOK_SECRET="$GITHUB_APP_WEBHOOK_SECRET" \
             "$IMAGE_NAME:latest"
 
       - name: Health check
