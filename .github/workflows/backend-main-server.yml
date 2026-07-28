@@ -1,0 +1,213 @@
+name: Backend Main Server Deploy
+
+on:
+  push:
+    branches: [infra/IEUM-SRV-26]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend_main_server
+  cancel-in-progress: false
+
+env:
+  JAVA_VERSION: '21'
+  IMAGE_NAME: ieum-backend-main
+  CONTAINER_NAME: ieum-backend
+  LEGACY_CONTAINER_NAME: hirescope-backend
+  DOCKER_NETWORK: ieum_net_green
+  BACKEND_IP: 10.10.10.11
+  BACKEND_PORT: '8080'
+  SPRING_PROFILES_ACTIVE: dev
+  ENV_FILE: /home/kwung/deploy/ieum-backend/.env
+
+jobs:
+  deploy:
+    name: Deploy Main to Self Hosted Server
+    runs-on:
+      group: ieum_dev_server
+      labels: [self-hosted, linux, x64, ieum-backend]
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Render backend env file from GitHub Secrets
+        env:
+          DB_URL: ${{ secrets.DB_URL }}
+          DB_USERNAME: ${{ secrets.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          REDIS_HOST: ${{ secrets.REDIS_HOST }}
+          REDIS_PORT: ${{ secrets.REDIS_PORT }}
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          CORS_ALLOWED_ORIGINS: ${{ secrets.CORS_ALLOWED_ORIGINS }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          JWT_EXPIRATION: ${{ secrets.JWT_EXPIRATION }}
+          JWT_REFRESH_EXPIRATION: ${{ secrets.JWT_REFRESH_EXPIRATION }}
+          AES_SECRET_KEY: ${{ secrets.AES_SECRET_KEY }}
+          AGENT_SERVICE_URL: ${{ secrets.AGENT_SERVICE_URL }}
+
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+
+          NOTION_CLIENT_ID: ${{ secrets.NOTION_CLIENT_ID }}
+          NOTION_CLIENT_SECRET: ${{ secrets.NOTION_CLIENT_SECRET }}
+          NOTION_AUTH_URL: ${{ secrets.NOTION_AUTH_URL }}
+          NOTION_TOKEN_URL: ${{ secrets.NOTION_TOKEN_URL }}
+          NOTION_REDIRECT_URI: ${{ secrets.NOTION_REDIRECT_URI }}
+          NOTION_FRONTEND_REDIRECT_URI: ${{ secrets.NOTION_FRONTEND_REDIRECT_URI }}
+
+          GITHUB_APP_CLIENT_ID: ${{ secrets.GITHUB_APP_CLIENT_ID }}
+          GITHUB_APP_CLIENT_SECRET: ${{ secrets.GITHUB_APP_CLIENT_SECRET }}
+          GITHUB_APP_TOKEN_URL: ${{ secrets.GITHUB_APP_TOKEN_URL }}
+          GITHUB_APP_REDIRECT_URI: ${{ secrets.GITHUB_APP_REDIRECT_URI }}
+          GITHUB_APP_FRONTEND_REDIRECT_URI: ${{ secrets.GITHUB_APP_FRONTEND_REDIRECT_URI }}
+          GITHUB_APP_WEBHOOK_SECRET: ${{ secrets.GITHUB_APP_WEBHOOK_SECRET }}
+        run: |
+          missing_vars=()
+          [ -n "$DB_URL" ] || missing_vars+=("DB_URL")
+          [ -n "$DB_USERNAME" ] || missing_vars+=("DB_USERNAME")
+          [ -n "$DB_PASSWORD" ] || missing_vars+=("DB_PASSWORD")
+          [ -n "$REDIS_HOST" ] || missing_vars+=("REDIS_HOST")
+          [ -n "$REDIS_PORT" ] || missing_vars+=("REDIS_PORT")
+          [ -n "$MONGO_URI" ] || missing_vars+=("MONGO_URI")
+          [ -n "$CORS_ALLOWED_ORIGINS" ] || missing_vars+=("CORS_ALLOWED_ORIGINS")
+          [ -n "$JWT_SECRET" ] || missing_vars+=("JWT_SECRET")
+          [ -n "$JWT_EXPIRATION" ] || missing_vars+=("JWT_EXPIRATION")
+          [ -n "$JWT_REFRESH_EXPIRATION" ] || missing_vars+=("JWT_REFRESH_EXPIRATION")
+          [ -n "$AES_SECRET_KEY" ] || missing_vars+=("AES_SECRET_KEY")
+          [ -n "$AGENT_SERVICE_URL" ] || missing_vars+=("AGENT_SERVICE_URL")
+
+          if [ ${#missing_vars[@]} -gt 0 ]; then
+            echo "::error::Missing GitHub Secrets for: ${missing_vars[*]}"
+            exit 1
+          fi
+
+          mkdir -p "$(dirname "$ENV_FILE")"
+          umask 077
+          tmp_env="$(mktemp)"
+
+          {
+            printf 'DB_URL=%s\n' "$DB_URL"
+            printf 'DB_USERNAME=%s\n' "$DB_USERNAME"
+            printf 'DB_PASSWORD=%s\n' "$DB_PASSWORD"
+            printf 'DB_POOL_MAX_SIZE=%s\n' "10"
+            printf 'DB_POOL_MIN_IDLE=%s\n' "2"
+            printf 'REDIS_HOST=%s\n' "$REDIS_HOST"
+            printf 'REDIS_PORT=%s\n' "$REDIS_PORT"
+            printf 'MONGO_URI=%s\n' "$MONGO_URI"
+            printf 'CORS_ALLOWED_ORIGINS=%s\n' "$CORS_ALLOWED_ORIGINS"
+            printf 'JWT_SECRET=%s\n' "$JWT_SECRET"
+            printf 'JWT_EXPIRATION=%s\n' "$JWT_EXPIRATION"
+            printf 'JWT_REFRESH_EXPIRATION=%s\n' "$JWT_REFRESH_EXPIRATION"
+            printf 'AES_SECRET_KEY=%s\n' "$AES_SECRET_KEY"
+            printf 'AGENT_SERVICE_URL=%s\n' "$AGENT_SERVICE_URL"
+
+            printf 'GOOGLE_CLIENT_ID=%s\n' "${GOOGLE_CLIENT_ID:-unused}"
+            printf 'GOOGLE_CLIENT_SECRET=%s\n' "${GOOGLE_CLIENT_SECRET:-unused}"
+            printf 'OAUTH2_REDIRECT_URI=%s\n' "${OAUTH2_REDIRECT_URI:-http://aicollector.co.kr/oauth2/callback}"
+
+            printf 'NOTION_CLIENT_ID=%s\n' "${NOTION_CLIENT_ID:-unused}"
+            printf 'NOTION_CLIENT_SECRET=%s\n' "${NOTION_CLIENT_SECRET:-unused}"
+            printf 'NOTION_AUTH_URL=%s\n' "${NOTION_AUTH_URL:-https://api.notion.com/v1/oauth/authorize}"
+            printf 'NOTION_TOKEN_URL=%s\n' "${NOTION_TOKEN_URL:-https://api.notion.com/v1/oauth/token}"
+            printf 'NOTION_REDIRECT_URI=%s\n' "${NOTION_REDIRECT_URI:-http://aicollector.co.kr/api/v1/notion/oauth2/callback}"
+            printf 'NOTION_FRONTEND_REDIRECT_URI=%s\n' "${NOTION_FRONTEND_REDIRECT_URI:-http://aicollector.co.kr/settings/integrations}"
+
+            printf 'GITHUB_APP_CLIENT_ID=%s\n' "${GITHUB_APP_CLIENT_ID:-unused}"
+            printf 'GITHUB_APP_CLIENT_SECRET=%s\n' "${GITHUB_APP_CLIENT_SECRET:-unused}"
+            printf 'GITHUB_APP_TOKEN_URL=%s\n' "${GITHUB_APP_TOKEN_URL:-https://github.com/login/oauth/access_token}"
+            printf 'GITHUB_APP_REDIRECT_URI=%s\n' "${GITHUB_APP_REDIRECT_URI:-http://aicollector.co.kr/api/v1/github/oauth2/callback}"
+            printf 'GITHUB_APP_FRONTEND_REDIRECT_URI=%s\n' "${GITHUB_APP_FRONTEND_REDIRECT_URI:-http://aicollector.co.kr/settings/integrations}"
+            printf 'GITHUB_APP_WEBHOOK_SECRET=%s\n' "${GITHUB_APP_WEBHOOK_SECRET:-unused}"
+          } > "$tmp_env"
+
+          mv "$tmp_env" "$ENV_FILE"
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - name: Make Gradle executable
+        run: chmod +x gradlew
+
+      - name: Build
+        run: ./gradlew :api:bootJar -x test --no-daemon
+
+      - name: Test
+        run: ./gradlew test --no-daemon
+
+      - name: Prepare boot jar
+        run: |
+          mkdir -p .deploy
+
+          BOOT_JAR="$(find api/build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*plain.jar' | head -n 1)"
+
+          if [ -z "$BOOT_JAR" ]; then
+            echo "::error::Spring Boot jar file was not found in api/build/libs"
+            exit 1
+          fi
+
+          cp "$BOOT_JAR" .deploy/app.jar
+
+      - name: Write Dockerfile
+        run: |
+          cat > Dockerfile.ci <<'EOF'
+          FROM eclipse-temurin:21-jre
+          WORKDIR /app
+          COPY .deploy/app.jar /app/app.jar
+          EXPOSE 8080
+          ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+          EOF
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -f Dockerfile.ci \
+            -t $IMAGE_NAME:${{ github.sha }} \
+            -t $IMAGE_NAME:latest .
+
+      - name: Restart backend container
+        run: |
+          docker network inspect "$DOCKER_NETWORK" >/dev/null 2>&1 \
+            || docker network create --subnet 10.10.10.0/24 "$DOCKER_NETWORK"
+
+          docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+          docker rm -f "$LEGACY_CONTAINER_NAME" >/dev/null 2>&1 || true
+
+          docker run -d \
+            --name "$CONTAINER_NAME" \
+            --restart unless-stopped \
+            --network "$DOCKER_NETWORK" \
+            --ip "$BACKEND_IP" \
+            -e SPRING_PROFILES_ACTIVE="$SPRING_PROFILES_ACTIVE" \
+            --env-file "$ENV_FILE" \
+            "$IMAGE_NAME:latest"
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS "http://$BACKEND_IP:$BACKEND_PORT/actuator/health/readiness" >/dev/null 2>&1; then
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          docker logs --tail 200 "$CONTAINER_NAME"
+          exit 1
