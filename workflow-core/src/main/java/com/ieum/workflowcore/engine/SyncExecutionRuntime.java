@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.config.RetryProperties;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowExecutionLog;
@@ -32,6 +33,7 @@ import java.util.concurrent.CompletionService;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.random.RandomGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -56,17 +58,21 @@ public class SyncExecutionRuntime {
     private final ExecutionEventPublisher eventPublisher;
     /** @Component로 등록된 모든 NodeExecutor 구현체를 Spring이 자동 주입 */
     private final List<NodeExecutor> nodeExecutors;
+    private final RetryProperties retryProperties;
 
     /** 노드 타입 → 실행 전략. @PostConstruct에서 nodeExecutors로부터 구성된다. */
     private final Map<NodeType, NodeExecutor> executorMap = new EnumMap<>(NodeType.class);
+
+    /** 재시도 백오프 지터에 쓰는 난수 생성기. 워커 스레드들이 공유한다(정확한 난수 분포보다 지터 목적이면 충분). */
+    private final RandomGenerator random = RandomGenerator.getDefault();
 
     /** fan-out 병렬 실행 시 동시에 실행할 노드 수(워커 스레드 풀 크기). */
     @Value("${workflow.execution.parallelism:4}")
     private int parallelism;
 
-    /** 워커 스레드가 메인으로 돌려주는 노드 실행 결과 묶음. */
+    /** 워커 스레드가 메인으로 돌려주는 노드 실행 결과 묶음. attempts는 마지막으로 실행된 시도 회차. */
     private record NodeOutcome(Node node, Map<String, Object> input,
-                               ExecutorResult result, long durationMs) {}
+                               ExecutorResult result, long durationMs, int attempts) {}
 
     @PostConstruct
     void initExecutorMap() {
@@ -272,18 +278,42 @@ public class SyncExecutionRuntime {
                 throw new IllegalStateException("NodeExecutor 없음 — type: " + node.getType());
             }
             Map<String, Object> input = prepareNodeInput(node, cursor);
+            RetryPolicy policy = RetryPolicy.from(node.getConfig(), node.getType(), retryProperties);
             log.info("[Runtime] 노드 실행 — nodeId: {}, type: {}", node.getId(), node.getType());
             eventPublisher.publish(executionId,
                 ExecutionEvent.nodeStarted(node.getId(), node.getType()));
             completion.submit(() -> {
-                long t = System.currentTimeMillis();
-                ExecutorResult r;
-                try {
-                    r = executor.execute(node, input, cursor);
-                } catch (Exception ex) {
-                    r = ExecutorResult.failure(ex.toString(), System.currentTimeMillis() - t);
+                long overallStart = System.currentTimeMillis();
+                ExecutorResult result;
+                int attempt = 1;
+                while (true) {
+                    long attemptStart = System.currentTimeMillis();
+                    try {
+                        result = executor.execute(node, input, cursor);
+                    } catch (Exception ex) {
+                        result = ExecutorResult.failure(ex.toString(),
+                            System.currentTimeMillis() - attemptStart, FailureClassifier.fromException(ex));
+                    }
+                    if (result.isSuccess() || !policy.retryable(result.getFailureKind())
+                            || attempt == policy.maxAttempts()) {
+                        break;
+                    }
+                    long waitMs = policy.backoffMillis(attempt, random);
+                    log.warn("[Runtime] 노드 재시도 — nodeId: {}, attempt: {}/{}, failureKind: {}, waitMs: {}",
+                        node.getId(), attempt, policy.maxAttempts(), result.getFailureKind(), waitMs);
+                    try {
+                        // ponytail: 이 sleep이 워커 슬롯(workflow.execution.parallelism, 기본 4)을 점유한다.
+                        // fan-out이 넓고 동시 재시도가 몰리면 슬롯이 고갈된다.
+                        // 개선 경로: 재시도를 워커에 붙잡아두지 말고 큐에 되돌려 넣기(지연 재제출)
+                        Thread.sleep(waitMs);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                    attempt++;
                 }
-                return new NodeOutcome(node, input, r, System.currentTimeMillis() - t);
+                long durationMs = System.currentTimeMillis() - overallStart;
+                return new NodeOutcome(node, input, result, durationMs, attempt);
             });
             count++;
         }

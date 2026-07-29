@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.workflowcore.config.RetryProperties;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
@@ -28,9 +29,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.random.RandomGenerator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -112,7 +117,8 @@ class SyncExecutionRuntimeTest {
             new RecordingExecutor(NodeType.CONDITION, log, failNodeIds, conditionResults)
         );
         SyncExecutionRuntime runtime = new SyncExecutionRuntime(
-            objectMapper, logRepository, executionRepository, crudService, eventPublisher, executors);
+            objectMapper, logRepository, executionRepository, crudService, eventPublisher, executors,
+            new RetryProperties());
         runtime.initExecutorMap();
         ReflectionTestUtils.setField(runtime, "parallelism", 4);
         return runtime;
@@ -257,5 +263,152 @@ class SyncExecutionRuntimeTest {
         assertThatThrownBy(this::run)
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("순환");
+    }
+
+    @Nested
+    @DisplayName("RetryPolicy.backoffMillis")
+    class BackoffMillisTests {
+
+        private final RandomGenerator random = RandomGenerator.getDefault();
+
+        @Test
+        @DisplayName("jitter off: 지수 백오프가 그대로 반환된다 (1000 → 2000 → 4000)")
+        void exponential_backoff_without_jitter() {
+            RetryPolicy policy = new RetryPolicy(
+                5, 1000L, 2.0, 30_000L, false, null, List.of(), IdempotencyMode.NONE);
+            assertThat(policy.backoffMillis(1, random)).isEqualTo(1000L);
+            assertThat(policy.backoffMillis(2, random)).isEqualTo(2000L);
+            assertThat(policy.backoffMillis(3, random)).isEqualTo(4000L);
+        }
+
+        @Test
+        @DisplayName("maxBackoffMs로 상한 clamp된다")
+        void clamps_to_max_backoff() {
+            RetryPolicy policy = new RetryPolicy(
+                10, 1000L, 2.0, 3000L, false, null, List.of(), IdempotencyMode.NONE);
+            assertThat(policy.backoffMillis(5, random)).isEqualTo(3000L);
+        }
+
+        @Test
+        @DisplayName("jitter on: 0과 계산값 사이(포함)의 값을 반환한다")
+        void full_jitter_within_bounds() {
+            RetryPolicy policy = new RetryPolicy(
+                5, 1000L, 2.0, 30_000L, true, null, List.of(), IdempotencyMode.NONE);
+            long waitMs = policy.backoffMillis(2, random);
+            assertThat(waitMs).isBetween(0L, 2000L);
+        }
+    }
+
+    /**
+     * 노드ID별로 몇 번째 시도에서 성공할지, 그 전엔 어떤 {@link FailureKind}로 실패할지 스크립트로
+     * 정의하는 fake AI executor. 스크립트가 없는 노드는 첫 시도에 바로 성공한다(후속 노드용).
+     */
+    static class RetryScriptExecutor implements NodeExecutor {
+        private final Map<String, Integer> succeedOnAttempt;
+        private final Map<String, FailureKind> failureKind;
+        private final Map<String, AtomicInteger> calls = new ConcurrentHashMap<>();
+
+        RetryScriptExecutor(Map<String, Integer> succeedOnAttempt, Map<String, FailureKind> failureKind) {
+            this.succeedOnAttempt = succeedOnAttempt;
+            this.failureKind = failureKind;
+        }
+
+        @Override
+        public NodeType getNodeType() {
+            return NodeType.AI;
+        }
+
+        @Override
+        public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor) {
+            int attempt = calls.computeIfAbsent(node.getId(), k -> new AtomicInteger()).incrementAndGet();
+            if (!succeedOnAttempt.containsKey(node.getId()) && !failureKind.containsKey(node.getId())) {
+                return ExecutorResult.success(Map.of("output", node.getId()), 1);
+            }
+            Integer succeedAt = succeedOnAttempt.get(node.getId());
+            if (succeedAt != null && attempt >= succeedAt) {
+                return ExecutorResult.success(Map.of("output", node.getId()), 1);
+            }
+            return ExecutorResult.failure("스크립트 실패: " + node.getId(), 1,
+                failureKind.getOrDefault(node.getId(), FailureKind.UNKNOWN));
+        }
+
+        int callCount(String nodeId) {
+            return calls.getOrDefault(nodeId, new AtomicInteger()).get();
+        }
+    }
+
+    @Nested
+    @DisplayName("노드 재시도 실행")
+    class RetryExecution {
+
+        private RetryProperties retryProperties;
+
+        @BeforeEach
+        void setUpRetry() {
+            retryProperties = new RetryProperties();
+            // 테스트가 실제로 자지 않도록 백오프를 0으로 고정 (jitter on이어도 computed=0이면 0 반환)
+            retryProperties.setBackoffMs(0);
+            retryProperties.setMaxBackoffMs(0);
+        }
+
+        private SyncExecutionRuntime retryRuntime(NodeExecutor... executors) {
+            SyncExecutionRuntime runtime = new SyncExecutionRuntime(
+                objectMapper, logRepository, executionRepository, crudService, eventPublisher,
+                List.of(executors), retryProperties);
+            runtime.initExecutorMap();
+            ReflectionTestUtils.setField(runtime, "parallelism", 4);
+            return runtime;
+        }
+
+        @Test
+        @DisplayName("2회차에 성공하면 워크플로우가 계속 진행되고 후속 노드도 실행된다")
+        void succeeds_on_second_attempt() throws Exception {
+            RetryScriptExecutor ai = new RetryScriptExecutor(
+                Map.of("a", 2), Map.of("a", FailureKind.RATE_LIMIT));
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI"), node("b", "AI")),
+                List.of(edge("t", "a", null), edge("a", "b", null))
+            );
+            retryRuntime(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults), ai)
+                .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+            assertThat(ai.callCount("a")).isEqualTo(2);
+            assertThat(ai.callCount("b")).isEqualTo(1);
+            verify(execution).complete();
+        }
+
+        @Test
+        @DisplayName("CLIENT_ERROR로 실패하는 노드는 1회만 실행된다")
+        void client_error_is_not_retried() throws Exception {
+            RetryScriptExecutor ai = new RetryScriptExecutor(
+                Map.of(), Map.of("a", FailureKind.CLIENT_ERROR));
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI")),
+                List.of(edge("t", "a", null))
+            );
+            retryRuntime(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults), ai)
+                .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+            assertThat(ai.callCount("a")).isEqualTo(1);
+            verify(execution).fail();
+            verify(execution, never()).complete();
+        }
+
+        @Test
+        @DisplayName("RATE_LIMIT으로 계속 실패하면 maxAttempts만큼 실행되고 최종 FAILED")
+        void rate_limit_retries_until_max_attempts_then_fails() throws Exception {
+            RetryScriptExecutor ai = new RetryScriptExecutor(
+                Map.of(), Map.of("a", FailureKind.RATE_LIMIT));
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI")),
+                List.of(edge("t", "a", null))
+            );
+            retryRuntime(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults), ai)
+                .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+            assertThat(ai.callCount("a")).isEqualTo(retryProperties.getAiMaxAttempts());
+            verify(execution).fail();
+            verify(execution, never()).complete();
+        }
     }
 }

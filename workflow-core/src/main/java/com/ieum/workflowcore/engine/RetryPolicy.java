@@ -51,6 +51,22 @@ public record RetryPolicy(
     }
 
     /**
+     * attempt회차 실패 후 다음 시도까지 대기할 ms. attempt는 1부터.
+     *
+     * <p>기본 대기 = {@code backoffMs * multiplier^(attempt-1)}, {@code maxBackoffMs}로 상한 clamp.
+     * {@link #jitter}가 true면 full jitter로 {@code [0, computed]} 사이 균등 난수를 반환한다.
+     */
+    public long backoffMillis(int attempt, java.util.random.RandomGenerator random) {
+        double raw = backoffMs * Math.pow(multiplier, attempt - 1);
+        long computed = (long) Math.min(raw, (double) maxBackoffMs);
+        if (!jitter) {
+            return computed;
+        }
+        // nextLong(0, 1)은 항상 0이라 그대로 둬도 되지만 인자 조건(bound>0) 위반을 피하도록 방어
+        return computed == 0 ? 0 : random.nextLong(0, computed + 1);
+    }
+
+    /**
      * 이 회차에 사용할 모델을 반환한다. 1회차는 원 모델, 2회차부터 fallback 목록을 차례로 쓴다.
      * 목록을 넘어서면 원 모델을 유지한다.
      *
