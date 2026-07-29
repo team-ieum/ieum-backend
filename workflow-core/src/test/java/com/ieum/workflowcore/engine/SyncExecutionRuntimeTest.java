@@ -3,6 +3,8 @@ package com.ieum.workflowcore.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -16,7 +18,9 @@ import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
+import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
+import com.ieum.workflowcore.engine.event.ExecutionEventType;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
@@ -31,6 +35,10 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.random.RandomGenerator;
 import org.junit.jupiter.api.BeforeEach;
@@ -519,6 +527,129 @@ class SyncExecutionRuntimeTest {
             // maxAttempts=3까지 못 가고 2회차 인터럽트로 중단됨(attempt<maxAttempts)
             assertThat(calls.get()).isEqualTo(2);
             verify(execution).fail(false);
+        }
+
+        @Test
+        @DisplayName("fan-out 병렬: 한 갈래가 재시도하는 동안 형제 갈래가 계속 진행된다")
+        void sibling_branch_progresses_while_other_retries() throws Exception {
+            retryProperties.setAiMaxAttempts(3);
+            CountDownLatch dCompleted = new CountDownLatch(1);
+            List<String> completionOrder = new CopyOnWriteArrayList<>();
+            AtomicInteger aAttempts = new AtomicInteger();
+            AtomicBoolean dFinishedBeforeARetried = new AtomicBoolean(false);
+
+            // t -> a(재시도) / t -> d(독립 형제 브랜치). 같은 NodeType.AI는 executorMap에
+            // 하나만 등록되므로(같은 타입 마지막 등록이 덮어씀) 한 executor가 nodeId로 분기한다.
+            NodeExecutor combined = new NodeExecutor() {
+                @Override
+                public NodeType getNodeType() {
+                    return NodeType.AI;
+                }
+
+                @Override
+                public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor) {
+                    if ("a".equals(node.getId())) {
+                        if (aAttempts.incrementAndGet() == 1) {
+                            return ExecutorResult.failure("1차 실패", 1, FailureKind.RATE_LIMIT);
+                        }
+                        // 재시도(2회차) 진행 중 — d가 이미 끝났어야 병렬 진행이 증명된다.
+                        // 직렬화되는 회귀가 생기면 d가 끝나지 못해 여기서 타임아웃된다.
+                        try {
+                            dFinishedBeforeARetried.set(dCompleted.await(5, TimeUnit.SECONDS));
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                        }
+                        completionOrder.add("a");
+                        return ExecutorResult.success(Map.of("output", "a-done"), 1);
+                    }
+                    completionOrder.add("d");
+                    dCompleted.countDown();
+                    return ExecutorResult.success(Map.of("output", "d-done"), 1);
+                }
+            };
+
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI"), node("d", "AI")),
+                List.of(edge("t", "a", null), edge("t", "d", null))
+            );
+            retryRuntime(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults), combined)
+                .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+            assertThat(aAttempts.get()).isEqualTo(2);
+            assertThat(dFinishedBeforeARetried.get())
+                .as("a가 재시도하는 동안 형제 브랜치 d가 완료될 기회를 얻어야 한다")
+                .isTrue();
+            assertThat(completionOrder).containsExactly("d", "a");
+            verify(execution).complete();
+        }
+
+        @Test
+        @DisplayName("재시도로 성공한 노드의 output이 후속 노드 입력에 변수 치환으로 전파된다")
+        void retried_node_output_propagates_to_downstream_input() throws Exception {
+            Map<String, Map<String, Object>> capturedInputs = new ConcurrentHashMap<>();
+            AtomicInteger aAttempts = new AtomicInteger();
+
+            NodeExecutor combined = new NodeExecutor() {
+                @Override
+                public NodeType getNodeType() {
+                    return NodeType.AI;
+                }
+
+                @Override
+                public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor) {
+                    capturedInputs.put(node.getId(), input);
+                    if ("a".equals(node.getId())) {
+                        if (aAttempts.incrementAndGet() == 1) {
+                            return ExecutorResult.failure("1차 실패", 1, FailureKind.RATE_LIMIT);
+                        }
+                        return ExecutorResult.success(Map.of("output", "retried-value"), 1);
+                    }
+                    return ExecutorResult.success(Map.of("output", node.getId()), 1);
+                }
+            };
+
+            Map<String, Object> bNode = node("b", "AI");
+            bNode.put("config", Map.of("value", "{{nodes.a.output.output}}"));
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI"), bNode),
+                List.of(edge("t", "a", null), edge("a", "b", null))
+            );
+            retryRuntime(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults), combined)
+                .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+            assertThat(aAttempts.get()).isEqualTo(2);
+            assertThat(capturedInputs.get("b")).containsEntry("value", "retried-value");
+            verify(execution).complete();
+        }
+
+        @Test
+        @DisplayName("재시도 소진 실패 시 nodeFailed·executionCompleted(FAILED) SSE 이벤트가 기존과 동일하게 발행된다")
+        void retry_exhausted_failure_publishes_same_sse_events() throws Exception {
+            retryProperties.setAiMaxAttempts(3);
+            RetryScriptExecutor ai = new RetryScriptExecutor(Map.of(), Map.of("a", FailureKind.RATE_LIMIT));
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI")),
+                List.of(edge("t", "a", null))
+            );
+            retryRuntime(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults), ai)
+                .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+            ArgumentCaptor<ExecutionEvent> captor = ArgumentCaptor.forClass(ExecutionEvent.class);
+            verify(eventPublisher, atLeastOnce()).publish(eq(executionId), captor.capture());
+            List<ExecutionEvent> events = captor.getAllValues();
+
+            // 재시도 소진(maxAttempts=3)까지 갔어도 nodeFailed는 노드당 정확히 1회만 —
+            // 시도마다 발행되지 않고 최종 실패 시 한 번만 나가는 기존 동작과 동일해야 한다.
+            List<ExecutionEvent> nodeFailedEvents = events.stream()
+                .filter(e -> e.type() == ExecutionEventType.NODE_FAILED)
+                .toList();
+            assertThat(nodeFailedEvents).hasSize(1);
+            assertThat(nodeFailedEvents.get(0).nodeId()).isEqualTo("a");
+            assertThat(nodeFailedEvents.get(0).errorMessage()).contains("스크립트 실패");
+
+            ExecutionEvent lastEvent = events.get(events.size() - 1);
+            assertThat(lastEvent.type()).isEqualTo(ExecutionEventType.EXECUTION_COMPLETED);
+            assertThat(lastEvent.executionStatus()).isEqualTo(ExecutionStatus.FAILED);
         }
     }
 }
