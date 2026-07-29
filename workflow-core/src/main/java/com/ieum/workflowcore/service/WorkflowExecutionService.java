@@ -1,5 +1,6 @@
 package com.ieum.workflowcore.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.Workflow;
@@ -14,9 +15,11 @@ import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowQueryRepository;
+import com.ieum.workflowcore.util.SensitiveDataMasker;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -38,15 +41,18 @@ public class WorkflowExecutionService {
     private final WorkflowExecutionRepository workflowExecutionRepository;
     private final WorkflowExecutionLogRepository workflowExecutionLogRepository;
     private final WorkflowQueryRepository workflowQueryRepository;
+    private final ObjectMapper objectMapper;
 
     /**
      * 실행 전 검증 후 PENDING 상태의 실행 레코드를 생성한다.
      *
+     * @param triggerData 트리거가 전달한 초기 입력. null 허용(수동 실행 등). 저장 전
+     *                    {@link SensitiveDataMasker}로 민감 필드를 마스킹한다.
      * @throws CustomException INVALID_WORKFLOW — 비활성화된 워크플로우이거나 버전이 없는 경우
      */
     @Transactional
     public WorkflowExecution prepareExecution(Workflow workflow, WorkflowVersion latestVersion,
-            TriggerType triggerType) {
+            TriggerType triggerType, Map<String, Object> triggerData) {
         if (!workflow.isActive()) {
             throw new CustomException(ErrorCode.INVALID_WORKFLOW, "비활성화된 워크플로우입니다.");
         }
@@ -58,12 +64,26 @@ public class WorkflowExecutionService {
             .triggerType(triggerType)
             .startedAt(LocalDateTime.now())
             .traceId(UUID.randomUUID().toString().replace("-", ""))
+            .triggerData(serializeTriggerData(triggerData))
             .build();
         workflowExecutionRepository.save(execution);
 
         log.info("[WorkflowExecutionService] 실행 준비 완료 — workflowId: {}, executionId: {}",
             workflow.getId(), execution.getId());
         return execution;
+    }
+
+    /** 직렬화 실패가 실행 준비를 막지 않도록 warn만 남기고 null을 반환한다(saveExecutionLog와 동일 정책). */
+    private String serializeTriggerData(Map<String, Object> triggerData) {
+        if (triggerData == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(SensitiveDataMasker.mask(triggerData));
+        } catch (Exception e) {
+            log.warn("[WorkflowExecutionService] triggerData 직렬화 실패", e);
+            return null;
+        }
     }
 
     /**

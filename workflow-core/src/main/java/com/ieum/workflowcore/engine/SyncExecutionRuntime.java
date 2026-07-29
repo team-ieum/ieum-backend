@@ -19,6 +19,7 @@ import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
+import com.ieum.workflowcore.util.SensitiveDataMasker;
 import jakarta.annotation.PostConstruct;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -474,22 +475,6 @@ public class SyncExecutionRuntime {
         return value;
     }
 
-    private static final Set<String> SENSITIVE_KEYS =
-        Set.of("apiKey", "api_key", "token", "secret", "password", "Authorization");
-
-    private Map<String, Object> maskSensitiveFields(Map<String, Object> data) {
-        if (data == null) return null;
-        Map<String, Object> masked = new java.util.LinkedHashMap<>();
-        data.forEach((k, v) -> {
-            if (SENSITIVE_KEYS.stream().anyMatch(s -> k.toLowerCase().contains(s.toLowerCase()))) {
-                masked.put(k, "***");
-            } else {
-                masked.put(k, v);
-            }
-        });
-        return masked;
-    }
-
     private void saveExecutionLog(
         WorkflowExecution execution,
         Node node,
@@ -499,9 +484,9 @@ public class SyncExecutionRuntime {
         int attemptCount
     ) {
         try {
-            String inputJson = objectMapper.writeValueAsString(maskSensitiveFields(input));
+            String inputJson = objectMapper.writeValueAsString(SensitiveDataMasker.mask(input));
             String outputJson = result.isSuccess()
-                ? objectMapper.writeValueAsString(maskSensitiveFields(result.getOutput()))
+                ? objectMapper.writeValueAsString(SensitiveDataMasker.mask(result.getOutput()))
                 : null;
 
             ExecutorResult.TokenUsage usage = result.getUsage();

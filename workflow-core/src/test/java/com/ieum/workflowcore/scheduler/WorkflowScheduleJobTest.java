@@ -63,13 +63,15 @@ class WorkflowScheduleJobTest {
     void execute_activeWorkflow_executesNormally() throws Exception {
         given(workflowCrudService.findActiveById(workflowId)).willReturn(workflow);
         given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(workflowVersion));
-        given(workflowExecutionService.prepareExecution(workflow, workflowVersion, TriggerType.SCHEDULE))
+        given(workflowExecutionService.prepareExecution(
+                workflow, workflowVersion, TriggerType.SCHEDULE, Collections.emptyMap()))
             .willReturn(execution);
         given(execution.getId()).willReturn(executionId);
 
         job.execute(jobContext);
 
-        then(workflowExecutionService).should().prepareExecution(workflow, workflowVersion, TriggerType.SCHEDULE);
+        then(workflowExecutionService).should()
+            .prepareExecution(workflow, workflowVersion, TriggerType.SCHEDULE, Collections.emptyMap());
         then(syncExecutionRuntime).should().execute(eq(workflowVersion), eq(executionId), eq(Collections.emptyMap()));
     }
 
@@ -80,7 +82,7 @@ class WorkflowScheduleJobTest {
 
         job.execute(jobContext);
 
-        then(workflowExecutionService).should(never()).prepareExecution(any(), any(), any());
+        then(workflowExecutionService).should(never()).prepareExecution(any(), any(), any(), any());
         then(syncExecutionRuntime).should(never()).execute(any(), any(UUID.class), any(Map.class));
     }
 }

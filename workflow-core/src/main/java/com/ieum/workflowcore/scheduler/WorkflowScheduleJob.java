@@ -64,7 +64,7 @@ public class WorkflowScheduleJob implements Job {
                     "버전이 없는 워크플로우 — workflowId: " + workflowId));
 
             WorkflowExecution execution = workflowExecutionService.prepareExecution(
-                workflow, latestVersion, TriggerType.SCHEDULE);
+                workflow, latestVersion, TriggerType.SCHEDULE, Collections.emptyMap());
 
             syncExecutionRuntime.execute(latestVersion, execution.getId(), Collections.emptyMap());
 

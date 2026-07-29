@@ -78,6 +78,10 @@ public class WorkflowExecution extends BaseEntity {
     @Column(name = "retry_exhausted", nullable = false)
     private boolean retryExhausted;
 
+    /** 트리거가 전달한 초기 입력(JSON). 민감 필드는 저장 전 마스킹된다. 실패 실행 재처리의 원본 입력으로 쓰인다 */
+    @Column(name = "trigger_data", columnDefinition = "TEXT")
+    private String triggerData;
+
     @Builder
     private WorkflowExecution(
         Workflow workflow,
@@ -85,7 +89,8 @@ public class WorkflowExecution extends BaseEntity {
         ExecutionStatus status,
         TriggerType triggerType,
         LocalDateTime startedAt,
-        String traceId
+        String traceId,
+        String triggerData
     ) {
         this.workflow = workflow;
         this.workflowVersion = workflowVersion;
@@ -93,6 +98,7 @@ public class WorkflowExecution extends BaseEntity {
         this.triggerType = triggerType;
         this.startedAt = startedAt;
         this.traceId = traceId;
+        this.triggerData = triggerData;
     }
 
     public void start() {

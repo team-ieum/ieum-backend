@@ -7,6 +7,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.common.exception.CustomException;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
@@ -20,7 +21,9 @@ import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
 import com.ieum.workflowcore.engine.event.ExecutionEventType;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
@@ -29,6 +32,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
@@ -36,6 +40,7 @@ class WorkflowExecutionServiceTest {
 
     @Mock private WorkflowExecutionRepository workflowExecutionRepository;
     @Mock private WorkflowExecutionLogRepository workflowExecutionLogRepository;
+    @Spy private ObjectMapper objectMapper = new ObjectMapper();
     @InjectMocks private WorkflowExecutionService service;
 
     @Test
@@ -99,11 +104,57 @@ class WorkflowExecutionServiceTest {
         given(workflow.isActive()).willReturn(true);
         WorkflowVersion version = mock(WorkflowVersion.class);
 
-        service.prepareExecution(workflow, version, TriggerType.MANUAL);
+        service.prepareExecution(workflow, version, TriggerType.MANUAL, Collections.emptyMap());
 
         ArgumentCaptor<WorkflowExecution> captor = ArgumentCaptor.forClass(WorkflowExecution.class);
         verify(workflowExecutionRepository).save(captor.capture());
         assertThat(captor.getValue().getTraceId()).matches("[0-9a-f]{32}");
+    }
+
+    @Test
+    @DisplayName("prepareExecution은 triggerData를 JSON으로 저장한다")
+    void prepareExecution_persistsTriggerDataAsJson() {
+        Workflow workflow = mock(Workflow.class);
+        given(workflow.isActive()).willReturn(true);
+        WorkflowVersion version = mock(WorkflowVersion.class);
+
+        service.prepareExecution(workflow, version, TriggerType.MANUAL,
+            Map.of("city", "Seoul"));
+
+        ArgumentCaptor<WorkflowExecution> captor = ArgumentCaptor.forClass(WorkflowExecution.class);
+        verify(workflowExecutionRepository).save(captor.capture());
+        assertThat(captor.getValue().getTriggerData()).contains("\"city\"", "\"Seoul\"");
+    }
+
+    @Test
+    @DisplayName("triggerData의 민감 키(apiKey, token 등)는 ***로 마스킹되어 저장된다")
+    void prepareExecution_masksSensitiveTriggerData() {
+        Workflow workflow = mock(Workflow.class);
+        given(workflow.isActive()).willReturn(true);
+        WorkflowVersion version = mock(WorkflowVersion.class);
+
+        service.prepareExecution(workflow, version, TriggerType.WEBHOOK,
+            Map.of("apiKey", "sk-real-secret", "token", "raw-token", "city", "Seoul"));
+
+        ArgumentCaptor<WorkflowExecution> captor = ArgumentCaptor.forClass(WorkflowExecution.class);
+        verify(workflowExecutionRepository).save(captor.capture());
+        String stored = captor.getValue().getTriggerData();
+        assertThat(stored).doesNotContain("sk-real-secret", "raw-token");
+        assertThat(stored).contains("\"apiKey\":\"***\"", "\"token\":\"***\"", "\"city\":\"Seoul\"");
+    }
+
+    @Test
+    @DisplayName("triggerData가 null이어도 실행 준비가 깨지지 않는다")
+    void prepareExecution_nullTriggerData_doesNotBreak() {
+        Workflow workflow = mock(Workflow.class);
+        given(workflow.isActive()).willReturn(true);
+        WorkflowVersion version = mock(WorkflowVersion.class);
+
+        service.prepareExecution(workflow, version, TriggerType.MANUAL, null);
+
+        ArgumentCaptor<WorkflowExecution> captor = ArgumentCaptor.forClass(WorkflowExecution.class);
+        verify(workflowExecutionRepository).save(captor.capture());
+        assertThat(captor.getValue().getTriggerData()).isNull();
     }
 
     private WorkflowExecution mockExecution(UUID workflowId, ExecutionStatus status) {
