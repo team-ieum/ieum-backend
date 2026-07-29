@@ -3,6 +3,7 @@ package com.ieum.workflowcore.engine.executor;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.ExecutionCursor;
 import com.ieum.workflowcore.engine.ExecutorResult;
+import com.ieum.workflowcore.engine.FailureClassifier;
 import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.executor.dto.AgentExecutionResult;
 import com.ieum.workflowcore.engine.executor.dto.AgentNodeRequest;
@@ -155,7 +156,8 @@ public class AgentNodeExecutor implements NodeExecutor {
                 log.error("[AgentNodeExecutor] 에이전트 실행 실패 — nodeId: {}, error: {}",
                     node.getId(), agentResult.getErrorMessage());
                 return ExecutorResult.failure(agentResult.getErrorMessage(),
-                    System.currentTimeMillis() - startTime);
+                    System.currentTimeMillis() - startTime,
+                    FailureClassifier.fromAgentErrorCode(agentResult.getErrorCode()));
             }
 
             // 베타 플랫폼 키를 사용했다면 응답 usage.totalTokens로 사용량을 사후 차감한다.
@@ -182,7 +184,8 @@ public class AgentNodeExecutor implements NodeExecutor {
         } catch (Exception e) {
             releaseBetaQuotaOnFailure(betaReservationKey);
             log.error("[AgentNodeExecutor] 실행 실패 — nodeId: {}", node.getId(), e);
-            return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime);
+            return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime,
+                FailureClassifier.fromException(e));
         }
     }
 
@@ -416,7 +419,22 @@ public class AgentNodeExecutor implements NodeExecutor {
                 e.getStatusCode(), e.getResponseBodyAsString());
             return new AgentExecutionResult(false, null, null,
                 "에이전트 서비스 오류 (HTTP " + e.getStatusCode().value() + "): "
-                    + e.getResponseBodyAsString(), null);
+                    + e.getResponseBodyAsString(), null,
+                agentServiceErrorCode(e.getStatusCode().value()));
         }
+    }
+
+    /**
+     * agent 서비스 자체가 비정상 응답을 준 경우의 errorCode를 합성한다.
+     * agent가 본문으로 내려주는 errorCode가 없는 상황이므로 HTTP 상태로 대신 분류한다.
+     */
+    private static String agentServiceErrorCode(int status) {
+        return switch (FailureClassifier.fromHttpStatus(status)) {
+            case RATE_LIMIT -> "RATE_LIMITED";
+            case TIMEOUT -> "AGENT_TIMEOUT";
+            case SERVER_ERROR -> "AGENT_SERVICE_ERROR";
+            case CLIENT_ERROR -> "AGENT_BAD_REQUEST";
+            default -> null;
+        };
     }
 }

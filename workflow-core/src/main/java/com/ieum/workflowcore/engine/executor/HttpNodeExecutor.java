@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.ExecutionCursor;
 import com.ieum.workflowcore.engine.ExecutorResult;
+import com.ieum.workflowcore.engine.FailureClassifier;
 import com.ieum.workflowcore.engine.Node;
 import java.net.InetAddress;
 import java.net.URI;
@@ -91,11 +92,13 @@ public class HttpNodeExecutor implements NodeExecutor {
             log.error("[HttpExecutor] HTTP 오류 — nodeId: {}, status: {}", node.getId(), e.getStatusCode());
             return ExecutorResult.failure(
                 "HTTP " + e.getStatusCode().value() + ": " + e.getResponseBodyAsString(),
-                System.currentTimeMillis() - startTime
+                System.currentTimeMillis() - startTime,
+                FailureClassifier.fromHttpStatus(e.getStatusCode().value())
             );
         } catch (Exception e) {
             log.error("[HttpExecutor] 실행 실패 — nodeId: {}", node.getId(), e);
-            return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime);
+            return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime,
+                FailureClassifier.fromException(e));
         }
     }
 
