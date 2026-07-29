@@ -15,7 +15,10 @@ import lombok.NoArgsConstructor;
  *   "nodes": [...],               // WORKFLOW_GENERATED/MODIFIED 시에만 채워짐
  *   "edges": [...],               // WORKFLOW_GENERATED/MODIFIED 시에만 채워짐
  *   "actions": [...],             // INTEGRATION_REQUIRED 시에만 채워짐
- *   "changeDescription": "..."    // WORKFLOW_MODIFIED 시에만 채워짐
+ *   "changeDescription": "...",   // WORKFLOW_MODIFIED 시에만 채워짐
+ *   "usage": {                    // 모델이 토큰을 보고하지 않으면 null
+ *     "promptTokens": 1200, "completionTokens": 340, "totalTokens": 1540
+ *   }
  * }
  * </pre>
  */
@@ -67,19 +70,46 @@ public class ChatAgentResponse {
      */
     private String workflowName;
 
+    /**
+     * LLM 토큰 사용량. agent의 designer·reviewer·재생성 루프를 모두 합산한 값이다(IEUM-AI-48).
+     * 모델이 토큰을 보고하지 않으면 null이며, 그 경우 베타 토큰 차감은 건너뛴다.
+     */
+    private Usage usage;
+
+    /** agent 응답의 usage 필드. {@code /v1/execute}의 동명 구조와 같은 형태다. */
+    @Getter
+    @NoArgsConstructor
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class Usage {
+        private Integer promptTokens;
+        private Integer completionTokens;
+        private Integer totalTokens;
+    }
+
     /** 편의 메서드 — message 필드를 반환한다 */
     public String getContent() {
         return message;
     }
 
-    /** /v1/chat 응답에 토큰 정보가 없으므로 null 반환 */
+    /** 입력 토큰 수. usage가 없으면 null (차감 스킵 신호) */
     public Integer getInputTokens() {
-        return null;
+        return usage != null ? usage.getPromptTokens() : null;
     }
 
-    /** /v1/chat 응답에 토큰 정보가 없으므로 null 반환 */
+    /** 출력 토큰 수. usage가 없으면 null (차감 스킵 신호) */
     public Integer getOutputTokens() {
-        return null;
+        return usage != null ? usage.getCompletionTokens() : null;
+    }
+
+    /**
+     * 총 토큰 수. 베타 쿼터 차감의 기준값이다.
+     *
+     * <p>입출력 합산이 아니라 agent가 보낸 값을 그대로 쓴다 — 캐시드·reasoning 토큰처럼
+     * {@code total != prompt + completion}인 프로바이더가 있어서다. {@code AgentNodeExecutor}의
+     * execute 경로도 같은 방식으로 {@code totalTokens}를 신뢰한다.
+     */
+    public Integer getTotalTokens() {
+        return usage != null ? usage.getTotalTokens() : null;
     }
 
     /** 워크플로우 생성 또는 수정 응답인지 확인 */
