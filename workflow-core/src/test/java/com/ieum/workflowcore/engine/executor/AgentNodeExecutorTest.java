@@ -71,6 +71,11 @@ class AgentNodeExecutorTest {
         return new RetryPolicy(3, 0, 1.0, 0, false, null, List.of(), mode);
     }
 
+    /** 재시도가 꺼진(maxAttempts=1) 정책 — 리뷰 I-2: 재시도 없는 노드는 헤더도 안 붙어야 한다. */
+    private RetryPolicy disabledPolicy(IdempotencyMode mode) {
+        return new RetryPolicy(1, 0, 1.0, 0, false, null, List.of(), mode);
+    }
+
     @AfterEach
     void tearDown() throws IOException {
         mockWebServer.shutdown();
@@ -149,6 +154,22 @@ class AgentNodeExecutorTest {
         RecordedRequest second = mockWebServer.takeRequest();
         assertThat(first.getHeader("X-Idempotency-Key")).isEqualTo("fixed-key-1");
         assertThat(second.getHeader("X-Idempotency-Key")).isEqualTo("fixed-key-1");
+    }
+
+    @Test
+    @DisplayName("HEADER 모드라도 재시도가 꺼져 있으면(maxAttempts=1) X-Idempotency-Key를 보내지 않는다")
+    void execute_headerMode_disabledPolicy_noHeader() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNode("요약해줘", "CLAUDE", "cred-id-1");
+        NodeExecutor.NodeAttempt attempt =
+            new NodeExecutor.NodeAttempt(1, "fixed-key", disabledPolicy(IdempotencyMode.HEADER));
+
+        executor.execute(node, Collections.emptyMap(), buildCursor(), attempt);
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Idempotency-Key")).isNull();
     }
 
     @Test

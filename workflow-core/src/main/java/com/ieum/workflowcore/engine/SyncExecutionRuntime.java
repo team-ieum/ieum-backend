@@ -310,8 +310,14 @@ public class SyncExecutionRuntime {
                         result = ExecutorResult.failure(ex.toString(),
                             System.currentTimeMillis() - attemptStart, FailureClassifier.fromException(ex));
                     }
+                    // MARKER는 "재시도를 포기한다"는 모드다(IdempotencyMode.MARKER 참고) — 2회차를
+                    // 시작하면 attempt 1의 원 실패가 executor의 마커 차단(CLIENT_ERROR)으로 덮여써져
+                    // node_runs 진단 정보와 retryExhausted 신호가 왜곡된다. 그래서 attempt 1 이후
+                    // 곧바로 멈춘다(리뷰 I-1). executor의 마커 차단 분기는 다중 인스턴스 등을 대비한
+                    // 방어선으로 남긴다.
                     if (result.isSuccess() || !policy.retryable(result.getFailureKind())
-                            || attempt == policy.maxAttempts()) {
+                            || attempt == policy.maxAttempts()
+                            || policy.idempotency().usesMarker()) {
                         break;
                     }
                     long waitMs = policy.backoffMillis(attempt, random);

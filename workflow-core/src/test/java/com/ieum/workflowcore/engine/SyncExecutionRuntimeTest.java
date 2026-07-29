@@ -428,6 +428,47 @@ class SyncExecutionRuntimeTest {
         }
     }
 
+    /**
+     * Http/AgentNodeExecutor처럼 호출 직전 {@code IdempotencyStore.markInFlight}를 실제로 소비하는
+     * fake executor. 마커가 통과하면(true) 항상 재시도 대상 원인(TIMEOUT)으로 실패한다 —
+     * SyncExecutionRuntime이 MARKER 노드의 2회차를 시작하지 않는지(I-1) 검증하는 데 쓴다.
+     */
+    static class MarkerAwareExecutor implements NodeExecutor {
+        private final IdempotencyStore store;
+        final AtomicInteger calls = new AtomicInteger();
+        private volatile NodeExecutor.NodeAttempt lastAttempt;
+
+        MarkerAwareExecutor(IdempotencyStore store) {
+            this.store = store;
+        }
+
+        @Override
+        public NodeType getNodeType() {
+            return NodeType.AI;
+        }
+
+        @Override
+        public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor) {
+            throw new UnsupportedOperationException("이 fake executor는 4-인자 execute만 지원");
+        }
+
+        @Override
+        public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor,
+                                      NodeExecutor.NodeAttempt attempt) {
+            calls.incrementAndGet();
+            lastAttempt = attempt;
+            if (attempt.policy().idempotency().usesMarker()
+                    && !store.markInFlight(attempt.idempotencyKey(), NodeExecutor.markerTtl(attempt.policy()))) {
+                return ExecutorResult.failure("중복 호출 차단", 1, FailureKind.CLIENT_ERROR);
+            }
+            return ExecutorResult.failure("원 실패: 타임아웃", 1, FailureKind.TIMEOUT);
+        }
+
+        NodeExecutor.NodeAttempt lastAttempt() {
+            return lastAttempt;
+        }
+    }
+
     @Nested
     @DisplayName("노드 재시도 실행")
     class RetryExecution {
@@ -543,10 +584,12 @@ class SyncExecutionRuntimeTest {
         @Test
         @DisplayName("재시도 두 회차가 같은 멱등성 키를 전달받는다")
         void retriedAttempts_receiveSameIdempotencyKey() throws Exception {
+            // HEADER 모드 사용 — MARKER는 리뷰 I-1 수정으로 attempt 1 이후 재시도를 하지 않으므로
+            // "여러 attempt에 걸쳐 같은 키가 전달되는지"는 실제로 재시도가 일어나는 모드로 검증해야 한다.
             AttemptCapturingExecutor ai = new AttemptCapturingExecutor(2);
             stubDefinition(
                 List.of(node("t", "TRIGGER"),
-                    nodeWithRetry("a", "AI", Map.of("idempotency", "MARKER", "maxAttempts", 2))),
+                    nodeWithRetry("a", "AI", Map.of("idempotency", "HEADER", "maxAttempts", 2))),
                 List.of(edge("t", "a", null))
             );
             retryRuntime(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults), ai)
@@ -559,21 +602,39 @@ class SyncExecutionRuntimeTest {
         }
 
         @Test
-        @DisplayName("MARKER 모드: clearInFlight는 재시도 루프 전체가 끝난 뒤 정확히 1회만 호출된다(C-1)")
-        void markerMode_clearInFlightCalledOnceAfterAllAttempts() throws Exception {
-            AttemptCapturingExecutor ai = new AttemptCapturingExecutor(2);
+        @DisplayName("MARKER 모드: attempt 1이 재시도 대상 원인(RATE_LIMIT)으로 실패해도 2회차 없이 원 실패가 보존되고 " +
+            "retryExhausted=false다(I-1), clearInFlight는 1회 호출된다(C-1)")
+        void markerMode_retryableFailure_doesNotEnterSecondAttempt() throws Exception {
+            when(idempotencyStore.markInFlight(any(), any())).thenReturn(true);
+            // Http/AgentNodeExecutor처럼 markInFlight를 실제로 소비하는 fake — 러ntime의
+            // 조기 break가 executor 레벨 마커 상호작용과 함께 동작하는지까지 검증한다.
+            MarkerAwareExecutor ai = new MarkerAwareExecutor(idempotencyStore);
             stubDefinition(
                 List.of(node("t", "TRIGGER"),
-                    nodeWithRetry("a", "AI", Map.of("idempotency", "MARKER", "maxAttempts", 2))),
+                    nodeWithRetry("a", "AI", Map.of("idempotency", "MARKER", "maxAttempts", 3))),
                 List.of(edge("t", "a", null))
             );
             retryRuntime(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults), ai)
                 .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
 
-            assertThat(ai.capturedAttempts).hasSize(2);
-            String key = ai.capturedAttempts.get(0).idempotencyKey();
-            // 개별 attempt의 finally가 아니라 루프 종료 후 1회만 — 2회 시도했지만 clear는 1번.
+            // 2회차가 아예 시작되지 않는다 — maxAttempts=3이지만 1번만 호출됨
+            assertThat(ai.calls.get()).isEqualTo(1);
+            verify(idempotencyStore, times(1)).markInFlight(any(), any());
+            String key = ai.lastAttempt().idempotencyKey();
             verify(idempotencyStore, times(1)).clearInFlight(key);
+            // 소진(retryExhausted)이 아니라 attempt=1의 원인 그대로 FAILED다
+            verify(execution).fail(false);
+            verify(execution, never()).complete();
+
+            ArgumentCaptor<com.ieum.workflowcore.domain.WorkflowExecutionLog> captor =
+                ArgumentCaptor.forClass(com.ieum.workflowcore.domain.WorkflowExecutionLog.class);
+            verify(logRepository, times(2)).save(captor.capture());
+            com.ieum.workflowcore.domain.WorkflowExecutionLog aLog = captor.getAllValues().stream()
+                .filter(l -> "a".equals(l.getNodeId())).findFirst().orElseThrow();
+            // 원 실패(타임아웃)가 그대로 남아야 한다 — executor의 "중복 호출 차단" 문구로 덮이면 안 된다.
+            assertThat(aLog.getErrorMessage()).contains("원 실패: 타임아웃");
+            assertThat(aLog.getErrorMessage()).doesNotContain("중복 호출 차단");
+            assertThat(aLog.getAttemptCount()).isEqualTo(1);
         }
 
         @Test

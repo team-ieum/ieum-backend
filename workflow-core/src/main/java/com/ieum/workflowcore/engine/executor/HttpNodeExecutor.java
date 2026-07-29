@@ -85,7 +85,10 @@ public class HttpNodeExecutor implements NodeExecutor {
 
             // 사용자가 config.headers에 이미 Idempotency-Key를 넣었으면 덮어쓰지 않는다.
             // HttpHeaders는 대소문자 구분 없는 맵이라 containsKey가 사용자 표기와 무관하게 감지한다.
-            if (policy != null && policy.idempotency().usesHeader()
+            // policy.isDisabled()(재시도 없음)면 헤더를 붙이지 않는다 — HTTP는 HEADER가 기본값이라
+            // retry 미선언 노드(maxAttempts=1)까지 헤더가 나가면 기존 워크플로우의 외부 요청이
+            // 이번 변경으로 바뀐다. 멱등성 키는 재시도가 있을 때만 의미가 있다(리뷰 I-2).
+            if (policy != null && policy.idempotency().usesHeader() && !policy.isDisabled()
                     && !httpHeaders.containsKey(IDEMPOTENCY_HEADER)) {
                 httpHeaders.set(IDEMPOTENCY_HEADER, attempt.idempotencyKey());
             }

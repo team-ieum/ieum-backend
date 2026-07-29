@@ -167,8 +167,10 @@ public class AgentNodeExecutor implements NodeExecutor {
                 }
             }
 
-            String idempotencyHeaderKey = (policy != null && policy.idempotency().usesHeader())
-                ? attempt.idempotencyKey() : null;
+            // HTTP와 동일 기준: 재시도가 꺼져 있으면(isDisabled) 헤더를 붙이지 않는다(리뷰 I-2).
+            String idempotencyHeaderKey =
+                (policy != null && policy.idempotency().usesHeader() && !policy.isDisabled())
+                    ? attempt.idempotencyKey() : null;
             AgentExecutionResult agentResult = callAgentService(
                 request, llmProvider, decryptedApiKey, googleAccessToken,
                 userId, userRole, toolAuthHeaders, useBetaPlatformKey,

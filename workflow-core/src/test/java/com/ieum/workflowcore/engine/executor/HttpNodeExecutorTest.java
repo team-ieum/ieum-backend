@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.workflowcore.config.RetryProperties;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.ExecutionContext;
 import com.ieum.workflowcore.engine.ExecutionCursor;
@@ -137,5 +138,39 @@ class HttpNodeExecutorTest {
         verify(restTemplate).exchange(eq(URL), eq(HttpMethod.GET), captor.capture(), eq(String.class));
         assertThat(captor.getValue().getHeaders().getFirst("Idempotency-Key")).isNull();
         verify(idempotencyStore, never()).markInFlight(any(), any());
+    }
+
+    // ── 실제 RetryPolicy.from() 기본값 경로 (리뷰 I-2) ──────────────────────────
+    // 프로덕션은 항상 4-인자 execute를 타므로, 3-인자 NONE 센티넬이 아니라
+    // RetryPolicy.from()이 만드는 실제 기본 정책으로 검증해야 한다.
+
+    @Test
+    @DisplayName("retry 미선언 HTTP 노드(기본 maxAttempts=1)는 HEADER가 기본값이어도 헤더를 붙이지 않는다")
+    void defaultPolicy_retryUndeclared_noHeader() {
+        RetryPolicy defaultPolicy = RetryPolicy.from(null, NodeType.HTTP, new RetryProperties());
+        NodeExecutor.NodeAttempt attempt = new NodeExecutor.NodeAttempt(1, "generated-key", defaultPolicy);
+
+        executor.execute(httpNode(new HashMap<>()), Collections.emptyMap(), cursor(), attempt);
+
+        ArgumentCaptor<HttpEntity> captor = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(eq(URL), eq(HttpMethod.GET), captor.capture(), eq(String.class));
+        assertThat(captor.getValue().getHeaders().getFirst("Idempotency-Key")).isNull();
+    }
+
+    @Test
+    @DisplayName("retry 선언(maxAttempts>1) HTTP 노드는 HEADER 기본값에 따라 헤더를 붙인다")
+    void defaultPolicy_retryDeclared_hasHeader() {
+        Map<String, Object> retryConfig = new HashMap<>();
+        retryConfig.put("maxAttempts", 3);
+        Map<String, Object> nodeConfig = new HashMap<>();
+        nodeConfig.put("retry", retryConfig);
+        RetryPolicy declaredPolicy = RetryPolicy.from(nodeConfig, NodeType.HTTP, new RetryProperties());
+        NodeExecutor.NodeAttempt attempt = new NodeExecutor.NodeAttempt(1, "generated-key", declaredPolicy);
+
+        executor.execute(httpNode(new HashMap<>()), Collections.emptyMap(), cursor(), attempt);
+
+        ArgumentCaptor<HttpEntity> captor = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(eq(URL), eq(HttpMethod.GET), captor.capture(), eq(String.class));
+        assertThat(captor.getValue().getHeaders().getFirst("Idempotency-Key")).isEqualTo("generated-key");
     }
 }
