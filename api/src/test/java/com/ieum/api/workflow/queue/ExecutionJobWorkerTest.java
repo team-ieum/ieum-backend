@@ -158,6 +158,45 @@ class ExecutionJobWorkerTest {
     }
 
     @Test
+    @DisplayName("실행 중인 잡이 회수돼 재배달되면 재실행하지 않고, ack도 하지 않는다(원본이 끝날 때 ack한다)")
+    void onMessage_redeliveredWhileRunning_doesNotRunTwice() throws Exception {
+        WorkflowExecution execution = execution(ExecutionStatus.PENDING);
+        when(execution.getWorkflowVersion()).thenReturn(version);
+        when(workflowExecutionRepository.findWithVersionById(executionId))
+            .thenReturn(Optional.of(execution));
+        when(workflowExecutionService.decryptTriggerData(execution)).thenReturn(Map.of());
+
+        MapRecord<String, String, String> record = jobRecord(executionId.toString());
+        // 실행이 minIdle을 넘겨 주기 회수가 같은 엔트리를 다시 물어오는 상황.
+        // 실행 도중(=RUNNING) 재배달이므로 종료 상태 가드로는 안 걸린다.
+        Mockito.doAnswer(invocation -> {
+            worker.onMessage(record);
+            return null;
+        }).when(syncExecutionRuntime).execute(any(), any(), any());
+
+        worker.onMessage(record);
+
+        verify(syncExecutionRuntime, Mockito.times(1)).execute(version, executionId, Map.of());
+        verify(streamOperations, Mockito.times(1)).acknowledge(
+            ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
+    }
+
+    @Test
+    @DisplayName("실행이 끝나면 in-flight에서 빠져 이후 재배달을 정상 처리한다")
+    void onMessage_afterCompletion_handlesRedeliveryAgain() throws Exception {
+        WorkflowExecution execution = execution(ExecutionStatus.PENDING);
+        when(execution.getWorkflowVersion()).thenReturn(version);
+        when(workflowExecutionRepository.findWithVersionById(executionId))
+            .thenReturn(Optional.of(execution));
+        when(workflowExecutionService.decryptTriggerData(execution)).thenReturn(Map.of());
+
+        worker.onMessage(jobRecord(executionId.toString()));
+        worker.onMessage(jobRecord(executionId.toString()));
+
+        verify(syncExecutionRuntime, Mockito.times(2)).execute(version, executionId, Map.of());
+    }
+
+    @Test
     @DisplayName("실행 풀이 포화면 잠시 뒤 다시 제출한다 — 폴링 스레드를 곧바로 점유하지 않는다")
     void onMessage_poolSaturated_retriesSubmission() throws Exception {
         WorkflowExecution execution = execution(ExecutionStatus.PENDING);

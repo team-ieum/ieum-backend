@@ -11,7 +11,9 @@ import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.time.Duration;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import lombok.RequiredArgsConstructor;
@@ -35,8 +37,8 @@ import org.springframework.stereotype.Component;
  * <p><b>배달 보장은 at-least-once이지 exactly-once가 아니다.</b> 프로세스가 실행 도중 죽으면 run은
  * {@code RUNNING}으로 남고 잡은 pending에 남아 회수되어 <b>처음부터 다시</b> 실행된다 — 이미
  * 부작용을 낸 노드(Slack 발송·Notion 쓰기·LLM 과금)까지 되풀이된다. 중복 가드는 종료 상태
- * ({@code SUCCESS}/{@code FAILED})만 걸러 준다. 재처리 API 등 이 큐 위에 무언가를 얹을 때
- * exactly-once로 오해하지 말 것.
+ * ({@code SUCCESS}/{@code FAILED})와 <b>이 프로세스에서 진행 중인 실행</b> 두 가지만 걸러 준다.
+ * 재처리 API 등 이 큐 위에 무언가를 얹을 때 exactly-once로 오해하지 말 것.
  */
 @Slf4j
 @Component
@@ -46,6 +48,9 @@ public class ExecutionJobWorker implements StreamListener<String, MapRecord<Stri
     /** 실행 풀 포화 시 제출 재시도 횟수·간격. 다 소진하면 폴링 스레드에서 인라인 실행한다. */
     private static final int SUBMIT_ATTEMPTS = 3;
     private static final Duration SUBMIT_RETRY_DELAY = Duration.ofSeconds(1);
+
+    /** 이 프로세스가 지금 돌리고 있는 실행. 회수분이 중복 실행되는 걸 막는다. */
+    private final Set<UUID> inFlight = ConcurrentHashMap.newKeySet();
 
     private final StringRedisTemplate redisTemplate;
     private final WorkflowExecutionRepository workflowExecutionRepository;
@@ -82,6 +87,15 @@ public class ExecutionJobWorker implements StreamListener<String, MapRecord<Stri
     }
 
     private void handle(UUID executionId, MapRecord<String, String, String> record) {
+        // 주기 회수는 컨슈머 필터 없이 pending을 긁어오므로, 실행이 minIdle을 넘기면 "지금 내가 돌리는 잡"이
+        // 회수돼 돌아온다. DB 상태는 RUNNING이라 종료 상태 가드로는 안 걸린다. 워커가 같은 프로세스에 있다는
+        // 단일 인스턴스 전제 덕에 in-memory Set으로 충분하다.
+        // ack하지 않고 그냥 빠진다 — 진행 중인 원본이 끝날 때 ack한다. 여기서 ack하면 그 사이 프로세스가
+        // 죽었을 때 pending에 안 남아 복구 대상에서 빠진다.
+        if (!inFlight.add(executionId)) {
+            log.info("[ExecutionJobWorker] 이미 실행 중인 잡의 재배달 — 무시. executionId: {}", executionId);
+            return;
+        }
         try {
             Optional<WorkflowExecution> found =
                 workflowExecutionRepository.findWithVersionById(executionId);
@@ -106,6 +120,7 @@ public class ExecutionJobWorker implements StreamListener<String, MapRecord<Stri
             log.error("[ExecutionJobWorker] 잡 처리 실패 — executionId: {}", executionId, e);
             workflowExecutionService.markAsFailed(executionId);
         } finally {
+            inFlight.remove(executionId);
             // ack는 반드시 실행이 종료 상태로 확정된 뒤다. 앞당기면 프로세스가 죽을 때
             // pending에 남지 않아 재시작 복구 대상에서 빠진다.
             acknowledge(record);
