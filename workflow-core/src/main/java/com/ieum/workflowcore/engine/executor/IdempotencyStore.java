@@ -17,10 +17,17 @@ public interface IdempotencyStore {
      *
      * @param key 마커 키 ({@link com.ieum.workflowcore.engine.IdempotencyKeys}로 생성)
      * @param ttl 마커 유효 시간
-     * @return 마커를 새로 세웠으면 true, 이미 있었으면 false
+     * @return 마커를 새로 세웠으면 true, 이미 있었으면 false. 구현체는 저장소 장애 시
+     *     안전하게 true(= 진행 허용)로 폴백할 수 있다.
      */
     boolean markInFlight(String key, Duration ttl);
 
-    /** 호출이 종료(성공/실패 확정)되었음을 기록해 마커를 해제한다. */
+    /**
+     * 호출이 종료(성공/실패 확정)되었음을 기록해 마커를 해제한다.
+     *
+     * <p>재시도 루프 전체가 끝난 뒤(마지막 attempt까지 확정된 뒤) 한 번만 호출해야 한다.
+     * 개별 attempt의 finally에서 호출하면 다음 attempt가 markInFlight로 마커를 다시 세울 수 있어
+     * {@link com.ieum.workflowcore.engine.IdempotencyMode#MARKER}가 무력화된다.
+     */
     void clearInFlight(String key);
 }
