@@ -58,7 +58,10 @@ public record RetryPolicy(
      */
     public long backoffMillis(int attempt, java.util.random.RandomGenerator random) {
         double raw = backoffMs * Math.pow(multiplier, attempt - 1);
-        long computed = (long) Math.min(raw, (double) maxBackoffMs);
+        // backoffMs는 nodeConfig 미선언 시 defaults.getBackoffMs()를 clamp 없이 그대로 쓰므로
+        // 음수 설정값이 여기까지 흘러올 수 있다 — Thread.sleep(negative)가 IllegalArgumentException을
+        // 던지는 것을 막기 위해 0으로 하한.
+        long computed = (long) Math.max(0, Math.min(raw, (double) maxBackoffMs));
         if (!jitter) {
             return computed;
         }

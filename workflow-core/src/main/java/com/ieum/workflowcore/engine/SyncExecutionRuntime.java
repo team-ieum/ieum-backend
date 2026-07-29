@@ -33,6 +33,7 @@ import java.util.concurrent.CompletionService;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.random.RandomGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -63,8 +64,12 @@ public class SyncExecutionRuntime {
     /** 노드 타입 → 실행 전략. @PostConstruct에서 nodeExecutors로부터 구성된다. */
     private final Map<NodeType, NodeExecutor> executorMap = new EnumMap<>(NodeType.class);
 
-    /** 재시도 백오프 지터에 쓰는 난수 생성기. 워커 스레드들이 공유한다(정확한 난수 분포보다 지터 목적이면 충분). */
-    private final RandomGenerator random = RandomGenerator.getDefault();
+    /**
+     * 재시도 백오프 지터에 쓰는 난수 생성기. 워커 스레드들이 공유하는 필드지만
+     * {@link ThreadLocalRandom}의 상태는 호출 스레드의 Thread 객체에 저장되므로 스레드 안전하다.
+     * {@code RandomGenerator.getDefault()}(L32X64MixRandom 등)는 스레드 안전하지 않아 쓰지 않는다.
+     */
+    private final RandomGenerator random = ThreadLocalRandom.current();
 
     /** fan-out 병렬 실행 시 동시에 실행할 노드 수(워커 스레드 풀 크기). */
     @Value("${workflow.execution.parallelism:4}")
@@ -305,7 +310,8 @@ public class SyncExecutionRuntime {
                         // ponytail: 이 sleep이 워커 슬롯(workflow.execution.parallelism, 기본 4)을 점유한다.
                         // fan-out이 넓고 동시 재시도가 몰리면 슬롯이 고갈된다.
                         // 개선 경로: 재시도를 워커에 붙잡아두지 말고 큐에 되돌려 넣기(지연 재제출)
-                        Thread.sleep(waitMs);
+                        // waitMs는 backoffMillis()가 0 이상으로 clamp하지만, 방어적으로 한 번 더 하한
+                        Thread.sleep(Math.max(0L, waitMs));
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
                         break;

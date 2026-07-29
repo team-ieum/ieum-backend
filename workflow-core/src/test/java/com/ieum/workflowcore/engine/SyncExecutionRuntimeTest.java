@@ -290,12 +290,49 @@ class SyncExecutionRuntimeTest {
         }
 
         @Test
-        @DisplayName("jitter on: 0과 계산값 사이(포함)의 값을 반환한다")
-        void full_jitter_within_bounds() {
+        @DisplayName("jitter on: nextLong(0, computed+1)을 호출하고 그 반환값을 그대로 쓴다")
+        void full_jitter_delegates_to_random() {
             RetryPolicy policy = new RetryPolicy(
                 5, 1000L, 2.0, 30_000L, true, null, List.of(), IdempotencyMode.NONE);
-            long waitMs = policy.backoffMillis(2, random);
-            assertThat(waitMs).isBetween(0L, 2000L);
+            StubRandom stub = new StubRandom(777L);
+            long waitMs = policy.backoffMillis(2, stub);   // computed = 2000
+            assertThat(stub.capturedOrigin).isEqualTo(0L);
+            assertThat(stub.capturedBound).isEqualTo(2001L);
+            assertThat(waitMs).isEqualTo(777L);
+        }
+
+        @Test
+        @DisplayName("jitter on이어도 computed=0이면 nextLong 호출 없이 0을 반환한다")
+        void full_jitter_zero_computed_skips_random_call() {
+            RetryPolicy policy = new RetryPolicy(
+                5, 0L, 2.0, 30_000L, true, null, List.of(), IdempotencyMode.NONE);
+            StubRandom stub = new StubRandom(999L);
+            long waitMs = policy.backoffMillis(1, stub);
+            assertThat(waitMs).isEqualTo(0L);
+            assertThat(stub.capturedBound).isEqualTo(-1L);   // nextLong(origin, bound) 미호출
+        }
+    }
+
+    /** {@link RetryPolicy#backoffMillis}가 넘기는 nextLong(origin, bound) 인자와 반환값 위임을 검증하는 스텁. */
+    static class StubRandom implements RandomGenerator {
+        private final long toReturn;
+        long capturedOrigin = -1;
+        long capturedBound = -1;
+
+        StubRandom(long toReturn) {
+            this.toReturn = toReturn;
+        }
+
+        @Override
+        public long nextLong() {
+            return toReturn;
+        }
+
+        @Override
+        public long nextLong(long origin, long bound) {
+            capturedOrigin = origin;
+            capturedBound = bound;
+            return toReturn;
         }
     }
 
@@ -397,6 +434,7 @@ class SyncExecutionRuntimeTest {
         @Test
         @DisplayName("RATE_LIMIT으로 계속 실패하면 maxAttempts만큼 실행되고 최종 FAILED")
         void rate_limit_retries_until_max_attempts_then_fails() throws Exception {
+            retryProperties.setAiMaxAttempts(3);
             RetryScriptExecutor ai = new RetryScriptExecutor(
                 Map.of(), Map.of("a", FailureKind.RATE_LIMIT));
             stubDefinition(
@@ -406,9 +444,32 @@ class SyncExecutionRuntimeTest {
             retryRuntime(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults), ai)
                 .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
 
-            assertThat(ai.callCount("a")).isEqualTo(retryProperties.getAiMaxAttempts());
+            assertThat(ai.callCount("a")).isEqualTo(3);
             verify(execution).fail();
             verify(execution, never()).complete();
+        }
+
+        @Test
+        @DisplayName("durationMs는 백오프 대기를 포함한 전체 시도 합산이다")
+        void durationMs_includes_backoff_wait() throws Exception {
+            retryProperties.setBackoffMs(50);
+            retryProperties.setMaxBackoffMs(1000);
+            retryProperties.setJitter(false);
+            RetryScriptExecutor ai = new RetryScriptExecutor(
+                Map.of("a", 2), Map.of("a", FailureKind.RATE_LIMIT));
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI")),
+                List.of(edge("t", "a", null))
+            );
+            retryRuntime(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults), ai)
+                .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+            ArgumentCaptor<com.ieum.workflowcore.domain.WorkflowExecutionLog> captor =
+                ArgumentCaptor.forClass(com.ieum.workflowcore.domain.WorkflowExecutionLog.class);
+            verify(logRepository, times(2)).save(captor.capture());
+            long aDurationMs = captor.getAllValues().stream()
+                .filter(l -> "a".equals(l.getNodeId())).findFirst().orElseThrow().getDurationMs();
+            assertThat(aDurationMs).isGreaterThanOrEqualTo(50L);
         }
     }
 }
