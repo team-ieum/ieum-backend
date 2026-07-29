@@ -1,5 +1,6 @@
 package com.ieum.workflowcore.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
@@ -85,6 +86,32 @@ public class WorkflowExecutionService {
         } catch (Exception e) {
             log.warn("[WorkflowExecutionService] triggerData 암호화 실패", e);
             return null;
+        }
+    }
+
+    /**
+     * 저장된 트리거 입력을 복호해 실행에 넣을 수 있는 Map으로 되돌린다.
+     * {@link #prepareExecution}의 암호화에 대응하는 유일한 역연산이며, 잡 큐 워커와
+     * 실패 실행 재처리가 이 메서드 하나를 공유한다(복호 로직을 복제하지 말 것).
+     *
+     * <p>{@code triggerData}가 null이면 빈 Map을 반환한다 — 트리거 입력이 아예 없었던 경우와
+     * 암호화가 실패해 유실된 경우를 구분할 수 없고, 둘 다 "입력 없음"으로 실행하는 것이
+     * 기존 동작과 일치한다.
+     *
+     * @throws CustomException CREDENTIAL_DECRYPT_FAILED — 복호 또는 역직렬화 실패
+     *                         (암호화 키 교체·데이터 손상)
+     */
+    public Map<String, Object> decryptTriggerData(WorkflowExecution execution) {
+        if (execution.getTriggerData() == null) {
+            return Map.of();
+        }
+        String json = aesEncryptor.decrypt(execution.getTriggerData());
+        try {
+            return objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
+        } catch (Exception e) {
+            log.error("[WorkflowExecutionService] triggerData 역직렬화 실패 — executionId: {}",
+                execution.getId(), e);
+            throw new CustomException(ErrorCode.CREDENTIAL_DECRYPT_FAILED);
         }
     }
 

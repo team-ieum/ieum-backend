@@ -30,7 +30,10 @@
 | `beta` | BetaUsageController | 베타 플랫폼 키 사용량(%) 조회 |
 
 ## 실행 트리거
-`workflow/WorkflowExecutionRunner` — `@Async`로 `SyncExecutionRuntime`을 띄우는 진입점. 실행 레코드 생성 자체는 workflow-core `WorkflowExecutionService.prepareExecution()`.
+`workflow/WorkflowExecutionRunner` — 실행 진입점. Redis Stream 잡 큐(`ieum:exec:jobs`)에 executionId만 발행하고, 같은 프로세스의 워커가 꺼내 `SyncExecutionRuntime`을 돌린다. 큐 발행이 실패하면(Redis 장애) 기존 `@Async` 직접 실행으로 폴백한다. 실행 레코드 생성 자체는 workflow-core `WorkflowExecutionService.prepareExecution()`.
+
+`workflow/queue/` — `ExecutionJobQueue`(발행), `ExecutionJobWorker`(소비), `ExecutionJobQueueBootstrap`(그룹 생성·부팅 시 고아 잡 회수·소비 시작), `ExecutionJobQueueConfig`(컨테이너 빈).
+**워커를 별도 프로세스로 빼지 말 것** — `ExecutionEventPublisher`가 in-memory `Sinks.Many`라 SSE가 즉시 깨진다. 큐의 목적은 수평 확장이 아니라 재시작 복구다.
 
 ## config/ — Provider 포트 실구현
 workflow-core가 선언한 포트를 여기서 `Default*`로 구현해 Stub을 대체한다 (`@Primary`).

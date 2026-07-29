@@ -175,6 +175,43 @@ class WorkflowExecutionServiceTest {
         assertThat(captor.getValue().getTriggerData()).isNull();
     }
 
+    @Test
+    @DisplayName("decryptTriggerData는 prepareExecution이 암호화한 입력을 원본 Map으로 되돌린다")
+    void decryptTriggerData_roundTripsPreparedInput() {
+        Workflow workflow = mock(Workflow.class);
+        given(workflow.isActive()).willReturn(true);
+        WorkflowVersion version = mock(WorkflowVersion.class);
+        Map<String, Object> original = Map.of("apiKey", "sk-real-secret", "city", "Seoul");
+
+        service.prepareExecution(workflow, version, TriggerType.WEBHOOK, original);
+        ArgumentCaptor<WorkflowExecution> captor = ArgumentCaptor.forClass(WorkflowExecution.class);
+        verify(workflowExecutionRepository).save(captor.capture());
+
+        WorkflowExecution stored = mock(WorkflowExecution.class);
+        given(stored.getTriggerData()).willReturn(captor.getValue().getTriggerData());
+
+        assertThat(service.decryptTriggerData(stored)).isEqualTo(original);
+    }
+
+    @Test
+    @DisplayName("triggerData가 null이면 빈 Map을 반환한다 — 입력 없이 실행하던 기존 동작과 같다")
+    void decryptTriggerData_nullTriggerData_returnsEmptyMap() {
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        given(execution.getTriggerData()).willReturn(null);
+
+        assertThat(service.decryptTriggerData(execution)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("복호에 실패하면 CustomException으로 알린다(손상된 입력으로 실행하지 않는다)")
+    void decryptTriggerData_corrupted_throws() {
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        given(execution.getTriggerData()).willReturn("not-a-ciphertext");
+
+        assertThatThrownBy(() -> service.decryptTriggerData(execution))
+            .isInstanceOf(CustomException.class);
+    }
+
     private WorkflowExecution mockExecution(UUID workflowId, ExecutionStatus status) {
         Workflow workflow = mock(Workflow.class);
         given(workflow.getId()).willReturn(workflowId);
