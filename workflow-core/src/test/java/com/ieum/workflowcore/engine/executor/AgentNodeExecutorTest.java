@@ -4,7 +4,10 @@ import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.ExecutionContext;
 import com.ieum.workflowcore.engine.ExecutionCursor;
 import com.ieum.workflowcore.engine.ExecutorResult;
+import com.ieum.workflowcore.engine.FailureKind;
+import com.ieum.workflowcore.engine.IdempotencyMode;
 import com.ieum.workflowcore.engine.Node;
+import com.ieum.workflowcore.engine.RetryPolicy;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
@@ -35,6 +38,7 @@ class AgentNodeExecutorTest {
     private GitHubTokenProvider gitHubTokenProvider;
     private GoogleTokenProvider googleTokenProvider;
     private BetaPlatformProvider betaPlatformProvider;
+    private IdempotencyStore idempotencyStore;
 
     @BeforeEach
     void setUp() throws IOException {
@@ -45,6 +49,8 @@ class AgentNodeExecutorTest {
         gitHubTokenProvider = mock(GitHubTokenProvider.class);
         googleTokenProvider = mock(GoogleTokenProvider.class);
         betaPlatformProvider = new StubBetaPlatformProvider();
+        idempotencyStore = mock(IdempotencyStore.class);
+        when(idempotencyStore.markInFlight(any(), any())).thenReturn(true);
         when(credentialProvider.getDecryptedApiKey(any())).thenReturn("decrypted-api-key");
         executor = new AgentNodeExecutor(
             mockWebServer.url("/").toString(),
@@ -55,8 +61,14 @@ class AgentNodeExecutorTest {
             new StubWebhookCredentialProvider(),
             uid -> null,
             betaPlatformProvider,
+            idempotencyStore,
             30
         );
+    }
+
+    /** HEADER/MARKER 테스트용 재시도 정책. maxAttempts=3, 백오프 없음. */
+    private RetryPolicy policy(IdempotencyMode mode) {
+        return new RetryPolicy(3, 0, 1.0, 0, false, null, List.of(), mode);
     }
 
     @AfterEach
@@ -115,6 +127,60 @@ class AgentNodeExecutorTest {
 
     private static final String SUCCESS_RESPONSE =
         "{\"success\":true,\"output\":\"완료\",\"metadata\":null,\"errorMessage\":null}";
+
+    // ── 멱등성 가드 (Task 6) ─────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("HEADER 모드: 재시도 두 회차가 같은 X-Idempotency-Key를 보낸다")
+    void execute_headerMode_sameKeyAcrossAttempts() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody(SUCCESS_RESPONSE));
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNode("요약해줘", "CLAUDE", "cred-id-1");
+        NodeExecutor.NodeAttempt attempt1 = new NodeExecutor.NodeAttempt(1, "fixed-key-1", policy(IdempotencyMode.HEADER));
+        NodeExecutor.NodeAttempt attempt2 = new NodeExecutor.NodeAttempt(2, "fixed-key-1", policy(IdempotencyMode.HEADER));
+
+        executor.execute(node, Collections.emptyMap(), buildCursor(), attempt1);
+        executor.execute(node, Collections.emptyMap(), buildCursor(), attempt2);
+
+        RecordedRequest first = mockWebServer.takeRequest();
+        RecordedRequest second = mockWebServer.takeRequest();
+        assertThat(first.getHeader("X-Idempotency-Key")).isEqualTo("fixed-key-1");
+        assertThat(second.getHeader("X-Idempotency-Key")).isEqualTo("fixed-key-1");
+    }
+
+    @Test
+    @DisplayName("NONE 모드(기본값)에서는 X-Idempotency-Key 헤더도 마커 호출도 없다")
+    void execute_noneMode_noHeaderNoMarker() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNode("요약해줘", "CLAUDE", "cred-id-1");
+        executor.execute(node, Collections.emptyMap(), buildCursor());
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Idempotency-Key")).isNull();
+        verify(idempotencyStore, never()).markInFlight(any(), any());
+    }
+
+    @Test
+    @DisplayName("MARKER 모드: 마커가 이미 있으면 agent 호출 없이 CLIENT_ERROR 실패를 반환한다")
+    void execute_markerMode_blockedWhenAlreadyInFlight() {
+        when(idempotencyStore.markInFlight("dup-key", NodeExecutor.markerTtl(policy(IdempotencyMode.MARKER))))
+            .thenReturn(false);
+
+        Node node = buildAgentNode("요약해줘", "CLAUDE", "cred-id-1");
+        NodeExecutor.NodeAttempt attempt =
+            new NodeExecutor.NodeAttempt(1, "dup-key", policy(IdempotencyMode.MARKER));
+
+        ExecutorResult result = executor.execute(node, Collections.emptyMap(), buildCursor(), attempt);
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getFailureKind()).isEqualTo(FailureKind.CLIENT_ERROR);
+        assertThat(mockWebServer.getRequestCount()).isZero();
+    }
 
     @Test
     @DisplayName("실행 traceId와 nodeId가 X-Trace-Id·X-Node-Id 헤더로 전송된다")
@@ -442,6 +508,7 @@ class AgentNodeExecutorTest {
             webhookProvider,
             uid -> null,
             betaPlatformProvider,
+            idempotencyStore,
             30
         );
 
@@ -487,6 +554,7 @@ class AgentNodeExecutorTest {
             new StubWebhookCredentialProvider(),
             roleProvider,
             betaProvider,
+            idempotencyStore,
             30
         );
     }
@@ -697,6 +765,7 @@ class AgentNodeExecutorTest {
             new StubWebhookCredentialProvider(),
             uid -> null,
             betaProvider,
+            idempotencyStore,
             5
         );
 

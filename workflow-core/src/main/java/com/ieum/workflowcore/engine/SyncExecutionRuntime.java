@@ -15,6 +15,7 @@ import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
+import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
@@ -60,6 +61,7 @@ public class SyncExecutionRuntime {
     /** @Component로 등록된 모든 NodeExecutor 구현체를 Spring이 자동 주입 */
     private final List<NodeExecutor> nodeExecutors;
     private final RetryProperties retryProperties;
+    private final IdempotencyStore idempotencyStore;
 
     /** 노드 타입 → 실행 전략. @PostConstruct에서 nodeExecutors로부터 구성된다. */
     private final Map<NodeType, NodeExecutor> executorMap = new EnumMap<>(NodeType.class);
@@ -290,6 +292,8 @@ public class SyncExecutionRuntime {
             }
             Map<String, Object> input = prepareNodeInput(node, cursor);
             RetryPolicy policy = RetryPolicy.from(node.getConfig(), node.getType(), retryProperties);
+            // attempt 회차와 무관한 노드 고정 키 — IdempotencyKeys.generate가 이를 보장한다.
+            String idempotencyKey = IdempotencyKeys.generate(executionId.toString(), node.getId());
             log.info("[Runtime] 노드 실행 — nodeId: {}, type: {}", node.getId(), node.getType());
             eventPublisher.publish(executionId,
                 ExecutionEvent.nodeStarted(node.getId(), node.getType()));
@@ -300,7 +304,8 @@ public class SyncExecutionRuntime {
                 while (true) {
                     long attemptStart = System.currentTimeMillis();
                     try {
-                        result = executor.execute(node, input, cursor);
+                        result = executor.execute(node, input, cursor,
+                            new NodeExecutor.NodeAttempt(attempt, idempotencyKey, policy));
                     } catch (Exception ex) {
                         result = ExecutorResult.failure(ex.toString(),
                             System.currentTimeMillis() - attemptStart, FailureClassifier.fromException(ex));
@@ -323,6 +328,11 @@ public class SyncExecutionRuntime {
                         break;
                     }
                     attempt++;
+                }
+                // 재시도 루프 전체가 끝난 뒤 1회만 마커 해제 — 개별 attempt에서 해제하면 다음 attempt의
+                // markInFlight가 항상 true를 반환해 MARKER 모드가 무력화된다(IdempotencyStore 계약).
+                if (policy.idempotency().usesMarker()) {
+                    idempotencyStore.clearInFlight(idempotencyKey);
                 }
                 long durationMs = System.currentTimeMillis() - overallStart;
                 // 재시도 대상 실패로 maxAttempts까지 다 쓰고도 실패한 경우만 "소진"이다.

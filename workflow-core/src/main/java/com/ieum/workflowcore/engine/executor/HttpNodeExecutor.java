@@ -6,7 +6,9 @@ import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.ExecutionCursor;
 import com.ieum.workflowcore.engine.ExecutorResult;
 import com.ieum.workflowcore.engine.FailureClassifier;
+import com.ieum.workflowcore.engine.FailureKind;
 import com.ieum.workflowcore.engine.Node;
+import com.ieum.workflowcore.engine.RetryPolicy;
 import java.net.InetAddress;
 import java.net.URI;
 import java.util.HashMap;
@@ -43,8 +45,11 @@ import org.springframework.web.client.RestTemplate;
 @RequiredArgsConstructor
 public class HttpNodeExecutor implements NodeExecutor {
 
+    private static final String IDEMPOTENCY_HEADER = "Idempotency-Key";
+
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
+    private final IdempotencyStore idempotencyStore;
 
     @Override
     public NodeType getNodeType() {
@@ -52,10 +57,16 @@ public class HttpNodeExecutor implements NodeExecutor {
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor) {
+        return execute(node, input, cursor, NodeAttempt.NONE);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor, NodeAttempt attempt) {
         long startTime = System.currentTimeMillis();
         log.info("[HttpExecutor] 노드 실행 — nodeId: {}", node.getId());
+        RetryPolicy policy = attempt.policy();
 
         try {
             Map<String, Object> config = node.getConfig();
@@ -71,6 +82,22 @@ public class HttpNodeExecutor implements NodeExecutor {
             HttpHeaders httpHeaders = new HttpHeaders();
             httpHeaders.setContentType(MediaType.APPLICATION_JSON);
             rawHeaders.forEach((k, v) -> httpHeaders.set(k, cursor.renderVariables(v)));
+
+            // 사용자가 config.headers에 이미 Idempotency-Key를 넣었으면 덮어쓰지 않는다.
+            // HttpHeaders는 대소문자 구분 없는 맵이라 containsKey가 사용자 표기와 무관하게 감지한다.
+            if (policy != null && policy.idempotency().usesHeader()
+                    && !httpHeaders.containsKey(IDEMPOTENCY_HEADER)) {
+                httpHeaders.set(IDEMPOTENCY_HEADER, attempt.idempotencyKey());
+            }
+
+            if (policy != null && policy.idempotency().usesMarker()) {
+                if (!idempotencyStore.markInFlight(attempt.idempotencyKey(), NodeExecutor.markerTtl(policy))) {
+                    log.warn("[HttpExecutor] 멱등성 마커 충돌로 호출 차단 — nodeId: {}", node.getId());
+                    return ExecutorResult.failure(
+                        "중복 호출 차단 — 이전 시도가 외부 서비스에 도달했을 수 있어 재시도를 중단합니다.",
+                        System.currentTimeMillis() - startTime, FailureKind.CLIENT_ERROR);
+                }
+            }
 
             // body 변수 치환
             String bodyJson = null;

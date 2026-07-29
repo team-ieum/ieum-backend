@@ -4,7 +4,9 @@ import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.ExecutionCursor;
 import com.ieum.workflowcore.engine.ExecutorResult;
 import com.ieum.workflowcore.engine.FailureClassifier;
+import com.ieum.workflowcore.engine.FailureKind;
 import com.ieum.workflowcore.engine.Node;
+import com.ieum.workflowcore.engine.RetryPolicy;
 import com.ieum.workflowcore.engine.executor.dto.AgentExecutionResult;
 import com.ieum.workflowcore.engine.executor.dto.AgentNodeRequest;
 import com.ieum.workflowcore.engine.executor.dto.McpServerRef;
@@ -55,6 +57,7 @@ public class AgentNodeExecutor implements NodeExecutor {
     private final WebhookCredentialProvider webhookCredentialProvider;
     private final UserRoleProvider userRoleProvider;
     private final BetaPlatformProvider betaPlatformProvider;
+    private final IdempotencyStore idempotencyStore;
     private final int agentTimeoutSeconds;
 
     public AgentNodeExecutor(
@@ -66,6 +69,7 @@ public class AgentNodeExecutor implements NodeExecutor {
         WebhookCredentialProvider webhookCredentialProvider,
         UserRoleProvider userRoleProvider,
         BetaPlatformProvider betaPlatformProvider,
+        IdempotencyStore idempotencyStore,
         @Value("${ieum.agent.timeout-seconds:120}") int agentTimeoutSeconds
     ) {
         this.webClient = WebClient.builder()
@@ -78,6 +82,7 @@ public class AgentNodeExecutor implements NodeExecutor {
         this.webhookCredentialProvider = webhookCredentialProvider;
         this.userRoleProvider = userRoleProvider;
         this.betaPlatformProvider = betaPlatformProvider;
+        this.idempotencyStore = idempotencyStore;
         this.agentTimeoutSeconds = agentTimeoutSeconds;
     }
 
@@ -87,10 +92,16 @@ public class AgentNodeExecutor implements NodeExecutor {
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor) {
+        return execute(node, input, cursor, NodeAttempt.NONE);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor, NodeAttempt attempt) {
         long startTime = System.currentTimeMillis();
         log.info("[AgentNodeExecutor] 노드 실행 — nodeId: {}", node.getId());
+        RetryPolicy policy = attempt.policy();
 
         UUID userId = null;
         boolean useBetaPlatformKey = false;
@@ -146,10 +157,22 @@ public class AgentNodeExecutor implements NodeExecutor {
                 useBetaPlatformKey = true;
             }
 
+            if (policy != null && policy.idempotency().usesMarker()) {
+                if (!idempotencyStore.markInFlight(attempt.idempotencyKey(), NodeExecutor.markerTtl(policy))) {
+                    releaseBetaQuotaOnFailure(betaReservationKey);
+                    log.warn("[AgentNodeExecutor] 멱등성 마커 충돌로 호출 차단 — nodeId: {}", node.getId());
+                    return ExecutorResult.failure(
+                        "중복 호출 차단 — 이전 시도가 외부 서비스에 도달했을 수 있어 재시도를 중단합니다.",
+                        System.currentTimeMillis() - startTime, FailureKind.CLIENT_ERROR);
+                }
+            }
+
+            String idempotencyHeaderKey = (policy != null && policy.idempotency().usesHeader())
+                ? attempt.idempotencyKey() : null;
             AgentExecutionResult agentResult = callAgentService(
                 request, llmProvider, decryptedApiKey, googleAccessToken,
                 userId, userRole, toolAuthHeaders, useBetaPlatformKey,
-                cursor.getContext().getTraceId());
+                cursor.getContext().getTraceId(), idempotencyHeaderKey);
 
             if (!agentResult.isSuccess()) {
                 releaseBetaQuotaOnFailure(betaReservationKey);
@@ -369,7 +392,7 @@ public class AgentNodeExecutor implements NodeExecutor {
     private AgentExecutionResult callAgentService(
         AgentNodeRequest request, String llmProvider, String llmApiKey,
         String googleAccessToken, UUID userId, String userRole, Map<String, String> toolAuthHeaders,
-        boolean useBetaPlatformKey, String traceId
+        boolean useBetaPlatformKey, String traceId, String idempotencyKey
     ) {
         try {
             WebClient.RequestBodySpec requestSpec = webClient.post()
@@ -382,6 +405,12 @@ public class AgentNodeExecutor implements NodeExecutor {
             // 헤더가 없으면 agent가 자체 uuid4를 생성해버려 BE 이력과 조인이 끊기므로 있을 때만 보낸다.
             if (traceId != null) {
                 requestSpec = requestSpec.header("X-Trace-Id", traceId);
+            }
+
+            // ieum-agent는 아직 이 헤더를 읽지 않는다 — BE가 먼저 보내둬도 무해하며(agent가 무시),
+            // agent 쪽 소비 로직이 나중에 배포돼도 BE를 다시 배포할 필요가 없다(배포 순서 무관).
+            if (idempotencyKey != null) {
+                requestSpec = requestSpec.header("X-Idempotency-Key", idempotencyKey);
             }
 
             if (useBetaPlatformKey) {

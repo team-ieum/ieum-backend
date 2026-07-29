@@ -21,6 +21,7 @@ import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.event.ExecutionEventType;
+import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
@@ -54,6 +55,7 @@ class SyncExecutionRuntimeTest {
     private WorkflowExecutionRepository executionRepository;
     private WorkflowCrudService crudService;
     private ExecutionEventPublisher eventPublisher;
+    private IdempotencyStore idempotencyStore;
     private WorkflowExecution execution;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final UUID executionId = UUID.randomUUID();
@@ -105,6 +107,7 @@ class SyncExecutionRuntimeTest {
         executionRepository = mock(WorkflowExecutionRepository.class);
         crudService = mock(WorkflowCrudService.class);
         eventPublisher = mock(ExecutionEventPublisher.class);
+        idempotencyStore = mock(IdempotencyStore.class);
         execution = mock(WorkflowExecution.class);
         Workflow workflow = mock(Workflow.class);
         when(workflow.getUserId()).thenReturn(UUID.randomUUID());
@@ -126,7 +129,7 @@ class SyncExecutionRuntimeTest {
         );
         SyncExecutionRuntime runtime = new SyncExecutionRuntime(
             objectMapper, logRepository, executionRepository, crudService, eventPublisher, executors,
-            new RetryProperties());
+            new RetryProperties(), idempotencyStore);
         runtime.initExecutorMap();
         ReflectionTestUtils.setField(runtime, "parallelism", 4);
         return runtime;
@@ -138,6 +141,15 @@ class SyncExecutionRuntimeTest {
         n.put("type", type);
         n.put("label", id);
         n.put("config", new HashMap<>());
+        return n;
+    }
+
+    /** retry 설정(예: idempotency 모드)이 포함된 노드 정의. */
+    private Map<String, Object> nodeWithRetry(String id, String type, Map<String, Object> retryConfig) {
+        Map<String, Object> n = node(id, type);
+        Map<String, Object> config = new HashMap<>();
+        config.put("retry", retryConfig);
+        n.put("config", config);
         return n;
     }
 
@@ -383,6 +395,39 @@ class SyncExecutionRuntimeTest {
         }
     }
 
+    /**
+     * 4-인자 execute로 전달받은 {@link NodeExecutor.NodeAttempt}를 그대로 기록하는 fake executor.
+     * 재시도 회차마다 같은 멱등성 키가 전달되는지(C-1 관련 계약) 검증하는 데 쓴다.
+     */
+    static class AttemptCapturingExecutor implements NodeExecutor {
+        private final int succeedOnAttempt;
+        final List<NodeExecutor.NodeAttempt> capturedAttempts = new CopyOnWriteArrayList<>();
+
+        AttemptCapturingExecutor(int succeedOnAttempt) {
+            this.succeedOnAttempt = succeedOnAttempt;
+        }
+
+        @Override
+        public NodeType getNodeType() {
+            return NodeType.AI;
+        }
+
+        @Override
+        public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor) {
+            throw new UnsupportedOperationException("이 fake executor는 4-인자 execute만 지원");
+        }
+
+        @Override
+        public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor,
+                                      NodeExecutor.NodeAttempt attempt) {
+            capturedAttempts.add(attempt);
+            if (attempt.attempt() < succeedOnAttempt) {
+                return ExecutorResult.failure("스크립트 실패", 1, FailureKind.RATE_LIMIT);
+            }
+            return ExecutorResult.success(Map.of("output", node.getId()), 1);
+        }
+    }
+
     @Nested
     @DisplayName("노드 재시도 실행")
     class RetryExecution {
@@ -400,7 +445,7 @@ class SyncExecutionRuntimeTest {
         private SyncExecutionRuntime retryRuntime(NodeExecutor... executors) {
             SyncExecutionRuntime runtime = new SyncExecutionRuntime(
                 objectMapper, logRepository, executionRepository, crudService, eventPublisher,
-                List.of(executors), retryProperties);
+                List.of(executors), retryProperties, idempotencyStore);
             runtime.initExecutorMap();
             ReflectionTestUtils.setField(runtime, "parallelism", 4);
             return runtime;
@@ -493,6 +538,57 @@ class SyncExecutionRuntimeTest {
             long aDurationMs = captor.getAllValues().stream()
                 .filter(l -> "a".equals(l.getNodeId())).findFirst().orElseThrow().getDurationMs();
             assertThat(aDurationMs).isGreaterThanOrEqualTo(50L);
+        }
+
+        @Test
+        @DisplayName("재시도 두 회차가 같은 멱등성 키를 전달받는다")
+        void retriedAttempts_receiveSameIdempotencyKey() throws Exception {
+            AttemptCapturingExecutor ai = new AttemptCapturingExecutor(2);
+            stubDefinition(
+                List.of(node("t", "TRIGGER"),
+                    nodeWithRetry("a", "AI", Map.of("idempotency", "MARKER", "maxAttempts", 2))),
+                List.of(edge("t", "a", null))
+            );
+            retryRuntime(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults), ai)
+                .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+            assertThat(ai.capturedAttempts).hasSize(2);
+            assertThat(ai.capturedAttempts.get(0).idempotencyKey()).isNotBlank();
+            assertThat(ai.capturedAttempts.get(0).idempotencyKey())
+                .isEqualTo(ai.capturedAttempts.get(1).idempotencyKey());
+        }
+
+        @Test
+        @DisplayName("MARKER 모드: clearInFlight는 재시도 루프 전체가 끝난 뒤 정확히 1회만 호출된다(C-1)")
+        void markerMode_clearInFlightCalledOnceAfterAllAttempts() throws Exception {
+            AttemptCapturingExecutor ai = new AttemptCapturingExecutor(2);
+            stubDefinition(
+                List.of(node("t", "TRIGGER"),
+                    nodeWithRetry("a", "AI", Map.of("idempotency", "MARKER", "maxAttempts", 2))),
+                List.of(edge("t", "a", null))
+            );
+            retryRuntime(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults), ai)
+                .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+            assertThat(ai.capturedAttempts).hasSize(2);
+            String key = ai.capturedAttempts.get(0).idempotencyKey();
+            // 개별 attempt의 finally가 아니라 루프 종료 후 1회만 — 2회 시도했지만 clear는 1번.
+            verify(idempotencyStore, times(1)).clearInFlight(key);
+        }
+
+        @Test
+        @DisplayName("NONE 모드(기본값)에서는 clearInFlight가 호출되지 않는다")
+        void noneMode_neverCallsClearInFlight() throws Exception {
+            RetryScriptExecutor ai = new RetryScriptExecutor(
+                Map.of("a", 2), Map.of("a", FailureKind.RATE_LIMIT));
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI")),
+                List.of(edge("t", "a", null))
+            );
+            retryRuntime(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults), ai)
+                .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+            verify(idempotencyStore, never()).clearInFlight(any());
         }
 
         @Test
