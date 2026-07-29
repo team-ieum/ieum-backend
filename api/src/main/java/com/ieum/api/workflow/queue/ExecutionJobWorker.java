@@ -9,9 +9,11 @@ import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.connection.stream.MapRecord;
@@ -29,11 +31,21 @@ import org.springframework.stereotype.Component;
  *
  * <p>잡 페이로드에는 executionId만 있다. 트리거 입력은 DB에서 읽어
  * {@link WorkflowExecutionService#decryptTriggerData}로 복호한다 — Redis에 평문이 남지 않는다.
+ *
+ * <p><b>배달 보장은 at-least-once이지 exactly-once가 아니다.</b> 프로세스가 실행 도중 죽으면 run은
+ * {@code RUNNING}으로 남고 잡은 pending에 남아 회수되어 <b>처음부터 다시</b> 실행된다 — 이미
+ * 부작용을 낸 노드(Slack 발송·Notion 쓰기·LLM 과금)까지 되풀이된다. 중복 가드는 종료 상태
+ * ({@code SUCCESS}/{@code FAILED})만 걸러 준다. 재처리 API 등 이 큐 위에 무언가를 얹을 때
+ * exactly-once로 오해하지 말 것.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class ExecutionJobWorker implements StreamListener<String, MapRecord<String, String, String>> {
+
+    /** 실행 풀 포화 시 제출 재시도 횟수·간격. 다 소진하면 폴링 스레드에서 인라인 실행한다. */
+    private static final int SUBMIT_ATTEMPTS = 3;
+    private static final Duration SUBMIT_RETRY_DELAY = Duration.ofSeconds(1);
 
     private final StringRedisTemplate redisTemplate;
     private final WorkflowExecutionRepository workflowExecutionRepository;
@@ -51,15 +63,22 @@ public class ExecutionJobWorker implements StreamListener<String, MapRecord<Stri
             return;
         }
 
-        try {
-            // 폴링 스레드에서 직접 실행하면 실행 하나가 끝날 때까지 다음 잡을 못 꺼낸다.
-            workflowExecutor.execute(() -> handle(executionId, record));
-        } catch (Exception e) {
-            // 풀 포화(TaskRejected) — 폴링 스레드에서 직접 처리해 자연스러운 백프레셔를 만든다.
-            log.warn("[ExecutionJobWorker] 실행 풀 포화 — 폴링 스레드에서 직접 실행. executionId: {}",
-                executionId);
-            handle(executionId, record);
+        // 폴링 스레드에서 직접 실행하면 이 스트림의 소비 전체가 그동안 멈춘다(StreamPollTask는
+        // 구독당 스레드 하나로 순차 처리). 풀이 포화면 잠깐 기다렸다 다시 제출해 본다.
+        for (int attempt = 1; attempt <= SUBMIT_ATTEMPTS; attempt++) {
+            try {
+                workflowExecutor.execute(() -> handle(executionId, record));
+                return;
+            } catch (RejectedExecutionException e) {
+                sleepQuietly(SUBMIT_RETRY_DELAY);
+            }
         }
+
+        // 최후수단. 잡을 잃지 않는 쪽을 택한 것이지 백프레셔가 아니다 — 생산자는 이 정체를 알지 못하고
+        // 계속 발행에 성공한다. 이 실행이 끝날 때까지 잡 소비가 멈춘다.
+        log.warn("[ExecutionJobWorker] 실행 풀이 계속 포화 — 폴링 스레드에서 직접 실행한다. "
+            + "이 실행이 끝날 때까지 잡 소비가 정지된다. executionId: {}", executionId);
+        handle(executionId, record);
     }
 
     private void handle(UUID executionId, MapRecord<String, String, String> record) {
@@ -105,6 +124,14 @@ public class ExecutionJobWorker implements StreamListener<String, MapRecord<Stri
             log.error("[ExecutionJobWorker] 잡 페이로드 해석 실패 — recordId: {}, value: {}",
                 record.getId(), record.getValue());
             return null;
+        }
+    }
+
+    private void sleepQuietly(Duration duration) {
+        try {
+            Thread.sleep(duration.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

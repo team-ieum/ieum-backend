@@ -34,6 +34,8 @@
 
 `workflow/queue/` — `ExecutionJobQueue`(발행), `ExecutionJobWorker`(소비), `ExecutionJobQueueBootstrap`(그룹 생성·부팅 시 고아 잡 회수·소비 시작), `ExecutionJobQueueConfig`(컨테이너 빈).
 **워커를 별도 프로세스로 빼지 말 것** — `ExecutionEventPublisher`가 in-memory `Sinks.Many`라 SSE가 즉시 깨진다. 큐의 목적은 수평 확장이 아니라 재시작 복구다.
+**단일 인스턴스 배포(stop-then-start) 전제** — 컨슈머 이름이 상수라 인스턴스를 구분하지 않는다. 롤링 배포로 두 인스턴스가 겹치면 고아 잡 회수가 살아 있는 쪽의 in-flight를 뺏어 이중 실행할 수 있다(`ieum.workflow.queue.reclaim-min-idle`, 기본 10분이 유일한 안전장치). 스케일아웃은 SSE 허브 교체가 선행 조건.
+Quartz 스케줄 실행(`WorkflowScheduleJob`)은 큐를 거치지 않아 내구성이 없다 — Provider 포트로 뒤집으면 해결되나 별도 이슈.
 
 ## config/ — Provider 포트 실구현
 workflow-core가 선언한 포트를 여기서 `Default*`로 구현해 Stub을 대체한다 (`@Primary`).

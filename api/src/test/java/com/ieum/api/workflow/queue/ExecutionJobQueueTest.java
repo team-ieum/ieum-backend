@@ -37,6 +37,7 @@ class ExecutionJobQueueTest {
         when(container.isRunning()).thenReturn(true);
 
         queue = new ExecutionJobQueue(redisTemplate, container);
+        queue.markConsumerHealthy();
     }
 
     @Test
@@ -88,5 +89,25 @@ class ExecutionJobQueueTest {
 
         assertThat(result).isFalse();
         verify(streamOperations, never()).add(any(MapRecord.class), any(XAddOptions.class));
+    }
+
+    @Test
+    @DisplayName("컨테이너는 running이어도 소비가 죽었으면 발행하지 않는다 — 그룹이 사라진 뒤 잡만 쌓이는 걸 막는다")
+    void enqueue_consumerUnhealthy_skipsPublish() {
+        queue.markConsumerUnhealthy(new RuntimeException("NOGROUP No such consumer group"));
+
+        boolean result = queue.enqueue(UUID.randomUUID());
+
+        assertThat(result).isFalse();
+        verify(streamOperations, never()).add(any(MapRecord.class), any(XAddOptions.class));
+    }
+
+    @Test
+    @DisplayName("소비가 복구되면 다시 발행한다")
+    void enqueue_consumerRecovered_publishesAgain() {
+        queue.markConsumerUnhealthy(new RuntimeException("redis down"));
+        queue.markConsumerHealthy();
+
+        assertThat(queue.enqueue(UUID.randomUUID())).isTrue();
     }
 }

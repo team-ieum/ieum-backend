@@ -2,8 +2,10 @@ package com.ieum.workflowcore.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
@@ -173,6 +175,22 @@ class WorkflowExecutionServiceTest {
         ArgumentCaptor<WorkflowExecution> captor = ArgumentCaptor.forClass(WorkflowExecution.class);
         verify(workflowExecutionRepository).save(captor.capture());
         assertThat(captor.getValue().getTriggerData()).isNull();
+    }
+
+    @Test
+    @DisplayName("비어 있지 않은 triggerData의 암호화가 실패하면 실행 준비 자체를 실패시킨다(입력이 사라진 채 SUCCESS 방지)")
+    void prepareExecution_encryptionFails_failsFast() throws Exception {
+        Workflow workflow = mock(Workflow.class);
+        given(workflow.isActive()).willReturn(true);
+        WorkflowVersion version = mock(WorkflowVersion.class);
+        given(objectMapper.writeValueAsString(any()))
+            .willThrow(new com.fasterxml.jackson.core.JsonProcessingException("boom") {});
+
+        assertThatThrownBy(() -> service.prepareExecution(
+            workflow, version, TriggerType.WEBHOOK, Map.of("city", "Seoul")))
+            .isInstanceOf(CustomException.class);
+
+        verify(workflowExecutionRepository, never()).save(any());
     }
 
     @Test

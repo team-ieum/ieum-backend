@@ -1,5 +1,6 @@
 package com.ieum.api.workflow.queue;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -17,11 +18,14 @@ import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 import org.mockito.Mockito;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.connection.stream.StreamRecords;
@@ -53,12 +57,15 @@ class ExecutionJobWorkerTest {
         workflowExecutionService = Mockito.mock(WorkflowExecutionService.class);
         syncExecutionRuntime = Mockito.mock(SyncExecutionRuntime.class);
 
+        worker = newWorker(Runnable::run);
+    }
+
+    private ExecutionJobWorker newWorker(Executor executor) {
         // 러너는 실물을 쓴다 — 큐 → 워커 → SyncExecutionRuntime.execute 경로를 통째로 검증하기 위함.
         WorkflowExecutionRunner runner = new WorkflowExecutionRunner(
             syncExecutionRuntime, workflowExecutionService, Mockito.mock(ExecutionJobQueue.class));
-
-        worker = new ExecutionJobWorker(redisTemplate, workflowExecutionRepository,
-            workflowExecutionService, runner, Runnable::run);
+        return new ExecutionJobWorker(redisTemplate, workflowExecutionRepository,
+            workflowExecutionService, runner, executor);
     }
 
     private MapRecord<String, String, String> jobRecord(String executionIdValue) {
@@ -146,6 +153,50 @@ class ExecutionJobWorkerTest {
 
         verify(syncExecutionRuntime, never()).execute(any(), any(), any());
         verify(workflowExecutionService).markAsFailed(executionId);
+        verify(streamOperations).acknowledge(
+            ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
+    }
+
+    @Test
+    @DisplayName("실행 풀이 포화면 잠시 뒤 다시 제출한다 — 폴링 스레드를 곧바로 점유하지 않는다")
+    void onMessage_poolSaturated_retriesSubmission() throws Exception {
+        WorkflowExecution execution = execution(ExecutionStatus.PENDING);
+        when(execution.getWorkflowVersion()).thenReturn(version);
+        when(workflowExecutionRepository.findWithVersionById(executionId))
+            .thenReturn(Optional.of(execution));
+        when(workflowExecutionService.decryptTriggerData(execution)).thenReturn(Map.of());
+
+        AtomicInteger submissions = new AtomicInteger();
+        Executor rejectsOnce = task -> {
+            if (submissions.incrementAndGet() == 1) {
+                throw new TaskRejectedException("pool full");
+            }
+            task.run();
+        };
+        worker = newWorker(rejectsOnce);
+
+        worker.onMessage(jobRecord(executionId.toString()));
+
+        assertThat(submissions.get()).isEqualTo(2);
+        verify(syncExecutionRuntime).execute(version, executionId, Map.of());
+    }
+
+    @Test
+    @DisplayName("실행 풀이 계속 포화면 최후수단으로 폴링 스레드에서 인라인 실행한다 — 잡을 잃지 않는다")
+    void onMessage_poolAlwaysSaturated_runsInline() throws Exception {
+        WorkflowExecution execution = execution(ExecutionStatus.PENDING);
+        when(execution.getWorkflowVersion()).thenReturn(version);
+        when(workflowExecutionRepository.findWithVersionById(executionId))
+            .thenReturn(Optional.of(execution));
+        when(workflowExecutionService.decryptTriggerData(execution)).thenReturn(Map.of());
+
+        worker = newWorker(task -> {
+            throw new TaskRejectedException("pool full");
+        });
+
+        worker.onMessage(jobRecord(executionId.toString()));
+
+        verify(syncExecutionRuntime).execute(version, executionId, Map.of());
         verify(streamOperations).acknowledge(
             ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
     }

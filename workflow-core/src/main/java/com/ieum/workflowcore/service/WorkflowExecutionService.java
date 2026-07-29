@@ -52,6 +52,7 @@ public class WorkflowExecutionService {
      *                    {@link AesEncryptor}로 AES-256 암호화한다(OAuth 토큰·AI API Key와 동일 정책 —
      *                    웹훅 페이로드에 토큰이 실릴 수 있어 평문 저장은 금지).
      * @throws CustomException INVALID_WORKFLOW — 비활성화된 워크플로우이거나 버전이 없는 경우
+     * @throws CustomException 암호화·직렬화 실패 — 입력이 사라진 채 실행되지 않도록 실행 준비를 세운다
      */
     @Transactional
     public WorkflowExecution prepareExecution(Workflow workflow, WorkflowVersion latestVersion,
@@ -76,16 +77,25 @@ public class WorkflowExecutionService {
         return execution;
     }
 
-    /** 직렬화·암호화 실패가 실행 준비를 막지 않도록 warn만 남기고 null을 반환한다(saveExecutionLog와 동일 정책). */
+    /**
+     * 트리거 입력을 암호화한다. 입력이 없으면(null·빈 Map) null을 저장한다.
+     *
+     * <p><b>비어 있지 않은 입력의 암호화 실패는 fail-fast다.</b> 여기서 null을 반환하면 실행은
+     * 서지만 워커가 DB에서 읽을 때 입력이 사라진 채 돌아 <b>"입력 없이 SUCCESS"</b>로 기록된다 —
+     * {@code {{trigger.data.*}}}를 쓰는 워크플로우가 빈 값으로 조용히 성공하는 게 가장 나쁜 결과다.
+     * 암호화 실패는 AES 키 오설정 같은 시스템 결함이지 일시 장애가 아니므로 실행 준비를 세운다.
+     */
     private String encryptTriggerData(Map<String, Object> triggerData) {
-        if (triggerData == null) {
+        if (triggerData == null || triggerData.isEmpty()) {
             return null;
         }
         try {
             return aesEncryptor.encrypt(objectMapper.writeValueAsString(triggerData));
+        } catch (CustomException e) {
+            throw e;
         } catch (Exception e) {
-            log.warn("[WorkflowExecutionService] triggerData 암호화 실패", e);
-            return null;
+            log.error("[WorkflowExecutionService] triggerData 직렬화 실패", e);
+            throw new CustomException(ErrorCode.INTERNAL_SERVER_ERROR, "트리거 입력을 저장하지 못했습니다.");
         }
     }
 
@@ -94,9 +104,8 @@ public class WorkflowExecutionService {
      * {@link #prepareExecution}의 암호화에 대응하는 유일한 역연산이며, 잡 큐 워커와
      * 실패 실행 재처리가 이 메서드 하나를 공유한다(복호 로직을 복제하지 말 것).
      *
-     * <p>{@code triggerData}가 null이면 빈 Map을 반환한다 — 트리거 입력이 아예 없었던 경우와
-     * 암호화가 실패해 유실된 경우를 구분할 수 없고, 둘 다 "입력 없음"으로 실행하는 것이
-     * 기존 동작과 일치한다.
+     * <p>{@code triggerData}가 null이면 빈 Map을 반환한다 — 암호화 실패는 {@link #prepareExecution}에서
+     * fail-fast로 걸러지므로, null은 "트리거 입력이 없었다"만 의미한다.
      *
      * @throws CustomException CREDENTIAL_DECRYPT_FAILED — 복호 또는 역직렬화 실패
      *                         (암호화 키 교체·데이터 손상)
