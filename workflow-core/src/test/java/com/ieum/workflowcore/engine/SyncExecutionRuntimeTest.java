@@ -208,7 +208,8 @@ class SyncExecutionRuntimeTest {
         run();
         assertThat(log).contains("t", "a");
         assertThat(log).doesNotContain("b");
-        verify(execution).fail();
+        // 재시도 대상이 아닌 실패(UNKNOWN, attempt=1)이므로 소진 아님
+        verify(execution).fail(false);
         verify(execution, never()).complete();
     }
 
@@ -415,7 +416,7 @@ class SyncExecutionRuntimeTest {
         }
 
         @Test
-        @DisplayName("CLIENT_ERROR로 실패하는 노드는 1회만 실행된다")
+        @DisplayName("CLIENT_ERROR로 실패하는 노드는 1회만 실행되고 attempt_count=1, retry_exhausted=false")
         void client_error_is_not_retried() throws Exception {
             RetryScriptExecutor ai = new RetryScriptExecutor(
                 Map.of(), Map.of("a", FailureKind.CLIENT_ERROR));
@@ -427,12 +428,19 @@ class SyncExecutionRuntimeTest {
                 .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
 
             assertThat(ai.callCount("a")).isEqualTo(1);
-            verify(execution).fail();
+            verify(execution).fail(false);
             verify(execution, never()).complete();
+
+            ArgumentCaptor<com.ieum.workflowcore.domain.WorkflowExecutionLog> captor =
+                ArgumentCaptor.forClass(com.ieum.workflowcore.domain.WorkflowExecutionLog.class);
+            verify(logRepository, times(2)).save(captor.capture());
+            assertThat(captor.getAllValues().stream()
+                .filter(l -> "a".equals(l.getNodeId())).findFirst().orElseThrow()
+                .getAttemptCount()).isEqualTo(1);
         }
 
         @Test
-        @DisplayName("RATE_LIMIT으로 계속 실패하면 maxAttempts만큼 실행되고 최종 FAILED")
+        @DisplayName("RATE_LIMIT으로 계속 실패하면 maxAttempts만큼 실행되고 최종 FAILED, 재시도 소진 기록")
         void rate_limit_retries_until_max_attempts_then_fails() throws Exception {
             retryProperties.setAiMaxAttempts(3);
             RetryScriptExecutor ai = new RetryScriptExecutor(
@@ -445,8 +453,15 @@ class SyncExecutionRuntimeTest {
                 .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
 
             assertThat(ai.callCount("a")).isEqualTo(3);
-            verify(execution).fail();
+            verify(execution).fail(true);
             verify(execution, never()).complete();
+
+            ArgumentCaptor<com.ieum.workflowcore.domain.WorkflowExecutionLog> captor =
+                ArgumentCaptor.forClass(com.ieum.workflowcore.domain.WorkflowExecutionLog.class);
+            verify(logRepository, times(2)).save(captor.capture());
+            assertThat(captor.getAllValues().stream()
+                .filter(l -> "a".equals(l.getNodeId())).findFirst().orElseThrow()
+                .getAttemptCount()).isEqualTo(3);
         }
 
         @Test

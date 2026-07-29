@@ -89,6 +89,10 @@ public class WorkflowExecutionLog extends BaseEntity {
     @Column(name = "total_tokens")
     private Integer totalTokens;
 
+    /** 이 실행 결과가 나오기까지 시도한 횟수(재시도 포함). 재시도 없이 끝났으면 1 */
+    @Column(name = "attempt_count")
+    private Integer attemptCount;
+
     @Builder
     private WorkflowExecutionLog(
         WorkflowExecution execution,
@@ -102,7 +106,8 @@ public class WorkflowExecutionLog extends BaseEntity {
         String traceId,
         Integer promptTokens,
         Integer completionTokens,
-        Integer totalTokens
+        Integer totalTokens,
+        Integer attemptCount
     ) {
         this.execution = execution;
         this.nodeId = nodeId;
@@ -116,5 +121,6 @@ public class WorkflowExecutionLog extends BaseEntity {
         this.promptTokens = promptTokens;
         this.completionTokens = completionTokens;
         this.totalTokens = totalTokens;
+        this.attemptCount = attemptCount != null ? attemptCount : 1;
     }
 }

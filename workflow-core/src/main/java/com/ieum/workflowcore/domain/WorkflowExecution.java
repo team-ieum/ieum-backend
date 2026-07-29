@@ -72,6 +72,10 @@ public class WorkflowExecution extends BaseEntity {
     @Column(name = "trace_id", length = 32)
     private String traceId;
 
+    /** 실패 원인이 재시도 대상이었고 재시도를 모두 소진한 뒤에도 실패했는지. 판정은 런타임이 하고 여기엔 결과만 저장한다 */
+    @Column(name = "retry_exhausted", nullable = false)
+    private boolean retryExhausted;
+
     @Builder
     private WorkflowExecution(
         Workflow workflow,
@@ -100,7 +104,13 @@ public class WorkflowExecution extends BaseEntity {
     }
 
     public void fail() {
+        fail(false);
+    }
+
+    /** @param retryExhausted 재시도 대상 실패로 재시도를 모두 소진하고도 실패했는지 (판정은 호출부 책임) */
+    public void fail(boolean retryExhausted) {
         this.status = ExecutionStatus.FAILED;
         this.finishedAt = LocalDateTime.now();
+        this.retryExhausted = retryExhausted;
     }
 }

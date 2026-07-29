@@ -75,9 +75,13 @@ public class SyncExecutionRuntime {
     @Value("${workflow.execution.parallelism:4}")
     private int parallelism;
 
-    /** 워커 스레드가 메인으로 돌려주는 노드 실행 결과 묶음. attempts는 마지막으로 실행된 시도 회차. */
+    /**
+     * 워커 스레드가 메인으로 돌려주는 노드 실행 결과 묶음. attempts는 마지막으로 실행된 시도 회차.
+     * retryExhausted는 재시도 대상 실패로 maxAttempts까지 다 써버리고도 실패했는지.
+     */
     private record NodeOutcome(Node node, Map<String, Object> input,
-                               ExecutorResult result, long durationMs, int attempts) {}
+                               ExecutorResult result, long durationMs, int attempts,
+                               boolean retryExhausted) {}
 
     @PostConstruct
     void initExecutorMap() {
@@ -167,6 +171,7 @@ public class SyncExecutionRuntime {
             // 5. fan-out 병렬 실행 (워커=노드실행, 메인=상태/JPA 독점)
             // ExecutorService는 try-with-resources로 관리 — 블록 종료 시 close()가 자동 shutdown+종료 대기.
             boolean failed = false;
+            boolean failedNodeRetryExhausted = false;
             try (ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, parallelism))) {
                 CompletionService<NodeOutcome> completion = new ExecutorCompletionService<>(pool);
                 int inFlight = 0;
@@ -185,7 +190,7 @@ public class SyncExecutionRuntime {
                             node.getId(), result.isSuccess(), durMs);
 
                         // 5-1. 실행 로그 저장(메인 스레드)
-                        saveExecutionLog(execution, node, outcome.input(), result, durMs);
+                        saveExecutionLog(execution, node, outcome.input(), result, durMs, outcome.attempts());
 
                         // 5-2. 실패 시 전체 중단(신규 디스패치 멈춤 → finally에서 in-flight 드레인)
                         if (!result.isSuccess()) {
@@ -194,6 +199,7 @@ public class SyncExecutionRuntime {
                             eventPublisher.publish(executionId, ExecutionEvent.nodeFailed(
                                 node.getId(), node.getType(), result.getErrorMessage(), durMs));
                             failed = true;
+                            failedNodeRetryExhausted = outcome.retryExhausted();
                             break;
                         }
 
@@ -216,7 +222,7 @@ public class SyncExecutionRuntime {
                         try {
                             NodeOutcome drained = completion.take().get();
                             saveExecutionLog(execution, drained.node(), drained.input(),
-                                drained.result(), drained.durationMs());
+                                drained.result(), drained.durationMs(), drained.attempts());
                         } catch (InterruptedException ie) {
                             Thread.currentThread().interrupt();
                             break;
@@ -230,7 +236,7 @@ public class SyncExecutionRuntime {
 
             // 6. 종료 처리
             if (failed) {
-                execution.fail();
+                execution.fail(failedNodeRetryExhausted);
                 workflowExecutionRepository.save(execution);
                 eventPublisher.publish(executionId,
                     ExecutionEvent.executionCompleted(ExecutionStatus.FAILED));
@@ -319,7 +325,11 @@ public class SyncExecutionRuntime {
                     attempt++;
                 }
                 long durationMs = System.currentTimeMillis() - overallStart;
-                return new NodeOutcome(node, input, result, durationMs, attempt);
+                // attempt>1(=재시도가 일어남)인데도 실패했고 그 마지막 원인이 재시도 대상이었다면,
+                // 유일하게 남는 루프 종료 사유는 attempt==maxAttempts뿐이다(= 소진).
+                boolean retryExhausted = !result.isSuccess() && attempt > 1
+                    && policy.retryable(result.getFailureKind());
+                return new NodeOutcome(node, input, result, durationMs, attempt, retryExhausted);
             });
             count++;
         }
@@ -467,7 +477,8 @@ public class SyncExecutionRuntime {
         Node node,
         Map<String, Object> input,
         ExecutorResult result,
-        long durationMs
+        long durationMs,
+        int attemptCount
     ) {
         try {
             String inputJson = objectMapper.writeValueAsString(maskSensitiveFields(input));
@@ -490,6 +501,7 @@ public class SyncExecutionRuntime {
                 .promptTokens(usage != null ? usage.promptTokens() : null)
                 .completionTokens(usage != null ? usage.completionTokens() : null)
                 .totalTokens(usage != null ? usage.totalTokens() : null)
+                .attemptCount(attemptCount)
                 .build();
 
             executionLogRepository.save(logEntry);
