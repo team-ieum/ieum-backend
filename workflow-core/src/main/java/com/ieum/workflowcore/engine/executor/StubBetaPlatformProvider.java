@@ -37,4 +37,11 @@ public class StubBetaPlatformProvider implements BetaPlatformProvider {
     public void releaseDailyCall(String reservationKey) {
         // no-op
     }
+
+    @Override
+    public boolean isModelAllowed(String model) {
+        // isBetaEligible이 항상 false라 platform 분기 자체에 진입하지 않으므로 실질적으로 호출되지 않는다.
+        // 다른 Stub 메서드들과 같은 방향으로 허용(true) 쪽에 둔다.
+        return true;
+    }
 }

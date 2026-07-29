@@ -92,6 +92,23 @@ class AgentNodeExecutorTest {
         return new Node("node-1", NodeType.AI, "AI 노드", config);
     }
 
+    private Node buildAgentNodeWithModel(String prompt, String llmProvider, String credentialId, String model) {
+        Map<String, Object> config = new java.util.HashMap<>();
+        config.put("llmProvider", llmProvider);
+        config.put("credentialId", credentialId);
+        config.put("prompt", prompt);
+        config.put("model", model);
+        return new Node("node-1", NodeType.AI, "AI 노드", config);
+    }
+
+    private Node buildAgentNodeNoCredentialWithModel(String prompt, String llmProvider, String model) {
+        Map<String, Object> config = new java.util.HashMap<>();
+        config.put("llmProvider", llmProvider);
+        config.put("prompt", prompt);
+        config.put("model", model);
+        return new Node("node-1", NodeType.AI, "AI 노드", config);
+    }
+
     private Node buildAgentNodeWithTools(
         String prompt, String llmProvider, String credentialId,
         List<Map<String, Object>> tools
@@ -849,5 +866,111 @@ class AgentNodeExecutorTest {
         assertThat(recorded.getHeader("X-LLM-Provider")).isEqualTo("GEMINI");
 
         verify(betaProvider).reserveQuota(userId);
+    }
+
+    // ── 재시도 회차 모델 fallback (Task 7) ──────────────────────────────────────
+
+    /** modelFallback 목록이 있는 재시도 정책. maxAttempts=3, 백오프 없음. */
+    private RetryPolicy policyWithModelFallback(List<String> modelFallback) {
+        return new RetryPolicy(3, 0, 1.0, 0, false, null, modelFallback, IdempotencyMode.NONE);
+    }
+
+    @Test
+    @DisplayName("1회차는 원 모델로, 2회차는 modelFallback[0]으로 agent를 호출한다")
+    void execute_modelFallback_firstAttemptOriginal_secondAttemptFallback() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody(SUCCESS_RESPONSE));
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeWithModel("요약해줘", "CLAUDE", "cred-id-1", "claude-opus-5");
+        RetryPolicy policy = policyWithModelFallback(List.of("claude-haiku-4-5"));
+        NodeExecutor.NodeAttempt attempt1 = new NodeExecutor.NodeAttempt(1, "key-1", policy);
+        NodeExecutor.NodeAttempt attempt2 = new NodeExecutor.NodeAttempt(2, "key-1", policy);
+
+        executor.execute(node, Collections.emptyMap(), buildCursor(), attempt1);
+        executor.execute(node, Collections.emptyMap(), buildCursor(), attempt2);
+
+        RecordedRequest first = mockWebServer.takeRequest();
+        RecordedRequest second = mockWebServer.takeRequest();
+        assertThat(first.getBody().readUtf8()).contains("\"model\":\"claude-opus-5\"");
+        assertThat(second.getBody().readUtf8()).contains("\"model\":\"claude-haiku-4-5\"");
+    }
+
+    @Test
+    @DisplayName("fallback 목록을 넘어선 회차는 원 모델을 유지한다")
+    void execute_modelFallback_beyondListKeepsOriginalModel() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeWithModel("요약해줘", "CLAUDE", "cred-id-1", "claude-opus-5");
+        RetryPolicy policy = policyWithModelFallback(List.of("claude-haiku-4-5"));
+        NodeExecutor.NodeAttempt attempt3 = new NodeExecutor.NodeAttempt(3, "key-1", policy);
+
+        executor.execute(node, Collections.emptyMap(), buildCursor(), attempt3);
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getBody().readUtf8()).contains("\"model\":\"claude-opus-5\"");
+    }
+
+    @Test
+    @DisplayName("modelFallback이 없는 노드는 회차가 늘어도 원 모델을 그대로 유지한다(회귀)")
+    void execute_noModelFallback_keepsOriginalModelAcrossAttempts() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeWithModel("요약해줘", "CLAUDE", "cred-id-1", "claude-opus-5");
+        NodeExecutor.NodeAttempt attempt2 = new NodeExecutor.NodeAttempt(2, "key-1", policy(IdempotencyMode.NONE));
+
+        executor.execute(node, Collections.emptyMap(), buildCursor(), attempt2);
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getBody().readUtf8()).contains("\"model\":\"claude-opus-5\"");
+    }
+
+    @Test
+    @DisplayName("platform-key 모드에서 허용 목록 밖 fallback 모델은 건너뛰고 원 모델로 호출한다")
+    void execute_modelFallback_platformKeyMode_disallowedModel_keepsOriginal() throws InterruptedException {
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        when(betaProvider.isModelAllowed("gpt-4")).thenReturn(false);
+        AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
+
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeNoCredentialWithModel("요약해줘", "CLAUDE", "gemini-3.5-flash");
+        RetryPolicy policy = policyWithModelFallback(List.of("gpt-4"));
+        NodeExecutor.NodeAttempt attempt2 = new NodeExecutor.NodeAttempt(2, "key-1", policy);
+
+        exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId), attempt2);
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getBody().readUtf8()).contains("\"model\":\"gemini-3.5-flash\"");
+        assertThat(recorded.getHeader("X-Key-Mode")).isEqualTo("platform");
+        verify(betaProvider).reserveQuota(userId);
+    }
+
+    @Test
+    @DisplayName("platform-key 모드에서 허용 목록 안 fallback 모델은 그대로 적용된다")
+    void execute_modelFallback_platformKeyMode_allowedModel_appliesFallback() throws InterruptedException {
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        when(betaProvider.isModelAllowed("gemini-3.5-flash")).thenReturn(true);
+        AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
+
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody(SUCCESS_RESPONSE));
+
+        Node node = buildAgentNodeNoCredentialWithModel("요약해줘", "CLAUDE", "gemini-2.5-flash");
+        RetryPolicy policy = policyWithModelFallback(List.of("gemini-3.5-flash"));
+        NodeExecutor.NodeAttempt attempt2 = new NodeExecutor.NodeAttempt(2, "key-1", policy);
+
+        exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId), attempt2);
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getBody().readUtf8()).contains("\"model\":\"gemini-3.5-flash\"");
     }
 }

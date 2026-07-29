@@ -49,4 +49,16 @@ public interface BetaPlatformProvider {
      * @param reservationKey reserveQuota가 반환한 일일 카운터 키
      */
     void releaseDailyCall(String reservationKey);
+
+    /**
+     * 재시도 모델 fallback 후보가 베타 플랫폼 키로 호출 가능한 모델인지 확인한다.
+     *
+     * <p>platform 모드는 IEUM 소유 Gemini 키 한 장으로 호출하며 {@code X-LLM-Provider}를 항상
+     * {@code GEMINI}로 고정한다. 따라서 비-Gemini 모델로 fallback하면 agent가 resolve 자체에
+     * 실패해 재시도가 확실히 죽는다 — 이 판정은 정책적 제한이 아니라 그 물리적 제약의 코드화다.
+     *
+     * @param model 시도하려는 모델명
+     * @return 베타 허용 목록에 있으면 true
+     */
+    boolean isModelAllowed(String model);
 }

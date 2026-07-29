@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
@@ -130,18 +131,6 @@ public class AgentNodeExecutor implements NodeExecutor {
             List<McpServerRef> mcpServers = resolveMcpServers(tools, userId);
             injectWebhookUrls(tools, userId);
 
-            AgentNodeRequest request = AgentNodeRequest.builder()
-                .nodeId(node.getId())
-                .promptTemplateId(promptTemplateId)
-                .renderedPrompt(renderedPrompt)
-                .systemMessage(systemMessage)
-                .model(model)
-                .agentType(agentType)
-                .tools(tools)
-                .workflowContext(cursor.getContext().getNodeOutputs())
-                .mcpServers(mcpServers.isEmpty() ? null : mcpServers)
-                .build();
-
             // credentialId가 없으면 키 없이 전달 — self-hosted 자격(ADMIN/TESTER role)이 최우선이며,
             // 이 경우 agent가 라우팅/차단을 판단한다(ChatService.isSelfHostedEligible과 동일 우선순위).
             // self-hosted 자격이 없을 때만 베타 자격(User.betaAccess)을 확인해 플랫폼 Gemini 키로 폴백한다.
@@ -156,6 +145,22 @@ public class AgentNodeExecutor implements NodeExecutor {
                 betaReservationKey = betaPlatformProvider.reserveQuota(userId);
                 useBetaPlatformKey = true;
             }
+
+            // 회차별 모델 fallback 결정 — useBetaPlatformKey가 정해진 뒤에 판단해야
+            // platform 모드에서 비-Gemini fallback을 걸러낼 수 있다(위 분기 참조).
+            String resolvedModel = resolveModelForAttempt(attempt, policy, model, useBetaPlatformKey, node.getId());
+
+            AgentNodeRequest request = AgentNodeRequest.builder()
+                .nodeId(node.getId())
+                .promptTemplateId(promptTemplateId)
+                .renderedPrompt(renderedPrompt)
+                .systemMessage(systemMessage)
+                .model(resolvedModel)
+                .agentType(agentType)
+                .tools(tools)
+                .workflowContext(cursor.getContext().getNodeOutputs())
+                .mcpServers(mcpServers.isEmpty() ? null : mcpServers)
+                .build();
 
             if (policy != null && policy.idempotency().usesMarker()) {
                 if (!idempotencyStore.markInFlight(attempt.idempotencyKey(), NodeExecutor.markerTtl(policy))) {
@@ -217,6 +222,37 @@ public class AgentNodeExecutor implements NodeExecutor {
     /** 자체 호스팅 LLM(키 없음) 경로 자격 — ChatService.isSelfHostedEligible과 동일 판정. */
     private static boolean isSelfHostedEligible(String userRole) {
         return "ROLE_ADMIN".equals(userRole) || "ROLE_TESTER".equals(userRole);
+    }
+
+    /**
+     * 이번 회차에 실제로 요청할 모델을 정한다. {@link RetryPolicy#modelForAttempt}로 fallback
+     * 후보를 얻고, 베타 platform 키 모드에서는 그 후보가 베타 허용 모델인지 확인한다.
+     *
+     * <p>platform 모드는 Gemini 키 한 장으로 호출하며 {@code X-LLM-Provider}를 항상 GEMINI로
+     * 고정하므로, 허용 목록 밖(비-Gemini 등) 모델로 fallback하면 agent가 resolve에 실패해
+     * 재시도가 확실히 죽는다 — 그 경우 fallback을 건너뛰고 원 모델을 유지한다.
+     */
+    private String resolveModelForAttempt(
+        NodeAttempt attempt, RetryPolicy policy, String originalModel,
+        boolean useBetaPlatformKey, String nodeId
+    ) {
+        if (policy == null) {
+            return originalModel;
+        }
+        String candidate = policy.modelForAttempt(attempt.attempt(), originalModel);
+        if (Objects.equals(candidate, originalModel)) {
+            return originalModel;
+        }
+        if (useBetaPlatformKey && !betaPlatformProvider.isModelAllowed(candidate)) {
+            log.info("[AgentNodeExecutor] 베타 허용 목록 밖 fallback 모델 — 원 모델 유지. "
+                    + "nodeId: {}, attempt: {}, originalModel: {}, skippedModel: {}",
+                nodeId, attempt.attempt(), originalModel, candidate);
+            return originalModel;
+        }
+        log.info("[AgentNodeExecutor] 재시도 모델 fallback 발동 — nodeId: {}, attempt: {}, "
+                + "originalModel: {}, fallbackModel: {}",
+            nodeId, attempt.attempt(), originalModel, candidate);
+        return candidate;
     }
 
     /**

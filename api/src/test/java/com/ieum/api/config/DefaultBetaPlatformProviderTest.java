@@ -132,4 +132,25 @@ class DefaultBetaPlatformProviderTest {
 
         verify(betaQuotaService).releaseDailyCall(reservationKey);
     }
+
+    @Test
+    @DisplayName("isModelAllowed - 기본값(gemini-3.5-flash)은 허용")
+    void isModelAllowed_defaultModel_returnsTrue() {
+        assertThat(provider.isModelAllowed("gemini-3.5-flash")).isTrue();
+    }
+
+    @Test
+    @DisplayName("isModelAllowed - 허용 목록 밖 모델(예: 비-Gemini)은 거부")
+    void isModelAllowed_disallowedModel_returnsFalse() {
+        assertThat(provider.isModelAllowed("claude-haiku-4-5")).isFalse();
+    }
+
+    @Test
+    @DisplayName("isModelAllowed - allowedModels 설정을 넓히면 그 목록을 그대로 따른다")
+    void isModelAllowed_customAllowedModels_followsProperty() {
+        properties.setAllowedModels(java.util.List.of("gemini-3.5-flash", "gemini-3.5-pro"));
+
+        assertThat(provider.isModelAllowed("gemini-3.5-pro")).isTrue();
+        assertThat(provider.isModelAllowed("gemini-2.5-flash")).isFalse();
+    }
 }
