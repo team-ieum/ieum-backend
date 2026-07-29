@@ -486,5 +486,39 @@ class SyncExecutionRuntimeTest {
                 .filter(l -> "a".equals(l.getNodeId())).findFirst().orElseThrow().getDurationMs();
             assertThat(aDurationMs).isGreaterThanOrEqualTo(50L);
         }
+
+        @Test
+        @DisplayName("backoff 대기 중 인터럽트로 중단되면(attempt<maxAttempts) 소진으로 오판정하지 않는다")
+        void interrupted_during_backoff_is_not_retry_exhausted() throws Exception {
+            retryProperties.setAiMaxAttempts(3);
+            AtomicInteger calls = new AtomicInteger();
+            // 2회차 시도에서 스스로를 인터럽트한다 — Thread.sleep은 지속시간과 무관하게 인터럽트
+            // 플래그가 서 있으면 즉시 InterruptedException을 던지므로, 3회차(maxAttempts)까지
+            // 가지 못하고 attempt=2에서 중단되는 상황을 타이밍 없이 재현할 수 있다.
+            NodeExecutor ai = new NodeExecutor() {
+                @Override
+                public NodeType getNodeType() {
+                    return NodeType.AI;
+                }
+
+                @Override
+                public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor) {
+                    if (calls.incrementAndGet() == 2) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return ExecutorResult.failure("스크립트 실패", 1, FailureKind.RATE_LIMIT);
+                }
+            };
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI")),
+                List.of(edge("t", "a", null))
+            );
+            retryRuntime(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults), ai)
+                .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+            // maxAttempts=3까지 못 가고 2회차 인터럽트로 중단됨(attempt<maxAttempts)
+            assertThat(calls.get()).isEqualTo(2);
+            verify(execution).fail(false);
+        }
     }
 }

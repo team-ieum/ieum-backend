@@ -325,9 +325,11 @@ public class SyncExecutionRuntime {
                     attempt++;
                 }
                 long durationMs = System.currentTimeMillis() - overallStart;
-                // attempt>1(=재시도가 일어남)인데도 실패했고 그 마지막 원인이 재시도 대상이었다면,
-                // 유일하게 남는 루프 종료 사유는 attempt==maxAttempts뿐이다(= 소진).
+                // 재시도 대상 실패로 maxAttempts까지 다 쓰고도 실패한 경우만 "소진"이다.
+                // attempt==maxAttempts를 직접 확인해야 한다 — 인터럽트로 attempt++ 이전에 break한 경우
+                // (attempt < maxAttempts)까지 소진으로 오판정하지 않기 위함.
                 boolean retryExhausted = !result.isSuccess() && attempt > 1
+                    && attempt == policy.maxAttempts()
                     && policy.retryable(result.getFailureKind());
                 return new NodeOutcome(node, input, result, durationMs, attempt, retryExhausted);
             });

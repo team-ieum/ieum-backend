@@ -21,6 +21,7 @@ import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.ColumnDefault;
 
 /**
  * 워크플로우의 각 실행 인스턴스를 기록하는 엔티티.
@@ -73,6 +74,7 @@ public class WorkflowExecution extends BaseEntity {
     private String traceId;
 
     /** 실패 원인이 재시도 대상이었고 재시도를 모두 소진한 뒤에도 실패했는지. 판정은 런타임이 하고 여기엔 결과만 저장한다 */
+    @ColumnDefault("false")
     @Column(name = "retry_exhausted", nullable = false)
     private boolean retryExhausted;
 
