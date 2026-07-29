@@ -3,6 +3,7 @@ package com.ieum.workflowcore.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.common.util.AesEncryptor;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowExecutionLog;
@@ -15,7 +16,6 @@ import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowQueryRepository;
-import com.ieum.workflowcore.util.SensitiveDataMasker;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -42,12 +42,14 @@ public class WorkflowExecutionService {
     private final WorkflowExecutionLogRepository workflowExecutionLogRepository;
     private final WorkflowQueryRepository workflowQueryRepository;
     private final ObjectMapper objectMapper;
+    private final AesEncryptor aesEncryptor;
 
     /**
      * 실행 전 검증 후 PENDING 상태의 실행 레코드를 생성한다.
      *
      * @param triggerData 트리거가 전달한 초기 입력. null 허용(수동 실행 등). 저장 전
-     *                    {@link SensitiveDataMasker}로 민감 필드를 마스킹한다.
+     *                    {@link AesEncryptor}로 AES-256 암호화한다(OAuth 토큰·AI API Key와 동일 정책 —
+     *                    웹훅 페이로드에 토큰이 실릴 수 있어 평문 저장은 금지).
      * @throws CustomException INVALID_WORKFLOW — 비활성화된 워크플로우이거나 버전이 없는 경우
      */
     @Transactional
@@ -64,7 +66,7 @@ public class WorkflowExecutionService {
             .triggerType(triggerType)
             .startedAt(LocalDateTime.now())
             .traceId(UUID.randomUUID().toString().replace("-", ""))
-            .triggerData(serializeTriggerData(triggerData))
+            .triggerData(encryptTriggerData(triggerData))
             .build();
         workflowExecutionRepository.save(execution);
 
@@ -73,15 +75,15 @@ public class WorkflowExecutionService {
         return execution;
     }
 
-    /** 직렬화 실패가 실행 준비를 막지 않도록 warn만 남기고 null을 반환한다(saveExecutionLog와 동일 정책). */
-    private String serializeTriggerData(Map<String, Object> triggerData) {
+    /** 직렬화·암호화 실패가 실행 준비를 막지 않도록 warn만 남기고 null을 반환한다(saveExecutionLog와 동일 정책). */
+    private String encryptTriggerData(Map<String, Object> triggerData) {
         if (triggerData == null) {
             return null;
         }
         try {
-            return objectMapper.writeValueAsString(SensitiveDataMasker.mask(triggerData));
+            return aesEncryptor.encrypt(objectMapper.writeValueAsString(triggerData));
         } catch (Exception e) {
-            log.warn("[WorkflowExecutionService] triggerData 직렬화 실패", e);
+            log.warn("[WorkflowExecutionService] triggerData 암호화 실패", e);
             return null;
         }
     }

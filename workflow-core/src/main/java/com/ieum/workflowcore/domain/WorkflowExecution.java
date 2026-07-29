@@ -78,7 +78,13 @@ public class WorkflowExecution extends BaseEntity {
     @Column(name = "retry_exhausted", nullable = false)
     private boolean retryExhausted;
 
-    /** 트리거가 전달한 초기 입력(JSON). 민감 필드는 저장 전 마스킹된다. 실패 실행 재처리의 원본 입력으로 쓰인다 */
+    /**
+     * 트리거가 전달한 초기 입력. {@code com.ieum.common.util.AesEncryptor}로 암호화된 JSON
+     * 문자열이다 — 평문이 아니다, 직접 파싱하지 말 것. 복호는 {@code AesEncryptor.decrypt()} 후
+     * JSON 역직렬화(실패 실행 재처리, Task 10에서 사용). 복호 실패 시 {@code AesEncryptor}가
+     * {@code CustomException(CREDENTIAL_DECRYPT_FAILED)}를 던진다.
+     * 조회 API 응답에 그대로 노출하지 말 것 — 노출이 필요해지면 "복호 → 마스킹 → 노출" 순서를 지킬 것.
+     */
     @Column(name = "trigger_data", columnDefinition = "TEXT")
     private String triggerData;
 

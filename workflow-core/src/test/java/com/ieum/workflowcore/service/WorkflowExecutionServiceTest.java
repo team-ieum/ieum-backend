@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.common.exception.CustomException;
+import com.ieum.common.util.AesEncryptor;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowExecutionLog;
@@ -34,14 +35,26 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 @ExtendWith(MockitoExtension.class)
 class WorkflowExecutionServiceTest {
 
+    // AesEncryptorTest와 동일한 32바이트 테스트 키 — 실제 암/복호화를 태워 round-trip을 검증한다.
+    private static final String TEST_AES_KEY = "ieum-test-secret-key-32bytes-ok!";
+
     @Mock private WorkflowExecutionRepository workflowExecutionRepository;
     @Mock private WorkflowExecutionLogRepository workflowExecutionLogRepository;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
+    @Spy private AesEncryptor aesEncryptor = newAesEncryptor();
     @InjectMocks private WorkflowExecutionService service;
+
+    private static AesEncryptor newAesEncryptor() {
+        AesEncryptor encryptor = new AesEncryptor();
+        ReflectionTestUtils.setField(encryptor, "secretKey", TEST_AES_KEY);
+        encryptor.validateKey();
+        return encryptor;
+    }
 
     @Test
     @DisplayName("종료된 실행 스냅샷은 노드 이벤트 + 종료 이벤트를 포함하고 terminal=true")
@@ -112,8 +125,8 @@ class WorkflowExecutionServiceTest {
     }
 
     @Test
-    @DisplayName("prepareExecution은 triggerData를 JSON으로 저장한다")
-    void prepareExecution_persistsTriggerDataAsJson() {
+    @DisplayName("prepareExecution은 triggerData를 평문이 아닌 암호문으로 저장한다")
+    void prepareExecution_persistsTriggerDataEncrypted() {
         Workflow workflow = mock(Workflow.class);
         given(workflow.isActive()).willReturn(true);
         WorkflowVersion version = mock(WorkflowVersion.class);
@@ -123,24 +136,29 @@ class WorkflowExecutionServiceTest {
 
         ArgumentCaptor<WorkflowExecution> captor = ArgumentCaptor.forClass(WorkflowExecution.class);
         verify(workflowExecutionRepository).save(captor.capture());
-        assertThat(captor.getValue().getTriggerData()).contains("\"city\"", "\"Seoul\"");
+        String stored = captor.getValue().getTriggerData();
+        assertThat(stored).isNotNull();
+        assertThat(stored).doesNotContain("city", "Seoul");
     }
 
     @Test
-    @DisplayName("triggerData의 민감 키(apiKey, token 등)는 ***로 마스킹되어 저장된다")
-    void prepareExecution_masksSensitiveTriggerData() {
+    @DisplayName("저장된 triggerData를 복호하면 민감 키를 포함한 원본 그대로 복원된다")
+    void prepareExecution_encryptedTriggerData_decryptsToOriginal() throws Exception {
         Workflow workflow = mock(Workflow.class);
         given(workflow.isActive()).willReturn(true);
         WorkflowVersion version = mock(WorkflowVersion.class);
+        Map<String, Object> original = Map.of(
+            "apiKey", "sk-real-secret", "token", "raw-token", "city", "Seoul");
 
-        service.prepareExecution(workflow, version, TriggerType.WEBHOOK,
-            Map.of("apiKey", "sk-real-secret", "token", "raw-token", "city", "Seoul"));
+        service.prepareExecution(workflow, version, TriggerType.WEBHOOK, original);
 
         ArgumentCaptor<WorkflowExecution> captor = ArgumentCaptor.forClass(WorkflowExecution.class);
         verify(workflowExecutionRepository).save(captor.capture());
         String stored = captor.getValue().getTriggerData();
-        assertThat(stored).doesNotContain("sk-real-secret", "raw-token");
-        assertThat(stored).contains("\"apiKey\":\"***\"", "\"token\":\"***\"", "\"city\":\"Seoul\"");
+
+        String decryptedJson = aesEncryptor.decrypt(stored);
+        Map<?, ?> decrypted = objectMapper.readValue(decryptedJson, Map.class);
+        assertThat(decrypted).isEqualTo(original);
     }
 
     @Test
