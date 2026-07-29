@@ -22,6 +22,12 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
     @Query("SELECT e FROM WorkflowExecution e JOIN FETCH e.workflowVersion WHERE e.id = :id")
     Optional<WorkflowExecution> findWithVersionById(@Param("id") UUID id);
 
+    /**
+     * 이 실행을 재처리로 낳은 원본 실행을 찾는다(역방향 조회 — 링크는 원본에만 있다).
+     * 재처리로 만들어진 실행이 아니면 비어 있다.
+     */
+    Optional<WorkflowExecution> findByRetriedByExecutionId(UUID retryExecutionId);
+
     List<WorkflowExecution> findByWorkflow(Workflow workflow);
 
     @Modifying(clearAutomatically = true)

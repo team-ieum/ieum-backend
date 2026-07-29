@@ -230,6 +230,55 @@ class WorkflowExecutionServiceTest {
             .isInstanceOf(CustomException.class);
     }
 
+    @Test
+    @DisplayName("재처리가 아닌 실행은 재사용 output이 비어 있어 모든 노드를 실행한다")
+    void 재처리_아니면_재사용_output_없음() {
+        UUID executionId = UUID.randomUUID();
+        given(workflowExecutionRepository.findByRetriedByExecutionId(executionId))
+            .willReturn(Optional.empty());
+
+        assertThat(service.loadReusableNodeOutputs(executionId)).isEmpty();
+        verify(workflowExecutionLogRepository, never())
+            .findByExecutionIdAndStatusIn(any(), any());
+    }
+
+    @Test
+    @DisplayName("재처리 실행은 원 실행의 SUCCESS·SKIPPED 노드 output을 nodeId별로 되돌린다")
+    void 재처리_성공노드_output_재사용() {
+        UUID sourceId = UUID.randomUUID();
+        UUID retryId = UUID.randomUUID();
+
+        WorkflowExecution source = mock(WorkflowExecution.class);
+        given(source.getId()).willReturn(sourceId);
+        given(workflowExecutionRepository.findByRetriedByExecutionId(retryId))
+            .willReturn(Optional.of(source));
+
+        List<WorkflowExecutionLog> sourceLogs = List.of(
+            mockLogWithOutput("node-1", "{\"text\":\"안녕\"}"),
+            mockLogWithOutput("node-2", "{\"count\":3}"),
+            mockLogWithOutput("node-3", null),           // output 없음 → 제외
+            mockLogWithOutput("node-4", "{깨진 json"));   // 파싱 실패 → 그 노드만 제외
+        // 앞선 재처리에서 건너뛴 노드(SKIPPED)도 다시 살려 실행하지 않도록 함께 읽는다.
+        given(workflowExecutionLogRepository.findByExecutionIdAndStatusIn(sourceId,
+                List.of(ExecutionLogStatus.SUCCESS, ExecutionLogStatus.SKIPPED)))
+            .willReturn(sourceLogs);
+
+        Map<String, Map<String, Object>> outputs = service.loadReusableNodeOutputs(retryId);
+
+        assertThat(outputs).containsOnlyKeys("node-1", "node-2");
+        assertThat(outputs.get("node-1")).containsEntry("text", "안녕");
+        assertThat(outputs.get("node-2")).containsEntry("count", 3);
+    }
+
+    private WorkflowExecutionLog mockLogWithOutput(String nodeId, String outputJson) {
+        WorkflowExecutionLog log = mock(WorkflowExecutionLog.class);
+        given(log.getOutputJson()).willReturn(outputJson);
+        if (outputJson != null) {
+            lenient().when(log.getNodeId()).thenReturn(nodeId);
+        }
+        return log;
+    }
+
     private WorkflowExecution mockExecution(UUID workflowId, ExecutionStatus status) {
         Workflow workflow = mock(Workflow.class);
         given(workflow.getId()).willReturn(workflowId);

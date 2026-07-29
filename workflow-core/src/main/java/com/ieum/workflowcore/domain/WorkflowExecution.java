@@ -34,7 +34,8 @@ import org.hibernate.annotations.ColumnDefault;
         @Index(name = "idx_workflow_runs_workflow_id", columnList = "workflow_id"),
         @Index(name = "idx_workflow_runs_status", columnList = "status"),
         @Index(name = "idx_workflow_runs_trigger_type", columnList = "trigger_type"),
-        @Index(name = "idx_workflow_runs_trace_id", columnList = "trace_id")
+        @Index(name = "idx_workflow_runs_trace_id", columnList = "trace_id"),
+        @Index(name = "idx_workflow_runs_retried_by", columnList = "retried_by_execution_id")
     }
 )
 @Getter
@@ -89,6 +90,16 @@ public class WorkflowExecution extends BaseEntity {
     @Column(name = "trigger_data", columnDefinition = "TEXT")
     private String triggerData;
 
+    /**
+     * 이 실행을 재처리하기 위해 새로 만들어진 실행의 ID. 재처리된 적이 없으면 null.
+     *
+     * <p>링크 방향이 원본 → 재처리 하나뿐이라 재처리 실행이 자기 원본을 찾을 때는 역방향 조회
+     * ({@code findByRetriedByExecutionId})를 쓴다. 이 조회로 재처리 실행이 "원본에서 이미 성공한
+     * 노드"를 알아내 건너뛴다 — 잡 큐 페이로드가 executionId뿐이라 스킵 정보도 DB에만 있어야 한다.
+     */
+    @Column(name = "retried_by_execution_id", columnDefinition = "uuid")
+    private UUID retriedByExecutionId;
+
     @Builder
     private WorkflowExecution(
         Workflow workflow,
@@ -127,5 +138,10 @@ public class WorkflowExecution extends BaseEntity {
         this.status = ExecutionStatus.FAILED;
         this.finishedAt = LocalDateTime.now();
         this.retryExhausted = retryExhausted;
+    }
+
+    /** 이 실행의 재처리로 만들어진 새 실행을 연결한다. 재처리를 다시 재처리하면 최신 것으로 덮어쓴다. */
+    public void markRetriedBy(UUID retryExecutionId) {
+        this.retriedByExecutionId = retryExecutionId;
     }
 }

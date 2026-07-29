@@ -46,7 +46,7 @@ class WorkflowExecutionRunnerTest {
 
         runner.run(version, executionId, triggerData);
 
-        verify(syncExecutionRuntime, never()).execute(any(), any(), any());
+        verify(syncExecutionRuntime, never()).execute(any(), any(), any(), any());
     }
 
     @Test
@@ -56,15 +56,36 @@ class WorkflowExecutionRunnerTest {
 
         runner.run(version, executionId, triggerData);
 
-        verify(syncExecutionRuntime).execute(version, executionId, triggerData);
+        verify(syncExecutionRuntime).execute(version, executionId, triggerData, Map.of());
         verify(workflowExecutionService, never()).markAsFailed(any());
+    }
+
+    @Test
+    @DisplayName("일반 실행은 스킵 대상이 비어 있어 모든 노드를 실행한다(재처리 회귀 방지)")
+    void executeNow_normalExecution_passesNoPreCompletedOutputs() throws Exception {
+        when(workflowExecutionService.loadReusableNodeOutputs(executionId)).thenReturn(Map.of());
+
+        runner.executeNow(version, executionId, triggerData);
+
+        verify(syncExecutionRuntime).execute(version, executionId, triggerData, Map.of());
+    }
+
+    @Test
+    @DisplayName("재처리 실행은 원 실행의 성공 노드 출력을 런타임에 넘긴다")
+    void executeNow_retryExecution_passesPreCompletedOutputs() throws Exception {
+        Map<String, Map<String, Object>> reusable = Map.of("node-1", Map.of("output", "hi"));
+        when(workflowExecutionService.loadReusableNodeOutputs(executionId)).thenReturn(reusable);
+
+        runner.executeNow(version, executionId, triggerData);
+
+        verify(syncExecutionRuntime).execute(version, executionId, triggerData, reusable);
     }
 
     @Test
     @DisplayName("실행 중 예외가 나면 실행을 FAILED로 기록한다")
     void executeNow_runtimeThrows_marksFailed() throws Exception {
         doThrow(new IllegalStateException("boom"))
-            .when(syncExecutionRuntime).execute(any(), any(), any());
+            .when(syncExecutionRuntime).execute(any(), any(), any(), any());
 
         runner.executeNow(version, executionId, triggerData);
 

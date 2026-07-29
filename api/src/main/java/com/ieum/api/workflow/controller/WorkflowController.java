@@ -6,6 +6,7 @@ import com.ieum.api.workflow.dto.UpdateWorkflowRequest;
 import com.ieum.api.workflow.dto.WorkflowExecutionLogResponse;
 import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
 import com.ieum.api.workflow.dto.WorkflowResponse;
+import com.ieum.api.workflow.service.ExecutionRetryService;
 import com.ieum.api.workflow.service.WorkflowService;
 import com.ieum.auth.security.CustomUserDetails;
 import com.ieum.common.dto.ApiResponse;
@@ -43,6 +44,7 @@ import reactor.core.publisher.Flux;
 public class WorkflowController implements WorkflowControllerDocs {
 
     private final WorkflowService workflowService;
+    private final ExecutionRetryService executionRetryService;
 
     @PostMapping
     public ResponseEntity<ApiResponse<WorkflowResponse>> create(
@@ -121,6 +123,16 @@ public class WorkflowController implements WorkflowControllerDocs {
         }
         WorkflowExecutionResponse response =
             workflowService.executeWorkflow(userDetails.getId(), id, request);
+        return ResponseEntity.status(202).body(ApiResponse.ok(response));
+    }
+
+    @PostMapping("/executions/{executionId}/retry")
+    public ResponseEntity<ApiResponse<WorkflowExecutionResponse>> retryExecution(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable UUID executionId) {
+
+        WorkflowExecutionResponse response =
+            executionRetryService.retryExecution(userDetails.getId(), executionId);
         return ResponseEntity.status(202).body(ApiResponse.ok(response));
     }
 

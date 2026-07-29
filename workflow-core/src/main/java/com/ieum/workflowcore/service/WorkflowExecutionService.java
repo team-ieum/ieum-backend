@@ -19,8 +19,10 @@ import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowQueryRepository;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -125,6 +127,49 @@ public class WorkflowExecutionService {
     }
 
     /**
+     * 재처리 실행이 건너뛸 수 있는 노드의 출력을 원본 실행의 {@code node_runs}에서 읽어 온다.
+     * 키는 nodeId, 값은 그 노드가 원본에서 남긴 output이다.
+     *
+     * <p>재처리로 만들어진 실행이 아니면 빈 Map을 반환한다 — 일반 실행은 이 결과가 비어 있어
+     * 아무 노드도 건너뛰지 않는다. 잡 큐 페이로드가 executionId뿐이라 이 정보는 DB에서만 나온다.
+     *
+     * <p>{@code SKIPPED}도 함께 읽는다. 재처리를 다시 재처리할 때 앞선 재처리에서 이미 건너뛴
+     * 노드를 되살려 실행하지 않기 위함이다.
+     *
+     * <p><b>output은 {@code SensitiveDataMasker}를 거쳐 저장된 값이다</b> — 민감 키는 {@code ***}로
+     * 마스킹돼 있다. 뒤 노드가 앞 노드 출력의 자격증명을 참조하는 워크플로우라면 재처리에서
+     * 마스킹된 값이 흘러간다.
+     */
+    public Map<String, Map<String, Object>> loadReusableNodeOutputs(UUID retryExecutionId) {
+        Optional<WorkflowExecution> source =
+            workflowExecutionRepository.findByRetriedByExecutionId(retryExecutionId);
+        if (source.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<String, Map<String, Object>> outputs = new LinkedHashMap<>();
+        for (WorkflowExecutionLog logEntry : workflowExecutionLogRepository
+                .findByExecutionIdAndStatusIn(source.get().getId(),
+                    List.of(ExecutionLogStatus.SUCCESS, ExecutionLogStatus.SKIPPED))) {
+            if (logEntry.getOutputJson() == null) {
+                continue;
+            }
+            try {
+                outputs.put(logEntry.getNodeId(),
+                    objectMapper.readValue(logEntry.getOutputJson(),
+                        new TypeReference<Map<String, Object>>() {}));
+            } catch (Exception e) {
+                // 이 노드만 재실행된다 — 재처리 전체를 세울 이유는 없다.
+                log.warn("[WorkflowExecutionService] 재사용 output 역직렬화 실패 — nodeId: {}",
+                    logEntry.getNodeId(), e);
+            }
+        }
+        log.info("[WorkflowExecutionService] 재처리 스킵 대상 노드 {}개 — executionId: {}, sourceId: {}",
+            outputs.size(), retryExecutionId, source.get().getId());
+        return outputs;
+    }
+
+    /**
      * 실행 이력을 필터·페이징 조회한다. hasNext 판별용으로 {@code size + 1}개를 반환하므로
      * 호출자가 초과분을 잘라내야 한다.
      */
@@ -135,6 +180,16 @@ public class WorkflowExecutionService {
 
     public WorkflowExecution getExecution(UUID executionId) {
         return workflowExecutionRepository.findById(executionId)
+            .orElseThrow(() -> new CustomException(ErrorCode.EXECUTION_NOT_FOUND));
+    }
+
+    /**
+     * 실행 시점 버전까지 즉시 로딩해 조회한다. 조회한 버전을 트랜잭션·영속성 컨텍스트 밖
+     * (@Async 실행 스레드 등)으로 넘길 때 쓴다 — {@link #getExecution}이 주는 lazy 프록시를
+     * 그대로 넘기면 {@code LazyInitializationException}이 난다.
+     */
+    public WorkflowExecution getExecutionWithVersion(UUID executionId) {
+        return workflowExecutionRepository.findWithVersionById(executionId)
             .orElseThrow(() -> new CustomException(ErrorCode.EXECUTION_NOT_FOUND));
     }
 

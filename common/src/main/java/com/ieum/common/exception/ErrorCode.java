@@ -59,6 +59,7 @@ public enum ErrorCode {
     WORKFLOW_NOT_ACTIVE(HttpStatus.BAD_REQUEST, "비활성화된 워크플로우입니다."),
     WEBHOOK_TRIGGER_MISMATCH(HttpStatus.BAD_REQUEST, "WEBHOOK 트리거 타입의 워크플로우가 아닙니다."),
     EXECUTION_NOT_FOUND(HttpStatus.NOT_FOUND, "실행 기록을 찾을 수 없습니다."),
+    EXECUTION_NOT_RETRYABLE(HttpStatus.BAD_REQUEST, "실패한 실행만 재처리할 수 있습니다."),
     INVALID_CURSOR(HttpStatus.BAD_REQUEST, "유효하지 않은 커서 값입니다."),
 
     // AI 에이전트

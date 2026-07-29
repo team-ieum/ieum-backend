@@ -94,7 +94,7 @@ class ExecutionJobWorkerTest {
         worker.onMessage(jobRecord(executionId.toString()));
 
         InOrder inOrder = Mockito.inOrder(syncExecutionRuntime, streamOperations);
-        inOrder.verify(syncExecutionRuntime).execute(version, executionId, Map.of("name", "홍길동"));
+        inOrder.verify(syncExecutionRuntime).execute(version, executionId, Map.of("name", "홍길동"), Map.of());
         inOrder.verify(streamOperations).acknowledge(
             ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
     }
@@ -108,7 +108,7 @@ class ExecutionJobWorkerTest {
 
         worker.onMessage(jobRecord(executionId.toString()));
 
-        verify(syncExecutionRuntime, never()).execute(any(), any(), any());
+        verify(syncExecutionRuntime, never()).execute(any(), any(), any(), any());
         verify(streamOperations).acknowledge(
             ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
     }
@@ -122,7 +122,7 @@ class ExecutionJobWorkerTest {
 
         worker.onMessage(jobRecord(executionId.toString()));
 
-        verify(syncExecutionRuntime, never()).execute(any(), any(), any());
+        verify(syncExecutionRuntime, never()).execute(any(), any(), any(), any());
         verify(streamOperations).acknowledge(
             ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
     }
@@ -135,7 +135,7 @@ class ExecutionJobWorkerTest {
 
         worker.onMessage(jobRecord(executionId.toString()));
 
-        verify(syncExecutionRuntime, never()).execute(any(), any(), any());
+        verify(syncExecutionRuntime, never()).execute(any(), any(), any(), any());
         verify(streamOperations).acknowledge(
             ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
     }
@@ -151,7 +151,7 @@ class ExecutionJobWorkerTest {
 
         worker.onMessage(jobRecord(executionId.toString()));
 
-        verify(syncExecutionRuntime, never()).execute(any(), any(), any());
+        verify(syncExecutionRuntime, never()).execute(any(), any(), any(), any());
         verify(workflowExecutionService).markAsFailed(executionId);
         verify(streamOperations).acknowledge(
             ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
@@ -172,11 +172,11 @@ class ExecutionJobWorkerTest {
         Mockito.doAnswer(invocation -> {
             worker.onMessage(record);
             return null;
-        }).when(syncExecutionRuntime).execute(any(), any(), any());
+        }).when(syncExecutionRuntime).execute(any(), any(), any(), any());
 
         worker.onMessage(record);
 
-        verify(syncExecutionRuntime, Mockito.times(1)).execute(version, executionId, Map.of());
+        verify(syncExecutionRuntime, Mockito.times(1)).execute(version, executionId, Map.of(), Map.of());
         verify(streamOperations, Mockito.times(1)).acknowledge(
             ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
     }
@@ -193,7 +193,7 @@ class ExecutionJobWorkerTest {
         worker.onMessage(jobRecord(executionId.toString()));
         worker.onMessage(jobRecord(executionId.toString()));
 
-        verify(syncExecutionRuntime, Mockito.times(2)).execute(version, executionId, Map.of());
+        verify(syncExecutionRuntime, Mockito.times(2)).execute(version, executionId, Map.of(), Map.of());
     }
 
     @Test
@@ -217,7 +217,7 @@ class ExecutionJobWorkerTest {
         worker.onMessage(jobRecord(executionId.toString()));
 
         assertThat(submissions.get()).isEqualTo(2);
-        verify(syncExecutionRuntime).execute(version, executionId, Map.of());
+        verify(syncExecutionRuntime).execute(version, executionId, Map.of(), Map.of());
     }
 
     @Test
@@ -235,7 +235,7 @@ class ExecutionJobWorkerTest {
 
         worker.onMessage(jobRecord(executionId.toString()));
 
-        verify(syncExecutionRuntime).execute(version, executionId, Map.of());
+        verify(syncExecutionRuntime).execute(version, executionId, Map.of(), Map.of());
         verify(streamOperations).acknowledge(
             ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
     }

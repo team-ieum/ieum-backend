@@ -281,6 +281,16 @@ public interface WorkflowControllerDocs {
             @Parameter(description = "워크플로우 ID") UUID id,
             ExecuteWorkflowRequest request);
 
+    @Operation(summary = "실패 실행 재처리",
+        description = "FAILED 상태의 실행을 같은 버전·같은 트리거 입력으로 다시 실행한다. "
+            + "원 실행에서 이미 성공한 노드는 저장된 출력을 재사용하고 SKIPPED로 기록되며, "
+            + "실패 지점부터 이어서 실행된다. 원 실행은 그대로 남고 새 실행 ID가 반환된다. "
+            + "FAILED가 아닌 실행은 400.")
+    @PreAuthorize("hasRole('USER')")
+    ResponseEntity<ApiResponse<WorkflowExecutionResponse>> retryExecution(
+            CustomUserDetails userDetails,
+            @Parameter(description = "재처리할 실행 ID") UUID executionId);
+
     @Operation(summary = "실행 목록 조회")
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<PageResponse<WorkflowExecutionResponse>>> getExecutions(

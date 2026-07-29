@@ -16,7 +16,9 @@ import com.ieum.workflowcore.config.RetryProperties;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
+import com.ieum.workflowcore.domain.WorkflowExecutionLog;
 import com.ieum.workflowcore.domain.WorkflowVersion;
+import com.ieum.workflowcore.domain.enums.ExecutionLogStatus;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
@@ -284,6 +286,143 @@ class SyncExecutionRuntimeTest {
         assertThatThrownBy(this::run)
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("순환");
+    }
+
+    @Nested
+    @DisplayName("재처리 — 원 실행 성공 노드 스킵")
+    class PreCompletedOutputs {
+
+        private void runWith(Map<String, Map<String, Object>> preCompleted) throws Exception {
+            runtime().execute(mock(WorkflowVersion.class), executionId, new HashMap<>(), preCompleted);
+        }
+
+        private List<WorkflowExecutionLog> capturedLogs(int expectedSaves) {
+            ArgumentCaptor<WorkflowExecutionLog> captor =
+                ArgumentCaptor.forClass(WorkflowExecutionLog.class);
+            verify(logRepository, times(expectedSaves)).save(captor.capture());
+            return captor.getAllValues();
+        }
+
+        private WorkflowExecutionLog logOf(List<WorkflowExecutionLog> logs, String nodeId) {
+            return logs.stream().filter(l -> nodeId.equals(l.getNodeId())).findFirst().orElseThrow();
+        }
+
+        @Test
+        @DisplayName("주입된 노드는 executor 호출 없이 SKIPPED로 기록되고, 나머지는 실행된다")
+        void preCompleted_node_is_skipped_and_logged() throws Exception {
+            // t -> a -> b, a는 원 실행에서 성공 → 스킵
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI"), node("b", "AI")),
+                List.of(edge("t", "a", null), edge("a", "b", null))
+            );
+
+            runWith(Map.of("a", Map.of("output", "원본-a-출력")));
+
+            assertThat(log).containsExactlyInAnyOrder("t", "b");
+            assertThat(log).doesNotContain("a");
+
+            List<WorkflowExecutionLog> logs = capturedLogs(3);
+            assertThat(logOf(logs, "a").getStatus()).isEqualTo(ExecutionLogStatus.SKIPPED);
+            assertThat(logOf(logs, "a").getOutputJson()).contains("원본-a-출력");
+            assertThat(logOf(logs, "t").getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
+            assertThat(logOf(logs, "b").getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
+            verify(execution).complete();
+        }
+
+        @Test
+        @DisplayName("스킵된 노드의 출력은 컨텍스트에 들어가 뒤 노드의 변수 치환에 쓰인다")
+        void skipped_node_output_feeds_downstream_variables() throws Exception {
+            Map<String, Object> b = node("b", "AI");
+            b.put("config", new HashMap<>(Map.of("prompt", "{{nodes.a.output.text}}")));
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI"), b),
+                List.of(edge("t", "a", null), edge("a", "b", null))
+            );
+
+            runWith(Map.of("a", Map.of("text", "복원된값")));
+
+            assertThat(logOf(capturedLogs(3), "b").getInputJson()).contains("복원된값");
+        }
+
+        @Test
+        @DisplayName("스킵 노드가 fan-out 부모여도 자식 분기가 모두 이어서 실행된다")
+        void skipped_node_still_propagates_edges() throws Exception {
+            // t -> a, a -> b, a -> c
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI"), node("b", "AI"), node("c", "AI")),
+                List.of(edge("t", "a", null), edge("a", "b", null), edge("a", "c", null))
+            );
+
+            runWith(Map.of("a", Map.of("output", "x")));
+
+            assertThat(log).containsExactlyInAnyOrder("t", "b", "c");
+            verify(execution).complete();
+        }
+
+        @Test
+        @DisplayName("스킵된 CONDITION 노드는 복원된 result로 원 실행과 같은 분기를 탄다")
+        void skipped_condition_restores_branch_direction() throws Exception {
+            // 원 실행에서 cond가 false로 평가됐다면 재처리도 false 분기여야 한다.
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("cond", "CONDITION"),
+                    node("yes", "AI"), node("no", "AI")),
+                List.of(edge("t", "cond", null), edge("cond", "yes", "true"),
+                    edge("cond", "no", "false"))
+            );
+
+            runWith(Map.of("cond", Map.of("result", false)));
+
+            assertThat(log).containsExactlyInAnyOrder("t", "no");
+            assertThat(log).doesNotContain("cond", "yes");
+            verify(execution).complete();
+        }
+
+        @Test
+        @DisplayName("회귀: 주입이 비면 모든 노드를 실행하고 SKIPPED 로그가 하나도 없다")
+        void empty_preCompleted_behaves_like_normal_execution() throws Exception {
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI"), node("b", "AI")),
+                List.of(edge("t", "a", null), edge("a", "b", null))
+            );
+
+            runWith(Map.of());
+
+            assertThat(log).containsExactlyInAnyOrder("t", "a", "b");
+            assertThat(capturedLogs(3))
+                .noneMatch(l -> l.getStatus() == ExecutionLogStatus.SKIPPED);
+            verify(execution).complete();
+        }
+
+        @Test
+        @DisplayName("회귀: 3-인자 execute는 주입 없는 실행과 동일하다")
+        void three_arg_execute_runs_every_node() throws Exception {
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI")),
+                List.of(edge("t", "a", null))
+            );
+
+            run();
+
+            assertThat(log).containsExactlyInAnyOrder("t", "a");
+            assertThat(capturedLogs(2))
+                .allMatch(l -> l.getStatus() == ExecutionLogStatus.SUCCESS);
+        }
+
+        @Test
+        @DisplayName("주입된 노드가 실패하던 노드 뒤에 있어도 실패 노드는 다시 실행된다(at-least-once)")
+        void non_injected_failing_node_runs_again() throws Exception {
+            failNodeIds.add("b");
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI"), node("b", "AI")),
+                List.of(edge("t", "a", null), edge("a", "b", null))
+            );
+
+            runWith(Map.of("a", Map.of("output", "x")));
+
+            assertThat(log).contains("b");
+            assertThat(log).doesNotContain("a");
+            verify(execution).fail(false);
+        }
     }
 
     @Nested

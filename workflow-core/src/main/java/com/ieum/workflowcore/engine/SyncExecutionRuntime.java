@@ -81,10 +81,11 @@ public class SyncExecutionRuntime {
     /**
      * 워커 스레드가 메인으로 돌려주는 노드 실행 결과 묶음. attempts는 마지막으로 실행된 시도 회차.
      * retryExhausted는 재시도 대상 실패로 maxAttempts까지 다 써버리고도 실패했는지.
+     * skipped는 executor를 부르지 않고 주입된 출력으로 대체했는지(재처리).
      */
     private record NodeOutcome(Node node, Map<String, Object> input,
                                ExecutorResult result, long durationMs, int attempts,
-                               boolean retryExhausted) {}
+                               boolean retryExhausted, boolean skipped) {}
 
     @PostConstruct
     void initExecutorMap() {
@@ -104,6 +105,28 @@ public class SyncExecutionRuntime {
         UUID executionId,
         Map<String, Object> triggerData
     ) throws Exception {
+        execute(workflowVersion, executionId, triggerData, Map.of());
+    }
+
+    /**
+     * 일부 노드의 출력을 미리 받아 그 노드를 실행하지 않고 건너뛰며 실행한다(실패 실행 재처리).
+     *
+     * <p>{@code preCompletedOutputs}가 비어 있으면 위 3-인자 실행과 완전히 동일하게 동작한다 —
+     * 일반 실행 경로는 이 매개변수를 타지 않는다.
+     *
+     * @param preCompletedOutputs nodeId → 그 노드의 출력. 여기 있는 노드는 {@link NodeExecutor}를
+     *                            호출하지 않고 주어진 출력을 그대로 성공 결과로 삼아 컨텍스트에 넣고,
+     *                            {@link ExecutionLogStatus#SKIPPED}로 로그를 남긴다.
+     */
+    public void execute(
+        WorkflowVersion workflowVersion,
+        UUID executionId,
+        Map<String, Object> triggerData,
+        Map<String, Map<String, Object>> preCompletedOutputs
+    ) throws Exception {
+
+        Map<String, Map<String, Object>> preCompleted =
+            preCompletedOutputs != null ? preCompletedOutputs : Map.<String, Map<String, Object>>of();
 
         WorkflowExecution execution = workflowExecutionRepository.findWithWorkflowById(executionId)
             .orElseThrow(() -> new CustomException(ErrorCode.EXECUTION_NOT_FOUND));
@@ -181,7 +204,7 @@ public class SyncExecutionRuntime {
                 try {
                     Deque<Node> ready = new ArrayDeque<>();
                     ready.add(triggerNode);   // 트리거는 incoming 0 → 최초 ready
-                    inFlight += dispatch(ready, cursor, completion, executionId);
+                    inFlight += dispatch(ready, cursor, completion, executionId, preCompleted);
 
                     while (inFlight > 0) {
                         NodeOutcome outcome = completion.take().get();
@@ -193,7 +216,8 @@ public class SyncExecutionRuntime {
                             node.getId(), result.isSuccess(), durMs);
 
                         // 5-1. 실행 로그 저장(메인 스레드)
-                        saveExecutionLog(execution, node, outcome.input(), result, durMs, outcome.attempts());
+                        saveExecutionLog(execution, node, outcome.input(), result, durMs,
+                            outcome.attempts(), outcome.skipped());
 
                         // 5-2. 실패 시 전체 중단(신규 디스패치 멈춤 → finally에서 in-flight 드레인)
                         if (!result.isSuccess()) {
@@ -215,7 +239,7 @@ public class SyncExecutionRuntime {
                         // 5-4. 엣지 전파 → 새로 준비된(모든 입력 해소+live) 노드 디스패치
                         Deque<Node> newReady = new ArrayDeque<>();
                         propagate(node, cursor, pending, hasLive, resolved, newReady);
-                        inFlight += dispatch(newReady, cursor, completion, executionId);
+                        inFlight += dispatch(newReady, cursor, completion, executionId, preCompleted);
                     }
                 } finally {
                     // 실패/예외 시 남은 in-flight 작업 드레인(완료 대기) 후 close()로 풀 종료.
@@ -225,7 +249,8 @@ public class SyncExecutionRuntime {
                         try {
                             NodeOutcome drained = completion.take().get();
                             saveExecutionLog(execution, drained.node(), drained.input(),
-                                drained.result(), drained.durationMs(), drained.attempts());
+                                drained.result(), drained.durationMs(), drained.attempts(),
+                                drained.skipped());
                         } catch (InterruptedException ie) {
                             Thread.currentThread().interrupt();
                             break;
@@ -279,10 +304,15 @@ public class SyncExecutionRuntime {
      * 입력 변수 치환·nodeStarted 이벤트는 메인 스레드에서 수행하고, 워커는 executor.execute만 실행한다.
      * 이 노드가 ready가 된 시점에는 모든 live 부모가 완료되어 컨텍스트에 output이 존재한다.
      *
+     * <p>{@code preCompleted}에 있는 노드는 executor를 부르지 않고 주어진 출력을 성공 결과로 즉시
+     * 돌려준다(재처리 스킵). 메인 루프의 결과 처리·컨텍스트 갱신·엣지 전파는 일반 노드와 같은
+     * 경로를 타므로 스케줄러 상태 관리가 갈라지지 않는다.
+     *
      * @return 제출한 노드 수
      */
     private int dispatch(Deque<Node> ready, ExecutionCursor cursor,
-                         CompletionService<NodeOutcome> completion, UUID executionId) {
+                         CompletionService<NodeOutcome> completion, UUID executionId,
+                         Map<String, Map<String, Object>> preCompleted) {
         int count = 0;
         while (!ready.isEmpty()) {
             Node node = ready.poll();
@@ -290,6 +320,17 @@ public class SyncExecutionRuntime {
             NodeExecutor executor = executorMap.get(node.getType());
             if (executor == null) {
                 throw new IllegalStateException("NodeExecutor 없음 — type: " + node.getType());
+            }
+            Map<String, Object> preOutput = preCompleted.get(node.getId());
+            if (preOutput != null) {
+                log.info("[Runtime] 노드 스킵(재처리 — 원 실행 성공분 재사용) — nodeId: {}", node.getId());
+                eventPublisher.publish(executionId,
+                    ExecutionEvent.nodeStarted(node.getId(), node.getType()));
+                // 입력 렌더링도 하지 않는다 — 실행하지 않을 노드의 config를 치환할 이유가 없다.
+                completion.submit(() -> new NodeOutcome(node, Map.of(),
+                    ExecutorResult.success(preOutput, 0L), 0L, 0, false, true));
+                count++;
+                continue;
             }
             Map<String, Object> input = prepareNodeInput(node, cursor);
             RetryPolicy policy = RetryPolicy.from(node.getConfig(), node.getType(), retryProperties);
@@ -348,7 +389,7 @@ public class SyncExecutionRuntime {
                 boolean retryExhausted = !result.isSuccess() && attempt > 1
                     && attempt == policy.maxAttempts()
                     && policy.retryable(result.getFailureKind());
-                return new NodeOutcome(node, input, result, durationMs, attempt, retryExhausted);
+                return new NodeOutcome(node, input, result, durationMs, attempt, retryExhausted, false);
             });
             count++;
         }
@@ -481,7 +522,8 @@ public class SyncExecutionRuntime {
         Map<String, Object> input,
         ExecutorResult result,
         long durationMs,
-        int attemptCount
+        int attemptCount,
+        boolean skipped
     ) {
         try {
             String inputJson = objectMapper.writeValueAsString(SensitiveDataMasker.mask(input));
@@ -495,7 +537,8 @@ public class SyncExecutionRuntime {
                 .execution(execution)
                 .nodeId(node.getId())
                 .nodeType(node.getType())
-                .status(result.isSuccess() ? ExecutionLogStatus.SUCCESS : ExecutionLogStatus.FAILED)
+                .status(skipped ? ExecutionLogStatus.SKIPPED
+                    : result.isSuccess() ? ExecutionLogStatus.SUCCESS : ExecutionLogStatus.FAILED)
                 .inputJson(inputJson)
                 .outputJson(outputJson)
                 .errorMessage(result.getErrorMessage())
