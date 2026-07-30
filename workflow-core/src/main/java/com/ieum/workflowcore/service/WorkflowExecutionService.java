@@ -29,6 +29,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * 워크플로우 실행(Execution) 비즈니스 로직.
@@ -259,9 +261,13 @@ public class WorkflowExecutionService {
      * 런타임이 상태를 남기지 못한 실패를 FAILED로 확정한다(잡 페이로드 해석 실패, trigger_data 복호
      * 실패 등 런타임 진입 전 실패). 런타임이 이미 확정했으면 아무것도 하지 않는다.
      *
-     * <p>알림은 상태 전이가 실제로 일어난 분기 안에서만 발신한다 — 런타임의
+     * <p>알림은 상태 전이가 실제로 일어난 분기 안에서만 예약한다 — 런타임의
      * {@code finalizeFailure}가 이미 보냈으면 여기서 다시 보내지 않는다. 이 경로가 잡는 실패는
      * 개별 노드 실패보다 심각한 시스템 결함(AES 키 오설정, 큐 계약 파손)이라 조용히 넘기지 않는다.
+     *
+     * <p>실제 발신은 커밋 이후로 미룬다 — Discord POST가 DB 커넥션을 쥔 채 돌면 다수 실행이
+     * 동시에 실패하는 상황(이 경로가 잡는 실패가 정확히 그렇다)에서 커넥션 풀이 마른다.
+     * 롤백 시엔 발신되지 않아 유령 알림도 없다.
      *
      * @param reason 알림 문구에 실릴 오류 요약. null이면 실패 원인 없이 발신된다
      */
@@ -272,27 +278,47 @@ public class WorkflowExecutionService {
                     && execution.getStatus() != ExecutionStatus.SUCCESS) {
                 execution.fail();
                 log.warn("[ExecutionService] 실행 상태 FAILED 강제 업데이트 — executionId: {}", executionId);
-                notifyFailure(execution, reason);
+                // 알림 페이로드는 트랜잭션 안에서 만든다 — 커밋 이후엔 LAZY 연관을 못 읽는다.
+                Workflow workflow = execution.getWorkflow();
+                AlertNotifier.ExecutionFailureAlert alert = new AlertNotifier.ExecutionFailureAlert(
+                    execution.getId(), workflow.getId(), workflow.getName(), workflow.getUserId(),
+                    null, reason, false);
+                afterCommit(() -> notifyFailure(alert));
             }
         });
     }
 
     /**
-     * 실패 알림 발신. 발신 실패는 warn만 남기고 삼킨다 — 알림이 상태 확정을 깨면 안 된다.
+     * 실패 알림 발신. 발신 실패는 warn만 남기고 삼킨다 — 커밋 이후 콜백에서 예외를 올려보내면
+     * 커밋 호출부로 전파되므로 여기서 끊는다.
      *
      * <p>실패 노드를 특정할 수 없는 경로라 {@code failedNodeId}는 항상 null이고
      * {@code retryExhausted}는 false다. 소유자에게도 함께 발신한다 — 자기 실행이 실패한 사실은
      * 원인 노드를 몰라도 알아야 하고, 발신 지점을 대상별로 갈라 놓으면 분기만 늘어난다.
      */
-    private void notifyFailure(WorkflowExecution execution, String reason) {
+    private void notifyFailure(AlertNotifier.ExecutionFailureAlert alert) {
         try {
-            Workflow workflow = execution.getWorkflow();
-            alertNotifier.notifyExecutionFailed(new AlertNotifier.ExecutionFailureAlert(
-                execution.getId(), workflow.getId(), workflow.getName(), workflow.getUserId(),
-                null, reason, false));
+            alertNotifier.notifyExecutionFailed(alert);
         } catch (Exception e) {
-            log.warn("[ExecutionService] 실패 알림 발신 실패 — executionId: {}, 상태 확정은 계속한다",
-                execution.getId(), e);
+            log.warn("[ExecutionService] 실패 알림 발신 실패 — executionId: {}, 상태 확정은 이미 끝났다",
+                alert.executionId(), e);
         }
+    }
+
+    /**
+     * 현재 트랜잭션 커밋 이후에 action을 실행한다. 트랜잭션이 없으면 즉시 실행한다 —
+     * 쥐고 있는 커넥션이 없으니 미룰 이유가 없다.
+     */
+    private void afterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
     }
 }

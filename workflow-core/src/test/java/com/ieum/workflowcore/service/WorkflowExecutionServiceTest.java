@@ -44,6 +44,8 @@ import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @ExtendWith(MockitoExtension.class)
 class WorkflowExecutionServiceTest {
@@ -365,6 +367,57 @@ class WorkflowExecutionServiceTest {
 
         verify(execution, never()).fail();
         verify(alertNotifier, never()).notifyExecutionFailed(any());
+    }
+
+    @Test
+    @DisplayName("markAsFailed의 알림은 트랜잭션 커밋 이후에 발신된다 — 커밋 전엔 발신하지 않는다")
+    void markAsFailed_알림은_커밋후_발신() {
+        UUID executionId = UUID.randomUUID();
+        Workflow workflow = mock(Workflow.class);
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        given(execution.getStatus()).willReturn(ExecutionStatus.RUNNING);
+        given(execution.getWorkflow()).willReturn(workflow);
+        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.markAsFailed(executionId, "trigger_data 복호 실패");
+
+            // 상태 전이는 끝났지만 아직 커밋 전 — Discord POST가 DB 커넥션을 쥔 채 돌면 안 된다.
+            verify(execution).fail();
+            verify(alertNotifier, never()).notifyExecutionFailed(any());
+
+            TransactionSynchronizationManager.getSynchronizations()
+                .forEach(TransactionSynchronization::afterCommit);
+
+            verify(alertNotifier).notifyExecutionFailed(any());
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    @DisplayName("트랜잭션이 롤백되면 markAsFailed의 알림은 발신되지 않는다 (유령 알림 방지)")
+    void markAsFailed_롤백시_알림없음() {
+        UUID executionId = UUID.randomUUID();
+        Workflow workflow = mock(Workflow.class);
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        given(execution.getStatus()).willReturn(ExecutionStatus.RUNNING);
+        given(execution.getWorkflow()).willReturn(workflow);
+        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.markAsFailed(executionId, "원인");
+
+            // 롤백 = afterCommit이 불리지 않는다. afterCompletion만 돈다.
+            TransactionSynchronizationManager.getSynchronizations()
+                .forEach(s -> s.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+
+            verify(alertNotifier, never()).notifyExecutionFailed(any());
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test
