@@ -18,13 +18,14 @@ defaults:
 
 env:
   JAVA_VERSION: ${{ secrets.JAVA_VERSION }}
-  IMAGE_NAME: ${{ secrets.BACKEND_IMAGE_NAME }}
-  CONTAINER_NAME: ${{ secrets.BACKEND_CONTAINER_NAME }}
-  DOCKER_NETWORK: ${{ secrets.DOCKER_NETWORK }}
-  DOCKER_NETWORK_SUBNET: ${{ secrets.DOCKER_NETWORK_SUBNET }}
-  BACKEND_IP: ${{ secrets.BACKEND_IP }}
-  BACKEND_PORT: ${{ secrets.BACKEND_PORT }}
-  SPRING_PROFILES_ACTIVE: ${{ secrets.SPRING_PROFILES_ACTIVE }}
+  IMAGE_NAME: ${{ secrets.AWS_BACKEND_IMAGE_NAME }}
+  CONTAINER_NAME: ${{ secrets.AWS_BACKEND_CONTAINER_NAME }}
+  DOCKER_NETWORK: ${{ secrets.AWS_DOCKER_NETWORK }}
+  DOCKER_NETWORK_SUBNET: ${{ secrets.AWS_DOCKER_NETWORK_SUBNET }}
+  BACKEND_IP: ${{ secrets.AWS_BACKEND_IP }}
+  BACKEND_PORT: ${{ secrets.AWS_BACKEND_PORT }}
+  BACKEND_HOST_PORT: ${{ secrets.AWS_BACKEND_HOST_PORT }}
+  SPRING_PROFILES_ACTIVE: ${{ secrets.AWS_SPRING_PROFILES_ACTIVE }}
 
 jobs:
   deploy:
@@ -50,6 +51,7 @@ jobs:
             DOCKER_NETWORK_SUBNET \
             BACKEND_IP \
             BACKEND_PORT \
+            BACKEND_HOST_PORT \
             SPRING_PROFILES_ACTIVE
           do
             [ -n "${!name}" ] || missing_vars+=("$name")
@@ -62,32 +64,32 @@ jobs:
 
       - name: Validate app secrets
         env:
-          RDS_DB_URL: ${{ secrets.RDS_DB_URL }}
-          RDS_DB_USERNAME: ${{ secrets.RDS_DB_USERNAME }}
-          RDS_DB_PASSWORD: ${{ secrets.RDS_DB_PASSWORD }}
-          REDIS_HOST: ${{ secrets.REDIS_HOST }}
-          REDIS_PORT: ${{ secrets.REDIS_PORT }}
-          MONGO_URI: ${{ secrets.MONGO_URI }}
-          CORS_ALLOWED_ORIGINS: ${{ secrets.CORS_ALLOWED_ORIGINS }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          JWT_EXPIRATION: ${{ secrets.JWT_EXPIRATION }}
-          JWT_REFRESH_EXPIRATION: ${{ secrets.JWT_REFRESH_EXPIRATION }}
-          AES_SECRET_KEY: ${{ secrets.AES_SECRET_KEY }}
-          AGENT_SERVICE_URL: ${{ secrets.AGENT_SERVICE_URL }}
+          RDS_DB_URL: ${{ secrets.AWS_RDS_DB_URL }}
+          RDS_DB_USERNAME: ${{ secrets.AWS_RDS_DB_USERNAME }}
+          RDS_DB_PASSWORD: ${{ secrets.AWS_RDS_DB_PASSWORD }}
+          REDIS_HOST: ${{ secrets.AWS_REDIS_HOST }}
+          REDIS_PORT: ${{ secrets.AWS_REDIS_PORT }}
+          MONGO_URI: ${{ secrets.AWS_MONGO_URI }}
+          CORS_ALLOWED_ORIGINS: ${{ secrets.AWS_CORS_ALLOWED_ORIGINS }}
+          JWT_SECRET: ${{ secrets.AWS_JWT_SECRET }}
+          JWT_EXPIRATION: ${{ secrets.AWS_JWT_EXPIRATION }}
+          JWT_REFRESH_EXPIRATION: ${{ secrets.AWS_JWT_REFRESH_EXPIRATION }}
+          AES_SECRET_KEY: ${{ secrets.AWS_AES_SECRET_KEY }}
+          AGENT_SERVICE_URL: ${{ secrets.AWS_AGENT_SERVICE_URL }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          OAUTH2_REDIRECT_URI: ${{ secrets.OAUTH2_REDIRECT_URI }}
+          OAUTH2_REDIRECT_URI: ${{ secrets.AWS_OAUTH2_REDIRECT_URI }}
           NOTION_CLIENT_ID: ${{ secrets.NOTION_CLIENT_ID }}
           NOTION_CLIENT_SECRET: ${{ secrets.NOTION_CLIENT_SECRET }}
           NOTION_AUTH_URL: ${{ secrets.NOTION_AUTH_URL }}
           NOTION_TOKEN_URL: ${{ secrets.NOTION_TOKEN_URL }}
-          NOTION_REDIRECT_URI: ${{ secrets.NOTION_REDIRECT_URI }}
-          NOTION_FRONTEND_REDIRECT_URI: ${{ secrets.NOTION_FRONTEND_REDIRECT_URI }}
+          NOTION_REDIRECT_URI: ${{ secrets.AWS_NOTION_REDIRECT_URI }}
+          NOTION_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_NOTION_FRONTEND_REDIRECT_URI }}
           GITHUB_APP_CLIENT_ID: ${{ secrets.GH_APP_CLIENT_ID }}
           GITHUB_APP_CLIENT_SECRET: ${{ secrets.GH_APP_CLIENT_SECRET }}
           GITHUB_APP_TOKEN_URL: ${{ secrets.GH_APP_TOKEN_URL }}
-          GITHUB_APP_REDIRECT_URI: ${{ secrets.GH_APP_REDIRECT_URI }}
-          GITHUB_APP_FRONTEND_REDIRECT_URI: ${{ secrets.GH_APP_FRONTEND_REDIRECT_URI }}
+          GITHUB_APP_REDIRECT_URI: ${{ secrets.AWS_GH_APP_REDIRECT_URI }}
+          GITHUB_APP_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_GH_APP_FRONTEND_REDIRECT_URI }}
           GITHUB_APP_WEBHOOK_SECRET: ${{ secrets.GH_APP_WEBHOOK_SECRET }}
         run: |
           set -euo pipefail
@@ -177,32 +179,32 @@ jobs:
 
       - name: Restart backend container
         env:
-          RDS_DB_URL: ${{ secrets.RDS_DB_URL }}
-          RDS_DB_USERNAME: ${{ secrets.RDS_DB_USERNAME }}
-          RDS_DB_PASSWORD: ${{ secrets.RDS_DB_PASSWORD }}
-          REDIS_HOST: ${{ secrets.REDIS_HOST }}
-          REDIS_PORT: ${{ secrets.REDIS_PORT }}
-          MONGO_URI: ${{ secrets.MONGO_URI }}
-          CORS_ALLOWED_ORIGINS: ${{ secrets.CORS_ALLOWED_ORIGINS }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          JWT_EXPIRATION: ${{ secrets.JWT_EXPIRATION }}
-          JWT_REFRESH_EXPIRATION: ${{ secrets.JWT_REFRESH_EXPIRATION }}
-          AES_SECRET_KEY: ${{ secrets.AES_SECRET_KEY }}
-          AGENT_SERVICE_URL: ${{ secrets.AGENT_SERVICE_URL }}
+          RDS_DB_URL: ${{ secrets.AWS_RDS_DB_URL }}
+          RDS_DB_USERNAME: ${{ secrets.AWS_RDS_DB_USERNAME }}
+          RDS_DB_PASSWORD: ${{ secrets.AWS_RDS_DB_PASSWORD }}
+          REDIS_HOST: ${{ secrets.AWS_REDIS_HOST }}
+          REDIS_PORT: ${{ secrets.AWS_REDIS_PORT }}
+          MONGO_URI: ${{ secrets.AWS_MONGO_URI }}
+          CORS_ALLOWED_ORIGINS: ${{ secrets.AWS_CORS_ALLOWED_ORIGINS }}
+          JWT_SECRET: ${{ secrets.AWS_JWT_SECRET }}
+          JWT_EXPIRATION: ${{ secrets.AWS_JWT_EXPIRATION }}
+          JWT_REFRESH_EXPIRATION: ${{ secrets.AWS_JWT_REFRESH_EXPIRATION }}
+          AES_SECRET_KEY: ${{ secrets.AWS_AES_SECRET_KEY }}
+          AGENT_SERVICE_URL: ${{ secrets.AWS_AGENT_SERVICE_URL }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          OAUTH2_REDIRECT_URI: ${{ secrets.OAUTH2_REDIRECT_URI }}
+          OAUTH2_REDIRECT_URI: ${{ secrets.AWS_OAUTH2_REDIRECT_URI }}
           NOTION_CLIENT_ID: ${{ secrets.NOTION_CLIENT_ID }}
           NOTION_CLIENT_SECRET: ${{ secrets.NOTION_CLIENT_SECRET }}
           NOTION_AUTH_URL: ${{ secrets.NOTION_AUTH_URL }}
           NOTION_TOKEN_URL: ${{ secrets.NOTION_TOKEN_URL }}
-          NOTION_REDIRECT_URI: ${{ secrets.NOTION_REDIRECT_URI }}
-          NOTION_FRONTEND_REDIRECT_URI: ${{ secrets.NOTION_FRONTEND_REDIRECT_URI }}
+          NOTION_REDIRECT_URI: ${{ secrets.AWS_NOTION_REDIRECT_URI }}
+          NOTION_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_NOTION_FRONTEND_REDIRECT_URI }}
           GITHUB_APP_CLIENT_ID: ${{ secrets.GH_APP_CLIENT_ID }}
           GITHUB_APP_CLIENT_SECRET: ${{ secrets.GH_APP_CLIENT_SECRET }}
           GITHUB_APP_TOKEN_URL: ${{ secrets.GH_APP_TOKEN_URL }}
-          GITHUB_APP_REDIRECT_URI: ${{ secrets.GH_APP_REDIRECT_URI }}
-          GITHUB_APP_FRONTEND_REDIRECT_URI: ${{ secrets.GH_APP_FRONTEND_REDIRECT_URI }}
+          GITHUB_APP_REDIRECT_URI: ${{ secrets.AWS_GH_APP_REDIRECT_URI }}
+          GITHUB_APP_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_GH_APP_FRONTEND_REDIRECT_URI }}
           GITHUB_APP_WEBHOOK_SECRET: ${{ secrets.GH_APP_WEBHOOK_SECRET }}
         run: |
           set -euo pipefail
@@ -215,6 +217,7 @@ jobs:
           docker run -d \
             --name "$CONTAINER_NAME" \
             --restart unless-stopped \
+            -p "$BACKEND_HOST_PORT:$BACKEND_PORT" \
             --network "$DOCKER_NETWORK" \
             --ip "$BACKEND_IP" \
             -e SPRING_PROFILES_ACTIVE="$SPRING_PROFILES_ACTIVE" \
@@ -253,8 +256,16 @@ jobs:
         run: |
           set -euo pipefail
 
+          check_http() {
+            local url="$1"
+            local status
+            status="$(curl -sS -o /dev/null -w '%{http_code}' "$url" || true)"
+            [[ "$status" =~ ^[234][0-9][0-9]$ ]]
+          }
+
           for i in $(seq 1 30); do
-            if curl -fsS "http://$BACKEND_IP:$BACKEND_PORT/actuator/health/readiness" >/dev/null 2>&1; then
+            if check_http "http://$BACKEND_IP:$BACKEND_PORT/actuator/health/readiness" \
+              && check_http "http://127.0.0.1:$BACKEND_HOST_PORT/actuator/health/readiness"; then
               exit 0
             fi
 
