@@ -378,6 +378,25 @@ class SyncExecutionRuntimeTest {
         }
 
         @Test
+        @DisplayName("TRIGGER 노드는 주입돼 있어도 스킵하지 않고 다시 실행한다(마스킹된 로그값 대신 복호본)")
+        void trigger_node_is_never_skipped() throws Exception {
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI")),
+                List.of(edge("t", "a", null))
+            );
+
+            // 원 실행 로그에는 마스킹된 트리거 output이 남아 있다.
+            runWith(Map.of("t", Map.of("apiKey", "***"), "a", Map.of("output", "x")));
+
+            assertThat(log).contains("t");     // executor가 다시 호출된다
+            assertThat(log).doesNotContain("a");
+            List<WorkflowExecutionLog> logs = capturedLogs(2);
+            assertThat(logOf(logs, "t").getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
+            assertThat(logOf(logs, "t").getOutputJson()).doesNotContain("***");
+            assertThat(logOf(logs, "a").getStatus()).isEqualTo(ExecutionLogStatus.SKIPPED);
+        }
+
+        @Test
         @DisplayName("회귀: 주입이 비면 모든 노드를 실행하고 SKIPPED 로그가 하나도 없다")
         void empty_preCompleted_behaves_like_normal_execution() throws Exception {
             stubDefinition(

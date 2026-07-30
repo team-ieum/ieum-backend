@@ -117,6 +117,7 @@ public class SyncExecutionRuntime {
      * @param preCompletedOutputs nodeId → 그 노드의 출력. 여기 있는 노드는 {@link NodeExecutor}를
      *                            호출하지 않고 주어진 출력을 그대로 성공 결과로 삼아 컨텍스트에 넣고,
      *                            {@link ExecutionLogStatus#SKIPPED}로 로그를 남긴다.
+     *                            <b>TRIGGER 노드는 예외로 항상 다시 실행한다</b> — 아래 참조.
      */
     public void execute(
         WorkflowVersion workflowVersion,
@@ -170,6 +171,15 @@ public class SyncExecutionRuntime {
             // 트리거 입력 데이터 보존(트리거 노드 실행 입력으로 사용)
             cursor.getContext().setNodeOutput(triggerNode.getId(),
                 triggerData != null ? triggerData : new HashMap<>());
+
+            // 재처리라도 TRIGGER 노드는 주입하지 않고 다시 실행한다. node_runs에 남은 output은
+            // SensitiveDataMasker를 거친 값이라 트리거에 실린 민감값이 ***로 흘러가는데,
+            // TriggerNodeExecutor는 부작용이 없어 재실행이 공짜이고 복호된 triggerData로
+            // 정상 실행과 똑같은 출력을 스스로 다시 만든다.
+            if (preCompleted.containsKey(triggerNode.getId())) {
+                preCompleted = new HashMap<>(preCompleted);
+                preCompleted.remove(triggerNode.getId());
+            }
 
             // 2-1. 구조적 순환 검사(위상정렬 불가 = 사이클)
             assertNoCycle(nodes, edges);

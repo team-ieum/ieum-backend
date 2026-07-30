@@ -49,7 +49,8 @@ public class ExecutionRetryService {
      * @throws CustomException EXECUTION_NOT_FOUND — 실행이 없음
      * @throws CustomException WORKFLOW_NOT_FOUND — 요청자가 워크플로우 소유자가 아님
      *                         (존재 여부를 흘리지 않도록 다른 조회 API와 같은 코드를 쓴다)
-     * @throws CustomException EXECUTION_NOT_RETRYABLE — FAILED가 아닌 실행
+     * @throws CustomException EXECUTION_NOT_RETRYABLE — FAILED가 아닌 실행이거나,
+     *                         아직 끝나지 않은 재처리가 이미 있는 경우
      */
     @Transactional
     public WorkflowExecutionResponse retryExecution(UUID userId, UUID executionId) {
@@ -63,6 +64,20 @@ public class ExecutionRetryService {
         if (original.getStatus() != ExecutionStatus.FAILED) {
             throw new CustomException(ErrorCode.EXECUTION_NOT_RETRYABLE,
                 "현재 상태: " + original.getStatus());
+        }
+
+        // 진행 중인 재처리가 있으면 거부한다. 재처리 버튼 더블클릭만으로 두 재처리가 같은 실패 구간을
+        // 동시에 실행해 중복 외부 호출이 나고(크래시 없이), 링크가 덮어써져 앞선 재처리가 회수될 때
+        // 스킵 대상을 잃는다. 그 재처리가 끝난 뒤(SUCCESS/FAILED)에는 다시 재처리할 수 있다.
+        UUID previousRetryId = original.getRetriedByExecutionId();
+        if (previousRetryId != null) {
+            ExecutionStatus previousStatus =
+                workflowExecutionService.getExecution(previousRetryId).getStatus();
+            if (previousStatus != ExecutionStatus.SUCCESS && previousStatus != ExecutionStatus.FAILED) {
+                throw new CustomException(ErrorCode.EXECUTION_NOT_RETRYABLE,
+                    "이미 재처리가 진행 중입니다 — retryExecutionId: " + previousRetryId
+                        + ", 상태: " + previousStatus);
+            }
         }
 
         // 원 실행이 고정한 버전을 그대로 쓴다 — 최신 버전으로 갈아타면 재처리가 아니라 새 실행이다.
