@@ -9,6 +9,7 @@ Java 21 + Spring Boot 3.5.11 기반의 **멀티모듈 Gradle 모듈러 모노리
 - **Credential + Dashboard** 완료 — AI API Key BYOK, 프로바이더 관리
 - **Workflow Engine** 완료 — DAG 위상정렬 + fan-out 병렬 실행, 실행 이력 영속, SSE 진행 스트림, Quartz 스케줄
 - **베타 플랫폼 키** 완료 — BYOK 없이 플랫폼 Gemini 키 체험, Redis 2축 쿼터
+- **실행 신뢰성** 완료 (IEUM-BE-46) — 노드 재시도(지수백오프+jitter)·멱등 가드·모델 fallback, Redis Stream 잡 큐로 재시작 복구(at-least-once), 실패 실행 재처리 API, Discord 실패 알림
 - 각 모듈의 상세 구현 현황은 해당 모듈의 `CLAUDE.md` 참조
 
 ## 모듈 구조
@@ -93,6 +94,7 @@ QueryDSL (openfeign 7.1), springdoc-openapi 2.8.4, Quartz, Spring @Async (MVP)
 - Q클래스는 `./gradlew build` 후 생성됨 — 빌드 전에는 QueryDSL 코드가 컴파일 에러
 - `application-local.yml`은 `.gitignore`에 포함 — 환경변수는 `.env` 파일 사용
 - **스키마는 Flyway가 아니라 `ddl-auto: update`** — `db/migration` 디렉터리 자체가 없다. 컬럼 추가는 엔티티 필드만 넣으면 반영됨(컬럼 삭제·타입 변경은 반영 안 되니 수동 DDL 필요)
+- **`nullable = false` 컬럼을 기존 행이 있는 테이블에 추가할 때는 `@ColumnDefault`가 필수** — 없으면 PostgreSQL이 DDL을 거부하는데 `ddl-auto: update`는 그 오류를 경고로만 남기고 부팅을 계속해 **컬럼 없이 앱이 뜬다.** 운영은 `update`, 테스트는 `create-drop`(빈 스키마)이라 테스트가 이 사고를 잡아 주지 않는다
 - 변수 참조 문법: `{{nodes.<uuid>.output.<field>}}` (workflow-core에서 사용)
 - JWT 예외는 반드시 CustomException으로 변환 — ExpiredJwtException → TOKEN_EXPIRED, JwtException → TOKEN_INVALID
 

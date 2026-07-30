@@ -4,16 +4,41 @@
 워크플로우 엔진의 핵심 비즈니스 로직. 워크플로우 CRUD·버전 관리·실행 엔진·스케줄러·실행 이력을 담당한다.
 
 ## 현재 상태
-구현 완료 (main 68개 클래스). 실행 엔진·이력 영속·SSE 이벤트·Quartz 스케줄러 동작 중.
+구현 완료 (main 79개 클래스). 실행 엔진·이력 영속·SSE 이벤트·Quartz 스케줄러 동작 중.
+노드 재시도·멱등 가드·모델 fallback·실패 실행 재처리(IEUM-BE-46)까지 포함.
 
 ## 실행 엔진 (engine/)
 
 ### SyncExecutionRuntime
 이름은 Sync지만 **DAG 위상정렬 + fan-out 병렬** 실행이다.
 - Kahn 위상정렬로 구조적 사이클 검출 → 사이클이면 실행 거부
-- 워커 스레드 풀(`workflow.execution.parallelism`, 기본 4)에서 노드 실행, 메인 스레드가 상태/JPA 독점
+- 워커 스레드 풀(`workflow.execution.parallelism`, 코드 기본 4 / api `application.yml`이 3으로 낮춤)에서 노드 실행, 메인 스레드가 상태/JPA 독점
 - CONDITION 분기 시 선택 안 된 경로는 live 입력이 없어 자연 스킵
-- 실행 자체는 `@Async` 백그라운드 스레드 (트리거는 api 모듈 `WorkflowExecutionRunner`)
+- 실행 트리거는 api 모듈 `WorkflowExecutionRunner` → Redis Stream 잡 큐 → 같은 프로세스 워커 (Redis 장애 시 `@Async` 직접 실행 폴백). Quartz 스케줄 실행만 큐를 거치지 않고 런타임을 직접 부른다 — 그래서 내구성이 없다
+- 실패 확정은 `finalizeFailure()` 한 곳 — 상태 전이 + SSE 종료 이벤트 + `AlertNotifier` 발신. 이미 종료된 실행은 상태·알림을 다시 건드리지 않는다(중복 알림 방지)
+
+### 노드 재시도 (retry)
+- `RetryPolicy` — 노드 config의 `retry` 객체를 파싱한 record(정책 파싱·백오프 계산·회차별 모델 선택). 사용자 편집값이라 `maxAttempts` ≤ 10, 단일 백오프 ≤ 10분으로 상·하한 강제
+- `FailureKind` — 실패 원인 enum이 **재시도 가능 여부를 스스로 보유**한다(`isRetryable()`). TIMEOUT·RATE_LIMIT·SERVER_ERROR·NETWORK만 재시도 대상, CLIENT_ERROR·UNKNOWN은 아님
+- `FailureClassifier` — agent errorCode / HTTP status / 예외 cause 체인 → `FailureKind`. 문자열 추론이 아니라 Executor가 실패를 반환할 때 명시적으로 채운다
+- `RetryProperties`(`workflow.execution.retry.*`) — 기본값. **AI 노드만 기본 재시도(3회)**, 그 외는 1회(= 명시 선언 없으면 재시도 없음) — HTTP는 멱등성을 보장할 수 없어 기본 재시도가 위험하다
+- 백오프는 지수 + **full jitter**(`[0, computed]` 균등 난수). 지터 난수는 `ThreadLocalRandom`이다 — 워커 스레드가 공유하는 필드이므로 `RandomGenerator.getDefault()`로 바꾸지 말 것(스레드 안전하지 않다)
+- **대기는 워커 스레드의 `Thread.sleep`이다.** 메인 스레드 JPA 독점 구조를 유지하려 그렇게 뒀고, 그 대가로 재시도 대기가 워커 슬롯을 점유한다(fan-out이 넓으면 슬롯 고갈)
+
+### 멱등성 (재시도 중복 호출 가드)
+- `IdempotencyMode` = NONE / HEADER / MARKER / BOTH. 노드 config `retry.idempotency`로 선언. HTTP 노드만 HEADER가 기본, 나머지는 NONE
+- `IdempotencyKeys.generate(executionId, nodeId)` — sha256 앞 32자 hex. **attempt 번호를 절대 섞지 않는다**(섞으면 중복 차단이 성립하지 않음)
+- HEADER: HTTP 노드는 `Idempotency-Key`, AI 노드는 agent에 `X-Idempotency-Key`. `policy.isDisabled()`(재시도 없음)면 붙이지 않는다
+- MARKER: `IdempotencyStore` 포트로 in-flight 마커를 세우고, 마커가 있으면 **재시도를 포기**한다. 마커 해제는 재시도 루프 전체가 끝난 뒤 1회만 — attempt별 finally에서 해제하면 모드가 무력화된다
+- 런타임은 MARKER 모드 노드를 attempt 1 이후 곧바로 멈춘다 — 2회차를 시작하면 원 실패 원인이 마커 차단(CLIENT_ERROR)으로 덮여써져 `node_runs` 진단과 `retryExhausted` 신호가 왜곡된다
+
+### 모델 fallback
+`RetryPolicy.modelForAttempt()` — 1회차는 원 모델, 2회차부터 `retry.modelFallback` 목록을 차례로 쓴다.
+`AgentNodeExecutor`가 **platform-key 모드가 정해진 뒤에** 적용하며, 그 모드에선 `BetaPlatformProvider.isModelAllowed()`로 허용 목록을 검증한다 — platform 키는 Gemini 한 장이라 비-Gemini fallback은 agent resolve 자체가 실패한다.
+
+### 성공 노드 스킵 (실패 실행 재처리)
+`execute(version, executionId, triggerData, preCompletedOutputs)` 4-인자 오버로드. `preCompletedOutputs`에 있는 노드는 executor를 부르지 않고 주어진 출력을 성공 결과로 삼아 `SKIPPED` 로그를 남긴다. 빈 Map이면 3-인자와 완전히 동일 동작.
+**TRIGGER 노드는 스킵 대상에서 제외한다** — `node_runs`의 output은 `SensitiveDataMasker`를 거쳐 민감값이 `***`인데, `TriggerNodeExecutor`는 부작용이 없어 재실행이 공짜이고 복호된 triggerData로 같은 출력을 다시 만든다.
 
 ### 노드 타입 (NodeType)
 `TRIGGER`, `AI`, `CONDITION`, `HTTP`, `TRANSFORM` — 5종뿐. 외부 서비스(Gmail·Notion 등) 연동은 별도 노드 타입이 아니라 AI 노드의 도구/HTTP 노드로 처리한다.
@@ -21,26 +46,33 @@
 ### NodeExecutor
 `NodeExecutor` 인터페이스 + 타입별 구현체(`AgentNodeExecutor`, `ConditionNodeExecutor`, `HttpNodeExecutor`, `TransformNodeExecutor`, `TriggerNodeExecutor`). 결과는 `ExecutorResult`.
 
+3-인자 `execute(node, input, cursor)`가 기본이고, 외부 호출이 멱등 가드를 적용해야 하는 Executor(HTTP·AI)만 4-인자 오버로드 `execute(node, input, cursor, NodeAttempt)`를 override한다. `NodeAttempt(attempt, idempotencyKey, policy)`가 회차·멱등성 키·재시도 정책을 실어 온다 — **`ExecutionCursor`/`ExecutionContext`에 attempt 정보를 넣지 말 것**(워커 스레드 간 공유 객체다).
+
 ### Provider 포트 + Stub 패턴
-workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능은 **포트 인터페이스**로 선언하고 api 모듈이 구현체를 제공한다. 포트마다 `@ConditionalOnMissingBean` Stub이 있어 workflow-core 단독 테스트가 가능하다 (현재 8개).
+workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능은 **포트 인터페이스**로 선언하고 api 모듈이 구현체를 제공한다. 포트마다 `@ConditionalOnMissingBean` Stub이 있어 workflow-core 단독 테스트가 가능하다 (현재 10개).
 
 | 포트 | 실구현 위치 |
 |------|------------|
 | `CredentialProvider` | api (AI 크레덴셜 복호화) |
-| `GoogleTokenProvider` / `NotionTokenProvider` / `GitHubTokenProvider` | api (OAuth 토큰) |
-| `WebhookCredentialProvider` | api |
+| `GoogleTokenProvider` | api (OAuth 토큰) |
+| `NotionTokenProvider` | api (OAuth 토큰) |
+| `GitHubTokenProvider` | api (OAuth 토큰) |
+| `WebhookCredentialProvider` | api (송신 웹훅 URL + 실패 알림 대상 웹훅) |
 | `McpCatalogProvider` | api (MCP 서버 카탈로그) |
 | `UserRoleProvider` | api (self-hosted LLM 라우팅 판정) |
-| `BetaPlatformProvider` | api (베타 플랫폼 키 쿼터) |
+| `BetaPlatformProvider` | api (베타 플랫폼 키 쿼터 + fallback 모델 허용 판정) |
+| `IdempotencyStore` | api (Redis SETNX in-flight 마커) |
+| `AlertNotifier` | api (실행 실패 Discord 알림) |
 
 새 포트 추가 시 Stub도 같이 만들 것 — 없으면 workflow-core 테스트 컨텍스트가 깨진다.
+`IdempotencyStore`·`AlertNotifier` 구현체는 **저장소·발신 장애를 삼켜야 한다** — 실행 종료 처리를 깨는 것보다 중복 호출·알림 유실을 감수한다(의도적 트레이드오프).
 
 ### 변수 참조 시스템
 - 문법: `{{nodes.<node_uuid>.output.<field>}}`
 - `ExecutionCursor.renderVariables()`가 실행 시점에 치환. 중첩 참조 불가(1단계만)
 
 ### 실행 이벤트 (engine/event/)
-`ExecutionEventPublisher` — executionId 키의 in-memory `Sinks.Many` 멀티캐스트 허브. SSE 구독과 `@Async` 실행 스레드를 연결한다.
+`ExecutionEventPublisher` — executionId 키의 in-memory `Sinks.Many` 멀티캐스트 허브. SSE 구독(HTTP 스레드)과 실행 스레드를 **같은 JVM 안에서** 연결한다 — 그래서 api의 잡 큐 워커를 별도 프로세스로 뺄 수 없다.
 - **단일 인스턴스 전제** — 다중 인스턴스로 가면 Redis Pub/Sub 등으로 교체 필요
 - 늦은 구독 보완: `WorkflowExecutionService.loadEventSnapshot()`이 DB 로그를 이벤트로 변환해 먼저 흘림
 
@@ -50,20 +82,41 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 |--------|--------|------|
 | `Workflow` | `workflows` | |
 | `WorkflowVersion` | `workflow_versions` | 실행 시점 버전 고정 참조 |
-| `WorkflowExecution` | `workflow_runs` | status, triggerType, startedAt/finishedAt |
-| `WorkflowExecutionLog` | `node_runs` | nodeId, nodeType, status, input/output JSON(TEXT), errorMessage, durationMs |
+| `WorkflowExecution` | `workflow_runs` | status, triggerType, startedAt/finishedAt, traceId, `retry_exhausted`, `trigger_data`, `retried_by_execution_id` |
+| `WorkflowExecutionLog` | `node_runs` | nodeId, nodeType, status, input/output JSON(TEXT), errorMessage, durationMs, traceId, prompt/completion/total tokens, `attempt_count` |
 | `ChatMessage`/`ChatSession` | chat/ 하위 | 워크플로우 채팅 |
 | `WorkflowDefinitionDocument` | Mongo | nodes/edges 정의. PG `mongoDefinitionId`로 조인 |
 
 enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED, `ExecutionLogStatus`=SUCCESS/FAILED/SKIPPED, `TriggerType`=MANUAL/WEBHOOK/SCHEDULE.
 
+새 컬럼 (IEUM-BE-46):
+- `node_runs.attempt_count` — 결과가 나오기까지의 시도 횟수. 재시도 없이 끝나면 1, **`SKIPPED`(재처리 스킵)은 0**
+- `workflow_runs.retry_exhausted` — 재시도 대상 실패로 `maxAttempts`를 다 쓰고도 실패했는지. 판정은 런타임이 하고 컬럼엔 결과만 남는다
+- `workflow_runs.trigger_data` — 트리거가 전달한 초기 입력. **AES-256 암호문(TEXT)이다 — 직접 파싱하지 말 것.** 복호는 `WorkflowExecutionService.decryptTriggerData()` 하나뿐이다(잡 큐 워커·재처리가 공유). 조회 API 응답에 그대로 노출 금지
+- `workflow_runs.retried_by_execution_id` — 이 실행을 재처리하려 만든 새 실행. 역방향(재처리 → 원본) 조회는 `findByRetriedByExecutionId`
+
 **DDL은 Flyway가 아니라 `ddl-auto: update`** — 마이그레이션 파일 없음. 컬럼 추가는 엔티티 필드만 넣으면 된다.
+단, **`nullable = false` 컬럼을 기존 행이 있는 테이블에 추가할 때는 `@ColumnDefault`가 반드시 필요하다.** 없으면 PostgreSQL이 DDL을 거부하는데 `ddl-auto: update`는 그 오류를 경고로만 남기고 부팅을 계속해 **컬럼 없이 앱이 뜬다.** 테스트는 `ddl-auto: create-drop`(빈 스키마)이라 이 사고를 잡지 못한다 — 이번에 `retry_exhausted`·`alert_target`이 걸릴 뻔했다.
 
 ## 스케줄러 (scheduler/, config/)
 Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `ScheduleJobRestorer`(부팅 시 복원), `WorkflowCleanupScheduler`, `JobKeyGenerator`.
+`WorkflowScheduleJob`은 `SyncExecutionRuntime`을 직접 부른다 — api의 잡 큐를 거치지 않아 **스케줄 실행에는 내구성이 없다**(프로세스가 죽으면 유실). 해결 경로는 `boolean enqueue(UUID)` Provider 포트지만 별도 이슈다.
+
+## 설정 (workflow-core가 읽는 키)
+| 키 | 기본값 | 용도 |
+|----|--------|------|
+| `workflow.execution.parallelism` | 4 (api yml이 3으로 덮음) | 워크플로우 1개 내부 fan-out 병렬도 |
+| `workflow.execution.retry.ai-max-attempts` | 3 | AI 노드 기본 시도 횟수(최초 포함) |
+| `workflow.execution.retry.default-max-attempts` | 1 | AI 외 노드 기본 시도 횟수 (1 = 재시도 없음) |
+| `workflow.execution.retry.backoff-ms` | 1000 | 첫 재시도 전 대기 |
+| `workflow.execution.retry.multiplier` | 2.0 | 회차당 대기 증가 배수 |
+| `workflow.execution.retry.max-backoff-ms` | 30000 | 단일 대기 상한 |
+| `workflow.execution.retry.jitter` | true | full jitter 적용 여부 |
+
+`retry.*`는 `RetryProperties`(`@ConfigurationProperties`)의 필드 기본값이고 yml에 선언돼 있지 않다 — 장애 시 `ai-max-attempts: 1`로 재시도를 전역으로 끌 수 있게 코드 상수가 아니라 설정으로 뒀다. 노드 config의 `retry` 선언이 이 기본값보다 우선한다.
 
 ## 주의사항
-- `node_runs`의 input/output에 자격증명 원문 저장 금지 — `SyncExecutionRuntime.maskSensitiveFields()`가 `apiKey/token/secret/password/Authorization` 키를 `***`로 마스킹한다. 새 민감 키는 `SENSITIVE_KEYS`에 추가
+- `node_runs`의 input/output에 자격증명 원문 저장 금지 — `SensitiveDataMasker.mask()`(util/)가 `apiKey/api_key/token/secret/password/Authorization` 키를 `***`로 마스킹한다. 새 민감 키는 `SENSITIVE_KEYS`에 추가 (최상위 키만 검사 — 중첩 Map 내부는 마스킹하지 않는다). `workflow_runs.trigger_data`는 마스킹이 아니라 AES-256 암호화다 (`SensitiveDataMasker` 클래스 javadoc이 trigger_data도 마스킹한다고 적고 있으나 그 서술은 stale — 실제 호출부는 `SyncExecutionRuntime` 하나뿐이다)
 - 실행 로그 저장 실패는 실행 전체를 중단시키지 않음(warn만) — 이력 누락 가능성이 설계상 허용됨
 - 워크플로우당 트리거 노드 1개만 허용
 - 노드 config에 실제 토큰/키 저장 금지 — credential_id 참조만
@@ -73,13 +126,15 @@ Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `Sche
 ```
 com.ieum.workflowcore
 ├── chat/          # ChatSession, ChatMessage, MessageType + repository
-├── config/        # SchedulerConfig, QuartzJobFactory, WorkflowConfig
+├── config/        # SchedulerConfig, QuartzJobFactory, WorkflowConfig, RetryProperties
 ├── document/      # WorkflowDefinitionDocument (Mongo), BrandVersionCount
 ├── domain/        # Workflow, WorkflowVersion, WorkflowExecution, WorkflowExecutionLog + enums
 ├── engine/        # SyncExecutionRuntime, ExecutionCursor, ExecutionContext, Node, Edge, ExecutorResult
+│   │              # + RetryPolicy, FailureKind, FailureClassifier, IdempotencyMode, IdempotencyKeys
 │   ├── event/     # ExecutionEvent, ExecutionEventPublisher, ExecutionEventSnapshot
-│   └── executor/  # NodeExecutor 구현체 + Provider 포트/Stub + dto
+│   └── executor/  # NodeExecutor(+NodeAttempt) 구현체 + Provider 포트/Stub + dto
 ├── repository/    # Workflow/Version/Execution/ExecutionLog Repository, WorkflowQueryRepository
 ├── scheduler/     # Quartz 잡·복원·정리
-└── service/       # WorkflowCrudService, WorkflowExecutionService, IntegrationWorkflowQueryService
+├── service/       # WorkflowCrudService, WorkflowExecutionService, IntegrationWorkflowQueryService
+└── util/          # SensitiveDataMasker
 ```
