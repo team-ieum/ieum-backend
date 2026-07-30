@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -23,6 +24,7 @@ import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
 import com.ieum.workflowcore.engine.event.ExecutionEventType;
+import com.ieum.workflowcore.engine.executor.AlertNotifier;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import jakarta.persistence.LockModeType;
@@ -53,6 +55,7 @@ class WorkflowExecutionServiceTest {
     @Mock private WorkflowExecutionLogRepository workflowExecutionLogRepository;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
     @Spy private AesEncryptor aesEncryptor = newAesEncryptor();
+    @Mock private AlertNotifier alertNotifier;
     @InjectMocks private WorkflowExecutionService service;
 
     private static AesEncryptor newAesEncryptor() {
@@ -315,6 +318,70 @@ class WorkflowExecutionServiceTest {
         // 워크플로우 불일치 케이스에서는 상태 조회 전에 throw되므로 lenient로 둔다.
         lenient().when(execution.getStatus()).thenReturn(status);
         return execution;
+    }
+
+    @Test
+    @DisplayName("markAsFailed가 상태를 전이시키면 실패 알림을 발신한다")
+    void markAsFailed_전이시_알림발신() {
+        UUID executionId = UUID.randomUUID();
+        UUID ownerId = UUID.randomUUID();
+        UUID workflowId = UUID.randomUUID();
+        Workflow workflow = mock(Workflow.class);
+        given(workflow.getId()).willReturn(workflowId);
+        given(workflow.getName()).willReturn("실패한 워크플로우");
+        given(workflow.getUserId()).willReturn(ownerId);
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        given(execution.getStatus()).willReturn(ExecutionStatus.RUNNING);
+        given(execution.getId()).willReturn(executionId);
+        given(execution.getWorkflow()).willReturn(workflow);
+        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+
+        service.markAsFailed(executionId, "trigger_data 복호 실패");
+
+        verify(execution).fail();
+        ArgumentCaptor<AlertNotifier.ExecutionFailureAlert> captor =
+            ArgumentCaptor.forClass(AlertNotifier.ExecutionFailureAlert.class);
+        verify(alertNotifier).notifyExecutionFailed(captor.capture());
+        AlertNotifier.ExecutionFailureAlert alert = captor.getValue();
+        assertThat(alert.executionId()).isEqualTo(executionId);
+        assertThat(alert.workflowId()).isEqualTo(workflowId);
+        assertThat(alert.workflowName()).isEqualTo("실패한 워크플로우");
+        assertThat(alert.ownerUserId()).isEqualTo(ownerId);
+        assertThat(alert.errorSummary()).isEqualTo("trigger_data 복호 실패");
+        // 이 경로는 실패 노드를 특정할 수 없다
+        assertThat(alert.failedNodeId()).isNull();
+        assertThat(alert.retryExhausted()).isFalse();
+    }
+
+    @Test
+    @DisplayName("markAsFailed는 이미 FAILED인 실행에 알림을 다시 보내지 않는다 (런타임이 이미 발신)")
+    void markAsFailed_이미종료면_알림없음() {
+        UUID executionId = UUID.randomUUID();
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        given(execution.getStatus()).willReturn(ExecutionStatus.FAILED);
+        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+
+        service.markAsFailed(executionId, "무시되어야 한다");
+
+        verify(execution, never()).fail();
+        verify(alertNotifier, never()).notifyExecutionFailed(any());
+    }
+
+    @Test
+    @DisplayName("알림 발신이 예외를 던져도 markAsFailed의 상태 전이는 정상 완료된다")
+    void markAsFailed_알림실패_상태전이는성공() {
+        UUID executionId = UUID.randomUUID();
+        Workflow workflow = mock(Workflow.class);
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        given(execution.getStatus()).willReturn(ExecutionStatus.RUNNING);
+        given(execution.getWorkflow()).willReturn(workflow);
+        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+        doThrow(new RuntimeException("discord down"))
+            .when(alertNotifier).notifyExecutionFailed(any());
+
+        service.markAsFailed(executionId, "원인");
+
+        verify(execution).fail();
     }
 
     private WorkflowExecutionLog mockLog(ExecutionLogStatus status, String nodeId,

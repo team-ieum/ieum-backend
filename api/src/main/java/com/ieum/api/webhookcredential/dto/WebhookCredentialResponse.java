@@ -16,6 +16,7 @@ public record WebhookCredentialResponse(
         String displayName,
         String defaultChannel,
         boolean enabled,
+        boolean alertTarget,
         LocalDateTime createdAt
 ) {
     public static WebhookCredentialResponse from(WebhookCredential credential) {
@@ -25,6 +26,7 @@ public record WebhookCredentialResponse(
                 credential.getDisplayName(),
                 credential.getDefaultChannel(),
                 credential.isEnabled(),
+                credential.isAlertTarget(),
                 credential.getCreatedAt()
         );
     }

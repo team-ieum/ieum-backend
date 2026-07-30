@@ -118,7 +118,7 @@ public class ExecutionJobWorker implements StreamListener<String, MapRecord<Stri
         } catch (Exception e) {
             // executeNow는 자체적으로 실패를 기록한다. 여기 오는 건 조회·복호 실패다.
             log.error("[ExecutionJobWorker] 잡 처리 실패 — executionId: {}", executionId, e);
-            workflowExecutionService.markAsFailed(executionId);
+            workflowExecutionService.markAsFailed(executionId, e.getMessage());
         } finally {
             inFlight.remove(executionId);
             // ack는 반드시 실행이 종료 상태로 확정된 뒤다. 앞당기면 프로세스가 죽을 때

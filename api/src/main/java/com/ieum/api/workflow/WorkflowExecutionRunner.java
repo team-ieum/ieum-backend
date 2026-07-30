@@ -53,7 +53,7 @@ public class WorkflowExecutionRunner {
                 workflowExecutionService.loadReusableNodeOutputs(executionId));
         } catch (Exception e) {
             log.error("[Runner] 워크플로우 실행 예외 — executionId: {}", executionId, e);
-            workflowExecutionService.markAsFailed(executionId);
+            workflowExecutionService.markAsFailed(executionId, e.getMessage());
         }
     }
 }

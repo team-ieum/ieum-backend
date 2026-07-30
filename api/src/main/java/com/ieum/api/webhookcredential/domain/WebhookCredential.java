@@ -15,6 +15,7 @@ import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.ColumnDefault;
 
 /**
  * 사용자별 Slack/Discord 송신 웹훅 자격증명.
@@ -61,6 +62,18 @@ public class WebhookCredential extends BaseEntity {
     @Column(nullable = false)
     private boolean enabled;
 
+    /**
+     * 실행 실패 알림을 받을 대상인지. 사용자당 provider별로 하나만 true다
+     * (지정은 {@code WebhookCredentialService.setAlertTarget}이 기존 것을 내리고 세운다).
+     *
+     * <p>{@code @ColumnDefault}가 없으면 안 된다 — 스키마가 {@code ddl-auto: update}인데
+     * 이 테이블엔 기존 행이 있어, 기본값 없는 {@code not null} 컬럼 추가는 PostgreSQL이 거부하고
+     * {@code ddl-auto: update}는 그 오류를 경고로만 남기고 부팅을 계속한다(컬럼 없이 앱이 뜬다).
+     */
+    @ColumnDefault("false")
+    @Column(name = "alert_target", nullable = false)
+    private boolean alertTarget;
+
     @Builder
     private WebhookCredential(UUID userId, WebhookProvider provider, String displayName,
                              String encryptedWebhookUrl, String defaultChannel, boolean enabled) {
@@ -70,5 +83,9 @@ public class WebhookCredential extends BaseEntity {
         this.encryptedWebhookUrl = encryptedWebhookUrl;
         this.defaultChannel = defaultChannel;
         this.enabled = enabled;
+    }
+
+    public void changeAlertTarget(boolean alertTarget) {
+        this.alertTarget = alertTarget;
     }
 }

@@ -2,6 +2,7 @@ package com.ieum.api.workflow.queue;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -152,7 +153,7 @@ class ExecutionJobWorkerTest {
         worker.onMessage(jobRecord(executionId.toString()));
 
         verify(syncExecutionRuntime, never()).execute(any(), any(), any(), any());
-        verify(workflowExecutionService).markAsFailed(executionId);
+        verify(workflowExecutionService).markAsFailed(eq(executionId), any());
         verify(streamOperations).acknowledge(
             ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
     }

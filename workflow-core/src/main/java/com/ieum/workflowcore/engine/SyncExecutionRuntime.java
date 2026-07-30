@@ -15,6 +15,7 @@ import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
+import com.ieum.workflowcore.engine.executor.AlertNotifier;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
@@ -63,6 +64,7 @@ public class SyncExecutionRuntime {
     private final List<NodeExecutor> nodeExecutors;
     private final RetryProperties retryProperties;
     private final IdempotencyStore idempotencyStore;
+    private final AlertNotifier alertNotifier;
 
     /** 노드 타입 → 실행 전략. @PostConstruct에서 nodeExecutors로부터 구성된다. */
     private final Map<NodeType, NodeExecutor> executorMap = new EnumMap<>(NodeType.class);
@@ -150,10 +152,7 @@ public class SyncExecutionRuntime {
         } catch (Exception e) {
             log.error("[Runtime] 워크플로우 초기화 실패 — executionId: {}, error: {}",
                 execution.getId(), e.getMessage());
-            execution.fail();
-            workflowExecutionRepository.save(execution);
-            eventPublisher.publish(executionId,
-                ExecutionEvent.executionCompleted(ExecutionStatus.FAILED));
+            finalizeFailure(execution, executionId, false, null, e.getMessage());
             eventPublisher.complete(executionId);
             throw e;
         }
@@ -208,6 +207,8 @@ public class SyncExecutionRuntime {
             // ExecutorService는 try-with-resources로 관리 — 블록 종료 시 close()가 자동 shutdown+종료 대기.
             boolean failed = false;
             boolean failedNodeRetryExhausted = false;
+            String failedNodeId = null;
+            String failedNodeError = null;
             try (ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, parallelism))) {
                 CompletionService<NodeOutcome> completion = new ExecutorCompletionService<>(pool);
                 int inFlight = 0;
@@ -237,6 +238,8 @@ public class SyncExecutionRuntime {
                                 node.getId(), node.getType(), result.getErrorMessage(), durMs));
                             failed = true;
                             failedNodeRetryExhausted = outcome.retryExhausted();
+                            failedNodeId = node.getId();
+                            failedNodeError = result.getErrorMessage();
                             break;
                         }
 
@@ -274,10 +277,8 @@ public class SyncExecutionRuntime {
 
             // 6. 종료 처리
             if (failed) {
-                execution.fail(failedNodeRetryExhausted);
-                workflowExecutionRepository.save(execution);
-                eventPublisher.publish(executionId,
-                    ExecutionEvent.executionCompleted(ExecutionStatus.FAILED));
+                finalizeFailure(execution, executionId, failedNodeRetryExhausted,
+                    failedNodeId, failedNodeError);
                 return;
             }
 
@@ -289,19 +290,61 @@ public class SyncExecutionRuntime {
 
         } catch (Exception e) {
             log.error("[Runtime] 워크플로우 실행 중 예외 — executionId: {}", execution.getId(), e);
-            // 이미 종료(SUCCESS/FAILED)된 게 아니면 — RUNNING 전환 이전(Cursor 초기화 등)에서
-            // 던진 경우(PENDING)까지 — FAILED로 전환한다.
-            if (execution.getStatus() != ExecutionStatus.SUCCESS
-                    && execution.getStatus() != ExecutionStatus.FAILED) {
-                execution.fail();
-                workflowExecutionRepository.save(execution);
-            }
-            eventPublisher.publish(executionId,
-                ExecutionEvent.executionCompleted(ExecutionStatus.FAILED));
+            // 실패 노드를 특정할 수 없는 경로다(위상 검증 실패, Cursor 초기화 실패 등).
+            // 이미 종료된 실행이면 finalizeFailure가 상태·알림을 건드리지 않고 종료 이벤트만 흘린다.
+            finalizeFailure(execution, executionId, false, null, e.getMessage());
             throw e;
         } finally {
             // 성공·노드 실패(return)·예외 등 모든 종료 경로에서 SSE 스트림을 닫는다.
             eventPublisher.complete(executionId);
+        }
+    }
+
+    /**
+     * 실패 확정 단일 지점 — 상태 전이 + SSE 종료 이벤트 + 실패 알림을 한 곳에 모은다.
+     *
+     * <p>이미 종료(SUCCESS/FAILED)된 실행은 상태를 되돌리지도, 알림을 다시 보내지도 않는다.
+     * 종료 이벤트만 전이 여부와 무관하게 흘린다 — 늦게 붙은 SSE 구독자가 스트림 종료를 알아야 한다.
+     *
+     * <p>알림은 상태 전이가 실제로 일어난 경우에만 발신한다. 이 규칙 덕에
+     * {@code WorkflowExecutionService.markAsFailed()}가 뒤이어 불려도 중복 발신이 되지 않는다.
+     *
+     * @param failedNodeId 실패한 노드 ID. 노드를 특정할 수 없는 경로(정의 로드·위상 검증 실패)에선 null
+     * @param errorSummary 오류 요약. 알림 문구에 실린다 — 프롬프트 원문·자격증명이 아닌 값만 넘길 것
+     */
+    private void finalizeFailure(WorkflowExecution execution, UUID executionId,
+                                 boolean retryExhausted, String failedNodeId, String errorSummary) {
+        boolean transitioned = execution.getStatus() != ExecutionStatus.SUCCESS
+            && execution.getStatus() != ExecutionStatus.FAILED;
+        if (transitioned) {
+            execution.fail(retryExhausted);
+            workflowExecutionRepository.save(execution);
+        }
+        eventPublisher.publish(executionId,
+            ExecutionEvent.executionCompleted(ExecutionStatus.FAILED));
+        if (transitioned) {
+            notifyFailure(execution, retryExhausted, failedNodeId, errorSummary);
+        }
+    }
+
+    /**
+     * 실패 알림을 발신한다. 발신 실패는 warn만 남기고 삼킨다 —
+     * 알림이 실행 종료 처리를 깨면 안 된다(실행 로그 저장 실패와 같은 정책).
+     */
+    private void notifyFailure(WorkflowExecution execution, boolean retryExhausted,
+                               String failedNodeId, String errorSummary) {
+        try {
+            alertNotifier.notifyExecutionFailed(new AlertNotifier.ExecutionFailureAlert(
+                execution.getId(),
+                execution.getWorkflow().getId(),
+                execution.getWorkflow().getName(),
+                execution.getWorkflow().getUserId(),
+                failedNodeId,
+                errorSummary,
+                retryExhausted));
+        } catch (Exception e) {
+            log.warn("[Runtime] 실패 알림 발신 실패 — executionId: {}, 실행 처리는 계속한다",
+                execution.getId(), e);
         }
     }
 

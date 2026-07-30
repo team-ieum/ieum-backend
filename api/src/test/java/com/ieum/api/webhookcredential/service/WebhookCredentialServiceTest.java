@@ -13,6 +13,7 @@ import com.ieum.api.webhookcredential.repository.WebhookCredentialRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.common.util.AesEncryptionService;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -90,6 +91,69 @@ class WebhookCredentialServiceTest {
         when(repository.findByIdAndUserId(id, userId)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.getByIdAndUserId(id, userId))
+                .isInstanceOf(CustomException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.WEBHOOK_CREDENTIAL_NOT_FOUND);
+    }
+
+    private WebhookCredential credential(WebhookProvider provider, boolean alertTarget) {
+        WebhookCredential credential = WebhookCredential.builder()
+                .userId(userId).provider(provider).displayName("채널-" + provider)
+                .encryptedWebhookUrl(aes.encrypt(URL)).enabled(true).build();
+        credential.changeAlertTarget(alertTarget);
+        return credential;
+    }
+
+    @Test
+    @DisplayName("알림 대상 지정 - 기존 DISCORD 대상은 해제되고 새 대상만 남는다")
+    void setAlertTarget_replacesExistingTarget() {
+        UUID newId = UUID.randomUUID();
+        WebhookCredential existing = credential(WebhookProvider.DISCORD, true);
+        WebhookCredential target = credential(WebhookProvider.DISCORD, false);
+        when(repository.findByIdAndUserId(newId, userId)).thenReturn(Optional.of(target));
+        when(repository.findByUserIdAndProviderAndAlertTargetTrue(userId, WebhookProvider.DISCORD))
+                .thenReturn(List.of(existing));
+
+        WebhookCredential result = service.setAlertTarget(newId, userId, true);
+
+        assertThat(result.isAlertTarget()).isTrue();
+        assertThat(existing.isAlertTarget()).isFalse();
+    }
+
+    @Test
+    @DisplayName("알림 대상 해제 - 기존 대상 조회 없이 해당 크레덴셜만 내린다")
+    void setAlertTarget_false_clearsOnlyThisCredential() {
+        UUID id = UUID.randomUUID();
+        WebhookCredential target = credential(WebhookProvider.DISCORD, true);
+        when(repository.findByIdAndUserId(id, userId)).thenReturn(Optional.of(target));
+
+        WebhookCredential result = service.setAlertTarget(id, userId, false);
+
+        assertThat(result.isAlertTarget()).isFalse();
+        verify(repository, never())
+                .findByUserIdAndProviderAndAlertTargetTrue(any(), any());
+    }
+
+    @Test
+    @DisplayName("DISCORD가 아닌 크레덴셜은 알림 대상으로 지정할 수 없다")
+    void setAlertTarget_nonDiscord_throws() {
+        UUID id = UUID.randomUUID();
+        WebhookCredential slack = credential(WebhookProvider.SLACK, false);
+        when(repository.findByIdAndUserId(id, userId)).thenReturn(Optional.of(slack));
+
+        assertThatThrownBy(() -> service.setAlertTarget(id, userId, true))
+                .isInstanceOf(CustomException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.WEBHOOK_CREDENTIAL_NOT_ALERTABLE);
+
+        assertThat(slack.isAlertTarget()).isFalse();
+    }
+
+    @Test
+    @DisplayName("남의 크레덴셜은 알림 대상으로 지정할 수 없다")
+    void setAlertTarget_otherUsersCredential_throws() {
+        UUID id = UUID.randomUUID();
+        when(repository.findByIdAndUserId(id, userId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.setAlertTarget(id, userId, true))
                 .isInstanceOf(CustomException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.WEBHOOK_CREDENTIAL_NOT_FOUND);
     }

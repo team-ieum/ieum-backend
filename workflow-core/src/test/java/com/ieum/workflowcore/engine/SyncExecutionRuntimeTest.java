@@ -23,6 +23,7 @@ import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.event.ExecutionEventType;
+import com.ieum.workflowcore.engine.executor.AlertNotifier;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.domain.enums.NodeType;
@@ -58,7 +59,9 @@ class SyncExecutionRuntimeTest {
     private WorkflowCrudService crudService;
     private ExecutionEventPublisher eventPublisher;
     private IdempotencyStore idempotencyStore;
+    private AlertNotifier alertNotifier;
     private WorkflowExecution execution;
+    private Workflow workflow;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final UUID executionId = UUID.randomUUID();
 
@@ -110,8 +113,9 @@ class SyncExecutionRuntimeTest {
         crudService = mock(WorkflowCrudService.class);
         eventPublisher = mock(ExecutionEventPublisher.class);
         idempotencyStore = mock(IdempotencyStore.class);
+        alertNotifier = mock(AlertNotifier.class);
         execution = mock(WorkflowExecution.class);
-        Workflow workflow = mock(Workflow.class);
+        workflow = mock(Workflow.class);
         when(workflow.getUserId()).thenReturn(UUID.randomUUID());
         when(execution.getWorkflow()).thenReturn(workflow);
         when(execution.getStatus()).thenReturn(ExecutionStatus.RUNNING);
@@ -131,7 +135,7 @@ class SyncExecutionRuntimeTest {
         );
         SyncExecutionRuntime runtime = new SyncExecutionRuntime(
             objectMapper, logRepository, executionRepository, crudService, eventPublisher, executors,
-            new RetryProperties(), idempotencyStore);
+            new RetryProperties(), idempotencyStore, alertNotifier);
         runtime.initExecutorMap();
         ReflectionTestUtils.setField(runtime, "parallelism", 4);
         return runtime;
@@ -233,6 +237,85 @@ class SyncExecutionRuntimeTest {
         // 재시도 대상이 아닌 실패(UNKNOWN, attempt=1)이므로 소진 아님
         verify(execution).fail(false);
         verify(execution, never()).complete();
+    }
+
+    @Test
+    @DisplayName("노드 실패로 FAILED 확정되면 실패 노드·오류 요약을 담은 알림이 발신된다")
+    void failure_sendsAlert() throws Exception {
+        UUID workflowId = UUID.randomUUID();
+        UUID ownerId = UUID.randomUUID();
+        when(workflow.getId()).thenReturn(workflowId);
+        when(workflow.getName()).thenReturn("주문 처리");
+        when(workflow.getUserId()).thenReturn(ownerId);
+        when(execution.getId()).thenReturn(executionId);
+        failNodeIds.add("a");
+        stubDefinition(
+            List.of(node("t", "TRIGGER"), node("a", "AI")),
+            List.of(edge("t", "a", null))
+        );
+
+        run();
+
+        ArgumentCaptor<AlertNotifier.ExecutionFailureAlert> captor =
+            ArgumentCaptor.forClass(AlertNotifier.ExecutionFailureAlert.class);
+        verify(alertNotifier).notifyExecutionFailed(captor.capture());
+        AlertNotifier.ExecutionFailureAlert alert = captor.getValue();
+        assertThat(alert.executionId()).isEqualTo(executionId);
+        assertThat(alert.workflowId()).isEqualTo(workflowId);
+        assertThat(alert.workflowName()).isEqualTo("주문 처리");
+        assertThat(alert.ownerUserId()).isEqualTo(ownerId);
+        assertThat(alert.failedNodeId()).isEqualTo("a");
+        assertThat(alert.errorSummary()).contains("강제 실패: a");
+        assertThat(alert.retryExhausted()).isFalse();
+    }
+
+    @Test
+    @DisplayName("성공한 실행은 알림을 발신하지 않는다")
+    void success_sendsNoAlert() throws Exception {
+        stubDefinition(
+            List.of(node("t", "TRIGGER"), node("a", "AI")),
+            List.of(edge("t", "a", null))
+        );
+
+        run();
+
+        verify(alertNotifier, never()).notifyExecutionFailed(any());
+    }
+
+    @Test
+    @DisplayName("알림 발신이 예외를 던져도 FAILED 상태 처리는 정상 완료된다")
+    void alertFailure_doesNotBreakExecution() throws Exception {
+        org.mockito.Mockito.doThrow(new RuntimeException("discord down"))
+            .when(alertNotifier).notifyExecutionFailed(any());
+        failNodeIds.add("a");
+        stubDefinition(
+            List.of(node("t", "TRIGGER"), node("a", "AI")),
+            List.of(edge("t", "a", null))
+        );
+
+        run();
+
+        verify(execution).fail(false);
+        verify(executionRepository, atLeastOnce()).save(execution);
+        verify(eventPublisher).publish(eq(executionId),
+            org.mockito.ArgumentMatchers.argThat(
+                event -> event.type() == ExecutionEventType.EXECUTION_COMPLETED));
+        verify(eventPublisher).complete(executionId);
+    }
+
+    @Test
+    @DisplayName("정의 로드 실패(실패 노드 특정 불가)도 알림을 발신한다 — failedNodeId는 null")
+    void definitionLoadFailure_sendsAlertWithoutNodeId() {
+        when(execution.getStatus()).thenReturn(ExecutionStatus.PENDING);
+        when(crudService.loadDefinition(any())).thenThrow(new IllegalStateException("정의 없음"));
+
+        assertThatThrownBy(this::run).isInstanceOf(Exception.class);
+
+        ArgumentCaptor<AlertNotifier.ExecutionFailureAlert> captor =
+            ArgumentCaptor.forClass(AlertNotifier.ExecutionFailureAlert.class);
+        verify(alertNotifier).notifyExecutionFailed(captor.capture());
+        assertThat(captor.getValue().failedNodeId()).isNull();
+        assertThat(captor.getValue().errorSummary()).isEqualTo("정의 없음");
     }
 
     @Test
@@ -644,7 +727,7 @@ class SyncExecutionRuntimeTest {
         private SyncExecutionRuntime retryRuntime(NodeExecutor... executors) {
             SyncExecutionRuntime runtime = new SyncExecutionRuntime(
                 objectMapper, logRepository, executionRepository, crudService, eventPublisher,
-                List.of(executors), retryProperties, idempotencyStore);
+                List.of(executors), retryProperties, idempotencyStore, alertNotifier);
             runtime.initExecutorMap();
             ReflectionTestUtils.setField(runtime, "parallelism", 4);
             return runtime;

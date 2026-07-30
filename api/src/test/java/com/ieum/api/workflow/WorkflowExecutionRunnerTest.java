@@ -57,7 +57,7 @@ class WorkflowExecutionRunnerTest {
         runner.run(version, executionId, triggerData);
 
         verify(syncExecutionRuntime).execute(version, executionId, triggerData, Map.of());
-        verify(workflowExecutionService, never()).markAsFailed(any());
+        verify(workflowExecutionService, never()).markAsFailed(any(), any());
     }
 
     @Test
@@ -89,6 +89,6 @@ class WorkflowExecutionRunnerTest {
 
         runner.executeNow(version, executionId, triggerData);
 
-        verify(workflowExecutionService).markAsFailed(eq(executionId));
+        verify(workflowExecutionService).markAsFailed(eq(executionId), any());
     }
 }

@@ -14,6 +14,7 @@ import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
+import com.ieum.workflowcore.engine.executor.AlertNotifier;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowQueryRepository;
@@ -46,6 +47,7 @@ public class WorkflowExecutionService {
     private final WorkflowQueryRepository workflowQueryRepository;
     private final ObjectMapper objectMapper;
     private final AesEncryptor aesEncryptor;
+    private final AlertNotifier alertNotifier;
 
     /**
      * 실행 전 검증 후 PENDING 상태의 실행 레코드를 생성한다.
@@ -253,14 +255,44 @@ public class WorkflowExecutionService {
             logEntry.getNodeId(), logEntry.getNodeType(), duration);
     }
 
+    /**
+     * 런타임이 상태를 남기지 못한 실패를 FAILED로 확정한다(잡 페이로드 해석 실패, trigger_data 복호
+     * 실패 등 런타임 진입 전 실패). 런타임이 이미 확정했으면 아무것도 하지 않는다.
+     *
+     * <p>알림은 상태 전이가 실제로 일어난 분기 안에서만 발신한다 — 런타임의
+     * {@code finalizeFailure}가 이미 보냈으면 여기서 다시 보내지 않는다. 이 경로가 잡는 실패는
+     * 개별 노드 실패보다 심각한 시스템 결함(AES 키 오설정, 큐 계약 파손)이라 조용히 넘기지 않는다.
+     *
+     * @param reason 알림 문구에 실릴 오류 요약. null이면 실패 원인 없이 발신된다
+     */
     @Transactional
-    public void markAsFailed(UUID executionId) {
+    public void markAsFailed(UUID executionId, String reason) {
         workflowExecutionRepository.findById(executionId).ifPresent(execution -> {
             if (execution.getStatus() != ExecutionStatus.FAILED
                     && execution.getStatus() != ExecutionStatus.SUCCESS) {
                 execution.fail();
                 log.warn("[ExecutionService] 실행 상태 FAILED 강제 업데이트 — executionId: {}", executionId);
+                notifyFailure(execution, reason);
             }
         });
+    }
+
+    /**
+     * 실패 알림 발신. 발신 실패는 warn만 남기고 삼킨다 — 알림이 상태 확정을 깨면 안 된다.
+     *
+     * <p>실패 노드를 특정할 수 없는 경로라 {@code failedNodeId}는 항상 null이고
+     * {@code retryExhausted}는 false다. 소유자에게도 함께 발신한다 — 자기 실행이 실패한 사실은
+     * 원인 노드를 몰라도 알아야 하고, 발신 지점을 대상별로 갈라 놓으면 분기만 늘어난다.
+     */
+    private void notifyFailure(WorkflowExecution execution, String reason) {
+        try {
+            Workflow workflow = execution.getWorkflow();
+            alertNotifier.notifyExecutionFailed(new AlertNotifier.ExecutionFailureAlert(
+                execution.getId(), workflow.getId(), workflow.getName(), workflow.getUserId(),
+                null, reason, false));
+        } catch (Exception e) {
+            log.warn("[ExecutionService] 실패 알림 발신 실패 — executionId: {}, 상태 확정은 계속한다",
+                execution.getId(), e);
+        }
     }
 }

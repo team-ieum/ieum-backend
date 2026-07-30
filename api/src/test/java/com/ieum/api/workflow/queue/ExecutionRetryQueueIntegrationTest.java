@@ -28,6 +28,7 @@ import com.ieum.workflowcore.engine.ExecutorResult;
 import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.SyncExecutionRuntime;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
+import com.ieum.workflowcore.engine.executor.AlertNotifier;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.engine.executor.TriggerNodeExecutor;
@@ -139,7 +140,8 @@ class ExecutionRetryQueueIntegrationTest {
 
         workflowExecutionService = new WorkflowExecutionService(
             executionRepository, logRepository,
-            Mockito.mock(WorkflowQueryRepository.class), objectMapper, aesEncryptor);
+            Mockito.mock(WorkflowQueryRepository.class), objectMapper, aesEncryptor,
+            Mockito.mock(AlertNotifier.class));
 
         StringRedisTemplate redisTemplate = Mockito.mock(StringRedisTemplate.class);
         streamOperations = Mockito.mock(StreamOperations.class);
@@ -245,7 +247,8 @@ class ExecutionRetryQueueIntegrationTest {
             objectMapper, logRepository, executionRepository, crudService,
             Mockito.mock(ExecutionEventPublisher.class),
             List.of(new TriggerNodeExecutor(), new RecordingAiExecutor()),
-            retryProperties, Mockito.mock(IdempotencyStore.class));
+            retryProperties, Mockito.mock(IdempotencyStore.class),
+            Mockito.mock(AlertNotifier.class));
         ReflectionTestUtils.invokeMethod(runtime, "initExecutorMap");
         ReflectionTestUtils.setField(runtime, "parallelism", 2);
         return runtime;
