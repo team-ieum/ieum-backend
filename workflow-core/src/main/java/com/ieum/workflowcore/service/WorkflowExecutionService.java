@@ -193,6 +193,20 @@ public class WorkflowExecutionService {
             .orElseThrow(() -> new CustomException(ErrorCode.EXECUTION_NOT_FOUND));
     }
 
+    /**
+     * 실행 행을 잠근 뒤 버전까지 로딩해 돌려준다. 같은 실행을 두고 read-check-act를 하는 호출자
+     * (실패 실행 재처리)가 동시 요청에 같은 상태를 두 번 읽지 않게 한다.
+     *
+     * <p><b>반드시 호출자 트랜잭션 안에서 불러라</b> — 락은 트랜잭션 종료까지만 유효하다.
+     * 락 조회를 먼저 하는 순서가 중요하다: 잠그지 않고 먼저 읽으면 그 인스턴스가 영속성 컨텍스트에
+     * 남아, 뒤이은 락 조회가 갱신된 DB 상태로 덮어쓰지 않아 stale 값으로 판단하게 된다.
+     */
+    public WorkflowExecution lockExecutionWithVersion(UUID executionId) {
+        workflowExecutionRepository.findByIdForUpdate(executionId)
+            .orElseThrow(() -> new CustomException(ErrorCode.EXECUTION_NOT_FOUND));
+        return getExecutionWithVersion(executionId);
+    }
+
     public List<WorkflowExecutionLog> listExecutionLogs(UUID workflowId, UUID executionId) {
         WorkflowExecution execution = getExecution(executionId);
         if (!execution.getWorkflow().getId().equals(workflowId)) {

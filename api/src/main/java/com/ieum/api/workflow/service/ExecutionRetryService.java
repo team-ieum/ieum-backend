@@ -54,9 +54,11 @@ public class ExecutionRetryService {
      */
     @Transactional
     public WorkflowExecutionResponse retryExecution(UUID userId, UUID executionId) {
-        // 버전까지 즉시 로딩한다 — 아래에서 @Async 실행 스레드로 넘어가므로 lazy 프록시면
-        // 큐 폴백 경로에서 정의를 읽을 때 LazyInitializationException이 난다.
-        WorkflowExecution original = workflowExecutionService.getExecutionWithVersion(executionId);
+        // 원본 행을 잠그고 읽는다. 아래 중복 가드가 read-check-act라, 락이 없으면 동시 요청 둘이
+        // retriedByExecutionId를 둘 다 null로 읽어 재처리가 둘 생긴다(더블클릭보다 빠른 동시 제출).
+        // 버전까지 즉시 로딩하는 이유는 따로 있다 — 아래에서 @Async 실행 스레드로 넘어가므로
+        // lazy 프록시면 큐 폴백 경로에서 정의를 읽을 때 LazyInitializationException이 난다.
+        WorkflowExecution original = workflowExecutionService.lockExecutionWithVersion(executionId);
         // 소유권 검증 — 다른 워크플로우 API와 동일하게 "소유자의 워크플로우로 조회"로 검사한다.
         Workflow workflow =
             workflowCrudService.getWorkflowByOwner(userId, original.getWorkflow().getId());

@@ -92,7 +92,7 @@ class ExecutionRetryServiceTest {
         Workflow otherWorkflow = mock(Workflow.class);
         given(otherWorkflow.getId()).willReturn(workflowId);
         given(original.getWorkflow()).willReturn(otherWorkflow);
-        given(workflowExecutionService.getExecutionWithVersion(originalId)).willReturn(original);
+        given(workflowExecutionService.lockExecutionWithVersion(originalId)).willReturn(original);
         given(workflowCrudService.getWorkflowByOwner(userId, workflowId))
             .willThrow(new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
 
@@ -112,7 +112,7 @@ class ExecutionRetryServiceTest {
                 new ExecutionStatus[] {ExecutionStatus.PENDING, ExecutionStatus.RUNNING,
                     ExecutionStatus.SUCCESS}) {
             WorkflowExecution original = originalExecution(status);
-            given(workflowExecutionService.getExecutionWithVersion(originalId)).willReturn(original);
+            given(workflowExecutionService.lockExecutionWithVersion(originalId)).willReturn(original);
             given(workflowCrudService.getWorkflowByOwner(userId, workflowId)).willReturn(workflow);
 
             assertThatThrownBy(() -> service.retryExecution(userId, originalId))
@@ -133,7 +133,7 @@ class ExecutionRetryServiceTest {
             WorkflowExecution previousRetry = mock(WorkflowExecution.class);
             given(previousRetry.getStatus()).willReturn(inFlight);
 
-            given(workflowExecutionService.getExecutionWithVersion(originalId)).willReturn(original);
+            given(workflowExecutionService.lockExecutionWithVersion(originalId)).willReturn(original);
             given(workflowCrudService.getWorkflowByOwner(userId, workflowId)).willReturn(workflow);
             given(workflowExecutionService.getExecution(retryId)).willReturn(previousRetry);
 
@@ -156,7 +156,7 @@ class ExecutionRetryServiceTest {
         WorkflowExecution previousRetry = mock(WorkflowExecution.class);
         given(previousRetry.getStatus()).willReturn(ExecutionStatus.FAILED);
 
-        given(workflowExecutionService.getExecutionWithVersion(originalId)).willReturn(original);
+        given(workflowExecutionService.lockExecutionWithVersion(originalId)).willReturn(original);
         given(workflowCrudService.getWorkflowByOwner(userId, workflowId)).willReturn(workflow);
         given(workflowExecutionService.getExecution(original.getRetriedByExecutionId()))
             .willReturn(previousRetry);
@@ -177,7 +177,7 @@ class ExecutionRetryServiceTest {
         given(original.getTriggerType()).willReturn(TriggerType.WEBHOOK);
         Map<String, Object> triggerData = Map.of("score", "85");
 
-        given(workflowExecutionService.getExecutionWithVersion(originalId)).willReturn(original);
+        given(workflowExecutionService.lockExecutionWithVersion(originalId)).willReturn(original);
         given(workflowCrudService.getWorkflowByOwner(userId, workflowId)).willReturn(workflow);
         given(workflowExecutionService.decryptTriggerData(original)).willReturn(triggerData);
         WorkflowExecution retry = retryExecution();

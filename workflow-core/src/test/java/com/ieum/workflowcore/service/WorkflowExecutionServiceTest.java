@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
@@ -24,6 +25,7 @@ import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
 import com.ieum.workflowcore.engine.event.ExecutionEventType;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
+import jakarta.persistence.LockModeType;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -33,10 +35,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.test.util.ReflectionTestUtils;
 
 @ExtendWith(MockitoExtension.class)
@@ -228,6 +232,30 @@ class WorkflowExecutionServiceTest {
 
         assertThatThrownBy(() -> service.decryptTriggerData(execution))
             .isInstanceOf(CustomException.class);
+    }
+
+    @Test
+    @DisplayName("재처리용 조회는 잠금 조회를 먼저 태운 뒤 버전을 로딩한다")
+    void 재처리_조회는_행을_잠근다() throws Exception {
+        UUID executionId = UUID.randomUUID();
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        given(workflowExecutionRepository.findByIdForUpdate(executionId))
+            .willReturn(Optional.of(execution));
+        given(workflowExecutionRepository.findWithVersionById(executionId))
+            .willReturn(Optional.of(execution));
+
+        assertThat(service.lockExecutionWithVersion(executionId)).isSameAs(execution);
+
+        // 순서가 중요하다 — 잠그지 않고 먼저 읽으면 뒤이은 락 조회가 stale 인스턴스를 덮어쓰지 않는다.
+        InOrder order = inOrder(workflowExecutionRepository);
+        order.verify(workflowExecutionRepository).findByIdForUpdate(executionId);
+        order.verify(workflowExecutionRepository).findWithVersionById(executionId);
+
+        // 락이 실제로 PESSIMISTIC_WRITE인지 — 어노테이션이 빠지면 조회는 성공하고 가드만 조용히 뚫린다.
+        Lock lock = WorkflowExecutionRepository.class
+            .getMethod("findByIdForUpdate", UUID.class).getAnnotation(Lock.class);
+        assertThat(lock).isNotNull();
+        assertThat(lock.value()).isEqualTo(LockModeType.PESSIMISTIC_WRITE);
     }
 
     @Test
