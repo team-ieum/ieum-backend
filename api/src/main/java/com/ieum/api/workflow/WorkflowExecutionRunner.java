@@ -1,5 +1,6 @@
 package com.ieum.api.workflow;
 
+import com.ieum.api.workflow.queue.ExecutionJobQueue;
 import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.engine.SyncExecutionRuntime;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
@@ -17,15 +18,42 @@ public class WorkflowExecutionRunner {
 
     private final SyncExecutionRuntime syncExecutionRuntime;
     private final WorkflowExecutionService workflowExecutionService;
+    private final ExecutionJobQueue executionJobQueue;
 
+    /**
+     * 실행을 잡 큐에 넣는다. 큐에 들어간 잡은 같은 프로세스의 워커가 꺼내 실행하므로
+     * 프로세스가 죽어도 다음 기동에서 회수된다.
+     *
+     * <p>큐를 못 쓰면(Redis 장애) 이 스레드에서 바로 실행한다 — 내구성은 잃지만 실행은 성공한다.
+     * 호출부는 큐 도입 전과 동일하게 fire-and-forget으로 쓰면 된다.
+     */
     @Async("workflowExecutor")
     public void run(WorkflowVersion workflowVersion, UUID executionId,
             Map<String, Object> triggerData) {
+        if (executionJobQueue.enqueue(executionId)) {
+            return;
+        }
+        log.warn("[Runner] 큐 우회 직접 실행 — 프로세스가 죽으면 이 실행은 복구되지 않는다. executionId: {}",
+            executionId);
+        executeNow(workflowVersion, executionId, triggerData);
+    }
+
+    /**
+     * 큐를 거치지 않고 호출 스레드에서 실행한다. 잡 큐 워커와 폴백 경로가 공유하는 유일한
+     * 실행 지점이라 실패 기록(markAsFailed)이 한 곳에만 있다.
+     *
+     * <p>재처리로 만들어진 실행이면 원 실행에서 이미 성공한 노드의 출력을 여기서 조회해 런타임에
+     * 넘긴다 — 잡 큐 페이로드에는 executionId밖에 없어 큐를 거쳐 온 실행도 같은 정보를 얻어야 한다.
+     * 일반 실행은 빈 Map이 넘어가 기존과 동일하게 모든 노드를 실행한다.
+     */
+    public void executeNow(WorkflowVersion workflowVersion, UUID executionId,
+            Map<String, Object> triggerData) {
         try {
-            syncExecutionRuntime.execute(workflowVersion, executionId, triggerData);
+            syncExecutionRuntime.execute(workflowVersion, executionId, triggerData,
+                workflowExecutionService.loadReusableNodeOutputs(executionId));
         } catch (Exception e) {
             log.error("[Runner] 워크플로우 실행 예외 — executionId: {}", executionId, e);
-            workflowExecutionService.markAsFailed(executionId);
+            workflowExecutionService.markAsFailed(executionId, e.getMessage());
         }
     }
 }

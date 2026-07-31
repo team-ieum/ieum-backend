@@ -56,4 +56,9 @@ public class DefaultBetaPlatformProvider implements BetaPlatformProvider {
     public void releaseDailyCall(String reservationKey) {
         betaQuotaService.releaseDailyCall(reservationKey);
     }
+
+    @Override
+    public boolean isModelAllowed(String model) {
+        return properties.getAllowedModels().contains(model);
+    }
 }

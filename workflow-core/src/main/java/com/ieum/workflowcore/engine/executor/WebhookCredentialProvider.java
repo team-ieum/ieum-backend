@@ -21,4 +21,14 @@ public interface WebhookCredentialProvider {
      * @return 복호화된 webhook URL, 또는 빈 Optional
      */
     Optional<String> resolveWebhookUrl(UUID credentialId, UUID userId);
+
+    /**
+     * 실행 실패 알림을 받을 웹훅 URL을 조회한다(복호화된 값).
+     *
+     * <p>해당 사용자가 알림 대상으로 지정한 활성 DISCORD 웹훅 하나를 돌려준다.
+     * 지정이 없으면 빈 Optional — 소유자 알림을 생략한다는 뜻이다.
+     *
+     * @param userId 워크플로우 소유자 ID
+     */
+    Optional<String> resolveAlertWebhookUrl(UUID userId);
 }

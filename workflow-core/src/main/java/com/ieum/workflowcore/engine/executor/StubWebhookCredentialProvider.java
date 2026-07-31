@@ -25,4 +25,9 @@ public class StubWebhookCredentialProvider implements WebhookCredentialProvider 
         }
         return Optional.empty();
     }
+
+    @Override
+    public Optional<String> resolveAlertWebhookUrl(UUID userId) {
+        return Optional.empty();
+    }
 }

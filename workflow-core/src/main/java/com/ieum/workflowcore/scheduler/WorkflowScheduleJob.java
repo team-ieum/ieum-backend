@@ -25,6 +25,11 @@ import org.springframework.beans.factory.annotation.Autowired;
  * <p>Spring Bean이 아니므로 {@link com.ieum.workflowcore.config.QuartzJobFactory}가
  * {@code @Autowired} 필드를 주입한다.
  *
+ * <p><b>스케줄 실행에는 내구성이 없다.</b> {@code SyncExecutionRuntime}을 직접 호출하므로 api 모듈의
+ * 실행 잡 큐(Redis Stream)를 거치지 않고, 프로세스가 죽으면 진행 중이던 스케줄 실행은 유실된다.
+ * 막으려면 workflow-core에 {@code boolean enqueue(UUID)} Provider 포트 + Stub({@code return false})을
+ * 두고 api가 큐 구현을 꽂으면 된다 — 페이로드가 executionId 하나뿐이라 포트가 한 줄로 끝난다.
+ *
  * <p>JobDataMap 필수 키:
  * <ul>
  *   <li>{@code workflowId} — UUID 문자열
@@ -64,7 +69,7 @@ public class WorkflowScheduleJob implements Job {
                     "버전이 없는 워크플로우 — workflowId: " + workflowId));
 
             WorkflowExecution execution = workflowExecutionService.prepareExecution(
-                workflow, latestVersion, TriggerType.SCHEDULE);
+                workflow, latestVersion, TriggerType.SCHEDULE, Collections.emptyMap());
 
             syncExecutionRuntime.execute(latestVersion, execution.getId(), Collections.emptyMap());
 

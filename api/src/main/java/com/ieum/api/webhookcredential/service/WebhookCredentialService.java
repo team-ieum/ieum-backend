@@ -56,6 +56,27 @@ public class WebhookCredentialService {
                 .orElseThrow(() -> new CustomException(ErrorCode.WEBHOOK_CREDENTIAL_NOT_FOUND));
     }
 
+    /**
+     * 실행 실패 알림 대상을 지정하거나 해제한다.
+     *
+     * <p>지정 시 같은 사용자의 같은 provider 기존 대상을 먼저 내린다 — provider별로 하나만 유지된다.
+     *
+     * @throws CustomException WEBHOOK_CREDENTIAL_NOT_ALERTABLE — DISCORD가 아닌 크레덴셜을 지정한 경우
+     */
+    @Transactional
+    public WebhookCredential setAlertTarget(UUID id, UUID userId, boolean alertTarget) {
+        WebhookCredential credential = getByIdAndUserId(id, userId);
+        if (alertTarget && credential.getProvider() != WebhookProvider.DISCORD) {
+            throw new CustomException(ErrorCode.WEBHOOK_CREDENTIAL_NOT_ALERTABLE);
+        }
+        if (alertTarget) {
+            repository.findByUserIdAndProviderAndAlertTargetTrue(userId, credential.getProvider())
+                    .forEach(existing -> existing.changeAlertTarget(false));
+        }
+        credential.changeAlertTarget(alertTarget);
+        return credential;
+    }
+
     @Transactional
     public void delete(UUID id, UUID userId) {
         WebhookCredential credential = getByIdAndUserId(id, userId);

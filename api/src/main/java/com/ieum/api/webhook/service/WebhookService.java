@@ -49,12 +49,12 @@ public class WebhookService {
         WorkflowVersion latestVersion = workflowCrudService.findLatestVersion(workflowId)
             .orElseThrow(() -> new CustomException(ErrorCode.INVALID_WORKFLOW, "버전이 없는 워크플로우입니다."));
 
-        WorkflowExecution execution = workflowExecutionService.prepareExecution(
-            workflow, latestVersion, TriggerType.WEBHOOK);
-
         Map<String, Object> payload = (request != null && request.getPayload() != null)
             ? request.getPayload()
             : Collections.emptyMap();
+
+        WorkflowExecution execution = workflowExecutionService.prepareExecution(
+            workflow, latestVersion, TriggerType.WEBHOOK, payload);
 
         workflowExecutionRunner.run(latestVersion, execution.getId(), payload);
 

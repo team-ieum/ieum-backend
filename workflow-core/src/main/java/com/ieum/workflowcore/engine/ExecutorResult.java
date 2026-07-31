@@ -19,19 +19,27 @@ public class ExecutorResult {
     private long durationMs;
     /** LLM 토큰 사용량. AI 노드만 채워지고 그 외 노드는 null */
     private TokenUsage usage;
+    /** 실패 원인 분류(재시도 판단용). 성공 시 null, 분류 근거가 없으면 {@link FailureKind#UNKNOWN} */
+    private FailureKind failureKind;
 
     /** 노드 실행 1회의 토큰 사용량. agent 응답에 usage가 없으면 각 필드가 null일 수 있다. */
     public record TokenUsage(Integer promptTokens, Integer completionTokens, Integer totalTokens) {}
 
     public static ExecutorResult success(Map<String, Object> output, long durationMs) {
-        return new ExecutorResult(true, output, null, durationMs, null);
+        return new ExecutorResult(true, output, null, durationMs, null, null);
     }
 
     public static ExecutorResult success(Map<String, Object> output, long durationMs, TokenUsage usage) {
-        return new ExecutorResult(true, output, null, durationMs, usage);
+        return new ExecutorResult(true, output, null, durationMs, usage, null);
     }
 
+    /** 실패 원인을 분류할 근거가 없는 경우. 재시도하지 않는다. */
     public static ExecutorResult failure(String errorMessage, long durationMs) {
-        return new ExecutorResult(false, null, errorMessage, durationMs, null);
+        return failure(errorMessage, durationMs, FailureKind.UNKNOWN);
+    }
+
+    public static ExecutorResult failure(String errorMessage, long durationMs, FailureKind kind) {
+        return new ExecutorResult(false, null, errorMessage, durationMs, null,
+            kind == null ? FailureKind.UNKNOWN : kind);
     }
 }

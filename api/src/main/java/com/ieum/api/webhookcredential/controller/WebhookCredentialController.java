@@ -2,6 +2,7 @@ package com.ieum.api.webhookcredential.controller;
 
 import com.ieum.api.webhookcredential.domain.WebhookCredential;
 import com.ieum.api.webhookcredential.dto.CreateWebhookCredentialRequest;
+import com.ieum.api.webhookcredential.dto.UpdateAlertTargetRequest;
 import com.ieum.api.webhookcredential.dto.WebhookCredentialResponse;
 import com.ieum.api.webhookcredential.service.WebhookCredentialService;
 import com.ieum.auth.security.CustomUserDetails;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -53,6 +55,18 @@ public class WebhookCredentialController implements WebhookCredentialControllerD
                 .toList();
 
         return ResponseEntity.ok(ApiResponse.ok(responses));
+    }
+
+    @PutMapping("/{id}/alert-target")
+    public ResponseEntity<ApiResponse<WebhookCredentialResponse>> updateAlertTarget(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable UUID id,
+            @RequestBody @Valid UpdateAlertTargetRequest request) {
+
+        WebhookCredential credential = service.setAlertTarget(
+                id, userDetails.getId(), request.alertTarget());
+
+        return ResponseEntity.ok(ApiResponse.ok(WebhookCredentialResponse.from(credential)));
     }
 
     @DeleteMapping("/{id}")

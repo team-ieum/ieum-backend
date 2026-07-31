@@ -143,12 +143,12 @@ public class WorkflowService {
         WorkflowVersion latestVersion = workflowCrudService.findLatestVersion(workflowId)
             .orElseThrow(() -> new CustomException(ErrorCode.INVALID_WORKFLOW, "버전이 없는 워크플로우입니다."));
 
-        WorkflowExecution execution = workflowExecutionService.prepareExecution(
-            workflow, latestVersion, TriggerType.MANUAL);
-
         Map<String, Object> triggerData = request.getTriggerData() != null
             ? request.getTriggerData()
             : Collections.emptyMap();
+
+        WorkflowExecution execution = workflowExecutionService.prepareExecution(
+            workflow, latestVersion, TriggerType.MANUAL, triggerData);
 
         final UUID executionId = execution.getId();
         TransactionSynchronizationManager.registerSynchronization(

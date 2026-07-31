@@ -21,6 +21,7 @@ import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.ColumnDefault;
 
 /**
  * 워크플로우의 각 실행 인스턴스를 기록하는 엔티티.
@@ -33,7 +34,8 @@ import lombok.NoArgsConstructor;
         @Index(name = "idx_workflow_runs_workflow_id", columnList = "workflow_id"),
         @Index(name = "idx_workflow_runs_status", columnList = "status"),
         @Index(name = "idx_workflow_runs_trigger_type", columnList = "trigger_type"),
-        @Index(name = "idx_workflow_runs_trace_id", columnList = "trace_id")
+        @Index(name = "idx_workflow_runs_trace_id", columnList = "trace_id"),
+        @Index(name = "idx_workflow_runs_retried_by", columnList = "retried_by_execution_id")
     }
 )
 @Getter
@@ -72,6 +74,32 @@ public class WorkflowExecution extends BaseEntity {
     @Column(name = "trace_id", length = 32)
     private String traceId;
 
+    /** 실패 원인이 재시도 대상이었고 재시도를 모두 소진한 뒤에도 실패했는지. 판정은 런타임이 하고 여기엔 결과만 저장한다 */
+    @ColumnDefault("false")
+    @Column(name = "retry_exhausted", nullable = false)
+    private boolean retryExhausted;
+
+    /**
+     * 트리거가 전달한 초기 입력. {@code com.ieum.common.util.AesEncryptor}로 암호화된 JSON
+     * 문자열이다 — 평문이 아니다, 직접 파싱하지 말 것. 복호는 {@code AesEncryptor.decrypt()} 후
+     * JSON 역직렬화(실패 실행 재처리, Task 10에서 사용). 복호 실패 시 {@code AesEncryptor}가
+     * {@code CustomException(CREDENTIAL_DECRYPT_FAILED)}를 던진다. null은 "트리거 입력이 없었다"만
+     * 뜻한다 — 암호화 실패는 {@code prepareExecution}이 fail-fast로 막으므로 유실로 인한 null은 없다.
+     * 조회 API 응답에 그대로 노출하지 말 것 — 노출이 필요해지면 "복호 → 마스킹 → 노출" 순서를 지킬 것.
+     */
+    @Column(name = "trigger_data", columnDefinition = "TEXT")
+    private String triggerData;
+
+    /**
+     * 이 실행을 재처리하기 위해 새로 만들어진 실행의 ID. 재처리된 적이 없으면 null.
+     *
+     * <p>링크 방향이 원본 → 재처리 하나뿐이라 재처리 실행이 자기 원본을 찾을 때는 역방향 조회
+     * ({@code findByRetriedByExecutionId})를 쓴다. 이 조회로 재처리 실행이 "원본에서 이미 성공한
+     * 노드"를 알아내 건너뛴다 — 잡 큐 페이로드가 executionId뿐이라 스킵 정보도 DB에만 있어야 한다.
+     */
+    @Column(name = "retried_by_execution_id", columnDefinition = "uuid")
+    private UUID retriedByExecutionId;
+
     @Builder
     private WorkflowExecution(
         Workflow workflow,
@@ -79,7 +107,8 @@ public class WorkflowExecution extends BaseEntity {
         ExecutionStatus status,
         TriggerType triggerType,
         LocalDateTime startedAt,
-        String traceId
+        String traceId,
+        String triggerData
     ) {
         this.workflow = workflow;
         this.workflowVersion = workflowVersion;
@@ -87,6 +116,7 @@ public class WorkflowExecution extends BaseEntity {
         this.triggerType = triggerType;
         this.startedAt = startedAt;
         this.traceId = traceId;
+        this.triggerData = triggerData;
     }
 
     public void start() {
@@ -100,7 +130,18 @@ public class WorkflowExecution extends BaseEntity {
     }
 
     public void fail() {
+        fail(false);
+    }
+
+    /** @param retryExhausted 재시도 대상 실패로 재시도를 모두 소진하고도 실패했는지 (판정은 호출부 책임) */
+    public void fail(boolean retryExhausted) {
         this.status = ExecutionStatus.FAILED;
         this.finishedAt = LocalDateTime.now();
+        this.retryExhausted = retryExhausted;
+    }
+
+    /** 이 실행의 재처리로 만들어진 새 실행을 연결한다. 재처리를 다시 재처리하면 최신 것으로 덮어쓴다. */
+    public void markRetriedBy(UUID retryExecutionId) {
+        this.retriedByExecutionId = retryExecutionId;
     }
 }

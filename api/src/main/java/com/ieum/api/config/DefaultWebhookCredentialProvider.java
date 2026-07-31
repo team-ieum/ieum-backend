@@ -1,6 +1,7 @@
 package com.ieum.api.config;
 
 import com.ieum.api.webhookcredential.domain.WebhookCredential;
+import com.ieum.api.webhookcredential.domain.WebhookProvider;
 import com.ieum.api.webhookcredential.repository.WebhookCredentialRepository;
 import com.ieum.api.webhookcredential.service.WebhookCredentialService;
 import com.ieum.workflowcore.engine.executor.WebhookCredentialProvider;
@@ -53,5 +54,25 @@ public class DefaultWebhookCredentialProvider implements WebhookCredentialProvid
             log.warn("[webhook-debug] 복호화 실패 — credentialId: {}, error: {}", credentialId, e.getMessage());
             return Optional.empty();
         }
+    }
+
+    @Override
+    public Optional<String> resolveAlertWebhookUrl(UUID userId) {
+        if (userId == null) {
+            return Optional.empty();
+        }
+        return repository.findByUserIdAndProviderAndAlertTargetTrue(userId, WebhookProvider.DISCORD)
+                .stream()
+                .filter(WebhookCredential::isEnabled)
+                .findFirst()
+                .flatMap(credential -> {
+                    try {
+                        return Optional.ofNullable(credentialService.decryptWebhookUrl(credential));
+                    } catch (Exception e) {
+                        log.warn("[AlertWebhook] 알림 대상 웹훅 URL 복호화 실패 — credentialId: {}",
+                                credential.getId());
+                        return Optional.empty();
+                    }
+                });
     }
 }

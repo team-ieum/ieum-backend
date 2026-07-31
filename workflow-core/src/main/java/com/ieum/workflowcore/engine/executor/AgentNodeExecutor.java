@@ -3,7 +3,10 @@ package com.ieum.workflowcore.engine.executor;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.ExecutionCursor;
 import com.ieum.workflowcore.engine.ExecutorResult;
+import com.ieum.workflowcore.engine.FailureClassifier;
+import com.ieum.workflowcore.engine.FailureKind;
 import com.ieum.workflowcore.engine.Node;
+import com.ieum.workflowcore.engine.RetryPolicy;
 import com.ieum.workflowcore.engine.executor.dto.AgentExecutionResult;
 import com.ieum.workflowcore.engine.executor.dto.AgentNodeRequest;
 import com.ieum.workflowcore.engine.executor.dto.McpServerRef;
@@ -12,6 +15,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
@@ -54,6 +58,7 @@ public class AgentNodeExecutor implements NodeExecutor {
     private final WebhookCredentialProvider webhookCredentialProvider;
     private final UserRoleProvider userRoleProvider;
     private final BetaPlatformProvider betaPlatformProvider;
+    private final IdempotencyStore idempotencyStore;
     private final int agentTimeoutSeconds;
 
     public AgentNodeExecutor(
@@ -65,6 +70,7 @@ public class AgentNodeExecutor implements NodeExecutor {
         WebhookCredentialProvider webhookCredentialProvider,
         UserRoleProvider userRoleProvider,
         BetaPlatformProvider betaPlatformProvider,
+        IdempotencyStore idempotencyStore,
         @Value("${ieum.agent.timeout-seconds:120}") int agentTimeoutSeconds
     ) {
         this.webClient = WebClient.builder()
@@ -77,6 +83,7 @@ public class AgentNodeExecutor implements NodeExecutor {
         this.webhookCredentialProvider = webhookCredentialProvider;
         this.userRoleProvider = userRoleProvider;
         this.betaPlatformProvider = betaPlatformProvider;
+        this.idempotencyStore = idempotencyStore;
         this.agentTimeoutSeconds = agentTimeoutSeconds;
     }
 
@@ -86,10 +93,16 @@ public class AgentNodeExecutor implements NodeExecutor {
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor) {
+        return execute(node, input, cursor, NodeAttempt.NONE);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor, NodeAttempt attempt) {
         long startTime = System.currentTimeMillis();
         log.info("[AgentNodeExecutor] 노드 실행 — nodeId: {}", node.getId());
+        RetryPolicy policy = attempt.policy();
 
         UUID userId = null;
         boolean useBetaPlatformKey = false;
@@ -118,18 +131,6 @@ public class AgentNodeExecutor implements NodeExecutor {
             List<McpServerRef> mcpServers = resolveMcpServers(tools, userId);
             injectWebhookUrls(tools, userId);
 
-            AgentNodeRequest request = AgentNodeRequest.builder()
-                .nodeId(node.getId())
-                .promptTemplateId(promptTemplateId)
-                .renderedPrompt(renderedPrompt)
-                .systemMessage(systemMessage)
-                .model(model)
-                .agentType(agentType)
-                .tools(tools)
-                .workflowContext(cursor.getContext().getNodeOutputs())
-                .mcpServers(mcpServers.isEmpty() ? null : mcpServers)
-                .build();
-
             // credentialId가 없으면 키 없이 전달 — self-hosted 자격(ADMIN/TESTER role)이 최우선이며,
             // 이 경우 agent가 라우팅/차단을 판단한다(ChatService.isSelfHostedEligible과 동일 우선순위).
             // self-hosted 자격이 없을 때만 베타 자격(User.betaAccess)을 확인해 플랫폼 Gemini 키로 폴백한다.
@@ -145,17 +146,48 @@ public class AgentNodeExecutor implements NodeExecutor {
                 useBetaPlatformKey = true;
             }
 
+            // 회차별 모델 fallback 결정 — useBetaPlatformKey가 정해진 뒤에 판단해야
+            // platform 모드에서 비-Gemini fallback을 걸러낼 수 있다(위 분기 참조).
+            String resolvedModel = resolveModelForAttempt(attempt, policy, model, useBetaPlatformKey, node.getId());
+
+            AgentNodeRequest request = AgentNodeRequest.builder()
+                .nodeId(node.getId())
+                .promptTemplateId(promptTemplateId)
+                .renderedPrompt(renderedPrompt)
+                .systemMessage(systemMessage)
+                .model(resolvedModel)
+                .agentType(agentType)
+                .tools(tools)
+                .workflowContext(cursor.getContext().getNodeOutputs())
+                .mcpServers(mcpServers.isEmpty() ? null : mcpServers)
+                .build();
+
+            if (policy != null && policy.idempotency().usesMarker()) {
+                if (!idempotencyStore.markInFlight(attempt.idempotencyKey(), NodeExecutor.markerTtl(policy))) {
+                    releaseBetaQuotaOnFailure(betaReservationKey);
+                    log.warn("[AgentNodeExecutor] 멱등성 마커 충돌로 호출 차단 — nodeId: {}", node.getId());
+                    return ExecutorResult.failure(
+                        "중복 호출 차단 — 이전 시도가 외부 서비스에 도달했을 수 있어 재시도를 중단합니다.",
+                        System.currentTimeMillis() - startTime, FailureKind.CLIENT_ERROR);
+                }
+            }
+
+            // HTTP와 동일 기준: 재시도가 꺼져 있으면(isDisabled) 헤더를 붙이지 않는다(리뷰 I-2).
+            String idempotencyHeaderKey =
+                (policy != null && policy.idempotency().usesHeader() && !policy.isDisabled())
+                    ? attempt.idempotencyKey() : null;
             AgentExecutionResult agentResult = callAgentService(
                 request, llmProvider, decryptedApiKey, googleAccessToken,
                 userId, userRole, toolAuthHeaders, useBetaPlatformKey,
-                cursor.getContext().getTraceId());
+                cursor.getContext().getTraceId(), idempotencyHeaderKey);
 
             if (!agentResult.isSuccess()) {
                 releaseBetaQuotaOnFailure(betaReservationKey);
                 log.error("[AgentNodeExecutor] 에이전트 실행 실패 — nodeId: {}, error: {}",
                     node.getId(), agentResult.getErrorMessage());
                 return ExecutorResult.failure(agentResult.getErrorMessage(),
-                    System.currentTimeMillis() - startTime);
+                    System.currentTimeMillis() - startTime,
+                    FailureClassifier.fromAgentErrorCode(agentResult.getErrorCode()));
             }
 
             // 베타 플랫폼 키를 사용했다면 응답 usage.totalTokens로 사용량을 사후 차감한다.
@@ -182,13 +214,45 @@ public class AgentNodeExecutor implements NodeExecutor {
         } catch (Exception e) {
             releaseBetaQuotaOnFailure(betaReservationKey);
             log.error("[AgentNodeExecutor] 실행 실패 — nodeId: {}", node.getId(), e);
-            return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime);
+            return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime,
+                FailureClassifier.fromException(e));
         }
     }
 
     /** 자체 호스팅 LLM(키 없음) 경로 자격 — ChatService.isSelfHostedEligible과 동일 판정. */
     private static boolean isSelfHostedEligible(String userRole) {
         return "ROLE_ADMIN".equals(userRole) || "ROLE_TESTER".equals(userRole);
+    }
+
+    /**
+     * 이번 회차에 실제로 요청할 모델을 정한다. {@link RetryPolicy#modelForAttempt}로 fallback
+     * 후보를 얻고, 베타 platform 키 모드에서는 그 후보가 베타 허용 모델인지 확인한다.
+     *
+     * <p>platform 모드는 Gemini 키 한 장으로 호출하며 {@code X-LLM-Provider}를 항상 GEMINI로
+     * 고정하므로, 허용 목록 밖(비-Gemini 등) 모델로 fallback하면 agent가 resolve에 실패해
+     * 재시도가 확실히 죽는다 — 그 경우 fallback을 건너뛰고 원 모델을 유지한다.
+     */
+    private String resolveModelForAttempt(
+        NodeAttempt attempt, RetryPolicy policy, String originalModel,
+        boolean useBetaPlatformKey, String nodeId
+    ) {
+        if (policy == null) {
+            return originalModel;
+        }
+        String candidate = policy.modelForAttempt(attempt.attempt(), originalModel);
+        if (Objects.equals(candidate, originalModel)) {
+            return originalModel;
+        }
+        if (useBetaPlatformKey && !betaPlatformProvider.isModelAllowed(candidate)) {
+            log.info("[AgentNodeExecutor] 베타 허용 목록 밖 fallback 모델 — 원 모델 유지. "
+                    + "nodeId: {}, attempt: {}, originalModel: {}, skippedModel: {}",
+                nodeId, attempt.attempt(), originalModel, candidate);
+            return originalModel;
+        }
+        log.info("[AgentNodeExecutor] 재시도 모델 fallback 발동 — nodeId: {}, attempt: {}, "
+                + "originalModel: {}, fallbackModel: {}",
+            nodeId, attempt.attempt(), originalModel, candidate);
+        return candidate;
     }
 
     /**
@@ -366,7 +430,7 @@ public class AgentNodeExecutor implements NodeExecutor {
     private AgentExecutionResult callAgentService(
         AgentNodeRequest request, String llmProvider, String llmApiKey,
         String googleAccessToken, UUID userId, String userRole, Map<String, String> toolAuthHeaders,
-        boolean useBetaPlatformKey, String traceId
+        boolean useBetaPlatformKey, String traceId, String idempotencyKey
     ) {
         try {
             WebClient.RequestBodySpec requestSpec = webClient.post()
@@ -379,6 +443,12 @@ public class AgentNodeExecutor implements NodeExecutor {
             // 헤더가 없으면 agent가 자체 uuid4를 생성해버려 BE 이력과 조인이 끊기므로 있을 때만 보낸다.
             if (traceId != null) {
                 requestSpec = requestSpec.header("X-Trace-Id", traceId);
+            }
+
+            // ieum-agent는 아직 이 헤더를 읽지 않는다 — BE가 먼저 보내둬도 무해하며(agent가 무시),
+            // agent 쪽 소비 로직이 나중에 배포돼도 BE를 다시 배포할 필요가 없다(배포 순서 무관).
+            if (idempotencyKey != null) {
+                requestSpec = requestSpec.header("X-Idempotency-Key", idempotencyKey);
             }
 
             if (useBetaPlatformKey) {
@@ -416,7 +486,22 @@ public class AgentNodeExecutor implements NodeExecutor {
                 e.getStatusCode(), e.getResponseBodyAsString());
             return new AgentExecutionResult(false, null, null,
                 "에이전트 서비스 오류 (HTTP " + e.getStatusCode().value() + "): "
-                    + e.getResponseBodyAsString(), null);
+                    + e.getResponseBodyAsString(), null,
+                agentServiceErrorCode(e.getStatusCode().value()));
         }
+    }
+
+    /**
+     * agent 서비스 자체가 비정상 응답을 준 경우의 errorCode를 합성한다.
+     * agent가 본문으로 내려주는 errorCode가 없는 상황이므로 HTTP 상태로 대신 분류한다.
+     */
+    private static String agentServiceErrorCode(int status) {
+        return switch (FailureClassifier.fromHttpStatus(status)) {
+            case RATE_LIMIT -> "RATE_LIMITED";
+            case TIMEOUT -> "AGENT_TIMEOUT";
+            case SERVER_ERROR -> "AGENT_SERVICE_ERROR";
+            case CLIENT_ERROR -> "AGENT_BAD_REQUEST";
+            default -> null;
+        };
     }
 }
