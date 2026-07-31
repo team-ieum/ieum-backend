@@ -80,6 +80,15 @@ public class WorkflowExecution extends BaseEntity {
     private boolean retryExhausted;
 
     /**
+     * 실행 단위 실패 사유 요약. 노드 로그({@code node_runs.error_message})가 남지 않은 실패에서
+     * 유일한 원인 기록이다 — 런타임 진입 전 실패(잡 페이로드 해석·trigger_data 복호 실패)와
+     * 프로세스 이상 종료로 고립된 실행을 sweeper가 확정한 경우가 그렇다.
+     * 노드가 특정된 실패는 여기가 아니라 노드 로그에 원인이 남으므로 null이다.
+     */
+    @Column(name = "error_message", columnDefinition = "TEXT")
+    private String errorMessage;
+
+    /**
      * 트리거가 전달한 초기 입력. {@code com.ieum.common.util.AesEncryptor}로 암호화된 JSON
      * 문자열이다 — 평문이 아니다, 직접 파싱하지 말 것. 복호는 {@code AesEncryptor.decrypt()} 후
      * JSON 역직렬화(실패 실행 재처리, Task 10에서 사용). 복호 실패 시 {@code AesEncryptor}가
@@ -138,6 +147,11 @@ public class WorkflowExecution extends BaseEntity {
         this.status = ExecutionStatus.FAILED;
         this.finishedAt = LocalDateTime.now();
         this.retryExhausted = retryExhausted;
+    }
+
+    /** 실행 단위 실패 사유를 남긴다. 상태 전이와 분리해 둔 이유는 노드가 특정된 실패엔 쓰지 않기 때문이다. */
+    public void recordError(String errorMessage) {
+        this.errorMessage = errorMessage;
     }
 
     /** 이 실행의 재처리로 만들어진 새 실행을 연결한다. 재처리를 다시 재처리하면 최신 것으로 덮어쓴다. */

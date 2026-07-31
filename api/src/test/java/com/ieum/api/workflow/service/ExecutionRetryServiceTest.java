@@ -170,6 +170,42 @@ class ExecutionRetryServiceTest {
     }
 
     @Test
+    @DisplayName("고립된 재처리가 sweeper로 FAILED가 되면 원본 재처리 차단이 풀린다")
+    void retry_stuckRetrySweptToFailed_unblocksOriginal() {
+        UUID previousRetryId = UUID.randomUUID();
+        WorkflowExecution previousRetry = mock(WorkflowExecution.class);
+
+        given(workflowCrudService.getWorkflowByOwner(userId, workflowId)).willReturn(workflow);
+        given(workflowExecutionService.getExecution(previousRetryId)).willReturn(previousRetry);
+
+        // 프로세스가 죽어 RUNNING에 고정된 재처리 — 원본은 "재처리 진행 중"으로 영구히 막힌다.
+        WorkflowExecution blockedOriginal = originalExecution(ExecutionStatus.FAILED);
+        given(blockedOriginal.getRetriedByExecutionId()).willReturn(previousRetryId);
+        given(previousRetry.getStatus()).willReturn(ExecutionStatus.RUNNING);
+        given(workflowExecutionService.lockExecutionWithVersion(originalId))
+            .willReturn(blockedOriginal);
+
+        assertThatThrownBy(() -> service.retryExecution(userId, originalId))
+            .isInstanceOf(CustomException.class)
+            .extracting("errorCode").isEqualTo(ErrorCode.EXECUTION_NOT_RETRYABLE);
+
+        // sweeper가 고립 실행을 FAILED로 확정한 뒤 — 같은 요청이 통과해야 한다.
+        WorkflowExecution original = originalExecution(ExecutionStatus.FAILED);
+        given(original.getRetriedByExecutionId()).willReturn(previousRetryId);
+        given(original.getWorkflowVersion()).willReturn(version);
+        given(original.getTriggerType()).willReturn(TriggerType.MANUAL);
+        given(previousRetry.getStatus()).willReturn(ExecutionStatus.FAILED);
+        given(workflowExecutionService.lockExecutionWithVersion(originalId)).willReturn(original);
+        given(workflowExecutionService.decryptTriggerData(original)).willReturn(Map.of());
+        WorkflowExecution retry = retryExecution();
+        given(workflowExecutionService.prepareExecution(
+            workflow, version, TriggerType.MANUAL, Map.of())).willReturn(retry);
+
+        assertThat(service.retryExecution(userId, originalId).getId()).isEqualTo(retryId);
+        verify(original).markRetriedBy(retryId);
+    }
+
+    @Test
     @DisplayName("FAILED 실행은 원 버전·복호한 트리거 입력으로 새 실행을 만들고 원 실행에 링크를 남긴다")
     void retry_failedExecution_createsLinkedExecution() {
         WorkflowExecution original = originalExecution(ExecutionStatus.FAILED);
