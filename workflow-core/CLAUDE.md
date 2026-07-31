@@ -26,7 +26,7 @@
 - **대기는 워커 스레드의 `Thread.sleep`이다.** 메인 스레드 JPA 독점 구조를 유지하려 그렇게 뒀고, 그 대가로 재시도 대기가 워커 슬롯을 점유한다(fan-out이 넓으면 슬롯 고갈)
 
 ### 멱등성 (재시도 중복 호출 가드)
-- `IdempotencyMode` = NONE / HEADER / MARKER / BOTH. 노드 config `retry.idempotency`로 선언. HTTP 노드만 HEADER가 기본, 나머지는 NONE
+- `IdempotencyMode` = NONE / HEADER / MARKER / BOTH. 노드 config `retry.idempotency`로 선언. **부수효과가 있는 HTTP·AI 노드가 HEADER 기본**, 나머지는 NONE. AI 노드는 기본 재시도가 3회인데 도구를 쓰므로 NONE이면 회차마다 부수효과가 중복된다(MARKER는 재시도와 양립 불가라 HEADER가 유일한 선택지). agent가 `X-Idempotency-Key`를 소비하며(IEUM-AI-52) 소비하지 않는 배포에선 no-op이라 배포 순서 무관
 - `IdempotencyKeys.generate(executionId, nodeId)` — sha256 앞 32자 hex. **attempt 번호를 절대 섞지 않는다**(섞으면 중복 차단이 성립하지 않음)
 - HEADER: HTTP 노드는 `Idempotency-Key`, AI 노드는 agent에 `X-Idempotency-Key`. `policy.isDisabled()`(재시도 없음)면 붙이지 않는다
 - MARKER: `IdempotencyStore` 포트로 in-flight 마커를 세우고, 마커가 있으면 **재시도를 포기**한다. 마커 해제는 재시도 루프 전체가 끝난 뒤 1회만 — attempt별 finally에서 해제하면 모드가 무력화된다
