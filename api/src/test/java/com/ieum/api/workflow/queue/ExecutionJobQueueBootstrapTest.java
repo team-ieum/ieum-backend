@@ -84,6 +84,33 @@ class ExecutionJobQueueBootstrapTest {
     }
 
     @Test
+    @DisplayName("BUSYGROUP이 cause에만 있어도(실 Redis + Spring 6 형태) 그대로 진행한다")
+    void run_busyGroupInCauseOnly_continues() {
+        // Spring 6부터 getMessage()가 cause 메시지를 이어 붙이지 않는다 — 실물은 이 모양이다.
+        when(streamOperations.createGroup(anyString(), any(ReadOffset.class), anyString()))
+            .thenThrow(new RedisSystemException("Error in execution",
+                new RuntimeException("BUSYGROUP Consumer Group name already exists")));
+
+        bootstrap.run(null);
+
+        verify(container).start();
+    }
+
+    @Test
+    @DisplayName("폴링 복구 중 그룹이 살아 있으면(BUSYGROUP이 cause에만) 정상 복구로 판정한다")
+    void onPollError_busyGroupInCauseOnly_recovers() {
+        bootstrap.run(null);
+        when(container.isRunning()).thenReturn(true);
+
+        when(streamOperations.createGroup(anyString(), any(ReadOffset.class), anyString()))
+            .thenThrow(new RedisSystemException("Error in execution",
+                new RuntimeException("BUSYGROUP Consumer Group name already exists")));
+        bootstrap.onPollError(new RedisSystemException("transient", new RuntimeException()));
+
+        assertThat(queue.enqueue(UUID.randomUUID())).isTrue();
+    }
+
+    @Test
     @DisplayName("Redis 장애로 기동에 실패하면 소비를 시작하지 않고, 컨테이너 상태와 무관하게 enqueue가 폴백한다")
     void run_redisDown_doesNotStartConsuming() {
         when(streamOperations.createGroup(anyString(), any(ReadOffset.class), anyString()))

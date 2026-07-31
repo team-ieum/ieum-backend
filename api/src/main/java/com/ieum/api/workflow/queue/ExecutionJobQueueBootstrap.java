@@ -147,10 +147,24 @@ public class ExecutionJobQueueBootstrap implements ApplicationRunner {
             // MKSTREAM 포함 — 스트림이 아직 없어도 그룹이 만들어진다.
             redisTemplate.opsForStream().createGroup(STREAM_KEY, ReadOffset.from("0"), GROUP);
         } catch (DataAccessException e) {
-            if (!String.valueOf(e.getMessage()).contains("BUSYGROUP")) {
+            if (!isBusyGroup(e)) {
                 throw e;
             }
         }
+    }
+
+    /**
+     * BUSYGROUP(그룹이 이미 있음) 여부. Spring 6부터 {@code getMessage()}가 cause 메시지를
+     * 이어 붙이지 않아 바깥 {@code RedisSystemException}은 "Error in execution"뿐이다 —
+     * BUSYGROUP은 cause 체인({@code RedisBusyException})에서 찾아야 한다.
+     */
+    private static boolean isBusyGroup(DataAccessException e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (String.valueOf(t.getMessage()).contains("BUSYGROUP")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void startConsuming() {
