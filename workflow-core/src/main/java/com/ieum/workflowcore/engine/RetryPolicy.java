@@ -122,9 +122,20 @@ public record RetryPolicy(
         );
     }
 
-    /** HTTP 노드는 부수효과가 있어 헤더 주입을 기본으로 켠다(지원하는 상대에겐 실효가 있다). */
+    /**
+     * 부수효과가 있는 노드는 헤더 주입을 기본으로 켠다(지원하는 상대에겐 실효가 있다).
+     *
+     * <p>AI 노드가 대상인 이유: 기본 재시도가 3회인데 도구(메일 발송·이슈 생성 등)를 쓰므로,
+     * 껐다가는 "도구는 실행됐는데 응답만 유실"된 회차마다 부수효과가 중복된다. MARKER는
+     * attempt 1 이후 재시도를 아예 중단시켜 재시도와 양립하지 못하므로 HEADER가 유일한 선택지다.
+     * ieum-agent가 {@code X-Idempotency-Key}를 소비하지 않는 배포에서는 이 값이 no-op이라
+     * 기존 동작과 같다(배포 순서 무관).
+     */
     private static IdempotencyMode defaultIdempotency(NodeType nodeType) {
-        return nodeType == NodeType.HTTP ? IdempotencyMode.HEADER : IdempotencyMode.NONE;
+        return switch (nodeType) {
+            case HTTP, AI -> IdempotencyMode.HEADER;
+            default -> IdempotencyMode.NONE;
+        };
     }
 
     private static IdempotencyMode idempotency(Object value, NodeType nodeType) {

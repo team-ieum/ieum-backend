@@ -42,12 +42,27 @@ class RetryPolicyTest {
         }
 
         @Test
-        @DisplayName("HTTP 노드는 멱등성 헤더 주입이 기본이고 그 외는 NONE이다")
+        @DisplayName("부수효과가 있는 HTTP·AI 노드는 멱등성 헤더 주입이 기본이고 그 외는 NONE이다")
         void idempotencyDefaultDependsOnNodeType() {
             assertThat(RetryPolicy.from(null, NodeType.HTTP, defaults).idempotency())
                 .isEqualTo(IdempotencyMode.HEADER);
+            // AI 노드는 기본 재시도 3회 + 도구 사용이라 NONE이면 부수효과가 회차마다 중복된다
             assertThat(RetryPolicy.from(null, NodeType.AI, defaults).idempotency())
+                .isEqualTo(IdempotencyMode.HEADER);
+            assertThat(RetryPolicy.from(null, NodeType.TRANSFORM, defaults).idempotency())
                 .isEqualTo(IdempotencyMode.NONE);
+            assertThat(RetryPolicy.from(null, NodeType.CONDITION, defaults).idempotency())
+                .isEqualTo(IdempotencyMode.NONE);
+        }
+
+        @Test
+        @DisplayName("AI 노드는 기본 재시도와 헤더 멱등이 함께 켜져 실제로 헤더가 붙는다")
+        void aiNodeDefaultsCombineRetryAndHeader() {
+            RetryPolicy policy = RetryPolicy.from(null, NodeType.AI, defaults);
+
+            // AgentNodeExecutor가 헤더를 붙이는 조건은 usesHeader() && !isDisabled() 둘 다이다
+            assertThat(policy.isDisabled()).isFalse();
+            assertThat(policy.idempotency().usesHeader()).isTrue();
         }
     }
 

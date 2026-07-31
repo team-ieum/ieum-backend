@@ -445,8 +445,9 @@ public class AgentNodeExecutor implements NodeExecutor {
                 requestSpec = requestSpec.header("X-Trace-Id", traceId);
             }
 
-            // ieum-agent는 아직 이 헤더를 읽지 않는다 — BE가 먼저 보내둬도 무해하며(agent가 무시),
-            // agent 쪽 소비 로직이 나중에 배포돼도 BE를 다시 배포할 필요가 없다(배포 순서 무관).
+            // ieum-agent가 이 헤더를 소비한다(IEUM-AI-52) — 같은 키의 재요청은 도구를 다시 돌리지
+            // 않고 저장된 응답을 돌려주거나, 앞선 요청이 실행 중이면 DUPLICATE_REQUEST로 거절한다.
+            // agent가 아직 배포되지 않은 환경에서는 헤더가 무시될 뿐이라 배포 순서는 여전히 무관하다.
             if (idempotencyKey != null) {
                 requestSpec = requestSpec.header("X-Idempotency-Key", idempotencyKey);
             }
