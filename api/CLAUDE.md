@@ -77,6 +77,6 @@ workflow-core가 선언한 포트 10개를 여기서 `Default*`로 구현해 Stu
 
 ## 크로스레포 계약 (ieum-agent 위임)
 - 크레덴셜 헤더: `X-LLM-Provider`, `X-LLM-Api-Key`
-- 멱등성 헤더: AI 노드가 `retry.idempotency`로 HEADER/BOTH를 선언하고 재시도가 켜져 있으면 agent에 `X-Idempotency-Key`를 보낸다(HTTP 노드는 외부 API에 표준 `Idempotency-Key`). agent가 아직 이 헤더를 쓰지 않아도 무해하다
+- 멱등성 헤더: 부수효과가 있는 HTTP·AI 노드는 `retry.idempotency` 선언이 없어도 HEADER가 기본이라, 재시도가 켜져 있으면 agent에 `X-Idempotency-Key`를 보낸다(IEUM-BE-54. HTTP 노드는 외부 API에 표준 `Idempotency-Key`). agent가 이 헤더를 소비하며(IEUM-AI-52) 같은 키의 재요청은 도구를 다시 돌리지 않는다 — 소비하지 않는 배포에선 무시될 뿐이라 배포 순서 무관
 - 베타 플랫폼 키 모드: `X-Key-Mode: platform` (소문자, ADMIN·TESTER에겐 미전송)
 - agent `/v1/execute`·`/v1/chat` 응답 모두 usage 있음(IEUM-AI-48) → chat도 일일 호출 캡 + 토큰 예산 둘 다 적용. 차감 기준은 `usage.totalTokens`(입출력 합산 아님)
