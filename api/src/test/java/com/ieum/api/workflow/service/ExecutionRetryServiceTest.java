@@ -87,7 +87,7 @@ class ExecutionRetryServiceTest {
 
     @Test
     @DisplayName("소유자가 아니면 재처리를 거부한다")
-    void 남의_실행은_재처리할_수_없다() {
+    void retry_notOwner_throwsForbidden() {
         WorkflowExecution original = mock(WorkflowExecution.class);
         Workflow otherWorkflow = mock(Workflow.class);
         given(otherWorkflow.getId()).willReturn(workflowId);
@@ -107,7 +107,7 @@ class ExecutionRetryServiceTest {
 
     @Test
     @DisplayName("FAILED가 아닌 실행은 400으로 거부한다")
-    void 실패하지_않은_실행은_재처리_불가() {
+    void retry_notFailedExecution_throwsBadRequest() {
         for (ExecutionStatus status :
                 new ExecutionStatus[] {ExecutionStatus.PENDING, ExecutionStatus.RUNNING,
                     ExecutionStatus.SUCCESS}) {
@@ -125,7 +125,7 @@ class ExecutionRetryServiceTest {
 
     @Test
     @DisplayName("진행 중인 재처리가 있으면 두 번째 요청을 거부한다 — 더블클릭 중복 실행 차단")
-    void 진행중인_재처리가_있으면_거부() {
+    void retry_retryInProgress_rejectsSecondRequest() {
         for (ExecutionStatus inFlight :
                 new ExecutionStatus[] {ExecutionStatus.PENDING, ExecutionStatus.RUNNING}) {
             WorkflowExecution original = originalExecution(ExecutionStatus.FAILED);
@@ -148,7 +148,7 @@ class ExecutionRetryServiceTest {
 
     @Test
     @DisplayName("앞선 재처리가 끝났으면(FAILED) 다시 재처리할 수 있다 — 재재처리 기능 손실 없음")
-    void 끝난_재처리는_다시_재처리_가능() {
+    void retry_previousRetryFinished_allowsRetryAgain() {
         WorkflowExecution original = originalExecution(ExecutionStatus.FAILED);
         given(original.getRetriedByExecutionId()).willReturn(UUID.randomUUID());
         given(original.getWorkflowVersion()).willReturn(version);
@@ -171,7 +171,7 @@ class ExecutionRetryServiceTest {
 
     @Test
     @DisplayName("FAILED 실행은 원 버전·복호한 트리거 입력으로 새 실행을 만들고 원 실행에 링크를 남긴다")
-    void 실패_실행_재처리() {
+    void retry_failedExecution_createsLinkedExecution() {
         WorkflowExecution original = originalExecution(ExecutionStatus.FAILED);
         given(original.getWorkflowVersion()).willReturn(version);
         given(original.getTriggerType()).willReturn(TriggerType.WEBHOOK);

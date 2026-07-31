@@ -376,7 +376,7 @@ class ExecutionRetryQueueIntegrationTest {
 
     @Test
     @DisplayName("재처리는 커밋 시점에 큐로만 들어가고, 워커가 잡을 꺼낸 뒤에야 실제로 실행된다")
-    void 재처리는_큐를_거쳐_워커에서_실행된다() {
+    void retry_enqueuedOnCommit_executedByWorker() {
         WorkflowExecution original = givenFailedOriginal();
         givenOriginalNodeRuns(original);
         stubDefinition();
@@ -403,7 +403,7 @@ class ExecutionRetryQueueIntegrationTest {
 
     @Test
     @DisplayName("재처리의 trigger_data는 새 암호문이지만 복호하면 원 실행과 같고, 그 평문이 트리거 노드까지 흐른다")
-    void 재처리_트리거입력은_복호하면_원본과_같다() {
+    void retry_triggerData_decryptsToOriginal() {
         WorkflowExecution original = givenFailedOriginal();
         String originalCipherText = original.getTriggerData();
         givenOriginalNodeRuns(original);
@@ -427,7 +427,7 @@ class ExecutionRetryQueueIntegrationTest {
 
     @Test
     @DisplayName("원 실행의 마스킹된 트리거 로그가 있어도 트리거는 재실행되어 후속 노드가 복호본을 받는다")
-    void 트리거는_스킵되지_않고_복호본으로_다시_실행된다() {
+    void retry_triggerNode_reExecutedWithDecryptedData() {
         WorkflowExecution original = givenFailedOriginal();
         givenOriginalNodeRuns(original);
         stubDefinition();
@@ -443,7 +443,7 @@ class ExecutionRetryQueueIntegrationTest {
 
     @Test
     @DisplayName("큐를 거친 재처리에서 스킵된 노드의 output이 후속 노드 변수 참조로 해석된다")
-    void 스킵노드_output이_후속노드_변수참조로_치환된다() {
+    void retry_skippedNodeOutput_resolvesDownstreamVariables() {
         WorkflowExecution original = givenFailedOriginal();
         givenOriginalNodeRuns(original);
         stubDefinition();
@@ -460,7 +460,7 @@ class ExecutionRetryQueueIntegrationTest {
 
     @Test
     @DisplayName("Redis 장애로 큐를 못 쓰면 폴백 직접 실행이 같은 스킵 대상·같은 트리거 입력으로 돈다")
-    void 큐_폴백_경로도_같은_결과를_낸다() {
+    void retry_queueFallback_producesSameResult() {
         when(container.isRunning()).thenReturn(false);
         WorkflowExecution original = givenFailedOriginal();
         givenOriginalNodeRuns(original);
@@ -479,7 +479,7 @@ class ExecutionRetryQueueIntegrationTest {
 
     @Test
     @DisplayName("완료된 재처리 잡이 회수돼 재배달되면 다시 실행하지 않는다(at-least-once 계약)")
-    void 완료된_재처리잡_재배달은_중복실행되지_않는다() {
+    void retry_redeliveredCompletedJob_notReExecuted() {
         WorkflowExecution original = givenFailedOriginal();
         givenOriginalNodeRuns(original);
         stubDefinition();

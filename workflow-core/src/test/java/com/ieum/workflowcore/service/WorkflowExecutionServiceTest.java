@@ -241,7 +241,7 @@ class WorkflowExecutionServiceTest {
 
     @Test
     @DisplayName("재처리용 조회는 잠금 조회를 먼저 태운 뒤 버전을 로딩한다")
-    void 재처리_조회는_행을_잠근다() throws Exception {
+    void findForRetry_locksRowBeforeLoadingVersion() throws Exception {
         UUID executionId = UUID.randomUUID();
         WorkflowExecution execution = mock(WorkflowExecution.class);
         given(workflowExecutionRepository.findByIdForUpdate(executionId))
@@ -265,7 +265,7 @@ class WorkflowExecutionServiceTest {
 
     @Test
     @DisplayName("재처리가 아닌 실행은 재사용 output이 비어 있어 모든 노드를 실행한다")
-    void 재처리_아니면_재사용_output_없음() {
+    void reusableOutputs_notRetry_returnsEmpty() {
         UUID executionId = UUID.randomUUID();
         given(workflowExecutionRepository.findByRetriedByExecutionId(executionId))
             .willReturn(Optional.empty());
@@ -277,7 +277,7 @@ class WorkflowExecutionServiceTest {
 
     @Test
     @DisplayName("재처리 실행은 원 실행의 SUCCESS·SKIPPED 노드 output을 nodeId별로 되돌린다")
-    void 재처리_성공노드_output_재사용() {
+    void reusableOutputs_retry_returnsSucceededAndSkippedByNodeId() {
         UUID sourceId = UUID.randomUUID();
         UUID retryId = UUID.randomUUID();
 
@@ -324,7 +324,7 @@ class WorkflowExecutionServiceTest {
 
     @Test
     @DisplayName("markAsFailed가 상태를 전이시키면 실패 알림을 발신한다")
-    void markAsFailed_전이시_알림발신() {
+    void markAsFailed_statusTransitioned_sendsAlert() {
         UUID executionId = UUID.randomUUID();
         UUID ownerId = UUID.randomUUID();
         UUID workflowId = UUID.randomUUID();
@@ -357,7 +357,7 @@ class WorkflowExecutionServiceTest {
 
     @Test
     @DisplayName("markAsFailed는 이미 FAILED인 실행에 알림을 다시 보내지 않는다 (런타임이 이미 발신)")
-    void markAsFailed_이미종료면_알림없음() {
+    void markAsFailed_alreadyFailed_skipsAlert() {
         UUID executionId = UUID.randomUUID();
         WorkflowExecution execution = mock(WorkflowExecution.class);
         given(execution.getStatus()).willReturn(ExecutionStatus.FAILED);
@@ -371,7 +371,7 @@ class WorkflowExecutionServiceTest {
 
     @Test
     @DisplayName("markAsFailed의 알림은 트랜잭션 커밋 이후에 발신된다 — 커밋 전엔 발신하지 않는다")
-    void markAsFailed_알림은_커밋후_발신() {
+    void markAsFailed_sendsAlertAfterCommit() {
         UUID executionId = UUID.randomUUID();
         Workflow workflow = mock(Workflow.class);
         WorkflowExecution execution = mock(WorkflowExecution.class);
@@ -398,7 +398,7 @@ class WorkflowExecutionServiceTest {
 
     @Test
     @DisplayName("트랜잭션이 롤백되면 markAsFailed의 알림은 발신되지 않는다 (유령 알림 방지)")
-    void markAsFailed_롤백시_알림없음() {
+    void markAsFailed_rolledBack_skipsAlert() {
         UUID executionId = UUID.randomUUID();
         Workflow workflow = mock(Workflow.class);
         WorkflowExecution execution = mock(WorkflowExecution.class);
@@ -422,7 +422,7 @@ class WorkflowExecutionServiceTest {
 
     @Test
     @DisplayName("알림 발신이 예외를 던져도 markAsFailed의 상태 전이는 정상 완료된다")
-    void markAsFailed_알림실패_상태전이는성공() {
+    void markAsFailed_alertThrows_statusTransitionSucceeds() {
         UUID executionId = UUID.randomUUID();
         Workflow workflow = mock(Workflow.class);
         WorkflowExecution execution = mock(WorkflowExecution.class);
