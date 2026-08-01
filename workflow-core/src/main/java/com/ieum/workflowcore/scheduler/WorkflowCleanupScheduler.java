@@ -84,7 +84,11 @@ public class WorkflowCleanupScheduler {
      * 여기서 쓸 수 없고, 쓸 이유도 없다. {@code retryExhausted}는 markAsFailed가 false로 둔다 —
      * 재시도를 소진한 실패가 아니라 재시도 판정 자체가 이뤄지지 못한 실패다.
      *
-     * <p>SSE 스트림은 별도로 닫되, 런타임의 다른 종료 경로와 같이 {@code EXECUTION_COMPLETED(FAILED)}를
+     * <p>SSE 처리는 {@code markAsFailed}가 실제로 전이시켰을 때만 한다. 조회와 개별 처리 사이에
+     * 실행이 스스로 SUCCESS로 끝날 수 있고(항목당 알림 발신이 동기라 그 간격이 수십 초까지 벌어진다),
+     * 그때 무조건 발행하면 DB는 SUCCESS인데 구독자에게만 FAILED를 통보하게 된다.
+     *
+     * <p>전이한 경우엔 런타임의 다른 종료 경로와 같이 {@code EXECUTION_COMPLETED(FAILED)}를
      * 먼저 발행한 뒤 닫는다. 라이브 구독자에게 종료를 알리는 신호는 그 이벤트 하나뿐이라,
      * {@code complete()}만 하면 프론트는 이유 없이 끊긴 스트림만 보고 실행 중 표시가 남는다.
      * 구독자는 프로세스가 죽은 뒤에도 생긴다 — {@code RUNNING}인 실행 상세를 열면 스냅샷은
@@ -110,7 +114,12 @@ public class WorkflowCleanupScheduler {
 
         for (UUID executionId : stuckIds) {
             try {
-                workflowExecutionService.markAsFailed(executionId, reason);
+                if (!workflowExecutionService.markAsFailed(executionId, reason)) {
+                    // 조회와 이 시점 사이에 실행이 스스로 끝났다 — 종료 이벤트는 그쪽이 이미 흘렸다.
+                    log.info("[WorkflowCleanupScheduler] 고립 후보가 이미 종료됨, 건너뜀 — executionId: {}",
+                        executionId);
+                    continue;
+                }
                 executionEventPublisher.publish(executionId,
                     ExecutionEvent.executionCompleted(ExecutionStatus.FAILED));
                 executionEventPublisher.complete(executionId);

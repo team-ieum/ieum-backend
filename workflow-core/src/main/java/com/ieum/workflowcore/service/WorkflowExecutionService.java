@@ -284,23 +284,27 @@ public class WorkflowExecutionService {
      * @param reason 오류 요약. 알림 문구에 실리고 {@code workflow_runs.error_message}에도 남는다 —
      *               이 경로엔 실패 노드 로그가 없어 여기가 유일한 원인 기록이다.
      *               자격증명·프롬프트 원문이 아닌 값만 넘길 것. null이면 실패 원인 없이 발신된다
+     * @return 이 호출이 실제로 FAILED로 전이시켰으면 true. 이미 종료됐거나 실행이 없으면 false —
+     *         호출부가 이 실행을 실패로 취급하는 후속 처리(SSE 종료 이벤트 등)를 걸 때 쓴다
      */
     @Transactional
-    public void markAsFailed(UUID executionId, String reason) {
-        workflowExecutionRepository.findById(executionId).ifPresent(execution -> {
-            if (execution.getStatus() != ExecutionStatus.FAILED
-                    && execution.getStatus() != ExecutionStatus.SUCCESS) {
-                execution.fail();
-                execution.recordError(reason);
-                log.warn("[ExecutionService] 실행 상태 FAILED 강제 업데이트 — executionId: {}", executionId);
-                // 알림 페이로드는 트랜잭션 안에서 만든다 — 커밋 이후엔 LAZY 연관을 못 읽는다.
-                Workflow workflow = execution.getWorkflow();
-                AlertNotifier.ExecutionFailureAlert alert = new AlertNotifier.ExecutionFailureAlert(
-                    execution.getId(), workflow.getId(), workflow.getName(), workflow.getUserId(),
-                    null, reason, false);
-                afterCommit(() -> notifyFailure(alert));
+    public boolean markAsFailed(UUID executionId, String reason) {
+        return workflowExecutionRepository.findById(executionId).map(execution -> {
+            if (execution.getStatus() == ExecutionStatus.FAILED
+                    || execution.getStatus() == ExecutionStatus.SUCCESS) {
+                return false;
             }
-        });
+            execution.fail();
+            execution.recordError(reason);
+            log.warn("[ExecutionService] 실행 상태 FAILED 강제 업데이트 — executionId: {}", executionId);
+            // 알림 페이로드는 트랜잭션 안에서 만든다 — 커밋 이후엔 LAZY 연관을 못 읽는다.
+            Workflow workflow = execution.getWorkflow();
+            AlertNotifier.ExecutionFailureAlert alert = new AlertNotifier.ExecutionFailureAlert(
+                execution.getId(), workflow.getId(), workflow.getName(), workflow.getUserId(),
+                null, reason, false);
+            afterCommit(() -> notifyFailure(alert));
+            return true;
+        }).orElse(false);
     }
 
     /**

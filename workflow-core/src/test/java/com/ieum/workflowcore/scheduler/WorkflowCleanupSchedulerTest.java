@@ -190,6 +190,7 @@ class WorkflowCleanupSchedulerTest {
         ArgumentCaptor<LocalDateTime> thresholdCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
         given(workflowExecutionService.findStuckRunningExecutionIds(thresholdCaptor.capture()))
             .willReturn(List.of(stuckId));
+        given(workflowExecutionService.markAsFailed(eq(stuckId), any())).willReturn(true);
 
         scheduler.failStuckRunningExecutions();
 
@@ -209,6 +210,7 @@ class WorkflowCleanupSchedulerTest {
         UUID stuckId = UUID.randomUUID();
         given(workflowExecutionService.findStuckRunningExecutionIds(any()))
             .willReturn(List.of(stuckId));
+        given(workflowExecutionService.markAsFailed(eq(stuckId), any())).willReturn(true);
 
         scheduler.failStuckRunningExecutions();
 
@@ -218,6 +220,22 @@ class WorkflowCleanupSchedulerTest {
         inOrder.verify(executionEventPublisher)
             .publish(stuckId, ExecutionEvent.executionCompleted(ExecutionStatus.FAILED));
         inOrder.verify(executionEventPublisher).complete(stuckId);
+    }
+
+    @Test
+    @DisplayName("조회 뒤 스스로 종료된 실행은 FAILED 이벤트를 흘리지 않는다")
+    void failStuckRunningExecutions_alreadyTerminated_skipsEvent() {
+        UUID raceId = UUID.randomUUID();
+        given(workflowExecutionService.findStuckRunningExecutionIds(any()))
+            .willReturn(List.of(raceId));
+        // 조회와 처리 사이에 실행이 SUCCESS로 끝나면 markAsFailed는 전이하지 않고 false를 준다.
+        given(workflowExecutionService.markAsFailed(eq(raceId), any())).willReturn(false);
+
+        scheduler.failStuckRunningExecutions();
+
+        // DB는 SUCCESS인데 구독자에게만 FAILED를 통보하는 상황을 막는다.
+        verify(executionEventPublisher, never()).publish(eq(raceId), any());
+        verify(executionEventPublisher, never()).complete(raceId);
     }
 
     @Test
@@ -239,8 +257,9 @@ class WorkflowCleanupSchedulerTest {
 
         given(workflowExecutionService.findStuckRunningExecutionIds(any()))
             .willReturn(List.of(failId, successId));
-        Mockito.doThrow(new RuntimeException("DB 연결 오류"))
-            .when(workflowExecutionService).markAsFailed(eq(failId), any());
+        given(workflowExecutionService.markAsFailed(eq(failId), any()))
+            .willThrow(new RuntimeException("DB 연결 오류"));
+        given(workflowExecutionService.markAsFailed(eq(successId), any())).willReturn(true);
 
         scheduler.failStuckRunningExecutions();
 
