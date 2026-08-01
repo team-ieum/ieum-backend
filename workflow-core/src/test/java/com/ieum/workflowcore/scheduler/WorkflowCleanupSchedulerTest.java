@@ -3,6 +3,8 @@ package com.ieum.workflowcore.scheduler;
 import com.ieum.workflowcore.config.StuckExecutionProperties;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.WorkflowVersion;
+import com.ieum.workflowcore.domain.enums.ExecutionStatus;
+import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
@@ -15,6 +17,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
@@ -198,6 +201,23 @@ class WorkflowCleanupSchedulerTest {
         // 사용자가 "왜 실패로 바뀌었는지" 알 수 있어야 한다 — 사유는 비어 있으면 안 된다.
         assertThat(reasonCaptor.getValue()).contains("프로세스 이상 종료 추정");
         verify(executionEventPublisher).complete(stuckId);
+    }
+
+    @Test
+    @DisplayName("스트림을 닫기 전에 EXECUTION_COMPLETED(FAILED)를 먼저 발행한다")
+    void failStuckRunningExecutions_publishesCompletedEventBeforeClosingStream() {
+        UUID stuckId = UUID.randomUUID();
+        given(workflowExecutionService.findStuckRunningExecutionIds(any()))
+            .willReturn(List.of(stuckId));
+
+        scheduler.failStuckRunningExecutions();
+
+        // 페이로드 없이 complete만 하면 구독자는 이유 없이 끊긴 스트림만 본다 —
+        // 종료 상태를 알리는 이벤트가 먼저 나가야 한다.
+        InOrder inOrder = Mockito.inOrder(executionEventPublisher);
+        inOrder.verify(executionEventPublisher)
+            .publish(stuckId, ExecutionEvent.executionCompleted(ExecutionStatus.FAILED));
+        inOrder.verify(executionEventPublisher).complete(stuckId);
     }
 
     @Test

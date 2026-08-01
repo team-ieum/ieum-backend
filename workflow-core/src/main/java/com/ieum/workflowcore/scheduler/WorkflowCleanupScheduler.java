@@ -2,6 +2,8 @@ package com.ieum.workflowcore.scheduler;
 
 import com.ieum.workflowcore.config.StuckExecutionProperties;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
+import com.ieum.workflowcore.domain.enums.ExecutionStatus;
+import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
@@ -82,9 +84,12 @@ public class WorkflowCleanupScheduler {
      * 여기서 쓸 수 없고, 쓸 이유도 없다. {@code retryExhausted}는 markAsFailed가 false로 둔다 —
      * 재시도를 소진한 실패가 아니라 재시도 판정 자체가 이뤄지지 못한 실패다.
      *
-     * <p>SSE 스트림은 별도로 닫는다. 프로세스가 죽은 경우엔 이 JVM에 Sink가 없어 no-op이지만,
-     * 실행 스레드만 죽고 JVM이 살아 있는 경우엔 구독자가 영영 끝나지 않는 스트림에 매달린다.
-     * {@code complete()}는 있는 Sink만 닫으므로 새 Sink를 만들어 새는 일이 없다.
+     * <p>SSE 스트림은 별도로 닫되, 런타임의 다른 종료 경로와 같이 {@code EXECUTION_COMPLETED(FAILED)}를
+     * 먼저 발행한 뒤 닫는다. 라이브 구독자에게 종료를 알리는 신호는 그 이벤트 하나뿐이라,
+     * {@code complete()}만 하면 프론트는 이유 없이 끊긴 스트림만 보고 실행 중 표시가 남는다.
+     * 구독자는 프로세스가 죽은 뒤에도 생긴다 — {@code RUNNING}인 실행 상세를 열면 스냅샷은
+     * 비terminal이라 종료 이벤트를 담지 않고 그대로 라이브 스트림에 매달린다.
+     * {@code publish()}가 Sink를 새로 만들더라도 곧바로 {@code complete()}가 제거하므로 새지 않는다.
      */
     @Scheduled(cron = "0 */10 * * * *")
     public void failStuckRunningExecutions() {
@@ -106,6 +111,8 @@ public class WorkflowCleanupScheduler {
         for (UUID executionId : stuckIds) {
             try {
                 workflowExecutionService.markAsFailed(executionId, reason);
+                executionEventPublisher.publish(executionId,
+                    ExecutionEvent.executionCompleted(ExecutionStatus.FAILED));
                 executionEventPublisher.complete(executionId);
                 log.warn("[WorkflowCleanupScheduler] 고립 실행 FAILED 확정 — executionId: {}",
                     executionId);
