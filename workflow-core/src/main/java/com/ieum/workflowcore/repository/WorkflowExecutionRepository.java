@@ -3,6 +3,7 @@ package com.ieum.workflowcore.repository;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import jakarta.persistence.LockModeType;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -42,6 +43,17 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
      * 재처리로 만들어진 실행이 아니면 비어 있다.
      */
     Optional<WorkflowExecution> findByRetriedByExecutionId(UUID retryExecutionId);
+
+    /**
+     * 임계 시각보다 먼저 시작해 아직 {@code RUNNING}인 실행의 ID를 찾는다(고립 실행 sweeper용).
+     *
+     * <p>엔티티가 아니라 ID만 돌려주는 이유는, sweeper가 후보마다 별도 트랜잭션에서 상태를
+     * 확정하기 때문이다 — 한 건이 실패해도 나머지가 롤백되지 않는다.
+     */
+    @Query("SELECT e.id FROM WorkflowExecution e "
+        + "WHERE e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.RUNNING "
+        + "AND e.startedAt < :threshold")
+    List<UUID> findStuckRunningIds(@Param("threshold") LocalDateTime threshold);
 
     List<WorkflowExecution> findByWorkflow(Workflow workflow);
 

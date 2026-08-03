@@ -188,6 +188,14 @@ public class WorkflowExecutionService {
     }
 
     /**
+     * 임계 시각보다 먼저 시작해 아직 {@code RUNNING}인 실행의 ID를 조회한다.
+     * 실행 중이던 프로세스가 죽어 상태를 확정하지 못한 실행을 찾아내는 용도다.
+     */
+    public List<UUID> findStuckRunningExecutionIds(LocalDateTime threshold) {
+        return workflowExecutionRepository.findStuckRunningIds(threshold);
+    }
+
+    /**
      * 실행 시점 버전까지 즉시 로딩해 조회한다. 조회한 버전을 트랜잭션·영속성 컨텍스트 밖
      * (@Async 실행 스레드 등)으로 넘길 때 쓴다 — {@link #getExecution}이 주는 lazy 프록시를
      * 그대로 넘기면 {@code LazyInitializationException}이 난다.
@@ -258,8 +266,9 @@ public class WorkflowExecutionService {
     }
 
     /**
-     * 런타임이 상태를 남기지 못한 실패를 FAILED로 확정한다(잡 페이로드 해석 실패, trigger_data 복호
-     * 실패 등 런타임 진입 전 실패). 런타임이 이미 확정했으면 아무것도 하지 않는다.
+     * 런타임이 상태를 남기지 못한 실패를 FAILED로 확정한다 — 런타임 진입 전 실패(잡 페이로드 해석
+     * 실패, trigger_data 복호 실패)와 실행 도중 프로세스가 죽어 고립된 실행(sweeper가 호출)이다.
+     * 런타임이 이미 확정했으면 아무것도 하지 않는다.
      *
      * <p>알림은 상태 전이가 실제로 일어난 분기 안에서만 예약한다 — 런타임의
      * {@code finalizeFailure}가 이미 보냈으면 여기서 다시 보내지 않는다. 이 경로가 잡는 실패는
@@ -269,23 +278,33 @@ public class WorkflowExecutionService {
      * 동시에 실패하는 상황(이 경로가 잡는 실패가 정확히 그렇다)에서 커넥션 풀이 마른다.
      * 롤백 시엔 발신되지 않아 유령 알림도 없다.
      *
-     * @param reason 알림 문구에 실릴 오류 요약. null이면 실패 원인 없이 발신된다
+     * <p>{@code retryExhausted}는 false다 — 이 경로의 실패는 재시도 정책을 소진한 결과가 아니라
+     * 재시도 루프에 진입조차 못 했거나 중간에 끊긴 것이다.
+     *
+     * @param reason 오류 요약. 알림 문구에 실리고 {@code workflow_runs.error_message}에도 남는다 —
+     *               이 경로엔 실패 노드 로그가 없어 여기가 유일한 원인 기록이다.
+     *               자격증명·프롬프트 원문이 아닌 값만 넘길 것. null이면 실패 원인 없이 발신된다
+     * @return 이 호출이 실제로 FAILED로 전이시켰으면 true. 이미 종료됐거나 실행이 없으면 false —
+     *         호출부가 이 실행을 실패로 취급하는 후속 처리(SSE 종료 이벤트 등)를 걸 때 쓴다
      */
     @Transactional
-    public void markAsFailed(UUID executionId, String reason) {
-        workflowExecutionRepository.findById(executionId).ifPresent(execution -> {
-            if (execution.getStatus() != ExecutionStatus.FAILED
-                    && execution.getStatus() != ExecutionStatus.SUCCESS) {
-                execution.fail();
-                log.warn("[ExecutionService] 실행 상태 FAILED 강제 업데이트 — executionId: {}", executionId);
-                // 알림 페이로드는 트랜잭션 안에서 만든다 — 커밋 이후엔 LAZY 연관을 못 읽는다.
-                Workflow workflow = execution.getWorkflow();
-                AlertNotifier.ExecutionFailureAlert alert = new AlertNotifier.ExecutionFailureAlert(
-                    execution.getId(), workflow.getId(), workflow.getName(), workflow.getUserId(),
-                    null, reason, false);
-                afterCommit(() -> notifyFailure(alert));
+    public boolean markAsFailed(UUID executionId, String reason) {
+        return workflowExecutionRepository.findById(executionId).map(execution -> {
+            if (execution.getStatus() == ExecutionStatus.FAILED
+                    || execution.getStatus() == ExecutionStatus.SUCCESS) {
+                return false;
             }
-        });
+            execution.fail();
+            execution.recordError(reason);
+            log.warn("[ExecutionService] 실행 상태 FAILED 강제 업데이트 — executionId: {}", executionId);
+            // 알림 페이로드는 트랜잭션 안에서 만든다 — 커밋 이후엔 LAZY 연관을 못 읽는다.
+            Workflow workflow = execution.getWorkflow();
+            AlertNotifier.ExecutionFailureAlert alert = new AlertNotifier.ExecutionFailureAlert(
+                execution.getId(), workflow.getId(), workflow.getName(), workflow.getUserId(),
+                null, reason, false);
+            afterCommit(() -> notifyFailure(alert));
+            return true;
+        }).orElse(false);
     }
 
     /**

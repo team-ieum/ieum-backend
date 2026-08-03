@@ -82,7 +82,7 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 |--------|--------|------|
 | `Workflow` | `workflows` | |
 | `WorkflowVersion` | `workflow_versions` | 실행 시점 버전 고정 참조 |
-| `WorkflowExecution` | `workflow_runs` | status, triggerType, startedAt/finishedAt, traceId, `retry_exhausted`, `trigger_data`, `retried_by_execution_id` |
+| `WorkflowExecution` | `workflow_runs` | status, triggerType, startedAt/finishedAt, traceId, `retry_exhausted`, `trigger_data`, `retried_by_execution_id`, `error_message` |
 | `WorkflowExecutionLog` | `node_runs` | nodeId, nodeType, status, input/output JSON(TEXT), errorMessage, durationMs, traceId, prompt/completion/total tokens, `attempt_count` |
 | `ChatMessage`/`ChatSession` | chat/ 하위 | 워크플로우 채팅 |
 | `WorkflowDefinitionDocument` | Mongo | nodes/edges 정의. PG `mongoDefinitionId`로 조인 |
@@ -95,12 +95,19 @@ enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED, `ExecutionLog
 - `workflow_runs.trigger_data` — 트리거가 전달한 초기 입력. **AES-256 암호문(TEXT)이다 — 직접 파싱하지 말 것.** 복호는 `WorkflowExecutionService.decryptTriggerData()` 하나뿐이다(잡 큐 워커·재처리가 공유). 조회 API 응답에 그대로 노출 금지
 - `workflow_runs.retried_by_execution_id` — 이 실행을 재처리하려 만든 새 실행. 역방향(재처리 → 원본) 조회는 `findByRetriedByExecutionId`
 
+새 컬럼 (IEUM-BE-50):
+- `workflow_runs.error_message` — **실행 단위** 실패 사유. 노드 로그(`node_runs.error_message`)가 남지 않은 실패(런타임 진입 전 실패, 고립 실행 sweeper 확정)에서 유일한 원인 기록이라 `markAsFailed`만 채운다. 노드가 특정된 실패는 여기가 null이고 노드 로그에 원인이 있다. 대시보드 에러 목록이 "노드 로그 → 이 컬럼 → 기본 문구" 순으로 고른다
+
 **DDL은 Flyway가 아니라 `ddl-auto: update`** — 마이그레이션 파일 없음. 컬럼 추가는 엔티티 필드만 넣으면 된다.
 단, **`nullable = false` 컬럼을 기존 행이 있는 테이블에 추가할 때는 `@ColumnDefault`가 반드시 필요하다.** 없으면 PostgreSQL이 DDL을 거부하는데 `ddl-auto: update`는 그 오류를 경고로만 남기고 부팅을 계속해 **컬럼 없이 앱이 뜬다.** 테스트는 `ddl-auto: create-drop`(빈 스키마)이라 이 사고를 잡지 못한다 — 이번에 `retry_exhausted`·`alert_target`이 걸릴 뻔했다.
 
 ## 스케줄러 (scheduler/, config/)
 Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `ScheduleJobRestorer`(부팅 시 복원), `WorkflowCleanupScheduler`, `JobKeyGenerator`.
 `WorkflowScheduleJob`은 `SyncExecutionRuntime`을 직접 부른다 — api의 잡 큐를 거치지 않아 **스케줄 실행에는 내구성이 없다**(프로세스가 죽으면 유실). 해결 경로는 `boolean enqueue(UUID)` Provider 포트지만 별도 이슈다.
+
+`WorkflowCleanupScheduler`는 두 가지를 돈다(둘 다 `@Scheduled` cron, Quartz 아님):
+- `cleanupOrphanWorkflows()` — 고아 빈 워크플로우 hard delete
+- `failStuckRunningExecutions()` — **고립 `RUNNING` 실행 sweeper**(IEUM-BE-50). 프로세스가 죽어 런타임이 종료 처리를 못 한 실행은 영원히 `RUNNING`으로 남고, 재처리 API가 `FAILED`만 받으므로 다시 돌릴 수 없다. 재처리로 생긴 실행이 이렇게 굳으면 원본까지 "재처리 진행 중"으로 판정돼 **영구히 막힌다.** 확정은 `WorkflowExecutionService.markAsFailed()`에 맡긴다 — 런타임 밖 실패 확정 경로가 이미 종료 상태 가드·알림·커밋 후 발신을 갖췄다. 런타임의 `finalizeFailure`는 실행 중 인스턴스 상태를 쥔 private 경로라 타지 않는다. `retryExhausted`는 false(재시도 소진이 아니라 재시도 판정 자체가 못 이뤄진 실패)
 
 ## 설정 (workflow-core가 읽는 키)
 | 키 | 기본값 | 용도 |
@@ -112,6 +119,7 @@ Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `Sche
 | `workflow.execution.retry.multiplier` | 2.0 | 회차당 대기 증가 배수 |
 | `workflow.execution.retry.max-backoff-ms` | 30000 | 단일 대기 상한 |
 | `workflow.execution.retry.jitter` | true | full jitter 적용 여부 |
+| `workflow.execution.stuck.threshold` | `PT2H` | 이 시간 넘게 `RUNNING`인 실행을 고립으로 보고 `FAILED`로 확정. **내리지 말 것** — 잡 큐 회수(`reclaim-min-idle` 10분)로 복구될 실행을 먼저 FAILED로 굳히면 워커가 종료 상태로 보고 건너뛰어 복구가 취소된다 |
 
 `retry.*`는 `RetryProperties`(`@ConfigurationProperties`)의 필드 기본값이고 yml에 선언돼 있지 않다 — 장애 시 `ai-max-attempts: 1`로 재시도를 전역으로 끌 수 있게 코드 상수가 아니라 설정으로 뒀다. 노드 config의 `retry` 선언이 이 기본값보다 우선한다.
 

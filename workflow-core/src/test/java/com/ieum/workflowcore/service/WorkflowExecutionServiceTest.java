@@ -3,6 +3,7 @@ package com.ieum.workflowcore.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
@@ -353,6 +354,26 @@ class WorkflowExecutionServiceTest {
         // 이 경로는 실패 노드를 특정할 수 없다
         assertThat(alert.failedNodeId()).isNull();
         assertThat(alert.retryExhausted()).isFalse();
+    }
+
+    @Test
+    @DisplayName("markAsFailed는 사유를 실행에 남기고 retryExhausted를 세우지 않는다")
+    void markAsFailed_recordsReasonAndKeepsRetryExhaustedFalse() {
+        UUID executionId = UUID.randomUUID();
+        Workflow workflow = mock(Workflow.class);
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        given(execution.getStatus()).willReturn(ExecutionStatus.RUNNING);
+        given(execution.getWorkflow()).willReturn(workflow);
+        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+
+        service.markAsFailed(executionId, "프로세스 이상 종료 추정");
+
+        // 이 경로엔 실패 노드 로그가 없어 실행에 남긴 사유가 유일한 원인 기록이다.
+        verify(execution).recordError("프로세스 이상 종료 추정");
+        // 재시도를 소진한 실패가 아니라 재시도 판정 자체가 이뤄지지 못한 실패다 —
+        // retryExhausted를 세우는 fail(boolean)이 아니라 false로 두는 fail()을 타야 한다.
+        verify(execution).fail();
+        verify(execution, never()).fail(anyBoolean());
     }
 
     @Test
