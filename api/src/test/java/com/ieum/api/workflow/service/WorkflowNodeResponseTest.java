@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.api.workflow.dto.NodeDto;
 import com.ieum.api.workflow.dto.WorkflowResponse;
+import com.ieum.common.dto.PageResponse;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowVersion;
@@ -133,5 +134,82 @@ class WorkflowNodeResponseTest {
 
         assertThat(response.getNodes().get(1).getPosition().getX()).isEqualTo(999.0);
         assertThat(response.getNodes().get(1).getPosition().getY()).isEqualTo(777.0);
+    }
+
+    @Test
+    @DisplayName("한쪽 좌표만 있는 노드는 빠진 축만 기본값으로 채워진다")
+    void partialPosition_isFilledPerAxis() {
+        WorkflowResponse response = getWorkflowWithNodes(List.of(
+            node("node-1", "TRIGGER", "시작", "실행하면 시작해요.", Map.of("x", 999)),
+            node("node-2", "TRANSFORM", "가공", "받은 값을 가공해요.", Map.of("y", 777))));
+
+        // x만 있던 노드 — y만 채워지고 x는 보존된다.
+        assertThat(response.getNodes().get(0).getPosition().getX()).isEqualTo(999.0);
+        assertThat(response.getNodes().get(0).getPosition().getY()).isEqualTo(120.0);
+        // y만 있던 노드 — x는 인덱스 기반 기본값(40 + 1*380), y는 보존된다.
+        assertThat(response.getNodes().get(1).getPosition().getX()).isEqualTo(420.0);
+        assertThat(response.getNodes().get(1).getPosition().getY()).isEqualTo(777.0);
+    }
+
+    /**
+     * 조회 경로의 원본인 Mongo {@code workflow_definitions.nodes}에는 이 DTO를 거치지 않고
+     * 저장되는 경로(ieum-agent 생성분)가 있어 BE가 {@code type} 값을 통제하지 못한다.
+     * 어긋난 문서 하나가 조회 전체를 500으로 무너뜨리면 안 된다.
+     */
+    @Test
+    @DisplayName("enum에 없는 type이 섞여 있어도 상세 조회는 200이고 정상 노드는 온전하다")
+    void unknownNodeType_doesNotBreakDetailRead() {
+        WorkflowResponse response = getWorkflowWithNodes(List.of(
+            node("node-x", "SLACK", "슬랙", "슬랙으로 보내요.", Map.of("x", 40, "y", 120)),
+            node("node-2", "AI", "분류", "AI가 문의를 유형별로 나눠요.", Map.of("x", 420, "y", 120))));
+
+        assertThat(response.getNodes()).hasSize(2);
+        assertThat(response.getNodes().get(0).getType()).isNull();
+        assertThat(response.getNodes().get(0).getId()).isEqualTo("node-x");
+        assertThat(response.getNodes().get(0).getLabel()).isEqualTo("슬랙");
+        assertThat(response.getNodes().get(0).getPosition().getX()).isEqualTo(40.0);
+
+        NodeDto intact = response.getNodes().get(1);
+        assertThat(intact.getType()).isEqualTo(NodeType.AI);
+        assertThat(intact.getLabel()).isEqualTo("분류");
+        assertThat(intact.getDescription()).isEqualTo("AI가 문의를 유형별로 나눠요.");
+        assertThat(intact.getConfig()).containsKey("mappings");
+    }
+
+    /** 목록 조회는 사용자의 모든 워크플로우를 한 번에 변환하므로, 한 건이 어긋나면 페이지 전체가 죽는다. */
+    @Test
+    @DisplayName("enum에 없는 type이 섞인 워크플로우가 있어도 목록 조회가 죽지 않는다")
+    void unknownNodeType_doesNotBreakListRead() {
+        Workflow broken = mock(Workflow.class);
+        Workflow healthy = mock(Workflow.class);
+        UUID brokenId = UUID.randomUUID();
+        UUID healthyId = UUID.randomUUID();
+        given(broken.getId()).willReturn(brokenId);
+        given(healthy.getId()).willReturn(healthyId);
+
+        WorkflowVersion brokenVersion = mock(WorkflowVersion.class);
+        WorkflowVersion healthyVersion = mock(WorkflowVersion.class);
+
+        given(workflowCrudService.listWorkflows(userId, 0, 20))
+            .willReturn(List.of(broken, healthy));
+        given(workflowCrudService.hasNextWorkflows(userId, 0, 20)).willReturn(false);
+        given(workflowCrudService.getLatestVersionMap(List.of(brokenId, healthyId)))
+            .willReturn(Map.of(brokenId, brokenVersion, healthyId, healthyVersion));
+        given(workflowCrudService.loadDefinition(brokenVersion)).willReturn(
+            WorkflowDefinitionDocument.builder()
+                .nodes(List.of(node("node-x", "SLACK", "슬랙", "슬랙으로 보내요.",
+                    Map.of("x", 40, "y", 120))))
+                .edges(List.of()).build());
+        given(workflowCrudService.loadDefinition(healthyVersion)).willReturn(
+            WorkflowDefinitionDocument.builder()
+                .nodes(List.of(node("node-1", "TRIGGER", "시작", "실행하면 시작해요.",
+                    Map.of("x", 40, "y", 120))))
+                .edges(List.of()).build());
+
+        PageResponse<WorkflowResponse> page = workflowService.getWorkflows(userId, null, 20);
+
+        assertThat(page.getContent()).hasSize(2);
+        assertThat(page.getContent().get(0).getNodes().get(0).getType()).isNull();
+        assertThat(page.getContent().get(1).getNodes().get(0).getType()).isEqualTo(NodeType.TRIGGER);
     }
 }
