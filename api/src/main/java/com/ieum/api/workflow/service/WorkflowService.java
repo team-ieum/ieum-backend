@@ -246,6 +246,9 @@ public class WorkflowService {
             WorkflowDefinitionDocument definition = workflowCrudService.loadDefinition(version);
             nodes = objectMapper.convertValue(definition.getNodes(), new TypeReference<>() {});
             edges = objectMapper.convertValue(definition.getEdges(), new TypeReference<>() {});
+            // 좌표가 없는 노드(이 필드 도입 이전 저장분, agent 생성분)를 프론트가 그대로 렌더할 수
+            // 있도록 응답에서만 채운다. 저장된 정의는 건드리지 않는다.
+            NodeDto.applyDefaultPositions(nodes);
         }
         return WorkflowResponse.from(workflow, version, nodes, edges);
     }

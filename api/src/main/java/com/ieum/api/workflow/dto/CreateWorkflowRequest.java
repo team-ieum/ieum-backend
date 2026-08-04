@@ -20,6 +20,7 @@ public class CreateWorkflowRequest {
     private List<NodeDto> nodes;
 
     @NotNull
+    @Valid
     private List<EdgeDto> edges;
 
     /** 트리거 타입. 미입력 시 MANUAL로 처리 */
