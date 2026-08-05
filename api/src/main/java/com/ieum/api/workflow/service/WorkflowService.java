@@ -1,6 +1,5 @@
 package com.ieum.api.workflow.service;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.api.workflow.WorkflowExecutionRunner;
@@ -26,6 +25,7 @@ import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -244,13 +244,49 @@ public class WorkflowService {
         List<EdgeDto> edges = Collections.emptyList();
         if (version != null) {
             WorkflowDefinitionDocument definition = workflowCrudService.loadDefinition(version);
-            nodes = objectMapper.convertValue(definition.getNodes(), new TypeReference<>() {});
-            edges = objectMapper.convertValue(definition.getEdges(), new TypeReference<>() {});
+            nodes = convertEach(definition.getNodes(), NodeDto.class, workflow.getId(), "node");
+            edges = convertEach(definition.getEdges(), EdgeDto.class, workflow.getId(), "edge");
             // 좌표가 없는 노드(이 필드 도입 이전 저장분, agent 생성분)를 프론트가 그대로 렌더할 수
             // 있도록 응답에서만 채운다. 저장된 정의는 건드리지 않는다.
             NodeDto.applyDefaultPositions(nodes);
         }
         return WorkflowResponse.from(workflow, version, nodes, edges);
+    }
+
+    /**
+     * Mongo 정의(raw Map)를 응답 DTO로 <b>항목 단위</b>로 변환하고, 변환에 실패한 항목만 버린다.
+     *
+     * <p>조회 원본인 {@code workflow_definitions}에는 이 DTO를 거치지 않는 저장 경로(ieum-agent
+     * 생성분)가 있어 BE가 구조를 통제하지 못한다. 목록 조회({@code getWorkflows})는 사용자의 모든
+     * 워크플로우를 한 번에 변환하므로, 어긋난 문서 하나가 예외로 터지면 목록 페이지 전체가 500이 된다.
+     * 리스트 자체가 null인 경우(정의는 있으나 노드가 비어 있는 문서)도 여기서 빈 목록으로 흡수한다 —
+     * {@code convertValue}는 null을 그대로 돌려주므로 뒤따르는 후처리가 NPE로 터진다.
+     *
+     * <p>워크플로우 단위로 통째 try/catch 하는 쪽이 코드는 적지만, 노드 하나가 깨졌다고 워크플로우가
+     * 빈 캔버스로 보이면 사용자가 무엇이 깨졌는지 알 수도, 나머지를 복구할 수도 없다. 그래서 항목
+     * 단위로 격리한다 — 정상 노드와 그 사이 엣지는 그대로 살아남는다.
+     *
+     * <p>알 수 없는 {@code type}은 여기서 걸러지지 <b>않는다</b>. {@code NodeDto.type}의
+     * {@code READ_UNKNOWN_ENUM_VALUES_AS_NULL}이 예외 대신 null로 흘려 노드를 남기기 때문이다 —
+     * 노드를 빼면 {@code edges}가 가리키는 대상이 사라져 프론트 그래프가 더 크게 깨진다.
+     * 항목을 버리는 것은 그 완충마저 통하지 않는(구조 자체가 어긋난) 경우의 최후 수단이다.
+     */
+    private <T> List<T> convertEach(List<Map<String, Object>> raw, Class<T> type,
+            UUID workflowId, String kind) {
+        if (raw == null) {
+            return Collections.emptyList();
+        }
+        List<T> converted = new ArrayList<>(raw.size());
+        for (Map<String, Object> item : raw) {
+            try {
+                converted.add(objectMapper.convertValue(item, type));
+            } catch (IllegalArgumentException e) {
+                // 정의 원문에는 사용자 데이터가 섞이므로 식별자와 실패 원인만 남긴다.
+                log.warn("[WORKFLOW_DEFINITION] {} 변환 실패로 1건 제외 — workflowId={}, id={}, cause={}",
+                    kind, workflowId, item != null ? item.get("id") : null, e.getMessage());
+            }
+        }
+        return converted;
     }
 
     private String toJson(Object obj) {

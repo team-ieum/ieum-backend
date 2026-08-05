@@ -40,8 +40,10 @@ public class GlobalExceptionHandler {
     }
 
     // 요청 본문을 읽지 못한 경우 — JSON 문법 오류, 그리고 허용되지 않은 enum 값처럼 타입 변환에
-    // 실패한 경우가 여기로 온다(예: 노드 type에 없는 값). 핸들러가 없으면 아래 Exception 핸들러가
-    // 잡아 500이 나가는데, 원인은 서버가 아니라 요청 쪽이다.
+    // 실패한 경우가 여기로 온다(예: 워크플로우 생성 요청의 triggerType에 없는 값). 핸들러가 없으면
+    // 아래 Exception 핸들러가 잡아 500이 나가는데, 원인은 서버가 아니라 요청 쪽이다.
+    // 노드 type은 이 경로가 아니다 — READ_UNKNOWN_ENUM_VALUES_AS_NULL이 붙어 역직렬화가 성공하고
+    // null이 된 값을 @NotNull이 잡으므로 handleMethodArgumentNotValid로 간다(둘 다 400).
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ApiResponse<Void>> handleHttpMessageNotReadable(HttpMessageNotReadableException e) {
         // 예외 메시지에는 내부 클래스명과 필드 경로가 담기므로 응답에 그대로 싣지 않는다.

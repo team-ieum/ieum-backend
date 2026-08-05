@@ -78,8 +78,13 @@ public class NodeDto {
      *
      * <p>{@code position} 자체가 없는 경우뿐 아니라 {@code x}·{@code y} 한쪽만 있는 경우도 채운다.
      * 계약상 좌표는 null일 수 없는데, 검증을 거치지 않는 위 저장 경로에서는 부분 좌표가 들어올 수 있다.
+     *
+     * <p>노드 목록이 없는 정의도 정상 상태이므로 {@code nodes}가 null이면 조용히 지나간다.
      */
     public static void applyDefaultPositions(List<NodeDto> nodes) {
+        if (nodes == null) {
+            return;
+        }
         for (int i = 0; i < nodes.size(); i++) {
             NodeDto node = nodes.get(i);
             double defaultX = DEFAULT_X_ORIGIN + i * DEFAULT_X_GAP;

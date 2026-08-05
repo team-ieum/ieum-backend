@@ -70,6 +70,20 @@ class WorkflowNodeResponseTest {
         return node;
     }
 
+    /**
+     * 구조가 어긋난 노드. {@code position}이 객체가 아니거나 {@code x}/{@code y}가 숫자로 변환되지
+     * 않는 경우로, 검증을 거치지 않는 저장 경로(ieum-agent 생성분)에서만 나올 수 있다.
+     */
+    private Map<String, Object> malformedNode(String id, Object position) {
+        Map<String, Object> node = new LinkedHashMap<>();
+        node.put("id", id);
+        node.put("type", "AI");
+        node.put("label", "깨진 노드");
+        node.put("description", "구조가 어긋난 노드예요.");
+        node.put("position", position);
+        return node;
+    }
+
     @Test
     @DisplayName("저장된 label·description·position·config가 그대로 반환된다")
     void storedFields_areReturnedAsIs() {
@@ -210,6 +224,83 @@ class WorkflowNodeResponseTest {
 
         assertThat(page.getContent()).hasSize(2);
         assertThat(page.getContent().get(0).getNodes().get(0).getType()).isNull();
+        assertThat(page.getContent().get(1).getNodes().get(0).getType()).isEqualTo(NodeType.TRIGGER);
+    }
+
+    /**
+     * 노드 목록 자체가 없는 정의 — 껍데기만 만들어진 워크플로우에서 나온다.
+     * 변환기가 null을 그대로 흘리면 뒤따르는 기본 좌표 채우기가 NPE로 터져 조회가 500이 됐었다.
+     */
+    @Test
+    @DisplayName("정의의 nodes·edges가 null이어도 조회는 성공하고 빈 목록이 반환된다")
+    void nullNodes_returnEmptyLists() {
+        Workflow workflow = mock(Workflow.class);
+        WorkflowVersion version = mock(WorkflowVersion.class);
+        given(workflowCrudService.getWorkflowByOwner(userId, workflowId)).willReturn(workflow);
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(workflowCrudService.loadDefinition(version))
+            .willReturn(WorkflowDefinitionDocument.builder().build());
+
+        WorkflowResponse response = workflowService.getWorkflow(userId, workflowId);
+
+        assertThat(response.getNodes()).isEmpty();
+        assertThat(response.getEdges()).isEmpty();
+    }
+
+    /**
+     * 알 수 없는 {@code type}과 달리 구조가 어긋난 노드는 DTO로 만들 수 없어 응답에서 빠진다.
+     * 대신 같은 워크플로우의 정상 노드는 살아남아야 한다 — 노드 하나 때문에 캔버스가 통째로
+     * 비면 사용자가 무엇이 깨졌는지 알 수도, 나머지를 복구할 수도 없다.
+     */
+    @Test
+    @DisplayName("position 구조가 어긋난 노드가 섞여 있어도 상세 조회는 200이고 정상 노드는 온전하다")
+    void malformedPosition_doesNotBreakDetailRead() {
+        WorkflowResponse response = getWorkflowWithNodes(List.of(
+            malformedNode("node-broken-1", "40,120"),
+            malformedNode("node-broken-2", Map.of("x", Map.of("nested", 1), "y", 120)),
+            node("node-ok", "AI", "분류", "AI가 문의를 유형별로 나눠요.", Map.of("x", 420, "y", 120))));
+
+        assertThat(response.getNodes()).hasSize(1);
+        NodeDto intact = response.getNodes().get(0);
+        assertThat(intact.getId()).isEqualTo("node-ok");
+        assertThat(intact.getType()).isEqualTo(NodeType.AI);
+        assertThat(intact.getPosition().getX()).isEqualTo(420.0);
+        assertThat(intact.getPosition().getY()).isEqualTo(120.0);
+    }
+
+    /** 목록 조회는 모든 워크플로우를 한 번에 변환하므로, 한 건이 어긋나면 페이지 전체가 죽는다. */
+    @Test
+    @DisplayName("position 구조가 어긋난 워크플로우가 있어도 목록 조회가 죽지 않는다")
+    void malformedPosition_doesNotBreakListRead() {
+        Workflow broken = mock(Workflow.class);
+        Workflow healthy = mock(Workflow.class);
+        UUID brokenId = UUID.randomUUID();
+        UUID healthyId = UUID.randomUUID();
+        given(broken.getId()).willReturn(brokenId);
+        given(healthy.getId()).willReturn(healthyId);
+
+        WorkflowVersion brokenVersion = mock(WorkflowVersion.class);
+        WorkflowVersion healthyVersion = mock(WorkflowVersion.class);
+
+        given(workflowCrudService.listWorkflows(userId, 0, 20))
+            .willReturn(List.of(broken, healthy));
+        given(workflowCrudService.hasNextWorkflows(userId, 0, 20)).willReturn(false);
+        given(workflowCrudService.getLatestVersionMap(List.of(brokenId, healthyId)))
+            .willReturn(Map.of(brokenId, brokenVersion, healthyId, healthyVersion));
+        given(workflowCrudService.loadDefinition(brokenVersion)).willReturn(
+            WorkflowDefinitionDocument.builder()
+                .nodes(List.of(malformedNode("node-broken", "40,120")))
+                .edges(List.of()).build());
+        given(workflowCrudService.loadDefinition(healthyVersion)).willReturn(
+            WorkflowDefinitionDocument.builder()
+                .nodes(List.of(node("node-1", "TRIGGER", "시작", "실행하면 시작해요.",
+                    Map.of("x", 40, "y", 120))))
+                .edges(List.of()).build());
+
+        PageResponse<WorkflowResponse> page = workflowService.getWorkflows(userId, null, 20);
+
+        assertThat(page.getContent()).hasSize(2);
+        assertThat(page.getContent().get(0).getNodes()).isEmpty();
         assertThat(page.getContent().get(1).getNodes().get(0).getType()).isEqualTo(NodeType.TRIGGER);
     }
 }
