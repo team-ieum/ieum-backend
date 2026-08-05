@@ -28,7 +28,6 @@ import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
-import com.ieum.workflowcore.util.SensitiveDataMasker;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -275,24 +274,16 @@ public class WorkflowService {
      * <p>막는 것은 요청 본문의 리터럴 URL뿐이다. 변수 참조({@code {{nodes.x.output.url}}})처럼 실행
      * 시점에야 웹훅 URL이 되는 값이나, {@code url} 외의 config 필드(예: {@code body})에 숨긴 URL은
      * 여기서 걸리지 않는다.
+     *
+     * <p>판정과 메시지는 {@link RawWebhookUrlGuard}가 갖는다 — 채팅으로 agent가 만든 정의도 같은
+     * 검사를 거치는데(Task 4) 둘이 각자 문구를 들고 있으면 같은 위반에 다른 반응이 나온다.
      */
     private void rejectRawWebhookUrls(List<NodeDto> nodes) {
         if (nodes == null) {
             return;
         }
         for (NodeDto node : nodes) {
-            Map<String, Object> config = node.getConfig();
-            if (config == null) {
-                continue;
-            }
-            if (config.get("url") instanceof String url
-                    && SensitiveDataMasker.containsWebhookUrl(url)) {
-                // 메시지에도 로그에도 URL·노드 식별자를 싣지 않는다. GlobalExceptionHandler가
-                // 예외 메시지를 그대로 WARN 로그에 남기므로 여기 담는 값이 곧 로그에 남는다.
-                throw new CustomException(ErrorCode.INVALID_WORKFLOW,
-                    "노드 config.url에 Slack·Discord 웹훅 URL을 직접 저장할 수 없습니다. "
-                        + "웹훅 자격증명을 등록한 뒤 config.webhookCredentialId로 참조하세요.");
-            }
+            RawWebhookUrlGuard.rejectRawWebhookUrl(node.getConfig());
         }
     }
 

@@ -124,7 +124,7 @@ Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `Sche
 `retry.*`는 `RetryProperties`(`@ConfigurationProperties`)의 필드 기본값이고 yml에 선언돼 있지 않다 — 장애 시 `ai-max-attempts: 1`로 재시도를 전역으로 끌 수 있게 코드 상수가 아니라 설정으로 뒀다. 노드 config의 `retry` 선언이 이 기본값보다 우선한다.
 
 ## 주의사항
-- `node_runs`의 input/output에 자격증명 원문 저장 금지 — `SensitiveDataMasker.mask()`(util/)가 `apiKey/api_key/token/secret/password/Authorization` 키를 `***`로 마스킹한다. 새 민감 키는 `SENSITIVE_KEYS`에 추가. **중첩 Map·List 내부까지 재귀 적용된다** (IEUM-BE-62에서 확장 — 그 전에는 최상위 키만 검사했다). `workflow_runs.trigger_data`는 마스킹이 아니라 AES-256 암호화다 — `mask()`의 호출부는 `SyncExecutionRuntime` 하나뿐이다. 같은 클래스의 `containsWebhookUrl()`은 api `WorkflowService`가 노드 `config.url` 원문 웹훅 저장을 거부할 때 쓴다 — **웹훅 도메인 정규식은 `WEBHOOK_URL_PATTERN` 한 곳뿐이어야 한다**(마스킹과 저장 거부가 갈라지면 한쪽만 고쳐진다)
+- `node_runs`의 input/output에 자격증명 원문 저장 금지 — `SensitiveDataMasker.mask()`(util/)가 `apiKey/api_key/token/secret/password/Authorization` 키를 `***`로 마스킹한다. 새 민감 키는 `SENSITIVE_KEYS`에 추가. **중첩 Map·List 내부까지 재귀 적용된다** (IEUM-BE-62에서 확장 — 그 전에는 최상위 키만 검사했다). `workflow_runs.trigger_data`는 마스킹이 아니라 AES-256 암호화다 — `mask()`의 호출부는 `SyncExecutionRuntime` 하나뿐이다. 같은 클래스의 `containsWebhookUrl()`은 api `RawWebhookUrlGuard`(REST 저장 `WorkflowService` + agent 저장 `ChatService` 공용)가 노드 `config.url` 원문 웹훅 저장을 거부할 때 쓴다 — **웹훅 도메인 정규식은 `WEBHOOK_URL_PATTERN` 한 곳뿐이어야 한다**(마스킹과 저장 거부가 갈라지면 한쪽만 고쳐진다)
 - 실행 로그 저장 실패는 실행 전체를 중단시키지 않음(warn만) — 이력 누락 가능성이 설계상 허용됨
 - 워크플로우당 트리거 노드 1개만 허용
 - 노드 config에 실제 토큰/키 저장 금지 — credential_id 참조만

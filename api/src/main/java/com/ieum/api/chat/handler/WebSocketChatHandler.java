@@ -194,6 +194,13 @@ public class WebSocketChatHandler {
                         UUID.fromString(userName)
                     );
                     sendToUser(userName, ChatStreamResponse.done(response));
+                } catch (CustomException e) {
+                    // 저장 거부(예: 노드 config에 웹훅 URL 원문 — IEUM-BE-62)는 사용자가 다음 행동을
+                    // 알아야 풀 수 있다. prepareStream 실패와 같은 방식으로 메시지를 그대로 전달한다.
+                    // CustomException 메시지는 사용자 입력을 되싣지 않는다는 전제 위에 있다.
+                    log.warn("[WS] done 처리(저장) 거부 — sessionId: {}, error: {}",
+                        setup.sessionId(), e.getMessage());
+                    sendToUser(userName, ChatStreamResponse.error(e.getMessage()));
                 } catch (Exception e) {
                     log.error("[WS] done 처리(저장) 실패 — sessionId: {}", setup.sessionId(), e);
                     sendToUser(userName, ChatStreamResponse.error("응답 저장 중 오류가 발생했습니다."));

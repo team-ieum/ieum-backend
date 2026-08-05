@@ -185,6 +185,41 @@ class WebSocketChatHandlerTest {
         verify(chatService, never()).releaseBetaQuotaOnFailure(any());
     }
 
+    @Test
+    @DisplayName("done 처리가 CustomException으로 거부되면 그 안내 문구를 그대로 전달한다 (IEUM-BE-62)")
+    void done_customException_relaysActionableMessage() {
+        mockPrepareStream();
+        ChatAgentResponse agentResponse = mock(ChatAgentResponse.class);
+        String guidance = "노드 config.url에 Slack·Discord 웹훅 URL을 직접 저장할 수 없습니다. "
+            + "웹훅 자격증명을 등록한 뒤 config.webhookCredentialId로 참조하세요.";
+        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any(), any()))
+            .willThrow(new CustomException(ErrorCode.INVALID_WORKFLOW, guidance));
+        mockChatStream(ChatStreamEvent.done(agentResponse));
+
+        handler.handleChat(workflowId, request, principal);
+
+        List<ChatStreamResponse> sent = captureSent(1);
+        assertThat(sent.get(0).getType()).isEqualTo(StreamType.ERROR);
+        // 일반 문구("응답 저장 중 오류가 발생했습니다.")로 뭉개면 사용자가 다음에 할 일을 알 수 없다.
+        assertThat(sent.get(0).getContent()).isEqualTo(guidance);
+    }
+
+    @Test
+    @DisplayName("done 처리가 예상 못한 예외로 실패하면 내부 사정을 감춘 일반 문구를 보낸다")
+    void done_unexpectedException_sendsGenericMessage() {
+        mockPrepareStream();
+        ChatAgentResponse agentResponse = mock(ChatAgentResponse.class);
+        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any(), any()))
+            .willThrow(new IllegalStateException("connection reset by peer"));
+        mockChatStream(ChatStreamEvent.done(agentResponse));
+
+        handler.handleChat(workflowId, request, principal);
+
+        List<ChatStreamResponse> sent = captureSent(1);
+        assertThat(sent.get(0).getType()).isEqualTo(StreamType.ERROR);
+        assertThat(sent.get(0).getContent()).isEqualTo("응답 저장 중 오류가 발생했습니다.");
+    }
+
     // ─────────────────── withBetaQuotaRefund (exactly-once 환불) ────────────
 
     @Test
