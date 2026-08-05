@@ -16,6 +16,9 @@ import java.util.regex.Pattern;
  *
  * <p>중첩 {@code Map}·{@code List} 안쪽까지 재귀로 적용하며, 값이 문자열이면 Slack/Discord
  * 웹훅 URL의 토큰 구간도 가린다. 입력은 변형하지 않고 새 컬렉션을 반환한다.
+ *
+ * <p>웹훅 URL 판정({@link #containsWebhookUrl})도 여기서 함께 제공한다 — 마스킹과 저장 거부가
+ * 같은 도메인 집합을 보게 하려면 정규식이 한 곳에만 있어야 하기 때문이다.
  */
 public final class SensitiveDataMasker {
 
@@ -88,6 +91,20 @@ public final class SensitiveDataMasker {
             return maskWebhookUrl(s);
         }
         return value;
+    }
+
+    /**
+     * 문자열 안에 Slack·Discord 웹훅 URL이 들어 있으면 true.
+     *
+     * <p>마스킹과 같은 정규식을 쓴다 — 노드 config에 원문 저장을 거부하는 쪽(api
+     * {@code WorkflowService})이 별도 정규식을 두면 도메인 하나가 추가될 때 한쪽만 고쳐진다.
+     * 그래서 판정 규칙은 늘리지 말고 {@code WEBHOOK_URL_PATTERN} 한 곳만 고친다.
+     *
+     * <p>토큰 구간(호스트 뒤 경로)이 있는 URL만 잡는다. 호스트만 적힌 문자열은 웹훅으로 쓸 수 없어
+     * 가릴 비밀도, 거부할 이유도 없다.
+     */
+    public static boolean containsWebhookUrl(String value) {
+        return value != null && WEBHOOK_URL_PATTERN.matcher(value).find();
     }
 
     private static boolean isSensitiveKey(String key) {

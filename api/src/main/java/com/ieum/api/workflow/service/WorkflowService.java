@@ -26,6 +26,7 @@ import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
+import com.ieum.workflowcore.util.SensitiveDataMasker;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
@@ -63,6 +64,7 @@ public class WorkflowService {
 
     @Transactional
     public WorkflowResponse createWorkflow(UUID userId, CreateWorkflowRequest request) {
+        rejectRawWebhookUrls(request.getNodes());
         WorkflowVersion version = workflowCrudService.createWorkflow(
             userId,
             request.getName(),
@@ -99,6 +101,7 @@ public class WorkflowService {
     @Transactional
     public WorkflowResponse updateWorkflow(UUID userId, UUID workflowId,
             UpdateWorkflowRequest request) {
+        rejectRawWebhookUrls(request.getNodes());
         WorkflowVersion version = workflowCrudService.updateWorkflow(
             userId,
             workflowId,
@@ -239,6 +242,43 @@ public class WorkflowService {
     }
 
     // ------------------------------------------------------------------ PRIVATE
+
+    /**
+     * 노드 {@code config.url}에 Slack·Discord 웹훅 URL 원문이 있으면 저장을 거부한다.
+     *
+     * <p>웹훅 URL은 그 자체가 비밀인데 노드 config는 Mongo에 평문으로 저장되고 조회 응답에도 그대로
+     * 실린다. 대안은 이미 있다 — 웹훅 자격증명을 등록하고 {@code config.webhookCredentialId}로
+     * 참조하면 {@code HttpNodeExecutor}가 실행 시점에만 복호해 쓴다(IEUM-BE-62 Task 1).
+     *
+     * <p><b>레거시도 거부한다.</b> 이미 원문 URL이 저장된 워크플로우는 그 값을 지우거나
+     * {@code webhookCredentialId}로 바꾸기 전까지 이름만 고치는 수정도 저장할 수 없다 — 수정 요청은
+     * 정의 전체를 새 버전으로 다시 쓰기 때문이다. 기존 값을 예외로 통과시키려면 "저장된 정의와 같은
+     * URL인가"를 매 요청 비교해야 하는데, 베타 단계라 해당 워크플로우가 적을 것으로 보고 그 복잡도
+     * 대신 단순한 쪽(항상 거부)을 택했다. 대가는 위의 수정 차단이다.
+     *
+     * <p>막는 것은 요청 본문의 리터럴 URL뿐이다. 변수 참조({@code {{nodes.x.output.url}}})처럼 실행
+     * 시점에야 웹훅 URL이 되는 값이나, {@code url} 외의 config 필드(예: {@code body})에 숨긴 URL은
+     * 여기서 걸리지 않는다.
+     */
+    private void rejectRawWebhookUrls(List<NodeDto> nodes) {
+        if (nodes == null) {
+            return;
+        }
+        for (NodeDto node : nodes) {
+            Map<String, Object> config = node.getConfig();
+            if (config == null) {
+                continue;
+            }
+            if (config.get("url") instanceof String url
+                    && SensitiveDataMasker.containsWebhookUrl(url)) {
+                // 메시지에도 로그에도 URL·노드 식별자를 싣지 않는다. GlobalExceptionHandler가
+                // 예외 메시지를 그대로 WARN 로그에 남기므로 여기 담는 값이 곧 로그에 남는다.
+                throw new CustomException(ErrorCode.INVALID_WORKFLOW,
+                    "노드 config.url에 Slack·Discord 웹훅 URL을 직접 저장할 수 없습니다. "
+                        + "웹훅 자격증명을 등록한 뒤 config.webhookCredentialId로 참조하세요.");
+            }
+        }
+    }
 
     /**
      * 저장된 정의(raw {@code Map})를 응답으로 옮긴다.
