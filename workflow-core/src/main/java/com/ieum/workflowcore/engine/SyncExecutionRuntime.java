@@ -134,6 +134,11 @@ public class SyncExecutionRuntime {
         WorkflowExecution execution = workflowExecutionRepository.findWithWorkflowById(executionId)
             .orElseThrow(() -> new CustomException(ErrorCode.EXECUTION_NOT_FOUND));
 
+        // 이벤트에 실을 workflowId. findWithWorkflowById가 workflow를 fetch join하므로 여기서 읽을 수 있다.
+        // 지역 변수로만 들고 다니고 ExecutionCursor/ExecutionContext에는 넣지 않는다 —
+        // 그 둘은 워커 스레드가 공유하는 객체다.
+        UUID workflowId = execution.getWorkflow().getId();
+
         log.info("[Runtime] 워크플로우 실행 시작 — executionId: {}, versionId: {}",
             execution.getId(), workflowVersion.getId());
 
@@ -215,7 +220,8 @@ public class SyncExecutionRuntime {
                 try {
                     Deque<Node> ready = new ArrayDeque<>();
                     ready.add(triggerNode);   // 트리거는 incoming 0 → 최초 ready
-                    inFlight += dispatch(ready, cursor, completion, executionId, preCompleted);
+                    inFlight += dispatch(ready, cursor, completion, executionId, workflowId,
+                        preCompleted);
 
                     while (inFlight > 0) {
                         NodeOutcome outcome = completion.take().get();
@@ -235,7 +241,8 @@ public class SyncExecutionRuntime {
                             log.error("[Runtime] 노드 실패로 워크플로우 중단 — nodeId: {}, error: {}",
                                 node.getId(), result.getErrorMessage());
                             eventPublisher.publish(executionId, ExecutionEvent.nodeFailed(
-                                node.getId(), node.getType(), result.getErrorMessage(), durMs));
+                                executionId, workflowId, node.getId(), node.getType(),
+                                result.getErrorMessage(), durMs));
                             failed = true;
                             failedNodeRetryExhausted = outcome.retryExhausted();
                             failedNodeId = node.getId();
@@ -244,15 +251,16 @@ public class SyncExecutionRuntime {
                         }
 
                         // 5-3. 성공 처리: 이벤트 + 컨텍스트 저장
-                        eventPublisher.publish(executionId,
-                            ExecutionEvent.nodeCompleted(node.getId(), node.getType(), durMs));
+                        eventPublisher.publish(executionId, ExecutionEvent.nodeCompleted(
+                            executionId, workflowId, node.getId(), node.getType(), durMs));
                         cursor.updateContext(node.getId(), result.getOutput());
                         resolved.add(node.getId());
 
                         // 5-4. 엣지 전파 → 새로 준비된(모든 입력 해소+live) 노드 디스패치
                         Deque<Node> newReady = new ArrayDeque<>();
                         propagate(node, cursor, pending, hasLive, resolved, newReady);
-                        inFlight += dispatch(newReady, cursor, completion, executionId, preCompleted);
+                        inFlight += dispatch(newReady, cursor, completion, executionId, workflowId,
+                            preCompleted);
                     }
                 } finally {
                     // 실패/예외 시 남은 in-flight 작업 드레인(완료 대기) 후 close()로 풀 종료.
@@ -285,8 +293,8 @@ public class SyncExecutionRuntime {
             execution.complete();
             workflowExecutionRepository.save(execution);
             log.info("[Runtime] 워크플로우 성공 — executionId: {}", execution.getId());
-            eventPublisher.publish(executionId,
-                ExecutionEvent.executionCompleted(ExecutionStatus.SUCCESS));
+            eventPublisher.publish(executionId, ExecutionEvent.executionCompleted(
+                executionId, workflowId, ExecutionStatus.SUCCESS));
 
         } catch (Exception e) {
             log.error("[Runtime] 워크플로우 실행 중 예외 — executionId: {}", execution.getId(), e);
@@ -320,8 +328,8 @@ public class SyncExecutionRuntime {
             execution.fail(retryExhausted);
             workflowExecutionRepository.save(execution);
         }
-        eventPublisher.publish(executionId,
-            ExecutionEvent.executionCompleted(ExecutionStatus.FAILED));
+        eventPublisher.publish(executionId, ExecutionEvent.executionCompleted(
+            executionId, execution.getWorkflow().getId(), ExecutionStatus.FAILED));
         if (transitioned) {
             notifyFailure(execution, retryExhausted, failedNodeId, errorSummary);
         }
@@ -365,6 +373,7 @@ public class SyncExecutionRuntime {
      */
     private int dispatch(Deque<Node> ready, ExecutionCursor cursor,
                          CompletionService<NodeOutcome> completion, UUID executionId,
+                         UUID workflowId,
                          Map<String, Map<String, Object>> preCompleted) {
         int count = 0;
         while (!ready.isEmpty()) {
@@ -377,8 +386,8 @@ public class SyncExecutionRuntime {
             Map<String, Object> preOutput = preCompleted.get(node.getId());
             if (preOutput != null) {
                 log.info("[Runtime] 노드 스킵(재처리 — 원 실행 성공분 재사용) — nodeId: {}", node.getId());
-                eventPublisher.publish(executionId,
-                    ExecutionEvent.nodeStarted(node.getId(), node.getType()));
+                eventPublisher.publish(executionId, ExecutionEvent.nodeStarted(
+                    executionId, workflowId, node.getId(), node.getType()));
                 // 입력 렌더링도 하지 않는다 — 실행하지 않을 노드의 config를 치환할 이유가 없다.
                 completion.submit(() -> new NodeOutcome(node, Map.of(),
                     ExecutorResult.success(preOutput, 0L), 0L, 0, false, true));
@@ -390,8 +399,8 @@ public class SyncExecutionRuntime {
             // attempt 회차와 무관한 노드 고정 키 — IdempotencyKeys.generate가 이를 보장한다.
             String idempotencyKey = IdempotencyKeys.generate(executionId.toString(), node.getId());
             log.info("[Runtime] 노드 실행 — nodeId: {}, type: {}", node.getId(), node.getType());
-            eventPublisher.publish(executionId,
-                ExecutionEvent.nodeStarted(node.getId(), node.getType()));
+            eventPublisher.publish(executionId, ExecutionEvent.nodeStarted(
+                executionId, workflowId, node.getId(), node.getType()));
             completion.submit(() -> {
                 long overallStart = System.currentTimeMillis();
                 ExecutorResult result;

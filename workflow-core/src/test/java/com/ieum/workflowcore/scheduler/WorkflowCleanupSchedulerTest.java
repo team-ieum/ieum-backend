@@ -6,6 +6,7 @@ import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
+import com.ieum.workflowcore.engine.event.ExecutionEventType;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.time.LocalDateTime;
@@ -190,7 +191,8 @@ class WorkflowCleanupSchedulerTest {
         ArgumentCaptor<LocalDateTime> thresholdCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
         given(workflowExecutionService.findStuckRunningExecutionIds(thresholdCaptor.capture()))
             .willReturn(List.of(stuckId));
-        given(workflowExecutionService.markAsFailed(eq(stuckId), any())).willReturn(true);
+        given(workflowExecutionService.markAsFailed(eq(stuckId), any()))
+            .willReturn(Optional.of(UUID.randomUUID()));
 
         scheduler.failStuckRunningExecutions();
 
@@ -208,18 +210,29 @@ class WorkflowCleanupSchedulerTest {
     @DisplayName("스트림을 닫기 전에 EXECUTION_COMPLETED(FAILED)를 먼저 발행한다")
     void failStuckRunningExecutions_publishesCompletedEventBeforeClosingStream() {
         UUID stuckId = UUID.randomUUID();
+        UUID workflowId = UUID.randomUUID();
         given(workflowExecutionService.findStuckRunningExecutionIds(any()))
             .willReturn(List.of(stuckId));
-        given(workflowExecutionService.markAsFailed(eq(stuckId), any())).willReturn(true);
+        given(workflowExecutionService.markAsFailed(eq(stuckId), any()))
+            .willReturn(Optional.of(workflowId));
 
         scheduler.failStuckRunningExecutions();
 
         // 페이로드 없이 complete만 하면 구독자는 이유 없이 끊긴 스트림만 본다 —
         // 종료 상태를 알리는 이벤트가 먼저 나가야 한다.
+        // occurredAt이 발행 시각이라 record 동등 비교가 불가능하므로 캡처해서 필드를 본다.
+        ArgumentCaptor<ExecutionEvent> eventCaptor = ArgumentCaptor.forClass(ExecutionEvent.class);
         InOrder inOrder = Mockito.inOrder(executionEventPublisher);
-        inOrder.verify(executionEventPublisher)
-            .publish(stuckId, ExecutionEvent.executionCompleted(ExecutionStatus.FAILED));
+        inOrder.verify(executionEventPublisher).publish(eq(stuckId), eventCaptor.capture());
         inOrder.verify(executionEventPublisher).complete(stuckId);
+
+        ExecutionEvent published = eventCaptor.getValue();
+        assertThat(published.type()).isEqualTo(ExecutionEventType.EXECUTION_COMPLETED);
+        assertThat(published.executionStatus()).isEqualTo(ExecutionStatus.FAILED);
+        // sweeper는 트랜잭션 밖이라 LAZY 연관을 못 읽는다 — workflowId는 markAsFailed가 준 값이어야 한다.
+        assertThat(published.executionId()).isEqualTo(stuckId);
+        assertThat(published.workflowId()).isEqualTo(workflowId);
+        assertThat(published.occurredAt()).isNotNull();
     }
 
     @Test
@@ -228,8 +241,8 @@ class WorkflowCleanupSchedulerTest {
         UUID raceId = UUID.randomUUID();
         given(workflowExecutionService.findStuckRunningExecutionIds(any()))
             .willReturn(List.of(raceId));
-        // 조회와 처리 사이에 실행이 SUCCESS로 끝나면 markAsFailed는 전이하지 않고 false를 준다.
-        given(workflowExecutionService.markAsFailed(eq(raceId), any())).willReturn(false);
+        // 조회와 처리 사이에 실행이 SUCCESS로 끝나면 markAsFailed는 전이하지 않고 빈 Optional을 준다.
+        given(workflowExecutionService.markAsFailed(eq(raceId), any())).willReturn(Optional.empty());
 
         scheduler.failStuckRunningExecutions();
 
@@ -259,7 +272,8 @@ class WorkflowCleanupSchedulerTest {
             .willReturn(List.of(failId, successId));
         given(workflowExecutionService.markAsFailed(eq(failId), any()))
             .willThrow(new RuntimeException("DB 연결 오류"));
-        given(workflowExecutionService.markAsFailed(eq(successId), any())).willReturn(true);
+        given(workflowExecutionService.markAsFailed(eq(successId), any()))
+            .willReturn(Optional.of(UUID.randomUUID()));
 
         scheduler.failStuckRunningExecutions();
 

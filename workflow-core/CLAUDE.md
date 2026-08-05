@@ -75,6 +75,9 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 `ExecutionEventPublisher` — executionId 키의 in-memory `Sinks.Many` 멀티캐스트 허브. SSE 구독(HTTP 스레드)과 실행 스레드를 **같은 JVM 안에서** 연결한다 — 그래서 api의 잡 큐 워커를 별도 프로세스로 뺄 수 없다.
 - **단일 인스턴스 전제** — 다중 인스턴스로 가면 Redis Pub/Sub 등으로 교체 필요
 - 늦은 구독 보완: `WorkflowExecutionService.loadEventSnapshot()`이 DB 로그를 이벤트로 변환해 먼저 흘림
+- `ExecutionEvent`는 모든 이벤트에 `type`·`executionId`·`workflowId`·`occurredAt`(ISO-8601)을 싣는다. **`type` 키 이름은 프론트가 읽고 있어 바꾸면 깨진다.** `workflowId`는 지역 변수/파라미터로만 흐른다 — `ExecutionCursor`·`ExecutionContext`에 넣지 말 것
+- `status` 필드의 enum은 SSE 전용 `NodeEventStatus`(PENDING/RUNNING/SUCCESS/FAILED/SKIPPED)다. 영속용 `ExecutionLogStatus`와 **분리**돼 있고, 이름이 겹치는 값은 직렬화 문자열이 같아야 한다(`ExecutionEventSerializationTest`가 검증). 진행 상태가 필요하다고 `ExecutionLogStatus`에 값을 더하면 `node_runs.status` 의미가 오염된다
+- 스냅샷 재생 이벤트는 `ExecutionEvent.withOccurredAt()`으로 기록 시각(`node_runs.created_at`·`workflow_runs.finished_at`)을 되씌운다
 
 ## 영속 (domain/, repository/)
 

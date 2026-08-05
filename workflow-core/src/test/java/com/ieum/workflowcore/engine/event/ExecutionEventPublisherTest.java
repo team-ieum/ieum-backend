@@ -19,15 +19,19 @@ class ExecutionEventPublisherTest {
     @DisplayName("구독자는 발행된 이벤트를 순서대로 수신하고 complete 시 스트림이 종료된다")
     void 발행_구독_완료_흐름() {
         UUID executionId = UUID.randomUUID();
+        UUID workflowId = UUID.randomUUID();
         List<ExecutionEvent> received = new CopyOnWriteArrayList<>();
         AtomicBoolean completed = new AtomicBoolean(false);
 
         publisher.subscribe(executionId)
             .subscribe(received::add, err -> { }, () -> completed.set(true));
 
-        publisher.publish(executionId, ExecutionEvent.nodeStarted("node-1", NodeType.TRIGGER));
-        publisher.publish(executionId, ExecutionEvent.nodeCompleted("node-1", NodeType.TRIGGER, 12L));
-        publisher.publish(executionId, ExecutionEvent.executionCompleted(ExecutionStatus.SUCCESS));
+        publisher.publish(executionId,
+            ExecutionEvent.nodeStarted(executionId, workflowId, "node-1", NodeType.TRIGGER));
+        publisher.publish(executionId,
+            ExecutionEvent.nodeCompleted(executionId, workflowId, "node-1", NodeType.TRIGGER, 12L));
+        publisher.publish(executionId,
+            ExecutionEvent.executionCompleted(executionId, workflowId, ExecutionStatus.SUCCESS));
         publisher.complete(executionId);
 
         assertThat(received).hasSize(3);
@@ -48,7 +52,8 @@ class ExecutionEventPublisherTest {
 
         publisher.subscribe(a).subscribe(receivedA::add);
 
-        publisher.publish(b, ExecutionEvent.nodeStarted("node-1", NodeType.AI));
+        publisher.publish(b,
+            ExecutionEvent.nodeStarted(b, UUID.randomUUID(), "node-1", NodeType.AI));
 
         assertThat(receivedA).isEmpty();
     }

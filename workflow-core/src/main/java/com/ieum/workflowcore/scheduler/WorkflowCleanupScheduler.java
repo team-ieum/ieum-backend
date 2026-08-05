@@ -10,6 +10,7 @@ import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -114,14 +115,15 @@ public class WorkflowCleanupScheduler {
 
         for (UUID executionId : stuckIds) {
             try {
-                if (!workflowExecutionService.markAsFailed(executionId, reason)) {
+                Optional<UUID> workflowId = workflowExecutionService.markAsFailed(executionId, reason);
+                if (workflowId.isEmpty()) {
                     // 조회와 이 시점 사이에 실행이 스스로 끝났다 — 종료 이벤트는 그쪽이 이미 흘렸다.
                     log.info("[WorkflowCleanupScheduler] 고립 후보가 이미 종료됨, 건너뜀 — executionId: {}",
                         executionId);
                     continue;
                 }
-                executionEventPublisher.publish(executionId,
-                    ExecutionEvent.executionCompleted(ExecutionStatus.FAILED));
+                executionEventPublisher.publish(executionId, ExecutionEvent.executionCompleted(
+                    executionId, workflowId.get(), ExecutionStatus.FAILED));
                 executionEventPublisher.complete(executionId);
                 log.warn("[WorkflowCleanupScheduler] 고립 실행 FAILED 확정 — executionId: {}",
                     executionId);
