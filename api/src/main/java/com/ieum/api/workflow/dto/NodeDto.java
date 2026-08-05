@@ -39,7 +39,7 @@ public class NodeDto {
     @NotBlank(message = "노드 description은 필수입니다.")
     private String description;
 
-    /** 캔버스 위치. 좌표를 확정하는 주체는 프론트고, 서버는 저장·반환만 한다. */
+    /** 캔버스 위치. 좌표를 확정하는 주체는 프론트고, 서버는 받은 값을 그대로 저장한다. */
     @NotNull(message = "노드 position은 필수입니다.")
     @Valid
     private Position position;

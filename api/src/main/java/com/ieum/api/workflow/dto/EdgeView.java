@@ -27,8 +27,11 @@ public record EdgeView(
      *
      * <ul>
      *   <li>{@code Map}이 아니거나 null인 원소 → 버린다.
-     *   <li>{@code source}·{@code target} — 둘 다 비어 있지 않은 문자열이어야 한다. 아니면 버린다.
+     *   <li>{@code source}·{@code target} — 둘 다 {@link NodeView#asText} 규칙으로 읽히고 비어 있지
+     *       않아야 한다. 아니면 버린다.
      *   <li>{@code nodes}에 없는 id를 가리키는 엣지 → 버린다.
+     *   <li>{@code conditionType} — {@link NodeView#asText} 규칙. boolean {@code true}가 문자열
+     *       {@code "true"}로 오는 저장 경로가 있어 스칼라를 받는다.
      * </ul>
      *
      * <p>끊긴 엣지를 버리는 것은 <b>조회 응답 전용이다</b> — 저장된 정의는 그대로 두므로 원인 문서를
@@ -52,8 +55,8 @@ public record EdgeView(
                     workflowId);
                 continue;
             }
-            String source = asNodeId(map.get("source"));
-            String target = asNodeId(map.get("target"));
+            String source = asNodeId(map.get("source"), "source", workflowId);
+            String target = asNodeId(map.get("target"), "target", workflowId);
             // 지금은 아래 끊긴 엣지 정리가 이 항목들도 걸러낸다(노드 id는 비어 있지 않은 문자열이라
             // 집합이 null·공백을 담지 않는다). 그래도 남겨 두는 이유는, 이 검사가 응답 필드를
             // 문자열로 확정하는 지점이고 로그에 원인을 구분해 남기기 때문이다.
@@ -68,13 +71,14 @@ public record EdgeView(
                     workflowId, source, target);
                 continue;
             }
-            String conditionType = map.get("conditionType") instanceof String s ? s : null;
-            edges.add(new EdgeView(source, target, conditionType));
+            edges.add(new EdgeView(source, target,
+                NodeView.asText(map.get("conditionType"), "conditionType", workflowId)));
         }
         return edges;
     }
 
-    private static String asNodeId(Object value) {
-        return value instanceof String s && !s.isBlank() ? s : null;
+    private static String asNodeId(Object value, String field, UUID workflowId) {
+        String text = NodeView.asText(value, field, workflowId);
+        return text != null && !text.isBlank() ? text : null;
     }
 }
