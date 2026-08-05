@@ -261,11 +261,16 @@ public class WorkflowExecutionService {
     private ExecutionEvent toEvent(UUID workflowId, UUID executionId,
                                    WorkflowExecutionLog logEntry) {
         long duration = logEntry.getDurationMs() != null ? logEntry.getDurationMs() : 0L;
-        ExecutionEvent event = logEntry.getStatus() == ExecutionLogStatus.FAILED
-            ? ExecutionEvent.nodeFailed(executionId, workflowId, logEntry.getNodeId(),
-                logEntry.getNodeType(), logEntry.getErrorMessage(), duration)
-            : ExecutionEvent.nodeCompleted(executionId, workflowId, logEntry.getNodeId(),
+        // SKIPPED를 따로 다루지 않으면 건너뛴 노드가 성공으로 재생된다.
+        // 분기는 ExecutionLogStatus 전체를 덮어야 한다 — default로 뭉치면 값이 늘 때 또 뭉개진다.
+        ExecutionEvent event = switch (logEntry.getStatus()) {
+            case FAILED -> ExecutionEvent.nodeFailed(executionId, workflowId, logEntry.getNodeId(),
+                logEntry.getNodeType(), logEntry.getErrorMessage(), duration);
+            case SKIPPED -> ExecutionEvent.nodeSkipped(executionId, workflowId, logEntry.getNodeId(),
                 logEntry.getNodeType(), duration);
+            case SUCCESS -> ExecutionEvent.nodeCompleted(executionId, workflowId,
+                logEntry.getNodeId(), logEntry.getNodeType(), duration);
+        };
         // 정적 팩토리는 호출 시각을 싣는다 — 재생 이벤트는 기록 시각으로 되돌린다.
         return event.withOccurredAt(toInstant(logEntry.getCreatedAt()));
     }

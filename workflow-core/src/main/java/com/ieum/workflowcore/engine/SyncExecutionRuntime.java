@@ -23,6 +23,7 @@ import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.util.SensitiveDataMasker;
 import jakarta.annotation.PostConstruct;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -250,15 +251,30 @@ public class SyncExecutionRuntime {
                             break;
                         }
 
-                        // 5-3. 성공 처리: 이벤트 + 컨텍스트 저장
-                        eventPublisher.publish(executionId, ExecutionEvent.nodeCompleted(
-                            executionId, workflowId, node.getId(), node.getType(), durMs));
+                        // 5-3. 성공 처리: 이벤트 + 컨텍스트 저장.
+                        // executor를 부르지 않고 원 실행 출력을 재사용한 노드는 node_runs가 SKIPPED다
+                        // — 이벤트도 SKIPPED로 내야 스냅샷 재생이 같은 모양을 만든다.
+                        eventPublisher.publish(executionId, outcome.skipped()
+                            ? ExecutionEvent.nodeSkipped(executionId, workflowId, node.getId(),
+                                node.getType(), durMs)
+                            : ExecutionEvent.nodeCompleted(executionId, workflowId, node.getId(),
+                                node.getType(), durMs));
                         cursor.updateContext(node.getId(), result.getOutput());
                         resolved.add(node.getId());
 
                         // 5-4. 엣지 전파 → 새로 준비된(모든 입력 해소+live) 노드 디스패치
                         Deque<Node> newReady = new ArrayDeque<>();
-                        propagate(node, cursor, pending, hasLive, resolved, newReady);
+                        List<Node> deadSkipped = new ArrayList<>();
+                        propagate(node, cursor, pending, hasLive, resolved, newReady, deadSkipped);
+                        // 죽은 분기로 실행되지 않은 노드도 로그를 남기고 이벤트를 흘린다.
+                        // 로그를 빠뜨리면 스냅샷 재생(node_runs만 읽는다)이 이 노드를 재현하지 못해
+                        // 늦게 구독한 화면과 라이브 화면의 모양이 갈린다.
+                        for (Node skippedNode : deadSkipped) {
+                            saveSkippedLog(execution, skippedNode);
+                            eventPublisher.publish(executionId, ExecutionEvent.nodeSkipped(
+                                executionId, workflowId, skippedNode.getId(),
+                                skippedNode.getType(), 0L));
+                        }
                         inFlight += dispatch(newReady, cursor, completion, executionId, workflowId,
                             preCompleted);
                     }
@@ -461,16 +477,21 @@ public class SyncExecutionRuntime {
     /**
      * 방금 성공한 노드의 outgoing 엣지를 해소하고, 모든 입력이 해소되어 실행 가능한 노드를 readyOut에 담는다.
      * CONDITION은 매칭된 분기만 live이며, 모든 입력이 dead인 노드는 skip하고 그 하위로 dead를 전파한다(가지치기).
+     *
+     * @param skippedOut 가지치기로 건너뛴 노드가 담긴다(정의에서 찾지 못한 노드는 제외). 호출부가
+     *                   로그·이벤트를 남기는 데 쓴다 — 어떤 노드를 건너뛸지 판단하는 규칙은 그대로다
      */
     private void propagate(Node node, ExecutionCursor cursor,
                            Map<String, Integer> pending, Map<String, Boolean> hasLive,
-                           Set<String> resolved, Deque<Node> readyOut) {
+                           Set<String> resolved, Deque<Node> readyOut, List<Node> skippedOut) {
         List<Edge> live = cursor.liveOutgoingEdges(node);
         Deque<String> deadSources = new ArrayDeque<>();
-        resolveEdges(node.getId(), live, true, cursor, pending, hasLive, resolved, readyOut, deadSources);
+        resolveEdges(node.getId(), live, true, cursor, pending, hasLive, resolved, readyOut,
+            deadSources, skippedOut);
         while (!deadSources.isEmpty()) {
             String deadId = deadSources.poll();
-            resolveEdges(deadId, List.of(), false, cursor, pending, hasLive, resolved, readyOut, deadSources);
+            resolveEdges(deadId, List.of(), false, cursor, pending, hasLive, resolved, readyOut,
+                deadSources, skippedOut);
         }
     }
 
@@ -478,7 +499,8 @@ public class SyncExecutionRuntime {
     private void resolveEdges(String sourceId, List<Edge> liveEdges, boolean sourceLive,
                               ExecutionCursor cursor, Map<String, Integer> pending,
                               Map<String, Boolean> hasLive, Set<String> resolved,
-                              Deque<Node> readyOut, Deque<String> deadSources) {
+                              Deque<Node> readyOut, Deque<String> deadSources,
+                              List<Node> skippedOut) {
         for (Edge e : cursor.outgoingEdges(sourceId)) {
             String target = e.getTarget();
             Integer p = pending.get(target);
@@ -499,6 +521,10 @@ public class SyncExecutionRuntime {
                     // 모든 입력이 dead → 노드 skip 후 하위로 dead 전파
                     resolved.add(target);
                     log.debug("[Runtime] 노드 skip(죽은 분기) — nodeId: {}", target);
+                    Node skipped = cursor.findNode(target);
+                    if (skipped != null) {
+                        skippedOut.add(skipped);
+                    }
                     deadSources.add(target);
                 }
             }
@@ -616,6 +642,33 @@ public class SyncExecutionRuntime {
         } catch (Exception e) {
             // 로그 저장 실패가 실행 전체를 중단시키지 않도록 경고만 기록
             log.warn("[Runtime] 실행 로그 저장 실패 — nodeId: {}", node.getId(), e);
+        }
+    }
+
+    /**
+     * 죽은 조건 분기로 실행되지 않은 노드를 {@code SKIPPED}로 기록한다.
+     * 스냅샷 재생은 {@code node_runs}만 읽으므로 이 행이 없으면 늦게 구독한 화면은 이 노드를
+     * 재현하지 못한다.
+     *
+     * <p>input/output은 남기지 않는다 — 실행하지 않아 만들어진 값이 없다. 특히 output을
+     * 빈 Map으로라도 채우면 {@code WorkflowExecutionService.loadReusableNodeOutputs}가 이 행을
+     * 재사용 대상으로 읽어, 재처리에서 실행되지 않은 노드의 빈 출력이 컨텍스트에 주입된다.
+     * {@code attemptCount}는 0이다(재처리 스킵 로그와 같은 규칙).
+     */
+    private void saveSkippedLog(WorkflowExecution execution, Node node) {
+        try {
+            executionLogRepository.save(WorkflowExecutionLog.builder()
+                .execution(execution)
+                .nodeId(node.getId())
+                .nodeType(node.getType())
+                .status(ExecutionLogStatus.SKIPPED)
+                .durationMs(0L)
+                .traceId(execution.getTraceId())
+                .attemptCount(0)
+                .build());
+        } catch (Exception e) {
+            // saveExecutionLog와 같은 정책 — 이력 저장 실패가 실행을 중단시키지 않는다.
+            log.warn("[Runtime] 스킵 노드 로그 저장 실패 — nodeId: {}", node.getId(), e);
         }
     }
 }

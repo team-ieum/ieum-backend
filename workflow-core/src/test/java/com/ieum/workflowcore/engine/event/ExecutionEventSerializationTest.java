@@ -90,6 +90,18 @@ class ExecutionEventSerializationTest {
     }
 
     @Test
+    @DisplayName("스킵 이벤트는 type NODE_COMPLETED + status SKIPPED다 — 프론트가 모르는 type을 만들지 않는다")
+    void node_skipped_reuses_completed_type() throws Exception {
+        JsonNode json = serialize(
+            ExecutionEvent.nodeSkipped(executionId, workflowId, "node-1", NodeType.AI, 0L));
+
+        assertThat(json.get("type").asText()).isEqualTo("NODE_COMPLETED");
+        assertThat(json.get("status").asText()).isEqualTo("SKIPPED");
+        assertThat(json.get("nodeId").asText()).isEqualTo("node-1");
+        assertThat(json.has("errorMessage")).isFalse();
+    }
+
+    @Test
     @DisplayName("ExecutionLogStatus와 이름이 겹치는 값은 직렬화 문자열이 서로 같다")
     void event_status_strings_match_persisted_status_strings() throws Exception {
         for (ExecutionLogStatus persisted : ExecutionLogStatus.values()) {

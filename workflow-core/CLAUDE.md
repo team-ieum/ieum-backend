@@ -78,6 +78,9 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 - `ExecutionEvent`는 모든 이벤트에 `type`·`executionId`·`workflowId`·`occurredAt`(ISO-8601)을 싣는다. **`type` 키 이름은 프론트가 읽고 있어 바꾸면 깨진다.** `workflowId`는 지역 변수/파라미터로만 흐른다 — `ExecutionCursor`·`ExecutionContext`에 넣지 말 것
 - `status` 필드의 enum은 SSE 전용 `NodeEventStatus`(PENDING/RUNNING/SUCCESS/FAILED/SKIPPED)다. 영속용 `ExecutionLogStatus`와 **분리**돼 있고, 이름이 겹치는 값은 직렬화 문자열이 같아야 한다(`ExecutionEventSerializationTest`가 검증). 진행 상태가 필요하다고 `ExecutionLogStatus`에 값을 더하면 `node_runs.status` 의미가 오염된다
 - 스냅샷 재생 이벤트는 `ExecutionEvent.withOccurredAt()`으로 기록 시각(`node_runs.created_at`·`workflow_runs.finished_at`)을 되씌운다
+- 건너뛴 노드는 `ExecutionEvent.nodeSkipped()` — **`type`은 `NODE_COMPLETED`이고 `status`만 `SKIPPED`다.** 새 `type` 값을 만들면 이미 배포된 프론트(`nodeId + type` 멱등 처리)가 그 노드의 종료를 못 받는다. 죽은 조건 분기 스킵과 재처리 스킵 둘 다 이 모양으로 나간다
+- **죽은 조건 분기로 건너뛴 노드도 `node_runs`에 `SKIPPED` 행을 남긴다**(`saveSkippedLog`, output/input 없음·`attempt_count`=0). 재생은 `node_runs`만 읽으므로 행이 없으면 늦게 구독한 화면이 그 노드를 재현하지 못한다. output을 채우면 `loadReusableNodeOutputs`가 재사용 대상으로 읽어 버리니 비워 둘 것
+- 라이브·재생 모양 일치는 `LiveAndSnapshotEventParityTest`가 실제 실행 산출물(`node_runs` 행)을 스냅샷 조회에 물려 검증한다. 다만 **실패로 중단된 실행의 드레인 노드**는 로그만 남고 이벤트가 없다(기존 동작, 이 테스트 범위 밖)
 
 ## 영속 (domain/, repository/)
 

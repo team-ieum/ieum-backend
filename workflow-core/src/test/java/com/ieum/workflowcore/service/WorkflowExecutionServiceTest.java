@@ -25,6 +25,7 @@ import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
 import com.ieum.workflowcore.engine.event.ExecutionEventType;
+import com.ieum.workflowcore.engine.event.NodeEventStatus;
 import com.ieum.workflowcore.engine.executor.AlertNotifier;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
@@ -123,6 +124,36 @@ class WorkflowExecutionServiceTest {
             .isEqualTo(loggedAt.atZone(ZoneId.systemDefault()).toInstant());
         assertThat(snapshot.events().get(1).occurredAt())
             .isEqualTo(finishedAt.atZone(ZoneId.systemDefault()).toInstant());
+    }
+
+    @Test
+    @DisplayName("스냅샷 재생은 SKIPPED 노드를 성공으로 뭉개지 않고 status SKIPPED로 되살린다")
+    void 스냅샷_스킵_노드_보존() {
+        UUID workflowId = UUID.randomUUID();
+        UUID executionId = UUID.randomUUID();
+        LocalDateTime loggedAt = LocalDateTime.of(2026, 2, 3, 4, 5, 6);
+
+        WorkflowExecution execution = mockExecution(workflowId, ExecutionStatus.SUCCESS);
+        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+
+        WorkflowExecutionLog ok =
+            mockLog(ExecutionLogStatus.SUCCESS, "node-1", NodeType.CONDITION, 10L, null);
+        WorkflowExecutionLog skipped =
+            mockLog(ExecutionLogStatus.SKIPPED, "node-2", NodeType.AI, 0L, null);
+        given(skipped.getCreatedAt()).willReturn(loggedAt);
+        given(workflowExecutionLogRepository.findByExecutionIdOrderByCreatedAtAsc(executionId))
+            .willReturn(List.of(ok, skipped));
+
+        ExecutionEventSnapshot snapshot = service.loadEventSnapshot(workflowId, executionId);
+
+        assertThat(snapshot.events().get(0).status()).isEqualTo(NodeEventStatus.SUCCESS);
+        // 같은 type + 다른 status — 프론트의 nodeId+type 멱등 처리를 깨지 않으면서 스킵을 구분한다.
+        assertThat(snapshot.events().get(1).type()).isEqualTo(ExecutionEventType.NODE_COMPLETED);
+        assertThat(snapshot.events().get(1).status()).isEqualTo(NodeEventStatus.SKIPPED);
+        assertThat(snapshot.events().get(1).nodeId()).isEqualTo("node-2");
+        // 재생 시각은 기록 시각이다 — now()를 쓰면 타임라인 순서가 뒤틀린다.
+        assertThat(snapshot.events().get(1).occurredAt())
+            .isEqualTo(loggedAt.atZone(ZoneId.systemDefault()).toInstant());
     }
 
     @Test

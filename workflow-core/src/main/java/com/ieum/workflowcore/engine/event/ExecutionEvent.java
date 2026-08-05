@@ -51,6 +51,24 @@ public record ExecutionEvent(
             nodeId, nodeType, NodeEventStatus.SUCCESS, durationMs, null, null);
     }
 
+    /**
+     * 실행하지 않고 건너뛴 노드. 죽은 조건 분기로 가지치기된 노드와, 재처리에서 원 실행의 출력을
+     * 재사용해 executor를 부르지 않은 노드가 여기 해당한다({@code node_runs.status = SKIPPED}).
+     *
+     * <p><b>{@code type}은 {@code NODE_COMPLETED}이고 {@code status}만 {@code SKIPPED}다.</b>
+     * 새 {@code type} 값을 만들지 않은 이유: 프론트는 {@code nodeId + type}으로 이벤트를 멱등
+     * 처리하는데, 이미 배포된 프론트에 모르는 {@code type}을 주면 그 노드는 종료 표시를 받지 못한
+     * 채 남는다(재처리 스킵 노드는 {@code NODE_STARTED}를 이미 받은 뒤라 "실행 중"으로 굳는다).
+     * 아는 {@code type}을 주고 {@code status}로 구분시키면, {@code status}를 읽지 않는 프론트에서
+     * 최악이라도 "스킵을 완료로 표시" — 즉 이 변경 이전 동작까지만 후퇴한다.
+     */
+    public static ExecutionEvent nodeSkipped(
+        UUID executionId, UUID workflowId, String nodeId, NodeType nodeType, long durationMs) {
+        return new ExecutionEvent(
+            ExecutionEventType.NODE_COMPLETED, executionId, workflowId, Instant.now(),
+            nodeId, nodeType, NodeEventStatus.SKIPPED, durationMs, null, null);
+    }
+
     public static ExecutionEvent nodeFailed(
         UUID executionId, UUID workflowId, String nodeId, NodeType nodeType,
         String errorMessage, long durationMs) {
