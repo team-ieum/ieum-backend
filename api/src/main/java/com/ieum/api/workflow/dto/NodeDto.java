@@ -79,12 +79,12 @@ public class NodeDto {
      * <p>{@code position} 자체가 없는 경우뿐 아니라 {@code x}·{@code y} 한쪽만 있는 경우도 채운다.
      * 계약상 좌표는 null일 수 없는데, 검증을 거치지 않는 위 저장 경로에서는 부분 좌표가 들어올 수 있다.
      *
-     * <p>노드 목록이 없는 정의도 정상 상태이므로 {@code nodes}가 null이면 조용히 지나간다.
+     * <p>목록 자체가 null인 경우와 null 원소는 여기서 방어하지 않는다. 유일한 호출부인
+     * {@code WorkflowService.convertEach}가 그 둘을 이미 정규화해 넘기기 때문이다(null 목록은 빈
+     * 목록으로, null 원소는 제외). 방어를 양쪽에 두면 어느 쪽이 계약인지 흐려지므로 원본 한 곳에만
+     * 둔다 — 다른 호출부를 추가한다면 그쪽도 같은 정규화를 거쳐야 한다.
      */
     public static void applyDefaultPositions(List<NodeDto> nodes) {
-        if (nodes == null) {
-            return;
-        }
         for (int i = 0; i < nodes.size(); i++) {
             NodeDto node = nodes.get(i);
             double defaultX = DEFAULT_X_ORIGIN + i * DEFAULT_X_GAP;

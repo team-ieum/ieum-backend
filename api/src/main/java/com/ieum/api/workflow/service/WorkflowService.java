@@ -27,8 +27,10 @@ import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -249,6 +251,7 @@ public class WorkflowService {
             // 좌표가 없는 노드(이 필드 도입 이전 저장분, agent 생성분)를 프론트가 그대로 렌더할 수
             // 있도록 응답에서만 채운다. 저장된 정의는 건드리지 않는다.
             NodeDto.applyDefaultPositions(nodes);
+            edges = dropDanglingEdges(nodes, edges, workflow.getId());
         }
         return WorkflowResponse.from(workflow, version, nodes, edges);
     }
@@ -270,23 +273,74 @@ public class WorkflowService {
      * {@code READ_UNKNOWN_ENUM_VALUES_AS_NULL}이 예외 대신 null로 흘려 노드를 남기기 때문이다 —
      * 노드를 빼면 {@code edges}가 가리키는 대상이 사라져 프론트 그래프가 더 크게 깨진다.
      * 항목을 버리는 것은 그 완충마저 통하지 않는(구조 자체가 어긋난) 경우의 최후 수단이다.
+     *
+     * <p>원소 타입을 {@code Map}으로 좁혀 받지 않는 이유는 그 캐스팅이 try 블록 밖(향상된 for문의
+     * 헤더)에서 일어나 {@code ClassCastException}으로 격리를 통째로 우회하기 때문이다. 제네릭은
+     * 런타임에 지워지므로 배열 원소가 문자열·숫자여도 컴파일러는 막아 주지 않는다. 그래서
+     * {@code Object}로 받아 {@code convertValue}가 예외를 내게 두고 여기서 잡는다.
+     *
+     * <p>반환 목록에는 null 원소가 들어가지 않는다. {@code convertValue(null, ...)}은 예외 없이
+     * null을 돌려주므로 catch로는 걸러지지 않아 명시적으로 건너뛴다 — 이 목록을 받는 후처리
+     * ({@link NodeDto#applyDefaultPositions})와 프론트가 원소 null까지 방어할 필요가 없게 한다.
      */
-    private <T> List<T> convertEach(List<Map<String, Object>> raw, Class<T> type,
-            UUID workflowId, String kind) {
+    private <T> List<T> convertEach(List<?> raw, Class<T> type, UUID workflowId, String kind) {
         if (raw == null) {
             return Collections.emptyList();
         }
         List<T> converted = new ArrayList<>(raw.size());
-        for (Map<String, Object> item : raw) {
+        for (Object item : raw) {
             try {
-                converted.add(objectMapper.convertValue(item, type));
+                T value = objectMapper.convertValue(item, type);
+                if (value == null) {
+                    logDropped(kind, workflowId, item, "원소가 null");
+                    continue;
+                }
+                converted.add(value);
             } catch (IllegalArgumentException e) {
-                // 정의 원문에는 사용자 데이터가 섞이므로 식별자와 실패 원인만 남긴다.
-                log.warn("[WORKFLOW_DEFINITION] {} 변환 실패로 1건 제외 — workflowId={}, id={}, cause={}",
-                    kind, workflowId, item != null ? item.get("id") : null, e.getMessage());
+                logDropped(kind, workflowId, item, e.getMessage());
             }
         }
         return converted;
+    }
+
+    /** 정의 원문에는 사용자 데이터가 섞이므로 식별자와 실패 원인만 남긴다. */
+    private void logDropped(String kind, UUID workflowId, Object item, String cause) {
+        Object id = item instanceof Map<?, ?> map ? map.get("id") : null;
+        log.warn("[WORKFLOW_DEFINITION] {} 변환 실패로 1건 제외 — workflowId={}, id={}, cause={}",
+            kind, workflowId, id, cause);
+    }
+
+    /**
+     * 응답에 남은 노드를 가리키지 않는 엣지를 제거한다. <b>조회 응답 전용이다</b> — 저장된 정의는
+     * 그대로 두므로, 원인 문서를 고치면 엣지도 그대로 돌아온다.
+     *
+     * <p>{@link #convertEach}가 구조가 어긋난 노드를 버려도 그 노드를 {@code source}/{@code target}
+     * 으로 잡은 엣지는 독립적으로 변환에 성공해 남는다. 그러면 응답이 자기 안에 없는 노드를 가리키게
+     * 되는데, 이는 "노드를 빼면 프론트 그래프가 더 크게 깨진다"는 위 판단과 정면으로 어긋난다.
+     * 프론트(React Flow)는 끊긴 엣지를 렌더하지 않고 콘솔 경고만 남기지만, 그 상태로 캔버스를
+     * 저장하면 끊긴 참조가 정의에 되쓰인다. "응답의 엣지는 항상 응답의 노드만 가리킨다"를 서버가
+     * 지켜 두는 편이 프론트가 매 화면에서 방어하는 것보다 싸다.
+     */
+    private List<EdgeDto> dropDanglingEdges(List<NodeDto> nodes, List<EdgeDto> edges,
+            UUID workflowId) {
+        if (edges.isEmpty()) {
+            return edges;
+        }
+        Set<String> nodeIds = new HashSet<>();
+        for (NodeDto node : nodes) {
+            nodeIds.add(node.getId());
+        }
+        List<EdgeDto> kept = new ArrayList<>(edges.size());
+        for (EdgeDto edge : edges) {
+            if (nodeIds.contains(edge.getSource()) && nodeIds.contains(edge.getTarget())) {
+                kept.add(edge);
+                continue;
+            }
+            // source·target은 노드 식별자라 사용자 데이터가 아니다.
+            log.warn("[WORKFLOW_DEFINITION] 끊긴 엣지 1건 제외 — workflowId={}, source={}, target={}",
+                workflowId, edge.getSource(), edge.getTarget());
+        }
+        return kept;
     }
 
     private String toJson(Object obj) {

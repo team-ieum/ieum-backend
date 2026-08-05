@@ -16,6 +16,7 @@ import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,15 +45,30 @@ class WorkflowNodeResponseTest {
     private final UUID workflowId = UUID.randomUUID();
 
     private WorkflowResponse getWorkflowWithNodes(List<Map<String, Object>> nodes) {
+        return getWorkflow(nodes, List.of());
+    }
+
+    private WorkflowResponse getWorkflow(List<Map<String, Object>> nodes,
+            List<Map<String, Object>> edges) {
         Workflow workflow = mock(Workflow.class);
         WorkflowVersion version = mock(WorkflowVersion.class);
 
         given(workflowCrudService.getWorkflowByOwner(userId, workflowId)).willReturn(workflow);
         given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(workflowCrudService.loadDefinition(version)).willReturn(
-            WorkflowDefinitionDocument.builder().nodes(nodes).edges(List.of()).build());
+            WorkflowDefinitionDocument.builder().nodes(nodes).edges(edges).build());
 
         return workflowService.getWorkflow(userId, workflowId);
+    }
+
+    /**
+     * Mongo 배열에는 스키마가 없어 어떤 타입이든(문자열·숫자·배열·null) 담길 수 있다.
+     * 이 DTO를 거치지 않는 저장 경로(ieum-agent 생성분)가 넣은 배열을 흉내내려면 타입을 못 박은
+     * {@code List.of}로는 표현할 수 없어 raw 목록을 만든다.
+     */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> rawList(Object... items) {
+        return (List<Map<String, Object>>) (List<?>) Arrays.asList(items);
     }
 
     /** Mongo 문서에서 읽어온 노드 한 건을 흉내낸다. position은 null이면 키 자체를 넣지 않는다. */
@@ -82,6 +98,14 @@ class WorkflowNodeResponseTest {
         node.put("description", "구조가 어긋난 노드예요.");
         node.put("position", position);
         return node;
+    }
+
+    /** Mongo 문서에서 읽어온 엣지 한 건. */
+    private Map<String, Object> edge(Object source, Object target) {
+        Map<String, Object> edge = new LinkedHashMap<>();
+        edge.put("source", source);
+        edge.put("target", target);
+        return edge;
     }
 
     @Test
@@ -302,5 +326,138 @@ class WorkflowNodeResponseTest {
         assertThat(page.getContent()).hasSize(2);
         assertThat(page.getContent().get(0).getNodes()).isEmpty();
         assertThat(page.getContent().get(1).getNodes().get(0).getType()).isEqualTo(NodeType.TRIGGER);
+    }
+
+    /**
+     * 배열 원소가 null인 경우. {@code convertValue}는 null을 예외가 아니라 null로 돌려주므로
+     * try/catch로는 걸러지지 않아, 응답 목록에 null이 섞이고 뒤따르는 좌표 채우기가 NPE로 터졌다.
+     */
+    @Test
+    @DisplayName("nodes 배열에 null 원소가 섞여 있어도 조회는 200이고 정상 노드는 온전하다")
+    void nullNodeElement_isDroppedAndOtherNodesSurvive() {
+        WorkflowResponse response = getWorkflowWithNodes(rawList(
+            null,
+            node("node-ok", "AI", "분류", "AI가 문의를 유형별로 나눠요.", Map.of("x", 420, "y", 120)),
+            null));
+
+        assertThat(response.getNodes()).hasSize(1);
+        assertThat(response.getNodes().get(0).getId()).isEqualTo("node-ok");
+        assertThat(response.getNodes().get(0).getPosition().getX()).isEqualTo(420.0);
+    }
+
+    /**
+     * 배열 원소가 객체가 아닌 경우(문자열·숫자·배열). Mongo 배열에는 스키마가 없어 가능한 상태다.
+     * 원소를 {@code Map}으로 받으면 그 캐스팅이 try 밖에서 일어나 {@code ClassCastException}이
+     * 격리를 통째로 우회했다.
+     */
+    @Test
+    @DisplayName("nodes 배열에 객체가 아닌 원소가 섞여 있어도 조회는 200이고 정상 노드는 온전하다")
+    void nonObjectNodeElement_isDroppedAndOtherNodesSurvive() {
+        WorkflowResponse response = getWorkflowWithNodes(rawList(
+            "node-1",
+            42,
+            List.of("node-2"),
+            node("node-ok", "AI", "분류", "AI가 문의를 유형별로 나눠요.", Map.of("x", 420, "y", 120))));
+
+        assertThat(response.getNodes()).hasSize(1);
+        assertThat(response.getNodes().get(0).getId()).isEqualTo("node-ok");
+        assertThat(response.getNodes().get(0).getType()).isEqualTo(NodeType.AI);
+    }
+
+    /** 목록 조회는 모든 워크플로우를 한 번에 변환하므로, 어긋난 원소 하나가 페이지 전체를 죽인다. */
+    @Test
+    @DisplayName("null·비객체 원소가 섞인 워크플로우가 있어도 목록 조회가 죽지 않는다")
+    void malformedElements_doNotBreakListRead() {
+        Workflow broken = mock(Workflow.class);
+        Workflow healthy = mock(Workflow.class);
+        UUID brokenId = UUID.randomUUID();
+        UUID healthyId = UUID.randomUUID();
+        given(broken.getId()).willReturn(brokenId);
+        given(healthy.getId()).willReturn(healthyId);
+
+        WorkflowVersion brokenVersion = mock(WorkflowVersion.class);
+        WorkflowVersion healthyVersion = mock(WorkflowVersion.class);
+
+        given(workflowCrudService.listWorkflows(userId, 0, 20))
+            .willReturn(List.of(broken, healthy));
+        given(workflowCrudService.hasNextWorkflows(userId, 0, 20)).willReturn(false);
+        given(workflowCrudService.getLatestVersionMap(List.of(brokenId, healthyId)))
+            .willReturn(Map.of(brokenId, brokenVersion, healthyId, healthyVersion));
+        given(workflowCrudService.loadDefinition(brokenVersion)).willReturn(
+            WorkflowDefinitionDocument.builder()
+                .nodes(rawList(null, "node-1"))
+                .edges(rawList(null, "edge-1")).build());
+        given(workflowCrudService.loadDefinition(healthyVersion)).willReturn(
+            WorkflowDefinitionDocument.builder()
+                .nodes(List.of(node("node-1", "TRIGGER", "시작", "실행하면 시작해요.",
+                    Map.of("x", 40, "y", 120))))
+                .edges(List.of()).build());
+
+        PageResponse<WorkflowResponse> page = workflowService.getWorkflows(userId, null, 20);
+
+        assertThat(page.getContent()).hasSize(2);
+        assertThat(page.getContent().get(0).getNodes()).isEmpty();
+        assertThat(page.getContent().get(0).getEdges()).isEmpty();
+        assertThat(page.getContent().get(1).getNodes().get(0).getType()).isEqualTo(NodeType.TRIGGER);
+    }
+
+    /**
+     * 격리는 노드·엣지 공용이다. 엣지 쪽도 항목 단위로 걸러져야 나머지 연결이 살아남는다.
+     */
+    @Test
+    @DisplayName("변환에 실패하는 엣지가 섞여 있어도 조회는 200이고 정상 엣지는 온전하다")
+    void malformedEdge_isDroppedAndValidEdgeSurvives() {
+        WorkflowResponse response = getWorkflow(
+            List.of(
+                node("node-1", "TRIGGER", "시작", "실행하면 시작해요.", Map.of("x", 40, "y", 120)),
+                node("node-2", "AI", "분류", "AI가 문의를 유형별로 나눠요.", Map.of("x", 420, "y", 120))),
+            rawList(
+                null,
+                "node-1->node-2",
+                edge(Map.of("id", "node-1"), "node-2"),
+                edge("node-1", "node-2")));
+
+        assertThat(response.getNodes()).hasSize(2);
+        assertThat(response.getEdges()).hasSize(1);
+        assertThat(response.getEdges().get(0).getSource()).isEqualTo("node-1");
+        assertThat(response.getEdges().get(0).getTarget()).isEqualTo("node-2");
+    }
+
+    /**
+     * 노드가 버려지면 그 노드를 가리키던 엣지는 응답 안에 대상이 없는 참조가 된다.
+     * 서버가 "엣지는 항상 응답의 노드만 가리킨다"를 지켜야 프론트가 매번 방어하지 않는다.
+     */
+    @Test
+    @DisplayName("변환에 실패한 노드를 가리키던 엣지는 함께 제외되고 나머지 연결은 남는다")
+    void danglingEdge_isDroppedWhenItsNodeIsDropped() {
+        WorkflowResponse response = getWorkflow(
+            List.of(
+                node("node-1", "TRIGGER", "시작", "실행하면 시작해요.", Map.of("x", 40, "y", 120)),
+                malformedNode("node-broken", "40,120"),
+                node("node-2", "AI", "분류", "AI가 문의를 유형별로 나눠요.", Map.of("x", 420, "y", 120))),
+            List.of(
+                edge("node-1", "node-broken"),
+                edge("node-broken", "node-2"),
+                edge("node-1", "node-2")));
+
+        assertThat(response.getNodes()).hasSize(2);
+        assertThat(response.getEdges()).hasSize(1);
+        assertThat(response.getEdges().get(0).getSource()).isEqualTo("node-1");
+        assertThat(response.getEdges().get(0).getTarget()).isEqualTo("node-2");
+    }
+
+    /** 알 수 없는 {@code type}은 노드를 남기므로, 그 노드를 가리키는 엣지도 남아야 한다. */
+    @Test
+    @DisplayName("enum에 없는 type 노드는 남으므로 그 노드를 가리키는 엣지도 유지된다")
+    void unknownNodeType_keepsItsEdges() {
+        WorkflowResponse response = getWorkflow(
+            List.of(
+                node("node-x", "SLACK", "슬랙", "슬랙으로 보내요.", Map.of("x", 40, "y", 120)),
+                node("node-2", "AI", "분류", "AI가 문의를 유형별로 나눠요.", Map.of("x", 420, "y", 120))),
+            List.of(edge("node-x", "node-2")));
+
+        assertThat(response.getNodes()).hasSize(2);
+        assertThat(response.getEdges()).hasSize(1);
+        assertThat(response.getEdges().get(0).getSource()).isEqualTo("node-x");
     }
 }
