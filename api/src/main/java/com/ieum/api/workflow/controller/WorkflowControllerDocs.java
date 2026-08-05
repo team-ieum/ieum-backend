@@ -406,7 +406,99 @@ public interface WorkflowControllerDocs {
 
     @Operation(summary = "실행 진행 이벤트 SSE 스트림",
         description = "워크플로우 실행의 노드별 진행 상태(시작/완료/실패)를 SSE로 실시간 전송한다. "
-            + "늦게 구독해도 진행 스냅샷을 먼저 재생한 뒤 라이브 이벤트를 잇는다.")
+            + "늦게 구독해도 진행 스냅샷을 먼저 재생한 뒤 라이브 이벤트를 잇는다.\n\n"
+            + "각 프레임은 `event: <type>` + `data: <아래 스키마의 JSON>` 형태다 — "
+            + "SSE `event` 이름은 JSON의 `type` 값과 항상 같다.\n\n"
+            + "- 모든 이벤트에 `type`·`executionId`·`workflowId`·`occurredAt`(ISO-8601)이 실린다.\n"
+            + "- **null 필드는 응답에서 아예 빠진다**(`@JsonInclude(NON_NULL)`). "
+            + "예를 들어 `EXECUTION_COMPLETED`에는 `nodeId`·`nodeType`·`status`·`durationMs`·"
+            + "`errorMessage` 키 자체가 없다.\n"
+            + "- **건너뛴 노드는 별도 `type`이 아니라 `NODE_COMPLETED` + `status: SKIPPED`다.** "
+            + "죽은 조건 분기로 가지치기된 노드(`durationMs: 0`)와 재처리에서 원 실행 출력을 "
+            + "재사용한 노드가 여기 해당한다.\n"
+            + "- 스냅샷 재생과 라이브가 같은 모양을 낸다. 경계 노드가 중복될 수 있으니 "
+            + "프론트는 `nodeId + type`으로 멱등 처리할 것.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(
+        responseCode = "200",
+        description = "SSE 스트림. data는 ExecutionEvent JSON이다.",
+        content = @Content(
+            mediaType = "text/event-stream",
+            schema = @Schema(implementation = ExecutionEvent.class),
+            examples = {
+                @ExampleObject(
+                    name = "NODE_STARTED",
+                    summary = "노드 실행 시작 — status는 RUNNING",
+                    value = """
+                        {
+                          "type": "NODE_STARTED",
+                          "executionId": "3f2b1c40-9a7e-4c1d-8b52-7c0a1e4d9f11",
+                          "workflowId": "8d6e5a21-1b3c-4f7a-9e02-5a4c3b2d1e00",
+                          "occurredAt": "2026-08-05T12:30:00.120Z",
+                          "nodeId": "node-condition",
+                          "nodeType": "CONDITION",
+                          "status": "RUNNING"
+                        }"""
+                ),
+                @ExampleObject(
+                    name = "NODE_COMPLETED",
+                    summary = "노드 실행 성공 — status SUCCESS + durationMs",
+                    value = """
+                        {
+                          "type": "NODE_COMPLETED",
+                          "executionId": "3f2b1c40-9a7e-4c1d-8b52-7c0a1e4d9f11",
+                          "workflowId": "8d6e5a21-1b3c-4f7a-9e02-5a4c3b2d1e00",
+                          "occurredAt": "2026-08-05T12:30:00.480Z",
+                          "nodeId": "node-condition",
+                          "nodeType": "CONDITION",
+                          "status": "SUCCESS",
+                          "durationMs": 360
+                        }"""
+                ),
+                @ExampleObject(
+                    name = "NODE_COMPLETED (SKIPPED)",
+                    summary = "건너뛴 노드 — type은 NODE_COMPLETED이고 status만 SKIPPED다",
+                    value = """
+                        {
+                          "type": "NODE_COMPLETED",
+                          "executionId": "3f2b1c40-9a7e-4c1d-8b52-7c0a1e4d9f11",
+                          "workflowId": "8d6e5a21-1b3c-4f7a-9e02-5a4c3b2d1e00",
+                          "occurredAt": "2026-08-05T12:30:00.482Z",
+                          "nodeId": "node-fail",
+                          "nodeType": "TRANSFORM",
+                          "status": "SKIPPED",
+                          "durationMs": 0
+                        }"""
+                ),
+                @ExampleObject(
+                    name = "NODE_FAILED",
+                    summary = "노드 실행 실패 — status FAILED + errorMessage. 문구는 노드 종류·실패 원인마다 다르다",
+                    value = """
+                        {
+                          "type": "NODE_FAILED",
+                          "executionId": "3f2b1c40-9a7e-4c1d-8b52-7c0a1e4d9f11",
+                          "workflowId": "8d6e5a21-1b3c-4f7a-9e02-5a4c3b2d1e00",
+                          "occurredAt": "2026-08-05T12:30:02.010Z",
+                          "nodeId": "node-http",
+                          "nodeType": "HTTP",
+                          "status": "FAILED",
+                          "durationMs": 1520,
+                          "errorMessage": "HTTP 500: Internal Server Error"
+                        }"""
+                ),
+                @ExampleObject(
+                    name = "EXECUTION_COMPLETED",
+                    summary = "실행 종료 — executionStatus만 싣고 노드 필드는 없다",
+                    value = """
+                        {
+                          "type": "EXECUTION_COMPLETED",
+                          "executionId": "3f2b1c40-9a7e-4c1d-8b52-7c0a1e4d9f11",
+                          "workflowId": "8d6e5a21-1b3c-4f7a-9e02-5a4c3b2d1e00",
+                          "occurredAt": "2026-08-05T12:30:02.015Z",
+                          "executionStatus": "SUCCESS"
+                        }"""
+                )
+            }
+        ))
     @PreAuthorize("hasRole('USER')")
     Flux<ServerSentEvent<ExecutionEvent>> streamExecutionEvents(
             CustomUserDetails userDetails,
