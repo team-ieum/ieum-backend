@@ -30,8 +30,8 @@ public record EdgeView(
      *   <li>{@code source}·{@code target} — 둘 다 {@link NodeView#asText} 규칙으로 읽히고 비어 있지
      *       않아야 한다. 아니면 버린다.
      *   <li>{@code nodes}에 없는 id를 가리키는 엣지 → 버린다.
-     *   <li>{@code conditionType} — {@link NodeView#asText} 규칙. boolean {@code true}가 문자열
-     *       {@code "true"}로 오는 저장 경로가 있어 스칼라를 받는다.
+     *   <li>{@code conditionType} — {@link NodeView#asText} 규칙. 문자열 {@code "true"}가 와야 할
+     *       자리에 boolean {@code true}가 오는 저장 경로가 있어 스칼라를 받는다.
      * </ul>
      *
      * <p>끊긴 엣지를 버리는 것은 <b>조회 응답 전용이다</b> — 저장된 정의는 그대로 두므로 원인 문서를

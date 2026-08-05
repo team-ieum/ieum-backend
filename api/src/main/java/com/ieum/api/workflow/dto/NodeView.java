@@ -154,7 +154,9 @@ public record NodeView(
      * 그 상태로 캔버스를 저장하면 원래 좌표가 정의에서 사라진다 — 되돌릴 수 없는 손실이라 이전
      * 매핑만큼 관대하게 받는다.
      *
-     * <p>NaN·무한대는 표준 JSON 숫자가 아니라 제외한다. 프론트에 그대로 실어 보내면 파싱이 깨진다.
+     * <p>NaN·무한대는 표준 JSON 숫자가 아니라 제외한다. Jackson 기본 설정은 이 값을 예외 대신
+     * 따옴표 붙은 {@code "NaN"} 문자열로 직렬화하므로 JSON 파싱이 깨지지는 않는다. 문제는 숫자여야
+     * 할 좌표 자리에 문자열이 실려 프론트의 좌표 계산이 망가지는 것이다.
      */
     private static Double asCoordinate(Object value, String field, UUID workflowId) {
         if (value instanceof Number n && Double.isFinite(n.doubleValue())) {
