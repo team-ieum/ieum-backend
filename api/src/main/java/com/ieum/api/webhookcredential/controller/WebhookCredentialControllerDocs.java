@@ -19,7 +19,11 @@ import java.util.UUID;
 @SecurityRequirement(name = "BearerAuth")
 public interface WebhookCredentialControllerDocs {
 
-    @Operation(summary = "웹훅 자격증명 등록")
+    @Operation(summary = "웹훅 자격증명 등록",
+            description = "webhookUrl은 provider의 웹훅 호스트·경로여야 한다(https 전용, 맞지 않으면 400). "
+                    + "SLACK은 hooks.slack.com의 /services·/triggers·/workflows, "
+                    + "DISCORD는 discord.com·discordapp.com(ptb·canary 서브도메인 포함)의 "
+                    + "/api/webhooks 및 /api/v10/webhooks 같은 버전 경로를 받는다.")
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<WebhookCredentialResponse>> create(CustomUserDetails userDetails,
                                                                   CreateWebhookCredentialRequest request);

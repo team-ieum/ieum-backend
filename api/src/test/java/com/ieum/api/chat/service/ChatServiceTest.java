@@ -768,6 +768,105 @@ class ChatServiceTest {
         assertThat(result.getContent()).isEqualTo("좀 더 알려주세요");
     }
 
+    // ─────────────────── agent 생성 정의의 웹훅 URL 원문 거부 (IEUM-BE-62) ────
+
+    private static final String SLACK_WEBHOOK =
+        "https://hooks.slack.com/services/FAKE-WORKSPACE/FAKE-CHANNEL/not-a-real-token";
+
+    @Test
+    @DisplayName("finalizeStream — agent가 만든 노드 config.url이 웹훅 원문이면 저장하지 않는다")
+    void finalizeStream_agentNodeWithRawWebhookUrl_notSaved() throws Exception {
+        ChatAgentResponse resp = buildWorkflowResponse(
+            "{ \"method\": \"POST\", \"url\": \"" + SLACK_WEBHOOK + "\" }");
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        assertThatThrownBy(() -> chatService.finalizeStream(
+            workflowId, sessionId, resp, config, UUID.randomUUID(), userId))
+            .isInstanceOf(CustomException.class)
+            .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
+                .isEqualTo(ErrorCode.INVALID_WORKFLOW));
+
+        // 거부는 저장 경로에 닿기 전에 끝나야 한다 — 새 버전이 남으면 막은 의미가 없다.
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any());
+        verify(workflowCrudService, never()).updateWorkflowName(any(), any());
+        verify(messageRepository, never()).save(any(ChatMessage.class));
+    }
+
+    @Test
+    @DisplayName("blocking chat — agent가 만든 노드 config.url이 웹훅 원문이면 저장하지 않는다")
+    void chat_agentNodeWithRawWebhookUrl_notSaved() throws Exception {
+        ChatAgentResponse resp = buildWorkflowResponse(
+            "{ \"method\": \"POST\", \"url\": \"" + SLACK_WEBHOOK + "\" }");
+
+        ChatSession session = buildSession(workflowId, userId);
+        WorkflowVersion version = buildVersionWithNodesJson("[]");
+        given(sessionRepository.save(any())).willReturn(session);
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(credentialService.getByUserId(userId)).willReturn(List.of());
+        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
+        given(integrationContextService.resolve(userId))
+            .willReturn(new IntegrationContext(List.of(), List.of()));
+        given(agentClient.chat(any(AgentChatCallParams.class))).willReturn(resp);
+
+        assertThatThrownBy(() ->
+            chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("웹훅으로 보내줘", null)))
+            .isInstanceOf(CustomException.class)
+            .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
+                .isEqualTo(ErrorCode.INVALID_WORKFLOW));
+
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("거부 메시지는 대안을 알려주고 URL을 되싣지 않는다 — REST 경로와 같은 문구")
+    void agentRejectionMessage_guidesToCredential_withoutEchoingUrl() throws Exception {
+        ChatAgentResponse resp = buildWorkflowResponse(
+            "{ \"method\": \"POST\", \"url\": \"" + SLACK_WEBHOOK + "\" }");
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        assertThatThrownBy(() -> chatService.finalizeStream(
+            workflowId, sessionId, resp, config, UUID.randomUUID(), userId))
+            // 사용자가 다음에 할 일을 알려준다 — 웹훅을 등록하면 agent가 그 id를 쓴다.
+            .hasMessageContaining("webhookCredentialId")
+            .hasMessageContaining("웹훅 자격증명")
+            // 메시지는 WS 핸들러가 사용자에게 그대로 보내고 로그에도 남는다.
+            .hasMessageNotContaining(SLACK_WEBHOOK)
+            .hasMessageNotContaining("hooks.slack.com");
+    }
+
+    @Test
+    @DisplayName("웹훅을 webhookCredentialId로 참조하는 정상 정의는 그대로 저장된다 (회귀 방지)")
+    void finalizeStream_agentNodeWithWebhookCredentialId_saved() throws Exception {
+        ChatAgentResponse resp = buildWorkflowResponse(
+            "{ \"method\": \"POST\", \"webhookCredentialId\": \"" + UUID.randomUUID() + "\" }");
+
+        ChatSession session = buildSession(workflowId, userId);
+        given(sessionRepository.findById(sessionId)).willReturn(Optional.of(session));
+        given(messageRepository.save(any(ChatMessage.class)))
+            .willReturn(buildMessage(session, MessageType.AGENT, "완성됐어요"));
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        chatService.finalizeStream(workflowId, sessionId, resp, config, UUID.randomUUID(), userId);
+
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any());
+    }
+
+    /** HTTP 노드 하나짜리 WORKFLOW_GENERATED 응답. config만 테스트마다 바꾼다. */
+    private ChatAgentResponse buildWorkflowResponse(String httpConfig) throws Exception {
+        String json = """
+            {
+                "message": "완성됐어요",
+                "type": "WORKFLOW_GENERATED",
+                "workflowName": "알림 워크플로우",
+                "nodes": [
+                    { "id": "node-http", "type": "HTTP", "config": %s }
+                ],
+                "edges": []
+            }
+            """.formatted(httpConfig);
+        return objectMapper.readValue(json, ChatAgentResponse.class);
+    }
+
     // ─────────────────── 헬퍼 ──────────────────────────────────────────────
 
     private ChatSession buildSession(UUID workflowId, UUID userId) {

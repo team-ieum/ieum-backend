@@ -19,6 +19,7 @@ import com.ieum.api.mcp.domain.McpServerCatalog;
 import com.ieum.api.mcp.repository.McpServerCatalogRepository;
 import com.ieum.api.webhookcredential.domain.WebhookCredential;
 import com.ieum.api.webhookcredential.repository.WebhookCredentialRepository;
+import com.ieum.api.workflow.service.RawWebhookUrlGuard;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.chat.domain.ChatMessage;
@@ -529,6 +530,10 @@ public class ChatService {
      *
      * <p>agent가 생성한 AI 노드에는 credentialId가 없으므로,
      * agentConfig/fallbackCredentialId를 기반으로 AI 노드 config에 주입한다.
+     *
+     * <p>여기가 agent 경로의 유일한 저장 지점이다 — {@link #chat}(블로킹)과 {@link #finalizeStream}
+     * (스트리밍) 둘 다 이 메서드를 거쳐 {@code WorkflowCrudService.saveAgentVersion}으로 간다. 그
+     * 아래는 JSON 문자열만 받으므로 노드 단위 검사는 여기가 마지막 지점이다(IEUM-BE-62 Task 4).
      */
     @SuppressWarnings("unchecked")
     private void saveWorkflowVersion(UUID workflowId, ChatAgentResponse agentResponse,
@@ -539,6 +544,11 @@ public class ChatService {
 
             // AI 노드에 credentialId / llmProvider 주입 (agent가 생성 시 누락하는 경우 보완)
             for (Map<String, Object> node : nodes) {
+                // agent가 만든 정의도 REST 생성·수정과 같은 웹훅 URL 원문 검사를 받는다. agent에는
+                // webhookCredentialId 목록만 주고 URL은 주지 않지만(resolveAvailableWebhooks),
+                // 사용자가 프롬프트에 URL을 그대로 적으면 그 값이 노드 config로 돌아올 수 있다.
+                RawWebhookUrlGuard.rejectRawWebhookUrl(node.get("config"));
+
                 String nodeType = (String) node.get("type");
                 if ("AI".equals(nodeType)) {
                     Map<String, Object> config = (Map<String, Object>) node.get("config");

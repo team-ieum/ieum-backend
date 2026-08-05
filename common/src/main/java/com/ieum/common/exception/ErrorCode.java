@@ -37,6 +37,10 @@ public enum ErrorCode {
     WEBHOOK_CREDENTIAL_DUPLICATE_NAME(HttpStatus.CONFLICT, "동일한 이름의 웹훅 자격증명이 이미 존재합니다."),
     WEBHOOK_CREDENTIAL_LIMIT_EXCEEDED(HttpStatus.BAD_REQUEST, "웹훅 자격증명 등록 한도를 초과했습니다."),
     WEBHOOK_CREDENTIAL_NOT_ALERTABLE(HttpStatus.BAD_REQUEST, "실패 알림은 Discord 웹훅으로만 받을 수 있습니다."),
+    WEBHOOK_CREDENTIAL_INVALID_URL(HttpStatus.BAD_REQUEST,
+            "웹훅 URL이 선택한 서비스의 형식과 맞지 않습니다. "
+                    + "Slack은 hooks.slack.com, Discord는 discord.com의 웹훅 주소를 https로 입력해주세요 "
+                    + "(예: https://hooks.slack.com/services/... , https://discord.com/api/webhooks/...)."),
     CREDENTIAL_NO_BILLING(HttpStatus.PAYMENT_REQUIRED, "프로바이더 계정에 결제 수단이 등록되어 있지 않습니다. 프로바이더 대시보드에서 결제 설정을 확인해주세요."),
     CREDENTIAL_EXPIRED(HttpStatus.UNAUTHORIZED, "OAuth 토큰이 만료되었습니다."),
     CREDENTIAL_IN_USE(HttpStatus.CONFLICT, "워크플로우에서 사용 중인 크레덴셜입니다."),

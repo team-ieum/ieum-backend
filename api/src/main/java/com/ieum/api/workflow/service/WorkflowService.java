@@ -2,6 +2,8 @@ package com.ieum.api.workflow.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
+import com.ieum.api.webhookcredential.domain.WebhookCredential;
+import com.ieum.api.webhookcredential.service.WebhookCredentialService;
 import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.api.workflow.dto.CreateWorkflowRequest;
 import com.ieum.api.workflow.dto.EdgeDto;
@@ -28,6 +30,7 @@ import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.time.LocalDateTime;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -58,11 +61,21 @@ public class WorkflowService {
     private final WorkflowExecutionRunner workflowExecutionRunner;
     private final ExecutionEventPublisher executionEventPublisher;
     private final ObjectMapper objectMapper;
+    private final WebhookCredentialService webhookCredentialService;
+
+    /**
+     * 노드 config에서 {@code webhookCredentialId}를 찾을 때 들어가는 최대 중첩 깊이. 정의 문서의
+     * 구조는 BE가 통제하지 못해 아주 깊거나 자기 참조하는 값이 올 수 있으므로, 방문 추적 대신
+     * 깊이로 끊는다({@code SensitiveDataMasker}가 같은 이유로 쓰는 상한과 같은 값이다).
+     * 이 아래의 참조는 이름 없이 남는다 — 별칭은 없어도 조회가 성립하는 값이라 여기서 닫아도 된다.
+     */
+    private static final int MAX_CONFIG_DEPTH = 20;
 
     // ------------------------------------------------------------------ CRUD
 
     @Transactional
     public WorkflowResponse createWorkflow(UUID userId, CreateWorkflowRequest request) {
+        rejectRawWebhookUrls(request.getNodes());
         WorkflowVersion version = workflowCrudService.createWorkflow(
             userId,
             request.getName(),
@@ -72,7 +85,7 @@ public class WorkflowService {
             request.getTriggerType(),
             request.getCronExpression()
         );
-        return toResponse(version.getWorkflow(), version);
+        return toResponse(version.getWorkflow(), version, ownedWebhookNames(userId));
     }
 
     public PageResponse<WorkflowResponse> getWorkflows(UUID userId, String cursor, int size) {
@@ -83,8 +96,12 @@ public class WorkflowService {
         List<UUID> workflowIds = workflows.stream().map(Workflow::getId).toList();
         Map<UUID, WorkflowVersion> versionMap = workflowCrudService.getLatestVersionMap(workflowIds);
 
+        // 웹훅 별칭 사전은 페이지 전체에 한 번만 조회한다 — 목록의 워크플로우는 모두 같은 사용자
+        // 소유라 사전도 하나면 충분하다. 워크플로우마다(또는 노드마다) 조회하면 N+1이 된다.
+        Map<UUID, String> webhookNames = ownedWebhookNames(userId);
+
         List<WorkflowResponse> responses = workflows.stream()
-            .map(w -> toResponse(w, versionMap.get(w.getId())))
+            .map(w -> toResponse(w, versionMap.get(w.getId()), webhookNames))
             .toList();
 
         return PageResponse.of(responses, hasNext, hasNext ? String.valueOf(page + 1) : null);
@@ -93,12 +110,13 @@ public class WorkflowService {
     public WorkflowResponse getWorkflow(UUID userId, UUID workflowId) {
         Workflow workflow = workflowCrudService.getWorkflowByOwner(userId, workflowId);
         WorkflowVersion latestVersion = workflowCrudService.findLatestVersion(workflowId).orElse(null);
-        return toResponse(workflow, latestVersion);
+        return toResponse(workflow, latestVersion, ownedWebhookNames(userId));
     }
 
     @Transactional
     public WorkflowResponse updateWorkflow(UUID userId, UUID workflowId,
             UpdateWorkflowRequest request) {
+        rejectRawWebhookUrls(request.getNodes());
         WorkflowVersion version = workflowCrudService.updateWorkflow(
             userId,
             workflowId,
@@ -109,7 +127,7 @@ public class WorkflowService {
             request.getTriggerType(),
             request.getCronExpression()
         );
-        return toResponse(version.getWorkflow(), version);
+        return toResponse(version.getWorkflow(), version, ownedWebhookNames(userId));
     }
 
     @Transactional
@@ -121,14 +139,14 @@ public class WorkflowService {
     public WorkflowResponse activateWorkflow(UUID userId, UUID workflowId) {
         Workflow workflow = workflowCrudService.activateWorkflow(userId, workflowId);
         WorkflowVersion latestVersion = workflowCrudService.findLatestVersion(workflowId).orElse(null);
-        return toResponse(workflow, latestVersion);
+        return toResponse(workflow, latestVersion, ownedWebhookNames(userId));
     }
 
     @Transactional
     public WorkflowResponse deactivateWorkflow(UUID userId, UUID workflowId) {
         Workflow workflow = workflowCrudService.deactivateWorkflow(userId, workflowId);
         WorkflowVersion latestVersion = workflowCrudService.findLatestVersion(workflowId).orElse(null);
-        return toResponse(workflow, latestVersion);
+        return toResponse(workflow, latestVersion, ownedWebhookNames(userId));
     }
 
     // ------------------------------------------------------------------ EXECUTION
@@ -241,6 +259,35 @@ public class WorkflowService {
     // ------------------------------------------------------------------ PRIVATE
 
     /**
+     * 노드 {@code config.url}에 Slack·Discord 웹훅 URL 원문이 있으면 저장을 거부한다.
+     *
+     * <p>웹훅 URL은 그 자체가 비밀인데 노드 config는 Mongo에 평문으로 저장되고 조회 응답에도 그대로
+     * 실린다. 대안은 이미 있다 — 웹훅 자격증명을 등록하고 {@code config.webhookCredentialId}로
+     * 참조하면 {@code HttpNodeExecutor}가 실행 시점에만 복호해 쓴다(IEUM-BE-62 Task 1).
+     *
+     * <p><b>레거시도 거부한다.</b> 이미 원문 URL이 저장된 워크플로우는 그 값을 지우거나
+     * {@code webhookCredentialId}로 바꾸기 전까지 이름만 고치는 수정도 저장할 수 없다 — 수정 요청은
+     * 정의 전체를 새 버전으로 다시 쓰기 때문이다. 기존 값을 예외로 통과시키려면 "저장된 정의와 같은
+     * URL인가"를 매 요청 비교해야 하는데, 베타 단계라 해당 워크플로우가 적을 것으로 보고 그 복잡도
+     * 대신 단순한 쪽(항상 거부)을 택했다. 대가는 위의 수정 차단이다.
+     *
+     * <p>막는 것은 요청 본문의 리터럴 URL뿐이다. 변수 참조({@code {{nodes.x.output.url}}})처럼 실행
+     * 시점에야 웹훅 URL이 되는 값이나, {@code url} 외의 config 필드(예: {@code body})에 숨긴 URL은
+     * 여기서 걸리지 않는다.
+     *
+     * <p>판정과 메시지는 {@link RawWebhookUrlGuard}가 갖는다 — 채팅으로 agent가 만든 정의도 같은
+     * 검사를 거치는데(Task 4) 둘이 각자 문구를 들고 있으면 같은 위반에 다른 반응이 나온다.
+     */
+    private void rejectRawWebhookUrls(List<NodeDto> nodes) {
+        if (nodes == null) {
+            return;
+        }
+        for (NodeDto node : nodes) {
+            RawWebhookUrlGuard.rejectRawWebhookUrl(node.getConfig());
+        }
+    }
+
+    /**
      * 저장된 정의(raw {@code Map})를 응답으로 옮긴다.
      *
      * <p>정의 문서의 구조는 BE가 통제하지 못한다(사유와 항목별 규칙은 {@link NodeView} 참조).
@@ -249,7 +296,8 @@ public class WorkflowService {
      * 터져 조회(특히 사용자의 모든 워크플로우를 한 번에 변환하는 {@link #getWorkflows})를 500으로
      * 무너뜨리지 않게 하기 위함이다.
      */
-    private WorkflowResponse toResponse(Workflow workflow, WorkflowVersion version) {
+    private WorkflowResponse toResponse(Workflow workflow, WorkflowVersion version,
+            Map<UUID, String> ownedWebhookNames) {
         List<NodeView> nodes = Collections.emptyList();
         List<EdgeView> edges = Collections.emptyList();
         if (version != null) {
@@ -257,7 +305,103 @@ public class WorkflowService {
             nodes = NodeView.fromDefinition(definition.getNodes(), workflow.getId());
             edges = EdgeView.fromDefinition(definition.getEdges(), nodes, workflow.getId());
         }
-        return WorkflowResponse.from(workflow, version, nodes, edges);
+        return WorkflowResponse.from(workflow, version, nodes, edges,
+            webhookCredentialNames(nodes, ownedWebhookNames));
+    }
+
+    /**
+     * 요청 사용자가 소유한 웹훅 자격증명의 별칭 사전(id → displayName).
+     *
+     * <p>소유자 검증이 이 조회 하나에 걸려 있다 — 사용자 것만 담기므로, 노드 config에 남의 자격증명
+     * id가 박혀 있어도 아래 매핑에서 이름을 찾지 못한다. 사용자 단위로 한 번만 부르고 그 결과를
+     * 응답 변환 전체가 나눠 쓴다(목록 조회의 N+1 방지).
+     *
+     * <p>{@code enabled}로 거르지 않는다 — {@code WebhookCredentialProvider.resolveWebhookUrl}이
+     * 비활성 자격증명의 URL을 내주지 않는 것과 다른 판단이다. 비활성이라고 이름을 감추면 빌더에
+     * UUID만 남아, 사용자가 어느 자격증명을 다시 켜야 하는지 알 수 없다. 이름은 URL과 달리 실행
+     * 권한을 주지 않으므로 소유 여부만 걸러도 충분하다.
+     *
+     * <p>{@code Collectors.toMap} 대신 루프로 담는다 — 값이 null이면 그쪽은 NPE를 던지는데,
+     * 이름 하나 때문에 조회 전체가 500이 되는 경로를 만들지 않기 위함이다
+     * ({@code display_name}은 {@code not null}이라 지금은 나올 수 없는 값이다).
+     */
+    private Map<UUID, String> ownedWebhookNames(UUID userId) {
+        Map<UUID, String> names = new LinkedHashMap<>();
+        for (WebhookCredential credential : webhookCredentialService.getByUserId(userId)) {
+            if (credential.getId() != null && credential.getDisplayName() != null) {
+                names.put(credential.getId(), credential.getDisplayName());
+            }
+        }
+        return names;
+    }
+
+    /**
+     * 노드 config가 참조하는 웹훅 자격증명 id에 별칭을 붙여 돌려준다(응답 전용 파생값 —
+     * 저장된 정의에는 쓰지 않는다).
+     *
+     * <p>참조는 두 자리에 나타난다. HTTP 노드의 {@code config.webhookCredentialId}(IEUM-BE-62 Task 1)와
+     * AI 노드의 {@code config.tools[].config.webhookCredentialId}({@code AgentNodeExecutor}가 실행
+     * 시점에 읽는 자리)다. 자리마다 경로를 박아 두는 대신 config 전체를 훑는다 — 정의 문서는 BE를
+     * 거치지 않는 저장 경로(ieum-agent 생성분)가 있어 중첩 위치가 늘어날 수 있는데, 그때 빌더에
+     * UUID가 되돌아오는 것을 막기 위함이다.
+     *
+     * <p>어떤 입력에도 예외를 던지지 않는다. UUID로 읽히지 않는 값, 사용자 소유가 아닌 id, 삭제된
+     * id는 모두 결과에 키가 없을 뿐이다 — 이름을 못 찾는 것이 조회를 500으로 만들면 안 된다.
+     */
+    private static Map<String, String> webhookCredentialNames(List<NodeView> nodes,
+            Map<UUID, String> ownedWebhookNames) {
+        if (ownedWebhookNames.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> names = new LinkedHashMap<>();
+        for (NodeView node : nodes) {
+            collectWebhookNames(node.config(), 0, ownedWebhookNames, names);
+        }
+        return names;
+    }
+
+    private static void collectWebhookNames(Object value, int depth,
+            Map<UUID, String> ownedWebhookNames, Map<String, String> names) {
+        if (depth > MAX_CONFIG_DEPTH) {
+            return;
+        }
+        if (value instanceof Map<?, ?> map) {
+            putIfOwned(map.get("webhookCredentialId"), ownedWebhookNames, names);
+            for (Object child : map.values()) {
+                collectWebhookNames(child, depth + 1, ownedWebhookNames, names);
+            }
+        } else if (value instanceof List<?> list) {
+            for (Object item : list) {
+                collectWebhookNames(item, depth + 1, ownedWebhookNames, names);
+            }
+        }
+    }
+
+    /**
+     * 사용자 소유 자격증명일 때만 별칭을 싣는다.
+     *
+     * <p>키는 config에 적힌 문자열 그대로다 — 프론트가 config에서 읽은 값을 그대로 키로 쓰면
+     * 맞도록. 반면 소유 판정은 {@code UUID.fromString}으로 정규화한 값으로 한다
+     * ({@code HttpNodeExecutor}가 같은 값을 해석하는 방식과 맞춘 것: 앞뒤 공백을 버리고 대소문자를
+     * 구분하지 않는다).
+     */
+    private static void putIfOwned(Object rawId, Map<UUID, String> ownedWebhookNames,
+            Map<String, String> names) {
+        if (rawId == null || rawId instanceof Map || rawId instanceof List) {
+            return;
+        }
+        String key = rawId.toString();
+        UUID credentialId;
+        try {
+            credentialId = UUID.fromString(key.trim());
+        } catch (IllegalArgumentException e) {
+            // id 자리에 웹훅 URL을 붙여 넣은 경우가 정확히 이 분기다 — 값을 로그에 싣지 않는다.
+            return;
+        }
+        String displayName = ownedWebhookNames.get(credentialId);
+        if (displayName != null) {
+            names.put(key, displayName);
+        }
     }
 
     private String toJson(Object obj) {

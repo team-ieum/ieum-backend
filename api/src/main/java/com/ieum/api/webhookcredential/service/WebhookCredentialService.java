@@ -6,6 +6,7 @@ import com.ieum.api.webhookcredential.repository.WebhookCredentialRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.common.util.AesEncryptionService;
+import com.ieum.workflowcore.util.SensitiveDataMasker;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -24,9 +25,23 @@ public class WebhookCredentialService {
     private final WebhookCredentialRepository repository;
     private final AesEncryptionService aesEncryptionService;
 
+    /**
+     * 웹훅 자격증명을 등록한다.
+     *
+     * <p>URL이 선언한 provider의 웹훅 호스트인지 먼저 검증한다 (IEUM-BE-62). 노드 config에는
+     * 원문 웹훅 URL을 저장할 수 없고({@code RawWebhookUrlGuard}) 대신 여기 등록한 뒤
+     * {@code config.webhookCredentialId}로 참조하는데, 등록이 무검증이면 임의 URL을
+     * "Slack 웹훅"으로 올린 뒤 그 참조로 {@code HttpNodeExecutor}가 호출하게 만들 수 있다.
+     *
+     * <p>검증은 신규 등록에만 걸린다 — 이미 저장된 레코드의 조회·사용·삭제는 이 경로를 타지 않는다.
+     */
     @Transactional
     public WebhookCredential create(UUID userId, WebhookProvider provider, String displayName,
-                                    String webhookUrl, String defaultChannel) {
+                                    String rawWebhookUrl, String defaultChannel) {
+        // 복사·붙여넣기로 딸려 온 앞뒤 공백은 떼고 검증·저장한다. 저장값이 곧 호출 대상 URL이다.
+        String webhookUrl = rawWebhookUrl == null ? "" : rawWebhookUrl.strip();
+        validateWebhookUrl(provider, webhookUrl);
+
         if (repository.existsByUserIdAndDisplayName(userId, displayName)) {
             throw new CustomException(ErrorCode.WEBHOOK_CREDENTIAL_DUPLICATE_NAME);
         }
@@ -45,6 +60,23 @@ public class WebhookCredentialService {
                 .build();
 
         return repository.save(credential);
+    }
+
+    /**
+     * URL이 provider의 웹훅 형식인지 검증한다. 판정은 {@link SensitiveDataMasker}에 맡긴다 —
+     * 마스킹·노드 config 거부와 도메인 조각을 공유해야 한 쪽만 고쳐지는 일이 없다.
+     *
+     * <p>예외에 URL을 싣지 않는다: {@code GlobalExceptionHandler}가 예외 메시지를 그대로 WARN 로그에
+     * 남기므로 여기 담는 값이 곧 로그에 남는데, 웹훅 URL은 그 자체가 비밀이다.
+     */
+    private void validateWebhookUrl(WebhookProvider provider, String webhookUrl) {
+        boolean matched = switch (provider) {
+            case SLACK -> SensitiveDataMasker.isSlackWebhookUrl(webhookUrl);
+            case DISCORD -> SensitiveDataMasker.isDiscordWebhookUrl(webhookUrl);
+        };
+        if (!matched) {
+            throw new CustomException(ErrorCode.WEBHOOK_CREDENTIAL_INVALID_URL);
+        }
     }
 
     public List<WebhookCredential> getByUserId(UUID userId) {

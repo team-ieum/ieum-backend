@@ -34,7 +34,17 @@ import reactor.core.publisher.Flux;
 @SecurityRequirement(name = "BearerAuth")
 public interface WorkflowControllerDocs {
 
-    @Operation(summary = "워크플로우 생성")
+    /** 생성·수정 양쪽에 걸리는 제약이라 문구를 한 곳에 둔다. */
+    String WEBHOOK_URL_NOTICE =
+        "노드 config.url에 Slack·Discord 웹훅 URL을 직접 넣으면 400이다 — 웹훅 URL 자체가 비밀이라"
+            + " 노드 config에 평문으로 저장하지 않는다. 웹훅 자격증명(POST /api/v1/webhook-credentials)을"
+            + " 등록하고 config.webhookCredentialId로 참조하면 실행 시점에만 복호해 호출한다."
+            + " 워크플로우 응답에는 참조한 자격증명의 별칭 사전(webhookCredentialNames: id → displayName)이"
+            + " 함께 실려 빌더가 UUID 대신 이름을 보여줄 수 있다 — 요청 사용자가 소유하지 않았거나 없는"
+            + " id는 사전에 실리지 않는다.";
+
+    @Operation(summary = "워크플로우 생성",
+        description = WEBHOOK_URL_NOTICE)
     @PreAuthorize("hasRole('USER')")
     @RequestBody(content = @Content(
         mediaType = "application/json",
@@ -271,7 +281,9 @@ public interface WorkflowControllerDocs {
             CustomUserDetails userDetails,
             @Parameter(description = "워크플로우 ID") UUID id);
 
-    @Operation(summary = "워크플로우 수정 (새 버전 생성)")
+    @Operation(summary = "워크플로우 수정 (새 버전 생성)",
+        description = "수정은 정의 전체를 새 버전으로 다시 쓴다. " + WEBHOOK_URL_NOTICE
+            + " 이미 원문 URL이 저장된 워크플로우는 그 값을 바꾸기 전까지 수정을 저장할 수 없다.")
     @PreAuthorize("hasRole('USER')")
     @RequestBody(content = @Content(
         mediaType = "application/json",
