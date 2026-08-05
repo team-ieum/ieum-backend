@@ -8,6 +8,7 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 
+import com.ieum.api.webhookcredential.service.WebhookCredentialService;
 import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
 import com.ieum.common.dto.PageResponse;
@@ -41,6 +42,7 @@ class WorkflowServiceExecutionPagingTest {
     @Mock private WorkflowExecutionRunner workflowExecutionRunner;
     @Mock private ExecutionEventPublisher executionEventPublisher;
     @Mock private ObjectMapper objectMapper;
+    @Mock private WebhookCredentialService webhookCredentialService;
     @InjectMocks private WorkflowService workflowService;
 
     private final UUID userId = UUID.randomUUID();

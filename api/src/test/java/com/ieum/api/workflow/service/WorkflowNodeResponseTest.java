@@ -11,6 +11,7 @@ import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.api.webhookcredential.service.WebhookCredentialService;
 import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.api.workflow.dto.EdgeDto;
 import com.ieum.api.workflow.dto.EdgeView;
@@ -54,7 +55,8 @@ class WorkflowNodeResponseTest {
         mock(WorkflowExecutionService.class),
         mock(WorkflowExecutionRunner.class),
         mock(ExecutionEventPublisher.class),
-        new ObjectMapper());
+        new ObjectMapper(),
+        mock(WebhookCredentialService.class));
 
     private final UUID userId = UUID.randomUUID();
     private final UUID workflowId = UUID.randomUUID();

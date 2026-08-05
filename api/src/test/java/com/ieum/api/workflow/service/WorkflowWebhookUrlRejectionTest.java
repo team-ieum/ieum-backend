@@ -10,6 +10,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.api.webhookcredential.service.WebhookCredentialService;
 import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.api.workflow.dto.CreateWorkflowRequest;
 import com.ieum.api.workflow.dto.UpdateWorkflowRequest;
@@ -46,7 +47,8 @@ class WorkflowWebhookUrlRejectionTest {
         mock(WorkflowExecutionService.class),
         mock(WorkflowExecutionRunner.class),
         mock(ExecutionEventPublisher.class),
-        new ObjectMapper());
+        new ObjectMapper(),
+        mock(WebhookCredentialService.class));
 
     private final ObjectMapper jsonMapper = new ObjectMapper();
     private final UUID userId = UUID.randomUUID();
