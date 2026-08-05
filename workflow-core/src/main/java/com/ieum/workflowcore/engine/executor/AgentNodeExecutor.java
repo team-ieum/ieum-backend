@@ -363,8 +363,6 @@ public class AgentNodeExecutor implements NodeExecutor {
      */
     @SuppressWarnings("unchecked")
     private void injectWebhookUrls(List<Map<String, Object>> tools, UUID userId) {
-        log.info("[webhook-debug] injectWebhookUrls 진입 — tools 수: {}, userId: {}",
-            tools != null ? tools.size() : 0, userId);
         if (tools == null || tools.isEmpty() || userId == null) {
             return;
         }
@@ -373,22 +371,25 @@ public class AgentNodeExecutor implements NodeExecutor {
             if (!WEBHOOK_TOOL_NAMES.contains(tool.get("name"))) {
                 continue;
             }
-            log.info("[webhook-debug] webhook 도구 발견 — name: {}, config: {}", tool.get("name"), tool.get("config"));
             Object cfg = tool.get("config");
             if (!(cfg instanceof Map<?, ?> configMap)) {
-                log.warn("[webhook-debug] config가 Map이 아님 — name: {}, config: {}", tool.get("name"), cfg);
+                // config 값 자체는 싣지 않는다 — 사용자가 웹훅 URL을 붙여 넣었을 수 있다.
+                log.warn("[AgentNodeExecutor] webhook 도구 config가 Map이 아님 — name: {}", tool.get("name"));
                 continue;
             }
             Object rawId = configMap.get("webhookCredentialId");
             if (rawId == null) {
-                log.warn("[webhook-debug] config에 webhookCredentialId 없음 — config keys: {}", configMap.keySet());
+                // 키 이름은 비밀이 아니라 그대로 남긴다 — 어떤 필드가 왔는지가 진단의 핵심이다.
+                log.warn("[AgentNodeExecutor] webhook 도구 config에 webhookCredentialId 없음 — config keys: {}",
+                    configMap.keySet());
                 continue;
             }
             UUID credentialId;
             try {
                 credentialId = UUID.fromString(rawId.toString());
             } catch (IllegalArgumentException e) {
-                log.warn("[AgentNodeExecutor] 잘못된 webhookCredentialId 형식 — value: {}", rawId);
+                // value를 싣지 않는다 — id 자리에 웹훅 URL을 붙여 넣은 경우가 정확히 이 분기로 온다.
+                log.warn("[AgentNodeExecutor] 잘못된 webhookCredentialId 형식 — name: {}", tool.get("name"));
                 continue;
             }
             webhookCredentialProvider.resolveWebhookUrl(credentialId, userId)

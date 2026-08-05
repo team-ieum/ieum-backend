@@ -28,30 +28,26 @@ public class DefaultWebhookCredentialProvider implements WebhookCredentialProvid
 
     @Override
     public Optional<String> resolveWebhookUrl(UUID credentialId, UUID userId) {
-        log.info("[webhook-debug] resolveWebhookUrl 진입 — credentialId: {}, 실행 userId: {}", credentialId, userId);
         if (credentialId == null || userId == null) {
-            log.warn("[webhook-debug] credentialId/userId가 null — credentialId: {}, userId: {}", credentialId, userId);
             return Optional.empty();
         }
 
+        // 소유자 검증은 이 조회 하나에 걸려 있다 — findByIdAndUserId를 findById로 바꾸면
+        // 남의 크레덴셜 id를 config에 박아 넣는 것만으로 URL이 새어 나간다.
         WebhookCredential credential = repository.findByIdAndUserId(credentialId, userId).orElse(null);
         if (credential == null) {
-            log.warn("[webhook-debug] 웹훅 자격증명이 존재하지 않거나 권한이 없음 — credentialId: {}, userId: {}", credentialId, userId);
+            log.warn("[WebhookCredential] 자격증명이 없거나 권한이 없음 — credentialId: {}", credentialId);
             return Optional.empty();
         }
-        log.info("[webhook-debug] 자격증명 조회 성공 — credentialId: {}, provider: {}, enabled: {}",
-                credentialId, credential.getProvider(), credential.isEnabled());
         if (!credential.isEnabled()) {
-            log.warn("[webhook-debug] 비활성 웹훅 자격증명 건너뜀 — credentialId: {}", credentialId);
+            log.warn("[WebhookCredential] 비활성 자격증명 건너뜀 — credentialId: {}", credentialId);
             return Optional.empty();
         }
         try {
-            String url = credentialService.decryptWebhookUrl(credential);
-            log.info("[webhook-debug] 복호화 성공 — credentialId: {}, url 길이: {}",
-                    credentialId, url != null ? url.length() : 0);
-            return Optional.ofNullable(url);
+            return Optional.ofNullable(credentialService.decryptWebhookUrl(credential));
         } catch (Exception e) {
-            log.warn("[webhook-debug] 복호화 실패 — credentialId: {}, error: {}", credentialId, e.getMessage());
+            log.warn("[WebhookCredential] 복호화 실패 — credentialId: {}, cause: {}",
+                    credentialId, e.getClass().getSimpleName());
             return Optional.empty();
         }
     }
