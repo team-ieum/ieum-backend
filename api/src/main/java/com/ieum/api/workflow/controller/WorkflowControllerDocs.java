@@ -416,8 +416,10 @@ public interface WorkflowControllerDocs {
             + "- **건너뛴 노드는 별도 `type`이 아니라 `NODE_COMPLETED` + `status: SKIPPED`다.** "
             + "죽은 조건 분기로 가지치기된 노드(`durationMs: 0`)와 재처리에서 원 실행 출력을 "
             + "재사용한 노드가 여기 해당한다.\n"
-            + "- 스냅샷 재생과 라이브가 같은 모양을 낸다. 경계 노드가 중복될 수 있으니 "
-            + "프론트는 `nodeId + type`으로 멱등 처리할 것.")
+            + "- 스냅샷 재생과 라이브가 같은 **모양**을 낸다(필드 구성·`type`·`status`가 일치). "
+            + "다만 재생은 이미 끝난 노드의 결과만 재현하므로 `NODE_STARTED`는 나오지 않는다 — "
+            + "늦게 구독하면 그 노드의 시작 프레임 없이 종료 프레임부터 받는다.\n"
+            + "- 경계 노드가 중복될 수 있으니 프론트는 `nodeId + type`으로 멱등 처리할 것.")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(
         responseCode = "200",
         description = "SSE 스트림. data는 ExecutionEvent JSON이다.",
@@ -463,7 +465,7 @@ public interface WorkflowControllerDocs {
                           "executionId": "3f2b1c40-9a7e-4c1d-8b52-7c0a1e4d9f11",
                           "workflowId": "8d6e5a21-1b3c-4f7a-9e02-5a4c3b2d1e00",
                           "occurredAt": "2026-08-05T12:30:00.482Z",
-                          "nodeId": "node-fail",
+                          "nodeId": "node-dead-branch",
                           "nodeType": "TRANSFORM",
                           "status": "SKIPPED",
                           "durationMs": 0
