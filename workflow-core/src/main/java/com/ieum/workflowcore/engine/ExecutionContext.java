@@ -21,7 +21,8 @@ public class ExecutionContext {
 
     /**
      * 워크플로우 소유자 ID.
-     * AI 노드에서 Google 빌트인 도구 사용 시 Google Access Token 조회에 사용된다.
+     * 실행 시점에 사용자별 자격증명을 조회하는 데 쓰인다
+     * (AI 노드의 Google Access Token·웹훅 URL, HTTP 노드의 웹훅 URL 등).
      */
     @Setter
     private UUID userId;

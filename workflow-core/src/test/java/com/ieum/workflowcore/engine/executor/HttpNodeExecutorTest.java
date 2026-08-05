@@ -23,6 +23,8 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -31,10 +33,12 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 /**
- * HTTP 노드의 멱등성 가드(Idempotency-Key 헤더 주입, MARKER 차단) 테스트.
+ * HTTP 노드의 멱등성 가드(Idempotency-Key 헤더 주입, MARKER 차단)와
+ * 웹훅 자격증명({@code webhookCredentialId}) 해석 테스트.
  *
  * <p>SSRF 방어({@code validateUrl})가 실제 DNS 조회를 하므로, 테스트 URL 호스트는
  * loopback/private가 아닌 IP 리터럴(TEST-NET-3, 203.0.113.0/24)을 써서 네트워크 호출 없이
@@ -43,17 +47,22 @@ import org.springframework.web.client.RestTemplate;
 class HttpNodeExecutorTest {
 
     private static final String URL = "http://203.0.113.10/webhook";
+    /** 자격증명에서 복호화되어 나오는 비밀 URL — 로그·실패 메시지에 등장하면 안 된다. */
+    private static final String RESOLVED_URL = "http://203.0.113.20/services/T000/B000/super-secret-token";
 
     private RestTemplate restTemplate;
     private IdempotencyStore idempotencyStore;
+    private WebhookCredentialProvider webhookCredentialProvider;
     private HttpNodeExecutor executor;
 
     @BeforeEach
     void setUp() {
         restTemplate = mock(RestTemplate.class);
         idempotencyStore = mock(IdempotencyStore.class);
+        webhookCredentialProvider = mock(WebhookCredentialProvider.class);
         when(idempotencyStore.markInFlight(any(), any())).thenReturn(true);
-        executor = new HttpNodeExecutor(restTemplate, new ObjectMapper(), idempotencyStore);
+        executor = new HttpNodeExecutor(
+            restTemplate, new ObjectMapper(), idempotencyStore, webhookCredentialProvider);
         when(restTemplate.exchange(eq(URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class)))
             .thenReturn(new ResponseEntity<>("{}", HttpStatus.OK));
     }
@@ -66,11 +75,24 @@ class HttpNodeExecutorTest {
         return new Node("node-1", NodeType.HTTP, "HTTP 노드", config);
     }
 
+    /** config.url은 그대로 두고 webhookCredentialId만 얹은 노드 — 해석된 URL이 우선하는지 본다. */
+    private Node webhookNode(Object credentialId) {
+        Node node = httpNode(new HashMap<>());
+        node.getConfig().put("webhookCredentialId", credentialId);
+        return node;
+    }
+
     private ExecutionCursor cursor() {
+        return cursor(UUID.randomUUID());
+    }
+
+    private ExecutionCursor cursor(UUID userId) {
         ExecutionCursor cursor = new ExecutionCursor();
         cursor.setAllNodes(Collections.emptyList());
         cursor.setAllEdges(Collections.emptyList());
-        cursor.setContext(new ExecutionContext());
+        ExecutionContext context = new ExecutionContext();
+        context.setUserId(userId);
+        cursor.setContext(context);
         return cursor;
     }
 
@@ -172,5 +194,123 @@ class HttpNodeExecutorTest {
         ArgumentCaptor<HttpEntity> captor = ArgumentCaptor.forClass(HttpEntity.class);
         verify(restTemplate).exchange(eq(URL), eq(HttpMethod.GET), captor.capture(), eq(String.class));
         assertThat(captor.getValue().getHeaders().getFirst("Idempotency-Key")).isEqualTo("generated-key");
+    }
+
+    // ── 웹훅 자격증명 해석 (IEUM-BE-62) ────────────────────────────────────────
+
+    @Test
+    @DisplayName("webhookCredentialId가 있으면 실행 userId로 해석한 URL로 호출한다")
+    void webhookCredential_callsResolvedUrl() {
+        UUID userId = UUID.randomUUID();
+        UUID credentialId = UUID.randomUUID();
+        when(webhookCredentialProvider.resolveWebhookUrl(credentialId, userId))
+            .thenReturn(Optional.of(RESOLVED_URL));
+        when(restTemplate.exchange(eq(RESOLVED_URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class)))
+            .thenReturn(new ResponseEntity<>("{}", HttpStatus.OK));
+
+        ExecutorResult result = executor.execute(
+            webhookNode(credentialId.toString()), Collections.emptyMap(), cursor(userId));
+
+        assertThat(result.isSuccess()).isTrue();
+        verify(restTemplate)
+            .exchange(eq(RESOLVED_URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class));
+        verify(restTemplate, never())
+            .exchange(eq(URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class));
+    }
+
+    @Test
+    @DisplayName("webhookCredentialId가 없으면 기존대로 config.url로 호출하고 자격증명을 조회하지 않는다")
+    void noWebhookCredential_usesConfigUrl() {
+        ExecutorResult result =
+            executor.execute(httpNode(new HashMap<>()), Collections.emptyMap(), cursor());
+
+        assertThat(result.isSuccess()).isTrue();
+        verify(restTemplate).exchange(eq(URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class));
+        verify(webhookCredentialProvider, never()).resolveWebhookUrl(any(), any());
+    }
+
+    @Test
+    @DisplayName("해석 실패(없는 id·남의 크레덴셜·비활성)는 외부 호출 없이 CLIENT_ERROR로 끝난다")
+    void webhookCredential_unresolved_isClientError() {
+        UUID userId = UUID.randomUUID();
+        UUID credentialId = UUID.randomUUID();
+        when(webhookCredentialProvider.resolveWebhookUrl(credentialId, userId)).thenReturn(Optional.empty());
+
+        ExecutorResult result = executor.execute(
+            webhookNode(credentialId.toString()), Collections.emptyMap(), cursor(userId));
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getFailureKind()).isEqualTo(FailureKind.CLIENT_ERROR);
+        assertThat(result.getFailureKind().isRetryable()).isFalse();
+        assertThat(result.getErrorMessage()).contains(credentialId.toString());
+        verify(restTemplate, never())
+            .exchange(any(String.class), any(HttpMethod.class), any(HttpEntity.class), eq(String.class));
+    }
+
+    @Test
+    @DisplayName("webhookCredentialId 형식 오류도 CLIENT_ERROR이며 입력값을 메시지에 싣지 않는다")
+    void webhookCredential_malformedId_isClientError() {
+        ExecutorResult result = executor.execute(
+            webhookNode("https://hooks.slack.com/services/T000/B000/leaked"),
+            Collections.emptyMap(), cursor());
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getFailureKind()).isEqualTo(FailureKind.CLIENT_ERROR);
+        assertThat(result.getErrorMessage()).doesNotContain("hooks.slack.com");
+        verify(webhookCredentialProvider, never()).resolveWebhookUrl(any(), any());
+        verify(restTemplate, never())
+            .exchange(any(String.class), any(HttpMethod.class), any(HttpEntity.class), eq(String.class));
+    }
+
+    @Test
+    @DisplayName("userId가 없으면 해석을 시도하지 않고 CLIENT_ERROR로 끝난다")
+    void webhookCredential_noUserId_isClientError() {
+        UUID credentialId = UUID.randomUUID();
+
+        ExecutorResult result = executor.execute(
+            webhookNode(credentialId.toString()), Collections.emptyMap(), cursor(null));
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getFailureKind()).isEqualTo(FailureKind.CLIENT_ERROR);
+        verify(webhookCredentialProvider, never()).resolveWebhookUrl(any(), any());
+    }
+
+    @Test
+    @DisplayName("전송 실패 메시지에 해석된 웹훅 URL이 남지 않는다")
+    void webhookCredential_transportFailure_messageHasNoUrl() {
+        UUID userId = UUID.randomUUID();
+        UUID credentialId = UUID.randomUUID();
+        when(webhookCredentialProvider.resolveWebhookUrl(credentialId, userId))
+            .thenReturn(Optional.of(RESOLVED_URL));
+        // RestTemplate의 전송 예외 메시지는 요청 URL을 그대로 담는다.
+        when(restTemplate.exchange(eq(RESOLVED_URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class)))
+            .thenThrow(new ResourceAccessException(
+                "I/O error on GET request for \"" + RESOLVED_URL + "\": connect timed out"));
+
+        ExecutorResult result = executor.execute(
+            webhookNode(credentialId.toString()), Collections.emptyMap(), cursor(userId));
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getErrorMessage()).doesNotContain(RESOLVED_URL);
+        assertThat(result.getErrorMessage()).doesNotContain("super-secret-token");
+        assertThat(result.getErrorMessage()).contains("connect timed out");
+    }
+
+    @Test
+    @DisplayName("URL 검증 실패 메시지에도 해석된 웹훅 URL이 남지 않는다")
+    void webhookCredential_invalidUrl_messageHasNoUrl() {
+        UUID userId = UUID.randomUUID();
+        UUID credentialId = UUID.randomUUID();
+        // URI 파싱이 실패하는 값 — validateUrl이 URL 원문을 담은 메시지로 예외를 던진다.
+        String brokenUrl = "http://203.0.113.20/services/super-secret-token^broken";
+        when(webhookCredentialProvider.resolveWebhookUrl(credentialId, userId))
+            .thenReturn(Optional.of(brokenUrl));
+
+        ExecutorResult result = executor.execute(
+            webhookNode(credentialId.toString()), Collections.emptyMap(), cursor(userId));
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getFailureKind()).isEqualTo(FailureKind.CLIENT_ERROR);
+        assertThat(result.getErrorMessage()).doesNotContain("super-secret-token");
     }
 }
