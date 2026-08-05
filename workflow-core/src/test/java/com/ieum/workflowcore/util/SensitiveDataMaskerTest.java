@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class SensitiveDataMaskerTest {
 
@@ -227,5 +229,75 @@ class SensitiveDataMaskerTest {
         data.put("selfList", list);
 
         assertThatCode(() -> SensitiveDataMasker.mask(data)).doesNotThrowAnyException();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "https://hooks.slack.com/services/T00000000/B00000000/aBcDeF123456",
+        "https://hooks.slack.com/triggers/T00000000/123456/aBcDeF123456",
+        "https://hooks.slack.com/workflows/T00000000/123456/aBcDeF123456"
+    })
+    @DisplayName("Slack 웹훅 URL 전체 일치는 등록 검증을 통과한다")
+    void isSlackWebhookUrl_validForms(String url) {
+        assertThat(SensitiveDataMasker.isSlackWebhookUrl(url)).isTrue();
+        assertThat(SensitiveDataMasker.isDiscordWebhookUrl(url)).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "https://discord.com/api/webhooks/1234567890/abcdefghij",
+        "https://discordapp.com/api/webhooks/1234567890/abcdefghij",
+        "https://ptb.discord.com/api/webhooks/1234567890/abcdefghij",
+        "https://discord.com/api/v10/webhooks/1234567890/abcdefghij"
+    })
+    @DisplayName("Discord 웹훅 URL 전체 일치는 등록 검증을 통과한다")
+    void isDiscordWebhookUrl_validForms(String url) {
+        assertThat(SensitiveDataMasker.isDiscordWebhookUrl(url)).isTrue();
+        assertThat(SensitiveDataMasker.isSlackWebhookUrl(url)).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        // 실제 요청 대상은 웹훅 호스트가 아닌 값들 (부분 일치를 허용하면 뚫린다)
+        "https://evil.example/?u=https://hooks.slack.com/services/T0/B0/x",
+        "https://evil.example/?u=https://discord.com/api/webhooks/1/2",
+        "https://hooks.slack.com.evil.example/services/T0/B0/x",
+        "https://discord.com.evil.example/api/webhooks/1/2",
+        "https://hooks.slack.com@evil.example/services/T0/B0/x",
+        // 평문 http
+        "http://hooks.slack.com/services/T0/B0/x",
+        "http://discord.com/api/webhooks/1/2",
+        // 토큰 구간 없음
+        "https://hooks.slack.com/services/",
+        "https://discord.com/api/webhooks",
+        // 웹훅이 아닌 같은 회사 경로
+        "https://api.slack.com/methods/chat.postMessage",
+        "https://discord.com/api/v10/users/@me"
+    })
+    @DisplayName("웹훅 호스트가 아니거나 전체 일치가 아니면 어느 provider로도 통과하지 않는다")
+    void webhookUrlPredicates_rejectNonWebhookForms(String url) {
+        assertThat(SensitiveDataMasker.isSlackWebhookUrl(url)).isFalse();
+        assertThat(SensitiveDataMasker.isDiscordWebhookUrl(url)).isFalse();
+    }
+
+    @Test
+    @DisplayName("null은 어느 판정에서도 false다")
+    void webhookUrlPredicates_nullIsFalse() {
+        assertThat(SensitiveDataMasker.isSlackWebhookUrl(null)).isFalse();
+        assertThat(SensitiveDataMasker.isDiscordWebhookUrl(null)).isFalse();
+    }
+
+    @Test
+    @DisplayName("마스킹·저장 거부·등록 검증이 같은 도메인 조각을 본다")
+    void webhookPatterns_shareDomainFragments() {
+        String slackTrigger = "https://hooks.slack.com/triggers/T0/123/tokenABC";
+        String discordVersioned = "https://discord.com/api/v10/webhooks/1/tokenABC";
+
+        assertThat(SensitiveDataMasker.containsWebhookUrl(slackTrigger)).isTrue();
+        assertThat(SensitiveDataMasker.containsWebhookUrl(discordVersioned)).isTrue();
+        assertThat(SensitiveDataMasker.mask(Map.of("url", slackTrigger)))
+            .containsEntry("url", "https://hooks.slack.com/triggers/***");
+        assertThat(SensitiveDataMasker.mask(Map.of("url", discordVersioned)))
+            .containsEntry("url", "https://discord.com/api/v10/webhooks/***");
     }
 }
