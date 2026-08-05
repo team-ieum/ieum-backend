@@ -6,30 +6,27 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import java.util.List;
 import java.util.Map;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+/**
+ * 워크플로우 생성·수정 <b>요청</b>의 노드. 조회 응답은 {@link NodeView}가 담당한다.
+ *
+ * <p>아래 검증 어노테이션은 {@code @Valid}가 붙은 요청 본문에서만 강제된다 — 조회 경로는 이 DTO를
+ * 거치지 않으므로 응답 쪽 불변식을 여기에 기대면 안 된다.
+ */
 @Getter
 public class NodeDto {
-
-    /** 좌표가 없는 노드에 조회 응답에서만 채워 주는 기본 배치값. */
-    private static final double DEFAULT_X_ORIGIN = 40.0;
-    private static final double DEFAULT_X_GAP = 380.0;
-    private static final double DEFAULT_Y = 120.0;
 
     @NotBlank(message = "노드 id는 필수입니다.")
     private String id;
 
     /**
-     * 알 수 없는 값은 역직렬화 단계에서 예외 대신 null로 흘린다.
-     *
-     * <p>이 DTO는 요청 본문뿐 아니라 <b>조회 응답</b>에도 쓰이는데, 조회 쪽 원본인 Mongo
-     * {@code workflow_definitions.nodes}는 이 DTO를 거치지 않고 저장되는 경로(ieum-agent 생성분)가
-     * 있어 BE가 값을 통제하지 못한다. 예외로 두면 어긋난 문서 하나가 목록 조회 전체를 500으로
-     * 무너뜨린다. 요청 경로에서는 null이 된 값을 아래 {@code @NotNull}이 400으로 잡는다.
+     * 알 수 없는 값은 역직렬화 단계에서 예외 대신 null로 흘리고, 그 null을 아래 {@code @NotNull}이
+     * 400으로 잡는다. 예외로 두면 본문 전체 파싱 실패({@code HttpMessageNotReadableException})가 되어
+     * 응답이 어느 필드가 잘못됐는지 알려주지 못한다(둘 다 400이라 상태 코드는 같다).
      */
     @NotNull(message = "노드 type은 필수입니다.")
     @JsonFormat(with = JsonFormat.Feature.READ_UNKNOWN_ENUM_VALUES_AS_NULL)
@@ -66,38 +63,5 @@ public class NodeDto {
 
         @NotNull(message = "position.y는 필수입니다.")
         private Double y;
-    }
-
-    /**
-     * 좌표가 없는 노드에 기본 배치값을 채운다. <b>조회 응답 전용이다.</b>
-     *
-     * <p>좌표를 확정하는 주체는 프론트이므로 이 값을 Mongo로 되쓰면 안 된다 — 되쓰는 순간
-     * 프론트가 확정한 좌표와 드리프트한다. 저장된 정의에 좌표가 없는 경우는 두 가지다:
-     * 이 필드가 생기기 전에 만들어진 워크플로우, 그리고 ieum-agent가 생성한 워크플로우
-     * (agent 응답은 이 DTO를 타지 않고 그대로 저장된다).
-     *
-     * <p>{@code position} 자체가 없는 경우뿐 아니라 {@code x}·{@code y} 한쪽만 있는 경우도 채운다.
-     * 계약상 좌표는 null일 수 없는데, 검증을 거치지 않는 위 저장 경로에서는 부분 좌표가 들어올 수 있다.
-     *
-     * <p>목록 자체가 null인 경우와 null 원소는 여기서 방어하지 않는다. 유일한 호출부인
-     * {@code WorkflowService.convertEach}가 그 둘을 이미 정규화해 넘기기 때문이다(null 목록은 빈
-     * 목록으로, null 원소는 제외). 방어를 양쪽에 두면 어느 쪽이 계약인지 흐려지므로 원본 한 곳에만
-     * 둔다 — 다른 호출부를 추가한다면 그쪽도 같은 정규화를 거쳐야 한다.
-     */
-    public static void applyDefaultPositions(List<NodeDto> nodes) {
-        for (int i = 0; i < nodes.size(); i++) {
-            NodeDto node = nodes.get(i);
-            double defaultX = DEFAULT_X_ORIGIN + i * DEFAULT_X_GAP;
-            if (node.position == null) {
-                node.position = new Position(defaultX, DEFAULT_Y);
-            } else {
-                Position position = node.position;
-                if (position.x == null || position.y == null) {
-                    node.position = new Position(
-                        position.x != null ? position.x : defaultX,
-                        position.y != null ? position.y : DEFAULT_Y);
-                }
-            }
-        }
     }
 }

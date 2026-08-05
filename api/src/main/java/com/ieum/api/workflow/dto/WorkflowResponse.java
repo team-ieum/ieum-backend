@@ -22,13 +22,13 @@ public class WorkflowResponse {
     private TriggerType triggerType;
     private String cronExpression;
     private Integer version;
-    private List<NodeDto> nodes;
-    private List<EdgeDto> edges;
+    private List<NodeView> nodes;
+    private List<EdgeView> edges;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
     public static WorkflowResponse from(Workflow workflow, WorkflowVersion latestVersion,
-            List<NodeDto> nodes, List<EdgeDto> edges) {
+            List<NodeView> nodes, List<EdgeView> edges) {
         return WorkflowResponse.builder()
             .id(workflow.getId())
             .userId(workflow.getUserId())
