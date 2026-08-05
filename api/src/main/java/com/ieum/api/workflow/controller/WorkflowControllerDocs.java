@@ -49,8 +49,12 @@ public interface WorkflowControllerDocs {
                       "description": "수동으로 실행하면 이름을 받아 인사 메시지를 만든다",
                       "triggerType": "MANUAL",
                       "nodes": [
-                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "시작",      "config": {} },
+                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "시작",
+                          "description": "실행 버튼을 누르면 시작해요.",
+                          "position": { "x": 40, "y": 120 }, "config": {} },
                         { "id": "node-transform", "type": "TRANSFORM", "label": "메시지 생성",
+                          "description": "입력한 이름으로 인사말을 만들어요.",
+                          "position": { "x": 420, "y": 120 },
                           "config": { "mappings": {
                             "message": "안녕하세요, {{nodes.node-trigger.output.name}}님!"
                           }}}
@@ -70,10 +74,16 @@ public interface WorkflowControllerDocs {
                       "triggerType": "SCHEDULE",
                       "cronExpression": "0 0 10 * * ?",
                       "nodes": [
-                        { "id": "node-trigger",   "type": "TRIGGER", "label": "스케줄 시작", "config": {} },
+                        { "id": "node-trigger",   "type": "TRIGGER", "label": "스케줄 시작",
+                          "description": "매일 오전 10시에 자동으로 시작해요.",
+                          "position": { "x": 40, "y": 120 }, "config": {} },
                         { "id": "node-http",      "type": "HTTP",    "label": "데이터 수집",
+                          "description": "외부 서비스에서 오늘 데이터를 가져와요.",
+                          "position": { "x": 420, "y": 120 },
                           "config": { "method": "GET", "url": "https://jsonplaceholder.typicode.com/todos/1", "headers": {} }},
                         { "id": "node-transform", "type": "TRANSFORM", "label": "결과 정리",
+                          "description": "가져온 데이터에서 필요한 값만 골라내요.",
+                          "position": { "x": 800, "y": 120 },
                           "config": { "mappings": {
                             "title":     "{{nodes.node-http.output.title}}",
                             "completed": "{{nodes.node-http.output.completed}}"
@@ -94,18 +104,67 @@ public interface WorkflowControllerDocs {
                       "description": "외부 쇼핑몰에서 주문 이벤트 발생 시 호출",
                       "triggerType": "WEBHOOK",
                       "nodes": [
-                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "Webhook 수신", "config": {} },
+                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "Webhook 수신",
+                          "description": "쇼핑몰에서 주문이 들어오면 시작해요.",
+                          "position": { "x": 40, "y": 120 }, "config": {} },
                         { "id": "node-condition", "type": "CONDITION", "label": "주문 금액 확인",
+                          "description": "주문 금액이 5만원을 넘는지 확인해요.",
+                          "position": { "x": 420, "y": 120 },
                           "config": { "left": "{{nodes.node-trigger.output.amount}}", "operator": "greaterThan", "right": "50000" }},
                         { "id": "node-vip",   "type": "TRANSFORM", "label": "VIP 처리",
+                          "description": "고액 주문을 VIP 등급으로 표시해요.",
+                          "position": { "x": 800, "y": 40 },
                           "config": { "mappings": { "grade": "VIP", "orderId": "{{nodes.node-trigger.output.orderId}}" }}},
                         { "id": "node-normal", "type": "TRANSFORM", "label": "일반 처리",
+                          "description": "그 외 주문을 일반 등급으로 표시해요.",
+                          "position": { "x": 800, "y": 320 },
                           "config": { "mappings": { "grade": "일반", "orderId": "{{nodes.node-trigger.output.orderId}}" }}}
                       ],
                       "edges": [
                         { "source": "node-trigger",   "target": "node-condition" },
                         { "source": "node-condition", "target": "node-vip",    "conditionType": "true" },
                         { "source": "node-condition", "target": "node-normal", "conditionType": "false" }
+                      ]
+                    }"""
+            ),
+            @ExampleObject(
+                name = "AI 노드 (앱 동작 포함)",
+                summary = "AI가 문의를 분류하고 Slack으로 알림 — 앱 동작은 AI 노드 + tools다",
+                value = """
+                    {
+                      "name": "문의 분류 워크플로우",
+                      "description": "들어온 문의를 AI가 분류하고 담당 채널에 알린다",
+                      "triggerType": "WEBHOOK",
+                      "nodes": [
+                        { "id": "inquiry-trigger", "type": "TRIGGER", "label": "문의가 도착하면",
+                          "description": "새 고객 문의가 들어오면 자동으로 시작해요.",
+                          "position": { "x": 40, "y": 120 }, "config": {} },
+                        { "id": "classify-inquiry", "type": "AI", "label": "문의 유형 나누기",
+                          "description": "AI가 문의 내용을 읽고 알맞은 유형으로 나눠요.",
+                          "position": { "x": 420, "y": 120 },
+                          "config": {
+                            "llmProvider": "GEMINI",
+                            "model": "gemini-3.5-flash",
+                            "credentialId": "550e8400-e29b-41d4-a716-446655440010",
+                            "prompt": "문의 내용과 긴급도를 분류해 주세요.",
+                            "agentType": "simple",
+                            "tools": []
+                          }},
+                        { "id": "notify-team", "type": "AI", "label": "담당 채널에 알리기",
+                          "description": "분류 결과를 담당 팀의 Slack 채널로 보내요.",
+                          "position": { "x": 800, "y": 120 },
+                          "config": {
+                            "serviceType": "SLACK",
+                            "llmProvider": "GEMINI",
+                            "model": "gemini-3.5-flash",
+                            "prompt": "다음 분류 결과를 슬랙으로 보내줘: {{nodes.classify-inquiry.output.output}}",
+                            "agentType": "react",
+                            "tools": [{ "name": "slack" }]
+                          }}
+                      ],
+                      "edges": [
+                        { "source": "inquiry-trigger",  "target": "classify-inquiry" },
+                        { "source": "classify-inquiry", "target": "notify-team" }
                       ]
                     }"""
             ),
@@ -117,8 +176,12 @@ public interface WorkflowControllerDocs {
                       "name": "변수 치환 테스트",
                       "description": "triggerData 값을 TRANSFORM으로 가공",
                       "nodes": [
-                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "시작",      "config": {} },
+                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "시작",
+                          "description": "실행하면 시작해요.",
+                          "position": { "x": 40, "y": 120 }, "config": {} },
                         { "id": "node-transform", "type": "TRANSFORM", "label": "메시지 가공",
+                          "description": "받은 이름을 인사말로 바꿔요.",
+                          "position": { "x": 420, "y": 120 },
                           "config": { "mappings": {
                             "greeting": "안녕하세요, {{nodes.node-trigger.output.name}}님!",
                             "original": "{{nodes.node-trigger.output.name}}"
@@ -137,12 +200,20 @@ public interface WorkflowControllerDocs {
                       "name": "CONDITION 분기 테스트",
                       "description": "score 값에 따라 pass/fail 분기",
                       "nodes": [
-                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "시작", "config": {} },
+                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "시작",
+                          "description": "실행하면 시작해요.",
+                          "position": { "x": 40, "y": 120 }, "config": {} },
                         { "id": "node-condition", "type": "CONDITION", "label": "점수 판정",
+                          "description": "점수가 60점 이상인지 확인해요.",
+                          "position": { "x": 420, "y": 120 },
                           "config": { "left": "{{nodes.node-trigger.output.score}}", "operator": "greaterThanOrEqual", "right": "60" }},
                         { "id": "node-pass", "type": "TRANSFORM", "label": "합격 처리",
+                          "description": "60점 이상이면 합격으로 표시해요.",
+                          "position": { "x": 800, "y": 40 },
                           "config": { "mappings": { "result": "합격", "score": "{{nodes.node-trigger.output.score}}" }}},
                         { "id": "node-fail", "type": "TRANSFORM", "label": "불합격 처리",
+                          "description": "60점 미만이면 불합격으로 표시해요.",
+                          "position": { "x": 800, "y": 320 },
                           "config": { "mappings": { "result": "불합격", "score": "{{nodes.node-trigger.output.score}}" }}}
                       ],
                       "edges": [
@@ -160,10 +231,16 @@ public interface WorkflowControllerDocs {
                       "name": "HTTP 호출 테스트",
                       "description": "공개 API 호출 후 결과 가공",
                       "nodes": [
-                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "시작", "config": {} },
+                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "시작",
+                          "description": "실행하면 시작해요.",
+                          "position": { "x": 40, "y": 120 }, "config": {} },
                         { "id": "node-http",      "type": "HTTP",      "label": "공개 API 호출",
+                          "description": "외부 서비스에서 할 일 정보를 가져와요.",
+                          "position": { "x": 420, "y": 120 },
                           "config": { "method": "GET", "url": "https://jsonplaceholder.typicode.com/todos/1", "headers": {} }},
                         { "id": "node-transform", "type": "TRANSFORM", "label": "결과 정리",
+                          "description": "가져온 정보에서 제목과 완료 여부만 남겨요.",
+                          "position": { "x": 800, "y": 120 },
                           "config": { "mappings": {
                             "todoTitle": "{{nodes.node-http.output.title}}",
                             "isDone":    "{{nodes.node-http.output.completed}}"
@@ -207,10 +284,16 @@ public interface WorkflowControllerDocs {
                       "name": "변수 치환 테스트 v2",
                       "description": "노드 하나 추가",
                       "nodes": [
-                        { "id": "node-trigger",    "type": "TRIGGER",   "label": "시작", "config": {} },
+                        { "id": "node-trigger",    "type": "TRIGGER",   "label": "시작",
+                          "description": "실행하면 시작해요.",
+                          "position": { "x": 40, "y": 120 }, "config": {} },
                         { "id": "node-transform1", "type": "TRANSFORM", "label": "1차 가공",
+                          "description": "받은 이름을 그대로 넘겨요.",
+                          "position": { "x": 420, "y": 120 },
                           "config": { "mappings": { "step1": "{{nodes.node-trigger.output.name}}" }}},
                         { "id": "node-transform2", "type": "TRANSFORM", "label": "2차 가공",
+                          "description": "1차 결과에 안내 문구를 붙여요.",
+                          "position": { "x": 800, "y": 120 },
                           "config": { "mappings": { "step2": "가공완료: {{nodes.node-transform1.output.step1}}" }}}
                       ],
                       "edges": [

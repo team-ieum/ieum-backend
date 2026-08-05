@@ -1,13 +1,14 @@
 package com.ieum.api.workflow.service;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.api.workflow.dto.CreateWorkflowRequest;
 import com.ieum.api.workflow.dto.EdgeDto;
+import com.ieum.api.workflow.dto.EdgeView;
 import com.ieum.api.workflow.dto.ExecuteWorkflowRequest;
 import com.ieum.api.workflow.dto.NodeDto;
+import com.ieum.api.workflow.dto.NodeView;
 import com.ieum.api.workflow.dto.UpdateWorkflowRequest;
 import com.ieum.api.workflow.dto.WorkflowExecutionLogResponse;
 import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
@@ -239,13 +240,22 @@ public class WorkflowService {
 
     // ------------------------------------------------------------------ PRIVATE
 
+    /**
+     * 저장된 정의(raw {@code Map})를 응답으로 옮긴다.
+     *
+     * <p>정의 문서의 구조는 BE가 통제하지 못한다(사유와 항목별 규칙은 {@link NodeView} 참조).
+     * 그래서 응답 매핑은 요청 DTO({@link NodeDto}·{@link EdgeDto})와 Jackson 빈 바인딩을 쓰지 않고
+     * {@link NodeView}·{@link EdgeView}가 raw 값을 직접 읽어 만든다 — 어긋난 문서 하나가 예외로
+     * 터져 조회(특히 사용자의 모든 워크플로우를 한 번에 변환하는 {@link #getWorkflows})를 500으로
+     * 무너뜨리지 않게 하기 위함이다.
+     */
     private WorkflowResponse toResponse(Workflow workflow, WorkflowVersion version) {
-        List<NodeDto> nodes = Collections.emptyList();
-        List<EdgeDto> edges = Collections.emptyList();
+        List<NodeView> nodes = Collections.emptyList();
+        List<EdgeView> edges = Collections.emptyList();
         if (version != null) {
             WorkflowDefinitionDocument definition = workflowCrudService.loadDefinition(version);
-            nodes = objectMapper.convertValue(definition.getNodes(), new TypeReference<>() {});
-            edges = objectMapper.convertValue(definition.getEdges(), new TypeReference<>() {});
+            nodes = NodeView.fromDefinition(definition.getNodes(), workflow.getId());
+            edges = EdgeView.fromDefinition(definition.getEdges(), nodes, workflow.getId());
         }
         return WorkflowResponse.from(workflow, version, nodes, edges);
     }
