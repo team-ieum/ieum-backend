@@ -23,6 +23,7 @@ import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.event.ExecutionEventType;
+import com.ieum.workflowcore.engine.event.NodeEventStatus;
 import com.ieum.workflowcore.engine.executor.AlertNotifier;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
@@ -64,6 +65,7 @@ class SyncExecutionRuntimeTest {
     private Workflow workflow;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final UUID executionId = UUID.randomUUID();
+    private final UUID workflowId = UUID.randomUUID();
 
     /** 실행된 노드 ID를 기록하는 페이크 Executor. 공유 상태로 fan-out/조건/실패를 검증한다. */
     static class RecordingExecutor implements NodeExecutor {
@@ -117,6 +119,7 @@ class SyncExecutionRuntimeTest {
         execution = mock(WorkflowExecution.class);
         workflow = mock(Workflow.class);
         when(workflow.getUserId()).thenReturn(UUID.randomUUID());
+        when(workflow.getId()).thenReturn(workflowId);
         when(execution.getWorkflow()).thenReturn(workflow);
         when(execution.getStatus()).thenReturn(ExecutionStatus.RUNNING);
         when(execution.getTraceId()).thenReturn("11112222333344445555666677778888");
@@ -369,6 +372,232 @@ class SyncExecutionRuntimeTest {
         assertThatThrownBy(this::run)
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("순환");
+    }
+
+    @Nested
+    @DisplayName("SSE 이벤트 공통 필드")
+    class SseEventEnvelope {
+
+        private List<ExecutionEvent> publishedEvents() {
+            ArgumentCaptor<ExecutionEvent> captor = ArgumentCaptor.forClass(ExecutionEvent.class);
+            verify(eventPublisher, atLeastOnce()).publish(eq(executionId), captor.capture());
+            return captor.getAllValues();
+        }
+
+        private void assertEnvelope(List<ExecutionEvent> events) {
+            assertThat(events).isNotEmpty();
+            assertThat(events).allSatisfy(event -> {
+                assertThat(event.executionId()).isEqualTo(executionId);
+                assertThat(event.workflowId()).isEqualTo(workflowId);
+                assertThat(event.occurredAt()).isNotNull();
+            });
+        }
+
+        @Test
+        @DisplayName("성공 실행이 발행하는 모든 이벤트에 executionId·workflowId·occurredAt이 실린다")
+        void success_events_carry_ids_and_timestamp() throws Exception {
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI")),
+                List.of(edge("t", "a", null))
+            );
+
+            run();
+
+            List<ExecutionEvent> events = publishedEvents();
+            assertEnvelope(events);
+            // 시작 2 + 완료 2 + 실행 종료 1
+            assertThat(events).hasSize(5);
+            assertThat(events.get(events.size() - 1).type())
+                .isEqualTo(ExecutionEventType.EXECUTION_COMPLETED);
+        }
+
+        @Test
+        @DisplayName("실패 실행이 발행하는 모든 이벤트에도 executionId·workflowId·occurredAt이 실린다")
+        void failure_events_carry_ids_and_timestamp() throws Exception {
+            failNodeIds.add("a");
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI")),
+                List.of(edge("t", "a", null))
+            );
+
+            run();
+
+            List<ExecutionEvent> events = publishedEvents();
+            assertEnvelope(events);
+            assertThat(events).anySatisfy(event ->
+                assertThat(event.type()).isEqualTo(ExecutionEventType.NODE_FAILED));
+            assertThat(events.get(events.size() - 1).executionStatus())
+                .isEqualTo(ExecutionStatus.FAILED);
+        }
+
+        @Test
+        @DisplayName("재처리 스킵 노드의 NODE_STARTED에도 공통 필드가 실린다")
+        void preCompleted_skip_events_carry_ids_and_timestamp() throws Exception {
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI")),
+                List.of(edge("t", "a", null))
+            );
+
+            runtime().execute(mock(WorkflowVersion.class), executionId, new HashMap<>(),
+                Map.of("a", Map.of("output", "원 실행 값")));
+
+            assertEnvelope(publishedEvents());
+        }
+
+        @Test
+        @DisplayName("NODE_STARTED는 status RUNNING을 싣는다")
+        void nodeStarted_carries_running_status() throws Exception {
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI")),
+                List.of(edge("t", "a", null))
+            );
+
+            run();
+
+            List<ExecutionEvent> started = publishedEvents().stream()
+                .filter(e -> e.type() == ExecutionEventType.NODE_STARTED)
+                .toList();
+            assertThat(started).hasSize(2);
+            assertThat(started).allSatisfy(event ->
+                assertThat(event.status()).isEqualTo(NodeEventStatus.RUNNING));
+        }
+    }
+
+    @Nested
+    @DisplayName("스킵 노드 SSE 이벤트")
+    class SkippedNodeEvents {
+
+        private List<ExecutionEvent> publishedEvents() {
+            ArgumentCaptor<ExecutionEvent> captor = ArgumentCaptor.forClass(ExecutionEvent.class);
+            verify(eventPublisher, atLeastOnce()).publish(eq(executionId), captor.capture());
+            return captor.getAllValues();
+        }
+
+        private List<WorkflowExecutionLog> savedLogs() {
+            ArgumentCaptor<WorkflowExecutionLog> captor =
+                ArgumentCaptor.forClass(WorkflowExecutionLog.class);
+            verify(logRepository, atLeastOnce()).save(captor.capture());
+            return captor.getAllValues();
+        }
+
+        private ExecutionEvent terminalEventOf(List<ExecutionEvent> events, String nodeId) {
+            return events.stream()
+                .filter(e -> nodeId.equals(e.nodeId()) && e.type() != ExecutionEventType.NODE_STARTED)
+                .reduce((first, second) -> second)
+                .orElseThrow();
+        }
+
+        @Test
+        @DisplayName("죽은 조건 분기로 건너뛴 노드도 SKIPPED 이벤트로 전달된다")
+        void dead_branch_node_publishes_skipped_event() throws Exception {
+            conditionResults.put("cond", true);
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("cond", "CONDITION"),
+                    node("yes", "AI"), node("no", "AI")),
+                List.of(edge("t", "cond", null), edge("cond", "yes", "true"),
+                    edge("cond", "no", "false"))
+            );
+
+            run();
+
+            ExecutionEvent skipped = terminalEventOf(publishedEvents(), "no");
+            assertThat(skipped.type()).isEqualTo(ExecutionEventType.NODE_COMPLETED);
+            assertThat(skipped.status()).isEqualTo(NodeEventStatus.SKIPPED);
+            assertThat(skipped.nodeType()).isEqualTo(NodeType.AI);
+            assertThat(skipped.executionId()).isEqualTo(executionId);
+            assertThat(skipped.workflowId()).isEqualTo(workflowId);
+            assertThat(skipped.occurredAt()).isNotNull();
+            // 실행된 분기는 그대로 SUCCESS다.
+            assertThat(terminalEventOf(publishedEvents(), "yes").status())
+                .isEqualTo(NodeEventStatus.SUCCESS);
+        }
+
+        @Test
+        @DisplayName("죽은 분기 노드는 node_runs에도 SKIPPED로 남는다 — 스냅샷 재생의 유일한 근거")
+        void dead_branch_node_is_persisted_as_skipped() throws Exception {
+            conditionResults.put("cond", true);
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("cond", "CONDITION"),
+                    node("yes", "AI"), node("no", "AI")),
+                List.of(edge("t", "cond", null), edge("cond", "yes", "true"),
+                    edge("cond", "no", "false"))
+            );
+
+            run();
+
+            WorkflowExecutionLog skippedLog = savedLogs().stream()
+                .filter(l -> "no".equals(l.getNodeId())).findFirst().orElseThrow();
+            assertThat(skippedLog.getStatus()).isEqualTo(ExecutionLogStatus.SKIPPED);
+            assertThat(skippedLog.getNodeType()).isEqualTo(NodeType.AI);
+            assertThat(skippedLog.getDurationMs()).isZero();
+            assertThat(skippedLog.getAttemptCount()).isZero();
+            // output을 채우면 재처리가 이 행을 재사용 대상으로 읽어 빈 출력을 주입한다.
+            assertThat(skippedLog.getOutputJson()).isNull();
+            assertThat(skippedLog.getTraceId()).isEqualTo(execution.getTraceId());
+        }
+
+        @Test
+        @DisplayName("죽은 분기의 하위 노드까지 전부 SKIPPED 이벤트를 받는다")
+        void dead_branch_cascade_publishes_skipped_events() throws Exception {
+            conditionResults.put("cond", true);
+            // cond--false-->no-->tail : no가 죽으면 tail도 함께 죽는다
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("cond", "CONDITION"),
+                    node("yes", "AI"), node("no", "AI"), node("tail", "AI")),
+                List.of(edge("t", "cond", null), edge("cond", "yes", "true"),
+                    edge("cond", "no", "false"), edge("no", "tail", null))
+            );
+
+            run();
+
+            assertThat(log).doesNotContain("no", "tail");
+            List<ExecutionEvent> events = publishedEvents();
+            assertThat(terminalEventOf(events, "no").status()).isEqualTo(NodeEventStatus.SKIPPED);
+            assertThat(terminalEventOf(events, "tail").status()).isEqualTo(NodeEventStatus.SKIPPED);
+            assertThat(savedLogs())
+                .filteredOn(l -> l.getStatus() == ExecutionLogStatus.SKIPPED)
+                .extracting(WorkflowExecutionLog::getNodeId)
+                .containsExactlyInAnyOrder("no", "tail");
+        }
+
+        @Test
+        @DisplayName("재처리로 executor를 부르지 않은 노드의 완료 이벤트도 status SKIPPED다")
+        void precompleted_node_completion_event_carries_skipped_status() throws Exception {
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI"), node("b", "AI")),
+                List.of(edge("t", "a", null), edge("a", "b", null))
+            );
+
+            runtime().execute(mock(WorkflowVersion.class), executionId, new HashMap<>(),
+                Map.of("a", Map.of("output", "원 실행 값")));
+
+            List<ExecutionEvent> events = publishedEvents();
+            assertThat(terminalEventOf(events, "a").type())
+                .isEqualTo(ExecutionEventType.NODE_COMPLETED);
+            assertThat(terminalEventOf(events, "a").status()).isEqualTo(NodeEventStatus.SKIPPED);
+            assertThat(terminalEventOf(events, "b").status()).isEqualTo(NodeEventStatus.SUCCESS);
+        }
+
+        @Test
+        @DisplayName("회귀: 스킵이 없는 실행은 이벤트 수·모양이 그대로다 (성공 SUCCESS / 실패 FAILED)")
+        void no_skip_execution_events_unchanged() throws Exception {
+            failNodeIds.add("b");
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI"), node("b", "AI")),
+                List.of(edge("t", "a", null), edge("a", "b", null))
+            );
+
+            run();
+
+            List<ExecutionEvent> events = publishedEvents();
+            assertThat(events).noneMatch(e -> e.status() == NodeEventStatus.SKIPPED);
+            assertThat(terminalEventOf(events, "t").status()).isEqualTo(NodeEventStatus.SUCCESS);
+            assertThat(terminalEventOf(events, "a").status()).isEqualTo(NodeEventStatus.SUCCESS);
+            assertThat(terminalEventOf(events, "b").type()).isEqualTo(ExecutionEventType.NODE_FAILED);
+            assertThat(terminalEventOf(events, "b").status()).isEqualTo(NodeEventStatus.FAILED);
+            // 시작 3 + 성공 2 + 실패 1 + 실행 종료 1
+            assertThat(events).hasSize(7);
+        }
     }
 
     @Nested

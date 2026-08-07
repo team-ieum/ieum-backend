@@ -18,7 +18,9 @@ import com.ieum.workflowcore.engine.executor.AlertNotifier;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowQueryRepository;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -244,25 +246,38 @@ public class WorkflowExecutionService {
         List<ExecutionEvent> events = new ArrayList<>();
         for (WorkflowExecutionLog logEntry :
                 workflowExecutionLogRepository.findByExecutionIdOrderByCreatedAtAsc(executionId)) {
-            events.add(toEvent(logEntry));
+            events.add(toEvent(workflowId, executionId, logEntry));
         }
 
         ExecutionStatus status = execution.getStatus();
         boolean terminal = status == ExecutionStatus.SUCCESS || status == ExecutionStatus.FAILED;
         if (terminal) {
-            events.add(ExecutionEvent.executionCompleted(status));
+            events.add(ExecutionEvent.executionCompleted(executionId, workflowId, status)
+                .withOccurredAt(toInstant(execution.getFinishedAt())));
         }
         return new ExecutionEventSnapshot(status, terminal, events);
     }
 
-    private ExecutionEvent toEvent(WorkflowExecutionLog logEntry) {
+    private ExecutionEvent toEvent(UUID workflowId, UUID executionId,
+                                   WorkflowExecutionLog logEntry) {
         long duration = logEntry.getDurationMs() != null ? logEntry.getDurationMs() : 0L;
-        if (logEntry.getStatus() == ExecutionLogStatus.FAILED) {
-            return ExecutionEvent.nodeFailed(
-                logEntry.getNodeId(), logEntry.getNodeType(), logEntry.getErrorMessage(), duration);
-        }
-        return ExecutionEvent.nodeCompleted(
-            logEntry.getNodeId(), logEntry.getNodeType(), duration);
+        // SKIPPED를 따로 다루지 않으면 건너뛴 노드가 성공으로 재생된다.
+        // 분기는 ExecutionLogStatus 전체를 덮어야 한다 — default로 뭉치면 값이 늘 때 또 뭉개진다.
+        ExecutionEvent event = switch (logEntry.getStatus()) {
+            case FAILED -> ExecutionEvent.nodeFailed(executionId, workflowId, logEntry.getNodeId(),
+                logEntry.getNodeType(), logEntry.getErrorMessage(), duration);
+            case SKIPPED -> ExecutionEvent.nodeSkipped(executionId, workflowId, logEntry.getNodeId(),
+                logEntry.getNodeType(), duration);
+            case SUCCESS -> ExecutionEvent.nodeCompleted(executionId, workflowId,
+                logEntry.getNodeId(), logEntry.getNodeType(), duration);
+        };
+        // 정적 팩토리는 호출 시각을 싣는다 — 재생 이벤트는 기록 시각으로 되돌린다.
+        return event.withOccurredAt(toInstant(logEntry.getCreatedAt()));
+    }
+
+    /** 감사 필드(LocalDateTime)를 이벤트 시각으로 변환한다. 값이 없으면 현재 시각으로 대체한다. */
+    private static Instant toInstant(LocalDateTime time) {
+        return time != null ? time.atZone(ZoneId.systemDefault()).toInstant() : Instant.now();
     }
 
     /**
@@ -284,15 +299,17 @@ public class WorkflowExecutionService {
      * @param reason 오류 요약. 알림 문구에 실리고 {@code workflow_runs.error_message}에도 남는다 —
      *               이 경로엔 실패 노드 로그가 없어 여기가 유일한 원인 기록이다.
      *               자격증명·프롬프트 원문이 아닌 값만 넘길 것. null이면 실패 원인 없이 발신된다
-     * @return 이 호출이 실제로 FAILED로 전이시켰으면 true. 이미 종료됐거나 실행이 없으면 false —
-     *         호출부가 이 실행을 실패로 취급하는 후속 처리(SSE 종료 이벤트 등)를 걸 때 쓴다
+     * @return 이 호출이 실제로 FAILED로 전이시켰으면 그 실행의 workflowId. 이미 종료됐거나 실행이
+     *         없으면 빈 Optional — 호출부가 이 실행을 실패로 취급하는 후속 처리(SSE 종료 이벤트 등)를
+     *         걸 때 쓴다. workflowId를 함께 주는 이유는 SSE 종료 이벤트가 그 값을 싣는데,
+     *         호출부(sweeper)는 트랜잭션 밖이라 LAZY 연관을 직접 읽을 수 없기 때문이다
      */
     @Transactional
-    public boolean markAsFailed(UUID executionId, String reason) {
-        return workflowExecutionRepository.findById(executionId).map(execution -> {
+    public Optional<UUID> markAsFailed(UUID executionId, String reason) {
+        return workflowExecutionRepository.findById(executionId).<Optional<UUID>>map(execution -> {
             if (execution.getStatus() == ExecutionStatus.FAILED
                     || execution.getStatus() == ExecutionStatus.SUCCESS) {
-                return false;
+                return Optional.empty();
             }
             execution.fail();
             execution.recordError(reason);
@@ -303,8 +320,8 @@ public class WorkflowExecutionService {
                 execution.getId(), workflow.getId(), workflow.getName(), workflow.getUserId(),
                 null, reason, false);
             afterCommit(() -> notifyFailure(alert));
-            return true;
-        }).orElse(false);
+            return Optional.of(workflow.getId());
+        }).orElse(Optional.empty());
     }
 
     /**
