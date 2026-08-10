@@ -24,6 +24,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -51,7 +52,7 @@ class AgentNodeExecutorTest {
         betaPlatformProvider = new StubBetaPlatformProvider();
         idempotencyStore = mock(IdempotencyStore.class);
         when(idempotencyStore.markInFlight(any(), any())).thenReturn(true);
-        when(credentialProvider.getDecryptedApiKey(any())).thenReturn("decrypted-api-key");
+        when(credentialProvider.getDecryptedApiKey(any(), any())).thenReturn("decrypted-api-key");
         executor = new AgentNodeExecutor(
             mockWebServer.url("/").toString(),
             credentialProvider,
@@ -449,8 +450,8 @@ class AgentNodeExecutorTest {
         assertThat(result.isSuccess()).isTrue();
         RecordedRequest recorded = mockWebServer.takeRequest();
         assertThat(recorded.getHeader("X-Notion-Token")).isEqualTo("decrypted-api-key");
-        verify(credentialProvider).getDecryptedApiKey("llm-cred-id");
-        verify(credentialProvider).getDecryptedApiKey("notion-cred-id");
+        verify(credentialProvider).getDecryptedApiKey("llm-cred-id", null);
+        verify(credentialProvider).getDecryptedApiKey("notion-cred-id", null);
     }
 
     @Test
@@ -479,8 +480,8 @@ class AgentNodeExecutorTest {
         assertThat(result.isSuccess()).isTrue();
         RecordedRequest recorded = mockWebServer.takeRequest();
         assertThat(recorded.getHeader("X-Notion-Token")).isEqualTo("ntn_test_token");
-        verify(credentialProvider).getDecryptedApiKey("llm-cred-id");
-        verify(credentialProvider, never()).getDecryptedApiKey("ntn_test_token");
+        verify(credentialProvider).getDecryptedApiKey("llm-cred-id", null);
+        verify(credentialProvider, never()).getDecryptedApiKey(eq("ntn_test_token"), any());
     }
 
     @Test
@@ -621,7 +622,7 @@ class AgentNodeExecutorTest {
 
         verify(betaProvider).reserveQuota(userId);
         verify(betaProvider).recordTokens(userId, 150L);
-        verify(credentialProvider, never()).getDecryptedApiKey(any());
+        verify(credentialProvider, never()).getDecryptedApiKey(any(), any());
     }
 
     @Test

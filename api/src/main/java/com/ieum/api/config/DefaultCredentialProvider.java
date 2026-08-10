@@ -24,9 +24,9 @@ public class DefaultCredentialProvider implements CredentialProvider {
     private final CredentialService credentialService;
 
     @Override
-    public String getDecryptedApiKey(String credentialId) {
+    public String getDecryptedApiKey(String credentialId, UUID userId) {
         try {
-            return credentialService.decrypt(UUID.fromString(credentialId));
+            return credentialService.decrypt(UUID.fromString(credentialId), userId);
         } catch (IllegalArgumentException e) {
             throw new CustomException(ErrorCode.INVALID_INPUT, "유효하지 않은 Credential ID 형식입니다.");
         }

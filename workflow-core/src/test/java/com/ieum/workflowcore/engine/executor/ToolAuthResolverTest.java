@@ -54,7 +54,7 @@ class ToolAuthResolverTest {
         String byokKey = "byok-notion-key";
         String credentialId = "test-cred-id";
 
-        when(credentialProvider.getDecryptedApiKey(credentialId)).thenReturn(byokKey);
+        when(credentialProvider.getDecryptedApiKey(credentialId, userId)).thenReturn(byokKey);
 
         List<Map<String, Object>> tools = List.of(
             Map.of("name", "builtin:notion_create_page", "credentialId", credentialId)

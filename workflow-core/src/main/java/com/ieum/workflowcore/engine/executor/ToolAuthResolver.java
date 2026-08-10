@@ -95,7 +95,7 @@ public class ToolAuthResolver {
         if (credentialId.isPresent() && !credentialId.get().isBlank()) {
             return credentialId.map(id -> {
                 log.debug("[ToolAuthResolver] 도구 인증 credential 조회 — toolName: {}", toolName);
-                return credentialProvider.getDecryptedApiKey(id);
+                return credentialProvider.getDecryptedApiKey(id, userId);
             });
         }
         // 2순위: OAuth connected_accounts 방식 (Notion 도구인 경우)

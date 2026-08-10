@@ -334,7 +334,7 @@ public class ChatService {
                 // 자격 없는 사용자가 키 없는 AI 노드를 실행하면 명시적 예외 — 복호화 단계의 NPE 방지
                 throw new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE);
             }
-            String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
+            String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId, userId);
             return new AgentConfig(llmProvider, decryptedApiKey, tools, false);
         }
 
@@ -357,7 +357,7 @@ public class ChatService {
         }
         log.info("[ChatService][DEBUG] fallbackCredentialId={}, userId={}", fallbackCredentialId, userId);
         Credential credential = credentialService.getByIdAndUserId(fallbackCredentialId, userId);
-        String decryptedApiKey = credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString());
+        String decryptedApiKey = credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString(), userId);
         return new AgentConfig(credential.getProvider().name(), decryptedApiKey, null, false);
     }
 

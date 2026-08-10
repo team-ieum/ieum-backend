@@ -271,7 +271,7 @@ class ChatServiceTest {
                 + "\"config\":{\"llmProvider\":\"OPENAI\",\"credentialId\":\"cred-1\"}}]");
         given(workflowCrudService.findLatestVersion(workflowId))
             .willReturn(Optional.of(version));
-        given(credentialProvider.getDecryptedApiKey("cred-1")).willReturn("decrypted-key");
+        given(credentialProvider.getDecryptedApiKey("cred-1", userId)).willReturn("decrypted-key");
 
         ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER");
 
@@ -296,7 +296,7 @@ class ChatServiceTest {
             .willReturn(List.of(credential));
         given(credentialService.getByIdAndUserId(autoCredentialId, userId))
             .willReturn(credential);
-        given(credentialProvider.getDecryptedApiKey(autoCredentialId.toString()))
+        given(credentialProvider.getDecryptedApiKey(autoCredentialId.toString(), userId))
             .willReturn("auto-decrypted-key");
 
         ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER");
@@ -351,7 +351,7 @@ class ChatServiceTest {
         given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(workflowCrudService.loadDefinition(version)).willReturn(buildDoc(List.of()));
         given(credentialService.getByIdAndUserId(fallbackCredentialId, userId)).willReturn(credential);
-        given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString())).willReturn("test-api-key");
+        given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString(), userId)).willReturn("test-api-key");
         given(integrationContextService.resolve(userId))
             .willReturn(new IntegrationContext(List.of(), List.of()));
         given(agentClient.chat(any(AgentChatCallParams.class)))
@@ -379,7 +379,7 @@ class ChatServiceTest {
         given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(workflowCrudService.loadDefinition(version)).willReturn(buildDoc(List.of()));
         given(credentialService.getByIdAndUserId(fallbackCredentialId, userId)).willReturn(credential);
-        given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString())).willReturn("test-api-key");
+        given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString(), userId)).willReturn("test-api-key");
         given(integrationContextService.resolve(userId))
             .willReturn(new IntegrationContext(List.of(), List.of()));
         given(agentClient.chat(any(AgentChatCallParams.class)))
@@ -407,7 +407,7 @@ class ChatServiceTest {
         given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(workflowCrudService.loadDefinition(version)).willReturn(buildDoc(List.of()));
         given(credentialService.getByIdAndUserId(fallbackCredentialId, userId)).willReturn(credential);
-        given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString())).willReturn("test-api-key");
+        given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString(), userId)).willReturn("test-api-key");
         given(integrationContextService.resolve(userId))
             .willReturn(new IntegrationContext(List.of(), List.of()));
         given(agentClient.chat(any(AgentChatCallParams.class)))

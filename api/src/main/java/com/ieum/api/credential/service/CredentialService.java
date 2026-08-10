@@ -74,8 +74,22 @@ public class CredentialService {
         credentialRepository.delete(credential);
     }
 
-    public String decrypt(UUID credentialId) {
-        Credential credential = credentialRepository.findById(credentialId)
+    /**
+     * 크레덴셜을 복호화한다. 소유자만 열 수 있다 (IEUM-BE-64).
+     *
+     * <p>이 조회 하나가 소유자 검증의 전부다 — {@code findByIdAndUserId}를 {@code findById}로 되돌리면
+     * 워크플로우 노드 config에 남의 credential UUID를 적는 것만으로 그 사용자의 API 키가 실행에 실린다.
+     * 웹훅 자격증명({@code DefaultWebhookCredentialProvider})이 같은 이유로 같은 조회를 쓴다.
+     *
+     * <p>{@code userId}가 없으면 소유자를 확인할 방법이 없으므로 조회 없이 거부한다(fail-closed).
+     * 실행 컨텍스트의 userId는 항상 워크플로우 소유자로 채워지므로(SyncExecutionRuntime), null은
+     * 배선이 빠진 경로라는 뜻이다.
+     */
+    public String decrypt(UUID credentialId, UUID userId) {
+        if (userId == null) {
+            throw new CustomException(ErrorCode.NOT_FOUND);
+        }
+        Credential credential = credentialRepository.findByIdAndUserId(credentialId, userId)
                 .orElseThrow(() -> new CustomException(ErrorCode.NOT_FOUND));
         return aesEncryptor.decrypt(credential.getEncryptedApiKey());
     }
