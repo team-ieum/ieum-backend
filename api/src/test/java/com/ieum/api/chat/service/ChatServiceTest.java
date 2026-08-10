@@ -851,6 +851,69 @@ class ChatServiceTest {
         verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any());
     }
 
+    // ─────────────────── agent 생성 정의의 남의 credentialId 거부 (IEUM-BE-64) ─
+
+    @Test
+    @DisplayName("blocking chat — agent가 만든 노드에 남의 credentialId가 있으면 저장하지 않는다")
+    void chat_agentNodeWithForeignCredentialId_notSaved() throws Exception {
+        UUID foreignCredentialId = UUID.randomUUID();
+        ChatAgentResponse resp = buildWorkflowResponse(
+            "{ \"credentialId\": \"" + foreignCredentialId + "\" }");
+
+        ChatSession session = buildSession(workflowId, userId);
+        WorkflowVersion version = buildVersionWithNodesJson("[]");
+        given(sessionRepository.save(any())).willReturn(session);
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(credentialService.getByUserId(userId)).willReturn(List.of());
+        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
+        given(integrationContextService.resolve(userId))
+            .willReturn(new IntegrationContext(List.of(), List.of()));
+        given(agentClient.chat(any(AgentChatCallParams.class))).willReturn(resp);
+
+        assertThatThrownBy(() ->
+            chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("요약해줘", null)))
+            .isInstanceOf(CustomException.class)
+            .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
+                .isEqualTo(ErrorCode.INVALID_WORKFLOW))
+            // 메시지는 WS 핸들러가 사용자에게 그대로 보내고 로그에도 남는다.
+            .satisfies(e -> assertThat(e.getMessage())
+                .doesNotContain(foreignCredentialId.toString()));
+
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("서버가 주입하는 fallback credentialId는 검사에 걸리지 않는다 — 검사는 주입 전에 한다")
+    void finalizeStream_fallbackCredentialInjection_isNotRejected() throws Exception {
+        UUID fallbackCredentialId = UUID.randomUUID();
+        // AI 노드에 credentialId가 비어 있어야 fallback 주입이 일어난다.
+        ChatAgentResponse resp = objectMapper.readValue("""
+            {
+                "message": "완성됐어요",
+                "type": "WORKFLOW_GENERATED",
+                "nodes": [
+                    { "id": "node-ai", "type": "AI", "config": { "llmProvider": "CLAUDE" } }
+                ],
+                "edges": []
+            }
+            """, ChatAgentResponse.class);
+
+        ChatSession session = buildSession(workflowId, userId);
+        given(sessionRepository.findById(sessionId)).willReturn(Optional.of(session));
+        given(messageRepository.save(any(ChatMessage.class)))
+            .willReturn(buildMessage(session, MessageType.AGENT, "완성됐어요"));
+        // 소유 목록을 비워 둔다 — 주입 뒤에 검사하면 서버가 고른 값이 스스로 거부당하는 것이 드러난다.
+        given(credentialService.getByUserId(userId)).willReturn(List.of());
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        chatService.finalizeStream(workflowId, sessionId, resp, config, fallbackCredentialId, userId);
+
+        verify(workflowCrudService).saveAgentVersion(
+            eq(workflowId),
+            argThat(nodesJson -> nodesJson.contains(fallbackCredentialId.toString())),
+            any());
+    }
+
     /** HTTP 노드 하나짜리 WORKFLOW_GENERATED 응답. config만 테스트마다 바꾼다. */
     private ChatAgentResponse buildWorkflowResponse(String httpConfig) throws Exception {
         String json = """

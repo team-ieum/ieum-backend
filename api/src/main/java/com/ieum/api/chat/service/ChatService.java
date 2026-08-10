@@ -19,6 +19,7 @@ import com.ieum.api.mcp.domain.McpServerCatalog;
 import com.ieum.api.mcp.repository.McpServerCatalogRepository;
 import com.ieum.api.webhookcredential.domain.WebhookCredential;
 import com.ieum.api.webhookcredential.repository.WebhookCredentialRepository;
+import com.ieum.api.workflow.service.NodeCredentialGuard;
 import com.ieum.api.workflow.service.RawWebhookUrlGuard;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
@@ -41,6 +42,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -174,7 +176,7 @@ public class ChatService {
         //    첫 생성 여부를 저장 전에 확인 (저장 후에는 version이 증가하므로)
         if (agentResponse.isWorkflowResult()) {
             int maxVersionBeforeSave = workflowCrudService.findMaxVersionByWorkflowId(workflowId);
-            saveWorkflowVersion(workflowId, agentResponse, agentConfig, request.getCredentialId());
+            saveWorkflowVersion(workflowId, agentResponse, agentConfig, request.getCredentialId(), userId);
 
             if (maxVersionBeforeSave <= 1 && agentResponse.getWorkflowName() != null) {
                 workflowCrudService.updateWorkflowName(workflowId, agentResponse.getWorkflowName());
@@ -537,10 +539,15 @@ public class ChatService {
      */
     @SuppressWarnings("unchecked")
     private void saveWorkflowVersion(UUID workflowId, ChatAgentResponse agentResponse,
-            AgentConfig agentConfig, UUID fallbackCredentialId) {
+            AgentConfig agentConfig, UUID fallbackCredentialId, UUID userId) {
         try {
             List<Map<String, Object>> nodes = objectMapper.convertValue(
                 agentResponse.getNodes(), new TypeReference<>() {});
+
+            // 소유 크레덴셜 목록은 저장당 한 번만 조회한다(노드마다 부르면 N+1).
+            Set<String> ownedCredentialIds = credentialService.getByUserId(userId).stream()
+                .map(credential -> credential.getId().toString())
+                .collect(Collectors.toSet());
 
             // AI 노드에 credentialId / llmProvider 주입 (agent가 생성 시 누락하는 경우 보완)
             for (Map<String, Object> node : nodes) {
@@ -548,6 +555,11 @@ public class ChatService {
                 // webhookCredentialId 목록만 주고 URL은 주지 않지만(resolveAvailableWebhooks),
                 // 사용자가 프롬프트에 URL을 그대로 적으면 그 값이 노드 config로 돌아올 수 있다.
                 RawWebhookUrlGuard.rejectRawWebhookUrl(node.get("config"));
+
+                // credentialId 소유 검사는 아래 fallback 주입보다 **먼저** 한다 (IEUM-BE-64 Task 2).
+                // 주입되는 값은 서버가 고른 요청자 소유 크레덴셜이라 검사 대상이 아니며, 검사 대상은
+                // agent가 실어 보낸 값뿐이다. 순서를 뒤집으면 서버가 채운 값을 스스로 판정하게 된다.
+                NodeCredentialGuard.rejectForeignCredentialId(node.get("config"), ownedCredentialIds);
 
                 String nodeType = (String) node.get("type");
                 if ("AI".equals(nodeType)) {
@@ -754,7 +766,7 @@ public class ChatService {
 
         if (agentResponse.isWorkflowResult()) {
             int maxVersionBeforeSave = workflowCrudService.findMaxVersionByWorkflowId(workflowId);
-            saveWorkflowVersion(workflowId, agentResponse, config, fallbackCredentialId);
+            saveWorkflowVersion(workflowId, agentResponse, config, fallbackCredentialId, userId);
 
             if (maxVersionBeforeSave <= 1 && agentResponse.getWorkflowName() != null) {
                 workflowCrudService.updateWorkflowName(workflowId, agentResponse.getWorkflowName());

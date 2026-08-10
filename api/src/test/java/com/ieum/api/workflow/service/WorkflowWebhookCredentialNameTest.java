@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.api.credential.service.CredentialService;
 import com.ieum.api.webhookcredential.domain.WebhookCredential;
 import com.ieum.api.webhookcredential.service.WebhookCredentialService;
 import com.ieum.api.workflow.WorkflowExecutionRunner;
@@ -50,7 +51,8 @@ class WorkflowWebhookCredentialNameTest {
         mock(WorkflowExecutionRunner.class),
         mock(ExecutionEventPublisher.class),
         new ObjectMapper(),
-        webhookCredentialService);
+        webhookCredentialService,
+        mock(CredentialService.class));
 
     private final ObjectMapper jsonMapper = new ObjectMapper();
     private final UUID userId = UUID.randomUUID();
