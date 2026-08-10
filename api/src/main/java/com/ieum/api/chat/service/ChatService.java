@@ -556,11 +556,6 @@ public class ChatService {
                 // 사용자가 프롬프트에 URL을 그대로 적으면 그 값이 노드 config로 돌아올 수 있다.
                 RawWebhookUrlGuard.rejectRawWebhookUrl(node.get("config"));
 
-                // credentialId 소유 검사는 아래 fallback 주입보다 **먼저** 한다 (IEUM-BE-64 Task 2).
-                // 주입되는 값은 서버가 고른 요청자 소유 크레덴셜이라 검사 대상이 아니며, 검사 대상은
-                // agent가 실어 보낸 값뿐이다. 순서를 뒤집으면 서버가 채운 값을 스스로 판정하게 된다.
-                NodeCredentialGuard.rejectForeignCredentialId(node.get("config"), ownedCredentialIds);
-
                 String nodeType = (String) node.get("type");
                 if ("AI".equals(nodeType)) {
                     Map<String, Object> config = (Map<String, Object>) node.get("config");
@@ -580,6 +575,14 @@ public class ChatService {
                         }
                     }
                 }
+
+                // credentialId 소유 검사는 위 fallback 주입보다 **뒤**다 (IEUM-BE-64 Task 2 수정).
+                // 주입값 fallbackCredentialId는 서버가 고른 값이 아니라 요청 본문의 credentialId
+                // 원본이고(chat: request.getCredentialId(), 스트리밍도 같은 값이 흘러온다),
+                // resolveAgentConfig의 소유 검증(getByIdAndUserId)은 "AI 노드 없음" 분기에서만
+                // 일어난다. 주입 전에 검사하면 AI 노드가 있는 워크플로우에서 남의 UUID가 무검사로
+                // 저장된다. 주입 뒤에 보면 agent가 실어 보낸 값과 주입값을 한 번에 판정한다.
+                NodeCredentialGuard.rejectForeignCredentialId(node.get("config"), ownedCredentialIds);
             }
 
             String nodesJson = objectMapper.writeValueAsString(nodes);
