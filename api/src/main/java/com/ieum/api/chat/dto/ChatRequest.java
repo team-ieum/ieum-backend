@@ -13,7 +13,7 @@ import lombok.NoArgsConstructor;
  * <p>프론트엔드는 현재 캔버스 상태({@code currentNodes}/{@code currentEdges})를 함께 전송한다.
  * {@code currentNodes}가 null이면 신규 워크플로우 생성, 값이 있으면 기존 워크플로우 수정으로 판단한다.
  *
- * <p>이 값은 BE가 DB에서 다시 읽지 않고 그대로 agent에 전달된다(ChatService:149·:706).
+ * <p>이 값은 BE가 DB에서 다시 읽지 않고 그대로 agent에 전달된다(ChatService.chat·ChatService.prepareStream).
  * 따라서 agent 쪽에서 "서버가 준 원본"으로 신뢰할 수 있는 값이 아니다 — 노드 검증 완화의
  * 근거로 쓰지 말 것(IEUM-AI-58에서 이 전제를 걷어냈다).
  */
