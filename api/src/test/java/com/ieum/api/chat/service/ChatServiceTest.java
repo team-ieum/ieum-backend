@@ -960,6 +960,34 @@ class ChatServiceTest {
         verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any());
     }
 
+    @Test
+    @DisplayName("blocking chat — agent가 만든 노드 config에 API 키 원문이 있으면 저장하지 않는다")
+    void chat_agentNodeWithInlineSecret_notSaved() throws Exception {
+        // 사용자가 프롬프트에 키를 그대로 적으면 그 값이 노드 config로 돌아온다. config는 Mongo에
+        // 평문 저장되고 조회 응답에 그대로 실린다.
+        ChatAgentResponse resp = buildWorkflowResponse("{ \"apiKey\": \"sk-live-not-a-real-key\" }");
+
+        ChatSession session = buildSession(workflowId, userId);
+        WorkflowVersion version = buildVersionWithNodesJson("[]");
+        given(sessionRepository.save(any())).willReturn(session);
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(credentialService.getByUserId(userId)).willReturn(List.of());
+        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
+        given(integrationContextService.resolve(userId))
+            .willReturn(new IntegrationContext(List.of(), List.of()));
+        given(agentClient.chat(any(AgentChatCallParams.class))).willReturn(resp);
+
+        assertThatThrownBy(() ->
+            chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("요약해줘", null)))
+            .isInstanceOf(CustomException.class)
+            .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
+                .isEqualTo(ErrorCode.INVALID_WORKFLOW))
+            // 메시지는 WS 핸들러가 사용자에게 그대로 보내고 로그에도 남는다.
+            .satisfies(e -> assertThat(e.getMessage()).doesNotContain("sk-live-not-a-real-key"));
+
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any());
+    }
+
     /** credentialId가 비어 있는 AI 노드 하나짜리 응답 — fallback 주입이 일어나는 모양이다. */
     private ChatAgentResponse buildAiNodeResponse() throws Exception {
         return objectMapper.readValue("""

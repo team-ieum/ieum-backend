@@ -303,6 +303,9 @@ public class WorkflowService {
      * ({@code CredentialService.MAX_CREDENTIALS_PER_USER})라 한 번 담아 두고 나눠 쓰면 충분하고,
      * 노드마다 부르면 N+1이 된다. 판정과 메시지는 {@link NodeCredentialGuard}가 갖는다(채팅으로
      * agent가 만든 정의도 같은 검사를 거친다).
+     *
+     * <p>같은 루프에서 비밀 원문 키도 거부한다({@code NodeCredentialGuard.rejectInlineSecret}) —
+     * 크레덴셜 참조를 통째로 건너뛰고 API 키를 config에 박으면 소유 검사가 아무것도 보지 못한다.
      */
     private void rejectForeignCredentialIds(UUID userId, List<NodeDto> nodes) {
         if (nodes == null || nodes.isEmpty()) {
@@ -313,6 +316,8 @@ public class WorkflowService {
             .collect(Collectors.toSet());
         for (NodeDto node : nodes) {
             NodeCredentialGuard.rejectForeignCredentialId(node.getConfig(), owned);
+            // 남의 크레덴셜을 참조하는 것뿐 아니라, 참조 자체를 건너뛰고 원문을 config에 박는 길도 막는다.
+            NodeCredentialGuard.rejectInlineSecret(node.getConfig());
         }
     }
 

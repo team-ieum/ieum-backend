@@ -355,9 +355,10 @@ public class ChatService {
             }
             Credential defaultCredential = credentials.get(0);
             fallbackCredentialId = defaultCredential.getId();
-            log.info("[ChatService] AI 노드가 없고 fallbackCredentialId가 누락되어 사용자의 기본 크레덴셜을 자동 적용합니다. credentialId: {}", fallbackCredentialId);
+            // 크레덴셜 ID는 남기지 않는다 — 자동 적용이 일어났다는 사실만으로 진단은 충분하고,
+            // 식별자는 로그 수집기까지 따라간다.
+            log.info("[ChatService] AI 노드가 없고 fallbackCredentialId가 누락되어 사용자의 기본 크레덴셜을 자동 적용합니다.");
         }
-        log.info("[ChatService][DEBUG] fallbackCredentialId={}, userId={}", fallbackCredentialId, userId);
         Credential credential = credentialService.getByIdAndUserId(fallbackCredentialId, userId);
         String decryptedApiKey = credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString(), userId);
         return new AgentConfig(credential.getProvider().name(), decryptedApiKey, null, false);
@@ -561,12 +562,13 @@ public class ChatService {
                     Map<String, Object> config = (Map<String, Object>) node.get("config");
                     if (config != null) {
                         String existingCredentialId = (String) config.get("credentialId");
-                        log.info("[ChatService][DEBUG] nodeId={}, existingCredentialId='{}', fallback={}",
-                            node.get("id"), existingCredentialId, fallbackCredentialId);
                         if ((existingCredentialId == null || existingCredentialId.isBlank())
                                 && fallbackCredentialId != null) {
                             config.put("credentialId", fallbackCredentialId.toString());
-                            log.info("[ChatService][DEBUG] credentialId 주입 완료 — nodeId={}", node.get("id"));
+                            // 크레덴셜 식별자는 남기지 않는다 — 어느 노드에 주입이 일어났는지만 있으면
+                            // "AI 노드인데 키가 비어 왔다"는 진단에 충분하다.
+                            log.info("[ChatService] AI 노드에 기본 credentialId를 주입했습니다 — nodeId: {}",
+                                node.get("id"));
                         }
                         String existingProvider = (String) config.get("llmProvider");
                         if ((existingProvider == null || existingProvider.isBlank())
@@ -583,6 +585,9 @@ public class ChatService {
                 // 일어난다. 주입 전에 검사하면 AI 노드가 있는 워크플로우에서 남의 UUID가 무검사로
                 // 저장된다. 주입 뒤에 보면 agent가 실어 보낸 값과 주입값을 한 번에 판정한다.
                 NodeCredentialGuard.rejectForeignCredentialId(node.get("config"), ownedCredentialIds);
+                // 참조를 건너뛰고 원문을 config에 박는 길도 막는다 — 사용자가 프롬프트에 API 키를
+                // 그대로 적으면 그 값이 노드 config로 돌아올 수 있다.
+                NodeCredentialGuard.rejectInlineSecret(node.get("config"));
             }
 
             String nodesJson = objectMapper.writeValueAsString(nodes);

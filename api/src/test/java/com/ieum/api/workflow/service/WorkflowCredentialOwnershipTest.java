@@ -30,6 +30,8 @@ import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpStatus;
 
 /**
@@ -212,5 +214,156 @@ class WorkflowCredentialOwnershipTest {
 
         // 노드마다 조회하면 N+1이 된다. 사용자당 최대 10개(MAX_CREDENTIALS_PER_USER)라 한 번이면 충분하다.
         verify(credentialService, times(1)).getByUserId(userId);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"apiKey", "api_key", "apikey", "APIKEY", "accessToken", "access_token",
+        "secret", "password", "privateKey"})
+    @DisplayName("config 최상위에 비밀 원문 키가 있으면 거부한다")
+    void rejectsInlineSecretKeys(String secretKey) {
+        CreateWorkflowRequest request = read(CreateWorkflowRequest.class,
+            "{ \"" + secretKey + "\": \"sk-live-not-a-real-key\" }");
+
+        assertThatThrownBy(() -> workflowService.createWorkflow(userId, request))
+            .isInstanceOf(CustomException.class)
+            .satisfies(e -> assertThat(((CustomException) e).getErrorCode().getStatus())
+                .isEqualTo(HttpStatus.BAD_REQUEST))
+            // 거부 메시지는 그대로 WARN 로그에 남는다 — 막으려던 원문을 로그로 흘리면 안 된다.
+            .hasMessageNotContaining("sk-live-not-a-real-key");
+
+        verifyNoInteractions(workflowCrudService);
+    }
+
+    @Test
+    @DisplayName("수정 경로에도 비밀 원문 키 검사가 걸린다")
+    void rejectsInlineSecretKeysOnUpdate() {
+        UpdateWorkflowRequest request = read(UpdateWorkflowRequest.class,
+            "{ \"apiKey\": \"sk-live-not-a-real-key\" }");
+
+        assertThatThrownBy(() -> workflowService.updateWorkflow(userId, workflowId, request))
+            .isInstanceOf(CustomException.class)
+            .satisfies(e -> assertThat(((CustomException) e).getErrorCode().getStatus())
+                .isEqualTo(HttpStatus.BAD_REQUEST));
+
+        verifyNoInteractions(workflowCrudService);
+    }
+
+    @Test
+    @DisplayName("변수 참조는 저장 시점의 비밀이 아니므로 통과한다")
+    void allowsVariableReferenceInSecretKey() {
+        stubSaveSucceeds();
+        CreateWorkflowRequest request = read(CreateWorkflowRequest.class,
+            "{ \"apiKey\": \"{{nodes.abc.output.token}}\" }");
+
+        assertThatCode(() -> workflowService.createWorkflow(userId, request))
+            .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("참조용 ID 키는 비밀이 아니므로 통과한다")
+    void allowsReferenceIdKeys() {
+        stubSaveSucceeds();
+        given(credentialService.getByUserId(userId)).willReturn(List.of(ownedCredential));
+
+        CreateWorkflowRequest request = read(CreateWorkflowRequest.class, """
+            { "credentialId": "%s",
+              "webhookCredentialId": "%s",
+              "catalogId": "%s" }""".formatted(
+            OWNED_CREDENTIAL_ID, UUID.randomUUID(), UUID.randomUUID()));
+
+        assertThatCode(() -> workflowService.createWorkflow(userId, request))
+            .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("중첩 Map 안의 비밀 키는 보지 않는다 — HTTP 노드 headers의 Authorization은 정당하다")
+    void ignoresSecretKeyNestedInMap() {
+        stubSaveSucceeds();
+        CreateWorkflowRequest request = read(CreateWorkflowRequest.class,
+            "{ \"headers\": { \"apiKey\": \"sk-live-not-a-real-key\" } }");
+
+        assertThatCode(() -> workflowService.createWorkflow(userId, request))
+            .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("tools[].credentialId(평면 형태)가 남의 것이면 거부한다")
+    void rejectsForeignCredentialIdInFlatToolAuth() {
+        given(credentialService.getByUserId(userId)).willReturn(List.of(ownedCredential));
+
+        CreateWorkflowRequest request = read(CreateWorkflowRequest.class, """
+            { "tools": [ { "name": "notion_search", "credentialId": "%s" } ] }"""
+            .formatted(FOREIGN_CREDENTIAL_ID));
+
+        assertThatThrownBy(() -> workflowService.createWorkflow(userId, request))
+            .isInstanceOf(CustomException.class)
+            .satisfies(e -> assertThat(((CustomException) e).getErrorCode().getStatus())
+                .isEqualTo(HttpStatus.BAD_REQUEST))
+            .hasMessageNotContaining(FOREIGN_CREDENTIAL_ID.toString());
+
+        verifyNoInteractions(workflowCrudService);
+    }
+
+    @Test
+    @DisplayName("tools[].auth.credentialId(구조화 형태)가 남의 것이면 거부한다")
+    void rejectsForeignCredentialIdInStructuredToolAuth() {
+        given(credentialService.getByUserId(userId)).willReturn(List.of(ownedCredential));
+
+        CreateWorkflowRequest request = read(CreateWorkflowRequest.class, """
+            { "tools": [ { "name": "notion_search",
+                "auth": { "type": "credential", "credentialId": "%s" } } ] }"""
+            .formatted(FOREIGN_CREDENTIAL_ID));
+
+        assertThatThrownBy(() -> workflowService.createWorkflow(userId, request))
+            .isInstanceOf(CustomException.class)
+            .satisfies(e -> assertThat(((CustomException) e).getErrorCode().getStatus())
+                .isEqualTo(HttpStatus.BAD_REQUEST));
+
+        verifyNoInteractions(workflowCrudService);
+    }
+
+    @Test
+    @DisplayName("본인 credentialId를 쓰는 도구는 통과한다")
+    void allowsOwnCredentialIdInToolAuth() {
+        stubSaveSucceeds();
+        given(credentialService.getByUserId(userId)).willReturn(List.of(ownedCredential));
+
+        CreateWorkflowRequest request = read(CreateWorkflowRequest.class, """
+            { "tools": [ { "name": "notion_search", "credentialId": "%s" },
+                         { "name": "slack_post",
+                           "auth": { "type": "credential", "credentialId": "%s" } } ] }"""
+            .formatted(OWNED_CREDENTIAL_ID, OWNED_CREDENTIAL_ID));
+
+        assertThatCode(() -> workflowService.createWorkflow(userId, request))
+            .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("auth.type이 secret이면 auth.value의 원문은 막지 않는다 — 지원되는 기존 기능이다")
+    void allowsPlainSecretInToolAuthValue() {
+        stubSaveSucceeds();
+        CreateWorkflowRequest request = read(CreateWorkflowRequest.class, """
+            { "tools": [ { "name": "notion_search",
+                "auth": { "type": "secret", "value": "raw-token-value" } } ] }""");
+
+        assertThatCode(() -> workflowService.createWorkflow(userId, request))
+            .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("tools가 List가 아니거나 원소가 Map이 아니어도 형변환 예외를 내지 않는다")
+    void toleratesMalformedToolsShape() {
+        stubSaveSucceeds();
+        CreateWorkflowRequest request = read(CreateWorkflowRequest.class,
+            "{ \"tools\": \"notion_search\" }");
+
+        assertThatCode(() -> workflowService.createWorkflow(userId, request))
+            .doesNotThrowAnyException();
+
+        CreateWorkflowRequest listOfStrings = read(CreateWorkflowRequest.class,
+            "{ \"tools\": [ \"notion_search\", null ] }");
+
+        assertThatCode(() -> workflowService.createWorkflow(userId, listOfStrings))
+            .doesNotThrowAnyException();
     }
 }
