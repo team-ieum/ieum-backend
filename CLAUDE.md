@@ -82,7 +82,7 @@ QueryDSL (openfeign 7.1), springdoc-openapi 2.8.4, Quartz, Spring @Async (MVP)
 - 연동 해제 시 토큰 즉시 DELETE, 소프트 딜리트 금지
 
 ## Git 컨벤션
-- 브랜치: `main` → `develop` → `{type}/IEUM-BE-{번호}` (Notion 이슈 ID 기반)
+- 브랜치: `main` → `dev` → `{type}/IEUM-BE-{번호}` (Notion 이슈 ID 기반)
 - 커밋: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`
 - PR: `[feat] 기능명`, Squash Merge만 사용, feature 브랜치 수명 최대 3일
 - PR 설명에 Notion 이슈 링크 포함
