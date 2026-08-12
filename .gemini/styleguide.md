@@ -1,5 +1,7 @@
 # ieum-backend Style Guide
 
+**리뷰 코멘트는 한국어로 작성한다.**
+
 ## 프로젝트 개요
 Java 21 + Spring Boot 3.5.11 기반 멀티모듈 Gradle 모노리스.
 AI 에이전트 기반 업무 자동화 플랫폼 (Zapier/Make + AI Agent).
@@ -11,15 +13,15 @@ AI 에이전트 기반 업무 자동화 플랫폼 (Zapier/Make + AI Agent).
 단방향 의존만 허용. 역방향 및 순환 참조 금지.
 
 ```
-api          → workflow-core, auth
-workflow-core → integration, ai
-integration  → auth
-모든 모듈     → common
+api           → workflow-core, auth
+workflow-core → common
+auth          → common
 ```
 
 - `common` 모듈은 다른 모듈을 참조하지 않는다
 - `workflow-core`는 `api`, `auth`를 참조하지 않는다
-- `auth`는 `workflow-core`, `ai`를 참조하지 않는다
+- `auth`는 `api`, `workflow-core`를 참조하지 않는다
+- `ai/`·`integration/` 디렉터리는 죽은 껍데기이므로 여기에 새 코드를 만들지 않는다 (`settings.gradle`의 실제 모듈은 위 4개뿐이다)
 - 모듈 경계를 넘는 직접 클래스 참조는 금지한다
 - `api` 모듈만 `org.springframework.boot` 플러그인을 적용한다
 
