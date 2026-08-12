@@ -9,7 +9,7 @@ public record ModelInfo(
         @Schema(description = "모델 ID", example = "claude-sonnet-4-20250514", allowableValues = {
                 "claude-sonnet-4-20250514", "claude-haiku-4-5-20251001",
                 "gpt-4o", "gpt-4o-mini",
-                "gemini-2.5-flash"
+                "gemini-3.5-flash"
         }) String id,
         @Schema(description = "표시 이름", example = "Claude Sonnet 4") String displayName,
         @Schema(description = "지원 기능", example = "[\"text\", \"vision\"]") List<String> capabilities,

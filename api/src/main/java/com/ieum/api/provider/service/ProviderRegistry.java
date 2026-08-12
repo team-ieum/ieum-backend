@@ -47,7 +47,7 @@ public class ProviderRegistry {
                 "Google Gemini",
                 List.of("API_KEY", "OAUTH"),
                 List.of(
-                        new ModelInfo("gemini-2.5-flash", "Gemini 2.5 Flash",
+                        new ModelInfo("gemini-3.5-flash", "Gemini 3.5 Flash",
                                 List.of("text", "tools", "vision"), 8192, 1000000)
                 )
         );
