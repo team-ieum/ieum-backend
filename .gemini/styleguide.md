@@ -13,7 +13,7 @@ AI 에이전트 기반 업무 자동화 플랫폼 (Zapier/Make + AI Agent).
 단방향 의존만 허용. 역방향 및 순환 참조 금지.
 
 ```
-api           → workflow-core, auth
+api           → workflow-core, auth, common
 workflow-core → common
 auth          → common
 ```
