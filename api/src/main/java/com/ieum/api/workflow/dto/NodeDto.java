@@ -35,8 +35,12 @@ public class NodeDto {
     @NotBlank(message = "노드 label은 필수입니다.")
     private String label;
 
-    /** 일반 사용자에게 보여줄 자연어 설명. 개발자용 기술 설명이 아니다. */
-    @NotBlank(message = "노드 description은 필수입니다.")
+    /**
+     * 일반 사용자에게 보여줄 자연어 설명. 개발자용 기술 설명이 아니다.
+     *
+     * <p>권장하되 <b>선택</b> 필드다 — 프론트에 이 값을 채워 보내는 경로가 없어, 필수로 두면 실제
+     * 클라이언트의 워크플로우 생성·수정이 전부 400으로 막힌다(IEUM-BE-60).
+     */
     private String description;
 
     /** 캔버스 위치. 좌표를 확정하는 주체는 프론트고, 서버는 받은 값을 그대로 저장한다. */
