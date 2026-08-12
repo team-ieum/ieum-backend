@@ -1,5 +1,6 @@
 package com.ieum.workflowcore.engine.executor;
 
+import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.stereotype.Component;
@@ -14,8 +15,8 @@ import org.springframework.stereotype.Component;
 public class StubCredentialProvider implements CredentialProvider {
 
     @Override
-    public String getDecryptedApiKey(String credentialId) {
-        log.warn("[StubCredentialProvider] CredentialService 미구현 — credentialId: {}", credentialId);
+    public String getDecryptedApiKey(String credentialId, UUID userId) {
+        log.warn("[StubCredentialProvider] CredentialService 미구현");
         throw new UnsupportedOperationException("CredentialService가 아직 구현되지 않았습니다.");
     }
 }

@@ -2,6 +2,7 @@ package com.ieum.api.workflow.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
+import com.ieum.api.credential.service.CredentialService;
 import com.ieum.api.webhookcredential.domain.WebhookCredential;
 import com.ieum.api.webhookcredential.service.WebhookCredentialService;
 import com.ieum.api.workflow.WorkflowExecutionRunner;
@@ -33,7 +34,9 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.codec.ServerSentEvent;
@@ -62,6 +65,7 @@ public class WorkflowService {
     private final ExecutionEventPublisher executionEventPublisher;
     private final ObjectMapper objectMapper;
     private final WebhookCredentialService webhookCredentialService;
+    private final CredentialService credentialService;
 
     /**
      * 노드 config에서 {@code webhookCredentialId}를 찾을 때 들어가는 최대 중첩 깊이. 정의 문서의
@@ -76,6 +80,7 @@ public class WorkflowService {
     @Transactional
     public WorkflowResponse createWorkflow(UUID userId, CreateWorkflowRequest request) {
         rejectRawWebhookUrls(request.getNodes());
+        rejectForeignCredentialIds(userId, request.getNodes());
         WorkflowVersion version = workflowCrudService.createWorkflow(
             userId,
             request.getName(),
@@ -117,6 +122,7 @@ public class WorkflowService {
     public WorkflowResponse updateWorkflow(UUID userId, UUID workflowId,
             UpdateWorkflowRequest request) {
         rejectRawWebhookUrls(request.getNodes());
+        rejectForeignCredentialIds(userId, request.getNodes());
         WorkflowVersion version = workflowCrudService.updateWorkflow(
             userId,
             workflowId,
@@ -284,6 +290,34 @@ public class WorkflowService {
         }
         for (NodeDto node : nodes) {
             RawWebhookUrlGuard.rejectRawWebhookUrl(node.getConfig());
+        }
+    }
+
+    /**
+     * 노드 {@code config.credentialId}가 요청자 소유가 아니면 저장을 거부한다 (IEUM-BE-64).
+     *
+     * <p>실행 시점의 복호화는 이미 소유자만 통과시키므로(Task 1) 이 검사가 없어도 남의 키가 새지는
+     * 않는다. 다만 저장이 되면 실행에서야 {@code NOT_FOUND}로 죽어 사용자에게 원인이 보이지 않는다.
+     *
+     * <p>소유 목록 조회는 노드마다가 아니라 저장당 한 번이다 — 사용자당 최대 10개
+     * ({@code CredentialService.MAX_CREDENTIALS_PER_USER})라 한 번 담아 두고 나눠 쓰면 충분하고,
+     * 노드마다 부르면 N+1이 된다. 판정과 메시지는 {@link NodeCredentialGuard}가 갖는다(채팅으로
+     * agent가 만든 정의도 같은 검사를 거친다).
+     *
+     * <p>같은 루프에서 비밀 원문 키도 거부한다({@code NodeCredentialGuard.rejectInlineSecret}) —
+     * 크레덴셜 참조를 통째로 건너뛰고 API 키를 config에 박으면 소유 검사가 아무것도 보지 못한다.
+     */
+    private void rejectForeignCredentialIds(UUID userId, List<NodeDto> nodes) {
+        if (nodes == null || nodes.isEmpty()) {
+            return;
+        }
+        Set<String> owned = credentialService.getByUserId(userId).stream()
+            .map(credential -> credential.getId().toString())
+            .collect(Collectors.toSet());
+        for (NodeDto node : nodes) {
+            NodeCredentialGuard.rejectForeignCredentialId(node.getConfig(), owned);
+            // 남의 크레덴셜을 참조하는 것뿐 아니라, 참조 자체를 건너뛰고 원문을 config에 박는 길도 막는다.
+            NodeCredentialGuard.rejectInlineSecret(node.getConfig());
         }
     }
 

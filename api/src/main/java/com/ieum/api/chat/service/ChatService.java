@@ -19,6 +19,7 @@ import com.ieum.api.mcp.domain.McpServerCatalog;
 import com.ieum.api.mcp.repository.McpServerCatalogRepository;
 import com.ieum.api.webhookcredential.domain.WebhookCredential;
 import com.ieum.api.webhookcredential.repository.WebhookCredentialRepository;
+import com.ieum.api.workflow.service.NodeCredentialGuard;
 import com.ieum.api.workflow.service.RawWebhookUrlGuard;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
@@ -41,6 +42,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -61,7 +63,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  *   <li>세션 찾기 or 신규 생성</li>
  *   <li>워크플로우 AI 노드 설정(credentialId, llmProvider, tools) 로드</li>
  *   <li>USER 메시지 DB 저장</li>
- *   <li>DB canonical state 조회 → currentNodes/currentEdges 결정</li>
+ *   <li>FE가 보낸 currentNodes/currentEdges를 그대로 전달(DB 재조회 없음)</li>
  *   <li>연동 상태 분류 (availableIntegrations / unavailableIntegrations)</li>
  *   <li>Google 빌트인 도구 여부 판단 → Access Token 조회</li>
  *   <li>AgentClient.chat() 호출 (블로킹)</li>
@@ -174,7 +176,7 @@ public class ChatService {
         //    첫 생성 여부를 저장 전에 확인 (저장 후에는 version이 증가하므로)
         if (agentResponse.isWorkflowResult()) {
             int maxVersionBeforeSave = workflowCrudService.findMaxVersionByWorkflowId(workflowId);
-            saveWorkflowVersion(workflowId, agentResponse, agentConfig, request.getCredentialId());
+            saveWorkflowVersion(workflowId, agentResponse, agentConfig, request.getCredentialId(), userId);
 
             if (maxVersionBeforeSave <= 1 && agentResponse.getWorkflowName() != null) {
                 workflowCrudService.updateWorkflowName(workflowId, agentResponse.getWorkflowName());
@@ -334,7 +336,7 @@ public class ChatService {
                 // 자격 없는 사용자가 키 없는 AI 노드를 실행하면 명시적 예외 — 복호화 단계의 NPE 방지
                 throw new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE);
             }
-            String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
+            String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId, userId);
             return new AgentConfig(llmProvider, decryptedApiKey, tools, false);
         }
 
@@ -353,11 +355,12 @@ public class ChatService {
             }
             Credential defaultCredential = credentials.get(0);
             fallbackCredentialId = defaultCredential.getId();
-            log.info("[ChatService] AI 노드가 없고 fallbackCredentialId가 누락되어 사용자의 기본 크레덴셜을 자동 적용합니다. credentialId: {}", fallbackCredentialId);
+            // 크레덴셜 ID는 남기지 않는다 — 자동 적용이 일어났다는 사실만으로 진단은 충분하고,
+            // 식별자는 로그 수집기까지 따라간다.
+            log.info("[ChatService] AI 노드가 없고 fallbackCredentialId가 누락되어 사용자의 기본 크레덴셜을 자동 적용합니다.");
         }
-        log.info("[ChatService][DEBUG] fallbackCredentialId={}, userId={}", fallbackCredentialId, userId);
         Credential credential = credentialService.getByIdAndUserId(fallbackCredentialId, userId);
-        String decryptedApiKey = credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString());
+        String decryptedApiKey = credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString(), userId);
         return new AgentConfig(credential.getProvider().name(), decryptedApiKey, null, false);
     }
 
@@ -537,10 +540,15 @@ public class ChatService {
      */
     @SuppressWarnings("unchecked")
     private void saveWorkflowVersion(UUID workflowId, ChatAgentResponse agentResponse,
-            AgentConfig agentConfig, UUID fallbackCredentialId) {
+            AgentConfig agentConfig, UUID fallbackCredentialId, UUID userId) {
         try {
             List<Map<String, Object>> nodes = objectMapper.convertValue(
                 agentResponse.getNodes(), new TypeReference<>() {});
+
+            // 소유 크레덴셜 목록은 저장당 한 번만 조회한다(노드마다 부르면 N+1).
+            Set<String> ownedCredentialIds = credentialService.getByUserId(userId).stream()
+                .map(credential -> credential.getId().toString())
+                .collect(Collectors.toSet());
 
             // AI 노드에 credentialId / llmProvider 주입 (agent가 생성 시 누락하는 경우 보완)
             for (Map<String, Object> node : nodes) {
@@ -554,12 +562,13 @@ public class ChatService {
                     Map<String, Object> config = (Map<String, Object>) node.get("config");
                     if (config != null) {
                         String existingCredentialId = (String) config.get("credentialId");
-                        log.info("[ChatService][DEBUG] nodeId={}, existingCredentialId='{}', fallback={}",
-                            node.get("id"), existingCredentialId, fallbackCredentialId);
                         if ((existingCredentialId == null || existingCredentialId.isBlank())
                                 && fallbackCredentialId != null) {
                             config.put("credentialId", fallbackCredentialId.toString());
-                            log.info("[ChatService][DEBUG] credentialId 주입 완료 — nodeId={}", node.get("id"));
+                            // 크레덴셜 식별자는 남기지 않는다 — 어느 노드에 주입이 일어났는지만 있으면
+                            // "AI 노드인데 키가 비어 왔다"는 진단에 충분하다.
+                            log.info("[ChatService] AI 노드에 기본 credentialId를 주입했습니다 — nodeId: {}",
+                                node.get("id"));
                         }
                         String existingProvider = (String) config.get("llmProvider");
                         if ((existingProvider == null || existingProvider.isBlank())
@@ -568,6 +577,17 @@ public class ChatService {
                         }
                     }
                 }
+
+                // credentialId 소유 검사는 위 fallback 주입보다 **뒤**다 (IEUM-BE-64 Task 2 수정).
+                // 주입값 fallbackCredentialId는 서버가 고른 값이 아니라 요청 본문의 credentialId
+                // 원본이고(chat: request.getCredentialId(), 스트리밍도 같은 값이 흘러온다),
+                // resolveAgentConfig의 소유 검증(getByIdAndUserId)은 "AI 노드 없음" 분기에서만
+                // 일어난다. 주입 전에 검사하면 AI 노드가 있는 워크플로우에서 남의 UUID가 무검사로
+                // 저장된다. 주입 뒤에 보면 agent가 실어 보낸 값과 주입값을 한 번에 판정한다.
+                NodeCredentialGuard.rejectForeignCredentialId(node.get("config"), ownedCredentialIds);
+                // 참조를 건너뛰고 원문을 config에 박는 길도 막는다 — 사용자가 프롬프트에 API 키를
+                // 그대로 적으면 그 값이 노드 config로 돌아올 수 있다.
+                NodeCredentialGuard.rejectInlineSecret(node.get("config"));
             }
 
             String nodesJson = objectMapper.writeValueAsString(nodes);
@@ -754,7 +774,7 @@ public class ChatService {
 
         if (agentResponse.isWorkflowResult()) {
             int maxVersionBeforeSave = workflowCrudService.findMaxVersionByWorkflowId(workflowId);
-            saveWorkflowVersion(workflowId, agentResponse, config, fallbackCredentialId);
+            saveWorkflowVersion(workflowId, agentResponse, config, fallbackCredentialId, userId);
 
             if (maxVersionBeforeSave <= 1 && agentResponse.getWorkflowName() != null) {
                 workflowCrudService.updateWorkflowName(workflowId, agentResponse.getWorkflowName());

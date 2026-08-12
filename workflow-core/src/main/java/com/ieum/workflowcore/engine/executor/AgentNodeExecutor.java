@@ -140,7 +140,7 @@ public class AgentNodeExecutor implements NodeExecutor {
             // (useBetaPlatformKey는 reserveQuota가 예외 없이 반환한 뒤에만 true가 된다).
             String decryptedApiKey = null;
             if (credentialId != null && !credentialId.isBlank()) {
-                decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId);
+                decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId, userId);
             } else if (!isSelfHostedEligible(userRole) && userId != null && betaPlatformProvider.isBetaEligible(userId)) {
                 betaReservationKey = betaPlatformProvider.reserveQuota(userId);
                 useBetaPlatformKey = true;
