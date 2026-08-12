@@ -100,22 +100,18 @@ public class CredentialValidator {
         }
     }
 
+    /**
+     * Claude·OpenAI와 달리 생성 요청이 아니라 모델 목록 조회로 검증한다. 특정 모델의
+     * {@code generateContent}를 부르면 그 모델에 접근 권한이 없는 키(무료 등급·조직 정책)가 404·403을
+     * 받아 <b>멀쩡한 키가 '유효하지 않음'으로 저장된다.</b> 목록 조회는 키 자체만 보므로 모델 개명·티어
+     * 변경에 영향받지 않는다. 대신 생성 권한까지는 확인하지 못한다 — 그건 실행 시점에 드러난다.
+     */
     private CredentialValidationResult validateGemini(String apiKey) {
         try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-
-            String body = """
-                    {
-                      "contents": [{"parts": [{"text": "ping"}]}],
-                      "generationConfig": {"maxOutputTokens": 10}
-                    }
-                    """;
-
             restTemplate.exchange(
-                    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=" + apiKey,
-                    HttpMethod.POST,
-                    new HttpEntity<>(body, headers),
+                    "https://generativelanguage.googleapis.com/v1beta/models?key=" + apiKey,
+                    HttpMethod.GET,
+                    HttpEntity.EMPTY,
                     String.class
             );
             return CredentialValidationResult.success("GEMINI");

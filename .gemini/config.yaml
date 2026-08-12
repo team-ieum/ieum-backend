@@ -1,5 +1,6 @@
 # 스키마: https://docs.cloud.google.com/gemini/docs/code-review/customize-repo-review
-# 이전 설정은 스키마에 없는 키를 썼고, 그 상태에서 이 레포에 자동 리뷰가 돌지 않았다 — 스키마에 있는 키만 쓸 것.
+# 이전 설정은 스키마에 없는 키(auto_review_on_pr_open·language·exclude_patterns·project_context·focus_areas)를
+# 썼고, 그 상태에서 이 레포에 자동 리뷰가 돌지 않았다 — 스키마에 있는 키만 쓸 것.
 # 리뷰 언어·프로젝트 컨텍스트·중점 항목은 .gemini/styleguide.md가 담는다.
 
 code_review:
