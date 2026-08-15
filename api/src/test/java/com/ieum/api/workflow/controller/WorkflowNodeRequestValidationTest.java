@@ -22,9 +22,12 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 /**
  * 노드/엣지 요청 본문 계약을 검증한다 (IEUM-BE-60).
  *
- * <p>{@code position}이 없어도 조용히 통과하던 것, 허용되지 않은 노드 {@code type}이 실행
- * 시점까지 살아남던 것, 빈 {@code source}/{@code target} 엣지가 통과하던 것을 모두 생성 시점
- * 400으로 막는다. {@code description}은 권장하되 선택 필드다.
+ * <p>허용되지 않은 노드 {@code type}이 실행 시점까지 살아남던 것, 빈 {@code source}/{@code target}
+ * 엣지가 통과하던 것을 생성 시점 400으로 막는다.
+ *
+ * <p>{@code description}과 {@code position}은 권장하되 <b>선택</b> 필드다 — 프론트가 보내지 않으므로
+ * 필수로 두면 저장이 전부 막힌다. 다만 {@code position}을 보냈다면 {@code x}·{@code y}가 모두 있어야
+ * 한다(반쪽 좌표는 400).
  */
 class WorkflowNodeRequestValidationTest {
 
@@ -84,12 +87,24 @@ class WorkflowNodeRequestValidationTest {
     }
 
     @Test
-    @DisplayName("position 누락이면 400")
-    void missingPosition_returns400() throws Exception {
+    @DisplayName("position 누락이어도 201 — description과 같은 이유로 선택 필드다")
+    void missingPosition_returns201() throws Exception {
         String node = """
             { "id": "node-trigger", "type": "TRIGGER", "label": "시작",
               "description": "실행하면 시작해요.", "config": {} }""";
-        expectStatus(body(node, ""), 400);
+        expectStatus(body(node, ""), 201);
+    }
+
+    /**
+     * 프론트가 실제로 보내는 모양이다 — {@code CreateWorkflowNodeDto}는 id·type·label·config 넷뿐이라
+     * description도 position도 담기지 않는다. 이 테스트가 깨지면 워크플로우 저장이 통째로 막힌다.
+     */
+    @Test
+    @DisplayName("프론트 최소 노드(id·type·label·config)면 201")
+    void frontendMinimalNode_returns201() throws Exception {
+        String node = """
+            { "id": "node-trigger", "type": "TRIGGER", "label": "시작", "config": {} }""";
+        expectStatus(body(node, ""), 201);
     }
 
     @Test

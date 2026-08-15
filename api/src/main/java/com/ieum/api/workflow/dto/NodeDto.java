@@ -43,8 +43,13 @@ public class NodeDto {
      */
     private String description;
 
-    /** 캔버스 위치. 좌표를 확정하는 주체는 프론트고, 서버는 받은 값을 그대로 저장한다. */
-    @NotNull(message = "노드 position은 필수입니다.")
+    /**
+     * 캔버스 위치. 좌표를 확정하는 주체는 프론트고, 서버는 받은 값을 그대로 저장한다.
+     *
+     * <p>{@code description}과 같은 이유로 <b>선택</b> 필드다 — 프론트의 노드 요청 타입에 이 필드가
+     * 없어, 필수로 두면 저장이 전부 400으로 막힌다(IEUM-BE-60). 다만 <b>보냈다면 완전해야 한다</b> —
+     * {@code @Valid}가 살아 있어 {@code x}나 {@code y}가 빠진 반쪽 좌표는 여전히 400이다.
+     */
     @Valid
     private Position position;
 
