@@ -1,34 +1,13 @@
+# 스키마: https://docs.cloud.google.com/gemini/docs/code-review/customize-repo-review
+# 이전 설정은 스키마에 없는 키(auto_review_on_pr_open·language·exclude_patterns·project_context·focus_areas)를
+# 썼고, 그 상태에서 이 레포에 자동 리뷰가 돌지 않았다 — 스키마에 있는 키만 쓸 것.
+# 리뷰 언어·프로젝트 컨텍스트·중점 항목은 .gemini/styleguide.md가 담는다.
+
 code_review:
-  comment_severity_threshold: MEDIUM  # LOW / MEDIUM / HIGH
-  auto_review_on_pr_open: true
-  language: ko
+  pull_request_opened:
+    summary: true
 
-  # 리뷰 제외 경로
-  exclude_patterns:
-    - "**/.gitignore"
-    - "**/gradlew"
-    - "**/gradlew.bat"
-    - "**/gradle/wrapper/**"
-    - "**/build/**"
-    - "**/generated/**"    # QueryDSL Q클래스 자동 생성 파일
-
-  # 프로젝트 컨텍스트 — 리뷰어가 이해해야 할 핵심 아키텍처
-  project_context: |
-    Java 21 + Spring Boot 3.5.11 멀티모듈 Gradle 모노리스.
-    모듈: api, auth, workflow-core, ai, integration, common.
-    의존 방향: api→workflow-core/auth, workflow-core→integration/ai, integration→auth, 모든 모듈→common.
-    공통 클래스: ApiResponse<T>, CustomException(ErrorCode), BaseEntity(UUID PK), AesEncryptor.
-    Repository: {Entity}Repository (커맨드), {Entity}QueryRepository (쿼리/QueryDSL).
-
-  # 중점 리뷰 항목
-  focus_areas:
-    - 모듈 간 단방향 의존 원칙 위반
-    - CustomException 대신 RuntimeException 직접 throw
-    - ApiResponse<T> 래퍼 미사용
-    - EnumType.ORDINAL 사용 (STRING 필수)
-    - FetchType.EAGER 사용
-    - BaseEntity 미상속
-    - OAuth Token / AI API Key 평문 저장
-    - node_runs JSONB에 자격증명 포함
-    - orderBy()에 사용자 입력값 직접 전달 (SQL Injection 위험)
-    - @Transactional readOnly 누락
+ignore_patterns:
+  - "**/gradlew"
+  - "**/gradlew.bat"
+  - "**/gradle/wrapper/**"

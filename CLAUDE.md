@@ -27,7 +27,7 @@ Java 21 + Spring Boot 3.5.11 기반의 **멀티모듈 Gradle 모듈러 모노리
 
 ### 의존 방향 (단방향 필수, 순환 참조 금지)
 ```
-api → workflow-core, auth
+api → workflow-core, auth, common
 workflow-core → common
 auth → common
 ```
