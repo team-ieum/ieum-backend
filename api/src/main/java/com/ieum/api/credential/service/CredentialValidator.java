@@ -153,6 +153,14 @@ public class CredentialValidator {
                     displayName + " 계정에 결제 수단이 등록되어 있지 않습니다.");
         }
         if (status == 429) {
+            // 생성 호출의 429는 "키는 살아 있고 한도만 찼다"는 뜻이라 유효로 본다. 그러나 메타데이터
+            // 호출의 429는 키 유효성에 대해 아무것도 말해 주지 않는다 — 여기서 success를 반환하면
+            // 쿼터가 마른 키가 isValid=true로 영속화되어 '유효' 배지를 단 채 실행마다 실패한다.
+            // 판정하지 않고 예외로 끊어 아무것도 저장되지 않게 한다.
+            if (!generationCall) {
+                throw new CustomException(ErrorCode.PROVIDER_UNAVAILABLE,
+                        displayName + " 요청이 일시적으로 제한되어 키를 확인하지 못했습니다. 잠시 후 다시 시도해주세요.");
+            }
             return CredentialValidationResult.success(name);
         }
         if (status == 401 || status == 403) {

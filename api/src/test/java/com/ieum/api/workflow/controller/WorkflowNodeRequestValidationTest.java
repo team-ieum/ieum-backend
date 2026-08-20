@@ -77,27 +77,13 @@ class WorkflowNodeRequestValidationTest {
         expectStatus(body(VALID_NODE, ""), 201);
     }
 
-    @Test
-    @DisplayName("description 누락이어도 201 — 선택 필드다")
-    void missingDescription_returns201() throws Exception {
-        String node = """
-            { "id": "node-trigger", "type": "TRIGGER", "label": "시작",
-              "position": { "x": 40, "y": 120 }, "config": {} }""";
-        expectStatus(body(node, ""), 201);
-    }
-
-    @Test
-    @DisplayName("position 누락이어도 201 — description과 같은 이유로 선택 필드다")
-    void missingPosition_returns201() throws Exception {
-        String node = """
-            { "id": "node-trigger", "type": "TRIGGER", "label": "시작",
-              "description": "실행하면 시작해요.", "config": {} }""";
-        expectStatus(body(node, ""), 201);
-    }
 
     /**
      * 프론트가 실제로 보내는 모양이다 — {@code CreateWorkflowNodeDto}는 id·type·label·config 넷뿐이라
      * description도 position도 담기지 않는다. 이 테스트가 깨지면 워크플로우 저장이 통째로 막힌다.
+     *
+     * <p>description·position 각각의 누락을 따로 단언하던 테스트 둘을 이 하나로 합쳤다 — 셋 다 같은
+     * 사실을 확인했고 이것이 그 상위 집합이다.
      */
     @Test
     @DisplayName("프론트 최소 노드(id·type·label·config)면 201")
