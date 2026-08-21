@@ -134,9 +134,9 @@ class DefaultBetaPlatformProviderTest {
     }
 
     @Test
-    @DisplayName("isModelAllowed - 기본값(gemini-3.5-flash)은 허용")
+    @DisplayName("isModelAllowed - 기본값(gemini-3.7-flash)은 허용")
     void isModelAllowed_defaultModel_returnsTrue() {
-        assertThat(provider.isModelAllowed("gemini-3.5-flash")).isTrue();
+        assertThat(provider.isModelAllowed("gemini-3.7-flash")).isTrue();
     }
 
     @Test

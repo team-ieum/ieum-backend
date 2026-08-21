@@ -33,5 +33,5 @@ public class BetaPlatformKeyProperties {
      * agent resolve가 실패한다 — 기본값은 베타가 실제 쓰는 단일 모델로 좁게 잡는다.
      * 넓히려면 yml만 바꾸면 된다(코드 변경 불필요).
      */
-    private List<String> allowedModels = List.of("gemini-3.5-flash");
+    private List<String> allowedModels = List.of("gemini-3.7-flash");
 }

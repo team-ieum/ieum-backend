@@ -119,7 +119,7 @@ ieum:
       token-budget: ${BETA_TOKEN_BUDGET:5000000}
       # 재시도 모델 fallback이 platform 모드에서 시도할 수 있는 모델(콤마 구분). platform 키는
       # Gemini 한 장이라 비-Gemini 모델은 넣지 말 것 — AgentNodeExecutor.isModelAllowed 참고.
-      allowed-models: ${BETA_ALLOWED_MODELS:gemini-3.5-flash}
+      allowed-models: ${BETA_ALLOWED_MODELS:gemini-3.7-flash}
 
 # [IEUM-BE-42] 워크플로 1개 내부에서 동시 실행할 노드 수(fan-out 병렬도).
 # 노드당 DB 쿼리(credential·role·token·webhook)를 쏘므로, 4 → 3으로 낮춰 커넥션 압박을 줄인다.
