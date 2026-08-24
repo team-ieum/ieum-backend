@@ -49,6 +49,16 @@ class ProviderRegistryTest {
     }
 
     @Test
+    @DisplayName("모든 모델의 capabilities는 text·tools·vision — null로 나가지 않는다")
+    void allModelsDeclareCapabilities() {
+        // PROVIDERS를 TEXT_TOOLS_VISION 선언 위로 옮기면 컴파일은 되지만 정적 초기화 순서 때문에
+        // capabilities가 전부 null이 되고, 그대로 응답에 나간다.
+        List<List<String>> capabilities = registry.getAllProviders().stream()
+                .flatMap(p -> p.models().stream()).map(ModelInfo::capabilities).toList();
+        assertThat(capabilities).containsOnly(List.of("text", "tools", "vision"));
+    }
+
+    @Test
     @DisplayName("provider당 default 모델이 정확히 1개이고 agent 기본값과 같다")
     void exactlyOneDefaultPerProviderMatchingAgent() {
         for (ProviderInfo p : registry.getAllProviders()) {
