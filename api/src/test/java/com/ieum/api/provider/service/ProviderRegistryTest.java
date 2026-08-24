@@ -2,6 +2,7 @@ package com.ieum.api.provider.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.beta.config.BetaPlatformKeyProperties;
 import com.ieum.api.provider.model.ModelInfo;
 import com.ieum.api.provider.model.ProviderInfo;
@@ -76,5 +77,12 @@ class ProviderRegistryTest {
         for (ProviderInfo p : registry.getAllProviders()) {
             assertThat(p.models()).as(p.provider()).hasSize(3);
         }
+    }
+
+    @Test
+    @DisplayName("JSON 필드명은 FE 계약대로 default — isDefault가 새지 않는다")
+    void serializesDefaultKeyOnly() throws Exception {
+        String json = new ObjectMapper().writeValueAsString(registry.getAllProviders());
+        assertThat(json).contains("\"default\":true").doesNotContain("isDefault");
     }
 }
