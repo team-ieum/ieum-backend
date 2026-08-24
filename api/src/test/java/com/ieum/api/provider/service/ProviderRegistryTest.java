@@ -1,9 +1,11 @@
 package com.ieum.api.provider.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.beta.config.BetaPlatformKeyProperties;
+import com.ieum.api.credential.domain.AiProvider;
 import com.ieum.api.provider.model.ModelInfo;
 import com.ieum.api.provider.model.ProviderInfo;
 import java.util.List;
@@ -20,10 +22,10 @@ class ProviderRegistryTest {
      * ieum-agent core/config.py의 *_DEFAULT_MODEL 복제. agent 기본값이 바뀌면 여기도 바꾼다 —
      * 크로스레포라 코드로 묶을 수 없어 테스트로 고정한다.
      */
-    private static final Map<String, String> AGENT_DEFAULTS = Map.of(
-            "CLAUDE", "claude-sonnet-5",
-            "OPENAI", "gpt-5.6-terra",
-            "GEMINI", "gemini-3.7-flash"
+    private static final Map<AiProvider, String> AGENT_DEFAULTS = Map.of(
+            AiProvider.CLAUDE, "claude-sonnet-5",
+            AiProvider.OPENAI, "gpt-5.6-terra",
+            AiProvider.GEMINI, "gemini-3.7-flash"
     );
 
     /**
@@ -36,12 +38,23 @@ class ProviderRegistryTest {
     );
 
     @Test
+    @DisplayName("provider 코드·표시명은 AiProvider enum과 같다 — 응답 문자열이 enum에서 파생된다")
+    void providerCodesAndNamesComeFromEnum() {
+        assertThat(registry.getAllProviders())
+                .extracting(ProviderInfo::provider, ProviderInfo::displayName)
+                .containsExactly(
+                        tuple(AiProvider.CLAUDE.name(), AiProvider.CLAUDE.getDisplayName()),
+                        tuple(AiProvider.OPENAI.name(), AiProvider.OPENAI.getDisplayName()),
+                        tuple(AiProvider.GEMINI.name(), AiProvider.GEMINI.getDisplayName()));
+    }
+
+    @Test
     @DisplayName("provider당 default 모델이 정확히 1개이고 agent 기본값과 같다")
     void exactlyOneDefaultPerProviderMatchingAgent() {
         for (ProviderInfo p : registry.getAllProviders()) {
             List<ModelInfo> defaults = p.models().stream().filter(ModelInfo::isDefault).toList();
             assertThat(defaults).as(p.provider()).hasSize(1);
-            assertThat(defaults.get(0).id()).isEqualTo(AGENT_DEFAULTS.get(p.provider()));
+            assertThat(defaults.get(0).id()).isEqualTo(AGENT_DEFAULTS.get(AiProvider.valueOf(p.provider())));
         }
     }
 
@@ -63,8 +76,12 @@ class ProviderRegistryTest {
     }
 
     @Test
-    @DisplayName("베타 플랫폼 허용 모델은 GEMINI 카탈로그에 있다")
-    void betaAllowedModelsAreInGeminiCatalog() {
+    @DisplayName("베타 허용 모델의 코드 기본값은 GEMINI 카탈로그 안에 있다")
+    void betaAllowedModelsDefaultIsInGeminiCatalog() {
+        // 검증 범위는 BetaPlatformKeyProperties의 Java 기본값뿐이다.
+        // 배포 서버의 BETA_ALLOWED_MODELS 값은 이 레포의 어떤 테스트로도 볼 수 없다
+        // (test/resources/application.yml이 main을 섀도잉해 @SpringBootTest도 같은 기본값을 읽는다).
+        // 배포 환경 값 점검은 PR 본문 "배포 후 확인" 항목이 담당한다.
         List<String> geminiIds = registry.getAllProviders().stream()
                 .filter(p -> p.provider().equals("GEMINI"))
                 .flatMap(p -> p.models().stream()).map(ModelInfo::id).toList();
