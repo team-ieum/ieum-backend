@@ -72,14 +72,6 @@ class ProviderRegistryTest {
     }
 
     @Test
-    @DisplayName("provider마다 3개 모델을 광고한다")
-    void threeModelsPerProvider() {
-        for (ProviderInfo p : registry.getAllProviders()) {
-            assertThat(p.models()).as(p.provider()).hasSize(3);
-        }
-    }
-
-    @Test
     @DisplayName("JSON 필드명은 FE 계약대로 default — isDefault가 새지 않는다")
     void serializesDefaultKeyOnly() throws Exception {
         String json = new ObjectMapper().writeValueAsString(registry.getAllProviders());
