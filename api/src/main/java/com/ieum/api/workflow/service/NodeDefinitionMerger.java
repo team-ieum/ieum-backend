@@ -60,10 +60,14 @@ final class NodeDefinitionMerger {
             return Map.of();
         }
         Map<String, Map<String, Object>> index = new LinkedHashMap<>();
-        for (Map<String, Object> node : previousNodes) {
-            if (node == null) {
+        // Map으로 선언돼 있어도 실제 원소가 Map이라는 보장은 없다 — 제네릭이 지워진 자리라
+        // for-each의 암묵 캐스트가 ClassCastException이 되고, 그대로 PUT 500이 된다.
+        for (Object item : previousNodes) {
+            if (!(item instanceof Map<?, ?> raw)) {
                 continue;
             }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> node = (Map<String, Object>) raw;
             // id가 없거나 문자열이 아닌 항목은 짝지을 수 없으니 버린다. 중복이면 먼저 나온 것을 쓴다.
             if (node.get("id") instanceof String id) {
                 index.putIfAbsent(id, node);

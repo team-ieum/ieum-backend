@@ -95,6 +95,17 @@ class WorkflowNodeRequestValidationTest {
             .andExpect(status().is(400));
     }
 
+    /**
+     * {@code edges}도 원소 null을 막아야 한다 (IEUM-BE-65). 저장되면 실행 시 엣지를 훑는 자리에서
+     * NPE가 난다. 생성 경로 하나면 충분하다 — 두 DTO를 함께 지키는 일은 위 {@code nodes} 테스트가
+     * 하고, 여기서 볼 것은 {@code edges} 필드에 제약이 실제로 붙었는가다.
+     */
+    @Test
+    @DisplayName("edges에 null 원소가 있으면 400")
+    void nullEdgeElement_returns400() throws Exception {
+        expectStatus(body(VALID_NODE, "null"), 400);
+    }
+
     @Test
     @DisplayName("description·position이 모두 있으면 201")
     void fullNode_returns201() throws Exception {

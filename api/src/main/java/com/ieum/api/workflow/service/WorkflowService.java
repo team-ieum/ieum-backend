@@ -166,13 +166,19 @@ public class WorkflowService {
      * <p>단 폴백은 유효 triggerType이 SCHEDULE일 때뿐이다 — {@code triggerType: "MANUAL"}로 스케줄을
      * 끄는 요청에서 저장된 cron을 되살리면 트리거는 MANUAL인데 cron만 남은 유령 값이 된다
      * ({@code validateScheduleConfig}는 SCHEDULE이 아니면 cron을 아예 보지 않아 걸러 주지 않는다).
+     *
+     * <p>저장된 트리거도 SCHEDULE이어야 한다. 그 유령 cron(MANUAL인데 cron이 남은 워크플로우)은 실제로
+     * 만들어지므로, 이 조건이 없으면 {@code triggerType: "SCHEDULE"}만 보낸 요청이 사용자가 이번에
+     * 지정한 적 없는 시각으로 Quartz Job을 등록한다. 여기서 {@code null}을 넘겨야 crud가 400으로 막는다.
      */
     private static String resolveCronExpression(String requested, TriggerType triggerType,
             Workflow current) {
         if (requested != null) {
             return requested;
         }
-        return triggerType == TriggerType.SCHEDULE ? current.getCronExpression() : null;
+        boolean keepsSchedule = triggerType == TriggerType.SCHEDULE
+            && current.getTriggerType() == TriggerType.SCHEDULE;
+        return keepsSchedule ? current.getCronExpression() : null;
     }
 
     /**

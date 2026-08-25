@@ -23,9 +23,11 @@ public class CreateWorkflowRequest {
     @Valid
     private List<@NotNull NodeDto> nodes;
 
+    /** {@code nodes}와 같은 이유로 원소에도 {@code @NotNull}이 필요하다 — {@code "edges":[null]}이 저장되면
+     * 실행 시 엣지를 훑는 자리에서 NPE가 난다(IEUM-BE-65). */
     @NotNull
     @Valid
-    private List<EdgeDto> edges;
+    private List<@NotNull EdgeDto> edges;
 
     /** 트리거 타입. 미입력 시 MANUAL로 처리 */
     private TriggerType triggerType;

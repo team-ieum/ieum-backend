@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.mock;
@@ -266,6 +267,35 @@ class WorkflowPartialUpdateTest {
         SavedWorkflowFields saved = capturedWorkflowFields();
         assertThat(saved.triggerType()).isEqualTo(TriggerType.MANUAL);
         assertThat(saved.cron()).isNull();
+    }
+
+    /**
+     * MANUAL인데 cron이 남은 워크플로우는 실제로 만들어진다 — 생성 시 {@code validateScheduleConfig}는
+     * SCHEDULE이 아니면 cron을 보지 않으므로 {@code triggerType: MANUAL} + cron을 함께 보내면 그대로
+     * 저장된다. 그 상태에서 cron 없이 SCHEDULE로 켜는 요청이 그 유령 cron을 이어받으면, 사용자가
+     * 이번 요청에 지정한 적 없는 시각으로 Quartz Job이 등록된다 (IEUM-BE-65).
+     */
+    @Test
+    @DisplayName("MANUAL에 남은 유령 cron은 SCHEDULE로 켜도 되살아나지 않는다")
+    void doesNotReviveOrphanCronWhenTriggerSwitchedToSchedule() {
+        given(currentWorkflow.getTriggerType()).willReturn(TriggerType.MANUAL);
+        given(currentWorkflow.getCronExpression()).willReturn("0 0 3 * * ?");
+        stubPreviousNodes(null);
+        // crud는 SCHEDULE + cron null을 400으로 거절한다 — 그 거절이 실제로 도달하는지까지 본다.
+        willThrow(new CustomException(ErrorCode.INVALID_CRON_EXPRESSION))
+            .given(workflowCrudService).updateWorkflow(
+                any(), any(), any(), any(), any(), any(), eq(TriggerType.SCHEDULE), isNull());
+
+        UpdateWorkflowRequest request = request("""
+            { "id": "%s", "type": "AI", "label": "요약하기" }""".formatted(NODE_ID),
+            ",\n  \"triggerType\": \"SCHEDULE\"");
+
+        assertThatThrownBy(() -> workflowService.updateWorkflow(userId, workflowId, request))
+            .isInstanceOf(CustomException.class)
+            .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
+                .isEqualTo(ErrorCode.INVALID_CRON_EXPRESSION));
+
+        assertThat(capturedWorkflowFields().cron()).isNull();
     }
 
 }

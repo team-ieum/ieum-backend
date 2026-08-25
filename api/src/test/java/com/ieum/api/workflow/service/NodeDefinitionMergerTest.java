@@ -105,7 +105,7 @@ class NodeDefinitionMergerTest {
     }
 
     @Test
-    @DisplayName("이전 정의가 null이거나 id가 깨져 있어도 예외 없이 요청 노드만 반환한다")
+    @DisplayName("이전 정의가 null이거나 id가 깨졌거나 Map이 아니어도 예외 없이 요청 노드만 반환한다")
     void 깨진_이전_정의는_무시된다() {
         List<NodeDto> request = List.of(node("""
             {"id":"n1","type":"AI","label":"라벨"}
@@ -115,9 +115,15 @@ class NodeDefinitionMergerTest {
             .singleElement().satisfies(n -> assertThat(n).containsEntry("id", "n1")
                 .doesNotContainKey("description"));
 
-        List<Map<String, Object>> brokenPrevious = new ArrayList<>(Arrays.asList(
+        // Map이 아닌 원소도 섞는다 — 저장된 정의 문서의 구조는 BE가 통제하지 못하고, 여기서
+        // ClassCastException이 나면 PUT이 통째로 500이 된다(IEUM-BE-65).
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        List<Map<String, Object>> brokenPrevious = (List) new ArrayList<>(Arrays.asList(
             new LinkedHashMap<>(Map.of("label", "id 없음", "description", "무시될 설명")),
             new LinkedHashMap<>(Map.of("id", 42, "description", "id가 문자열이 아님")),
+            "노드가 아니라 문자열",
+            42,
+            List.of("노드가 아니라 리스트"),
             null));
 
         assertThat(NodeDefinitionMerger.merge(brokenPrevious, request, objectMapper))
