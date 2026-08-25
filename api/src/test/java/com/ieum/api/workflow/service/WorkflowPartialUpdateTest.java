@@ -10,6 +10,7 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -41,9 +42,10 @@ import org.springframework.http.HttpStatus;
  * 수정 요청이 보내지 않은 노드 필드가 직전 버전에서 살아남는지, 그리고 그 병합 결과가 저장 전에
  * 가드를 거치는지 본다 (IEUM-BE-65 Task 2 — 배선 검증).
  *
- * <p>병합 규칙 자체는 {@link NodeDefinitionMergerTest}가 본다. 여기서 고정하는 계약은 세 가지다 —
- * ① 이전 정의를 실제로 읽어 병합한 결과가 저장된다 ② 가드가 요청이 아니라 병합 결과에 돈다
- * ③ 소유권 검증이 이전 정의 조회보다 먼저 온다.
+ * <p>병합 규칙 자체는 {@link NodeDefinitionMergerTest}·{@link EdgeDefinitionMergerTest}가 본다.
+ * 여기서 고정하는 계약은 네 가지다 — ① 이전 정의를 실제로 읽어 병합한 결과가 저장된다
+ * ② 가드가 요청이 아니라 병합 결과에 돈다 ③ 소유권 검증이 이전 정의 조회보다 먼저 온다
+ * ④ 노드와 엣지가 같은 문서 한 번의 조회에서 온다.
  *
  * <p>노드 하위 필드뿐 아니라 워크플로우 레벨 optional 필드(description·triggerType·cronExpression)도
  * 같은 규칙을 따르는지 함께 본다 — 여기가 새면 SCHEDULE 워크플로우가 조용히 MANUAL로 강등된다.
@@ -78,15 +80,26 @@ class WorkflowPartialUpdateTest {
 
     /** 직전 버전 정의를 스텁한다. {@code null}이면 버전 자체가 없는 워크플로우다. */
     private void stubPreviousNodes(List<Map<String, Object>> previousNodes) {
+        stubPreviousDefinition(previousNodes, List.of());
+    }
+
+    /**
+     * 직전 버전 정의를 스텁하고 그 버전을 돌려준다. {@code previousNodes}가 {@code null}이면 버전
+     * 자체가 없는 워크플로우이고 {@code null}을 돌려준다.
+     */
+    private WorkflowVersion stubPreviousDefinition(List<Map<String, Object>> previousNodes,
+            List<Map<String, Object>> previousEdges) {
         if (previousNodes == null) {
             given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.empty());
-            return;
+            return null;
         }
         WorkflowVersion previousVersion = mock(WorkflowVersion.class);
         given(workflowCrudService.findLatestVersion(workflowId))
             .willReturn(Optional.of(previousVersion));
         given(workflowCrudService.loadDefinition(previousVersion)).willReturn(
-            WorkflowDefinitionDocument.builder().nodes(previousNodes).edges(List.of()).build());
+            WorkflowDefinitionDocument.builder()
+                .nodes(previousNodes).edges(previousEdges).build());
+        return previousVersion;
     }
 
     /** 저장이 성공하는 경로. 응답 변환까지 가려면 crud 반환값이 필요하다. */
@@ -106,12 +119,16 @@ class WorkflowPartialUpdateTest {
 
     /** {@code extraFields}는 워크플로우 레벨 필드를 덧붙이는 JSON 조각이다(예: {@code ,"triggerType":"MANUAL"}). */
     private UpdateWorkflowRequest request(String nodeJson, String extraFields) {
+        return request(nodeJson, "", extraFields);
+    }
+
+    private UpdateWorkflowRequest request(String nodeJson, String edgeJson, String extraFields) {
         String body = """
             {
               "name": "수정된 워크플로우",
               "nodes": [ %s ],
-              "edges": []%s
-            }""".formatted(nodeJson, extraFields);
+              "edges": [ %s ]%s
+            }""".formatted(nodeJson, edgeJson, extraFields);
         try {
             return jsonMapper.readValue(body, UpdateWorkflowRequest.class);
         } catch (Exception e) {
@@ -124,13 +141,53 @@ class WorkflowPartialUpdateTest {
         ArgumentCaptor<String> nodesJson = ArgumentCaptor.forClass(String.class);
         verify(workflowCrudService).updateWorkflow(eq(userId), eq(workflowId), any(), any(),
             nodesJson.capture(), any(), any(), any());
+        return parseDefinitionJson(nodesJson.getValue());
+    }
+
+    /** 저장 경로로 넘어간 edgesJson을 파싱해 돌려준다. */
+    private List<Map<String, Object>> capturedEdges() {
+        ArgumentCaptor<String> edgesJson = ArgumentCaptor.forClass(String.class);
+        verify(workflowCrudService).updateWorkflow(eq(userId), eq(workflowId), any(), any(),
+            any(), edgesJson.capture(), any(), any());
+        return parseDefinitionJson(edgesJson.getValue());
+    }
+
+    private List<Map<String, Object>> parseDefinitionJson(String json) {
         try {
-            return jsonMapper.readValue(nodesJson.getValue(),
-                new TypeReference<List<Map<String, Object>>>() {
-                });
+            return jsonMapper.readValue(json, new TypeReference<List<Map<String, Object>>>() {
+            });
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /**
+     * 엣지의 {@code conditionType}은 선택 필드라, 생략한 PUT이 저장된 {@code "true"}/{@code "false"}를
+     * 지우면 실행 시 {@code ExecutionCursor.liveOutgoingEdges}가 걸러 낼 엣지가 하나도 남지 않아
+     * 조건 노드 이후가 조용히 실행되지 않는다 (IEUM-BE-65).
+     *
+     * <p>병합 규칙 자체는 {@link EdgeDefinitionMergerTest}가 본다. 여기서 고정하는 것은 배선과,
+     * 노드·엣지가 <b>같은 문서 한 번의 조회</b>에서 온다는 사실이다.
+     */
+    @Test
+    @DisplayName("엣지 conditionType을 생략해도 이전 값이 보존되고, 직전 정의는 한 번만 읽는다")
+    void keepsEdgeConditionTypeReadingPreviousDefinitionOnce() {
+        WorkflowVersion previousVersion = stubPreviousDefinition(
+            List.of(Map.of("id", NODE_ID, "type", "AI", "label", "요약하기")),
+            List.of(Map.of("source", NODE_ID, "target", "n-yes", "conditionType", "true")));
+        stubSaveSucceeds();
+
+        workflowService.updateWorkflow(userId, workflowId, request(
+            "{ \"id\": \"" + NODE_ID + "\", \"type\": \"AI\", \"label\": \"요약하기\" }",
+            "{ \"source\": \"" + NODE_ID + "\", \"target\": \"n-yes\" }",
+            ""));
+
+        List<Map<String, Object>> savedEdges = capturedEdges();
+        assertThat(savedEdges).hasSize(1);
+        assertThat(savedEdges.get(0).get("conditionType")).isEqualTo("true");
+        // 직전 정의는 한 번만 읽는다 — 노드와 엣지가 같은 문서에서 온다.
+        // (any()로 세지 않는 이유는 응답 변환이 '저장된' 버전의 정의를 따로 읽기 때문이다.)
+        verify(workflowCrudService, times(1)).loadDefinition(previousVersion);
     }
 
     @Test

@@ -124,7 +124,8 @@ public class WorkflowService {
      *
      * <p>수정은 정의 전체를 새 버전으로 다시 쓰는 구조라, 요청 노드를 그대로 저장하면 클라이언트가
      * 보내지 않은 {@code description}·{@code position}이 소실된다. 그래서 직전 버전 정의 위에
-     * 요청 노드를 덮어써({@link NodeDefinitionMerger}) 저장한다.
+     * 요청 노드를 덮어써({@link NodeDefinitionMerger}) 저장한다. 엣지의 {@code conditionType}도
+     * 같은 이유로 이어받는다({@link EdgeDefinitionMerger}).
      */
     @Transactional
     public WorkflowResponse updateWorkflow(UUID userId, UUID workflowId,
@@ -132,8 +133,12 @@ public class WorkflowService {
         // 소유권 검증이 이전 정의 조회보다 먼저다 — 남의 워크플로우 정의를 읽고 나서 거절하면 안 된다.
         Workflow current = workflowCrudService.getWorkflowByOwner(userId, workflowId);
 
+        // 정의 문서는 요청당 한 번만 읽는다 — 노드와 엣지가 같은 문서에서 온다.
+        WorkflowDefinitionDocument previous = previousDefinition(workflowId);
         List<Map<String, Object>> mergedNodes = NodeDefinitionMerger.merge(
-            previousNodes(workflowId), request.getNodes(), objectMapper);
+            previous != null ? previous.getNodes() : null, request.getNodes(), objectMapper);
+        List<Map<String, Object>> mergedEdges = EdgeDefinitionMerger.merge(
+            previous != null ? previous.getEdges() : null, request.getEdges());
 
         // 가드는 병합 결과에 돈다 — 요청이 config를 생략하면 이전 config가 되살아나는데, 그 안에 원문
         // 웹훅 URL이나 남의 credentialId가 있으면 요청만 검사해서는 통과해 버린다(IEUM-BE-62·64의
@@ -153,7 +158,7 @@ public class WorkflowService {
             request.getName(),
             request.getDescription() != null ? request.getDescription() : current.getDescription(),
             toJson(mergedNodes),
-            toJson(request.getEdges()),
+            toJson(mergedEdges),
             triggerType,
             resolveCronExpression(request.getCronExpression(), triggerType, current)
         );
@@ -182,19 +187,19 @@ public class WorkflowService {
     }
 
     /**
-     * 병합의 베이스가 될 직전 버전의 노드 목록. 버전이 없거나 정의 문서를 읽지 못하면 {@code null}이다.
+     * 병합의 베이스가 될 직전 버전의 정의 문서. 버전이 없거나 문서를 읽지 못하면 {@code null}이다.
      *
-     * <p>정의 문서를 읽지 못해도 수정을 막지 않는다 — 병합 없이 요청 노드만 저장하는 예전 동작으로
+     * <p>정의 문서를 읽지 못해도 수정을 막지 않는다 — 병합 없이 요청 값만 저장하는 예전 동작으로
      * 물러선다. 여기서 404를 던지면 Mongo 문서가 사라진 워크플로우는 수정으로 고칠 길조차 없어진다.
      */
-    private List<Map<String, Object>> previousNodes(UUID workflowId) {
+    private WorkflowDefinitionDocument previousDefinition(UUID workflowId) {
         WorkflowVersion latestVersion = workflowCrudService.findLatestVersion(workflowId)
             .orElse(null);
         if (latestVersion == null) {
             return null;
         }
         try {
-            return workflowCrudService.loadDefinition(latestVersion).getNodes();
+            return workflowCrudService.loadDefinition(latestVersion);
         } catch (CustomException e) {
             log.warn("[WorkflowService] 직전 정의를 읽지 못해 병합 없이 저장 — workflowId: {}, errorCode: {}",
                 workflowId, e.getErrorCode());
