@@ -40,6 +40,10 @@ final class NodeDefinitionMerger {
         List<Map<String, Object>> merged = new ArrayList<>(requestNodes.size());
 
         for (NodeDto node : requestNodes) {
+            // 요청 리스트에 섞인 null 원소는 무시한다 — @Valid는 리스트 자체만 검증해 여기까지 온다.
+            if (node == null) {
+                continue;
+            }
             Map<String, Object> requested = objectMapper.convertValue(node, NODE_MAP);
             // 값이 null인 필드는 "변경 없음"이다 — 이전 값을 덮어쓰지 않게 뺀다.
             requested.values().removeIf(Objects::isNull);

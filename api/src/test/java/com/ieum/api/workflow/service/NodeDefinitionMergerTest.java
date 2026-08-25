@@ -147,6 +147,23 @@ class NodeDefinitionMergerTest {
     }
 
     @Test
+    @DisplayName("요청 리스트에 null 원소가 섞여 있어도 예외 없이 나머지만 병합한다")
+    void 요청의_null_원소는_무시된다() {
+        List<Map<String, Object>> previous = List.of(
+            previousNode("n1", Map.of("description", "이전 설명")));
+        List<NodeDto> request = new ArrayList<>(Arrays.asList(null, node("""
+            {"id":"n1","type":"AI","label":"라벨"}
+            """), null));
+
+        List<Map<String, Object>> merged = NodeDefinitionMerger.merge(previous, request,
+            objectMapper);
+
+        assertThat(merged).singleElement().satisfies(n -> assertThat(n)
+            .containsEntry("id", "n1")
+            .containsEntry("description", "이전 설명"));
+    }
+
+    @Test
     @DisplayName("결과 Map을 수정해도 이전 정의 원본은 바뀌지 않는다")
     void 결과는_이전_정의의_복사본이다() {
         Map<String, Object> previousNode = previousNode("n1", Map.of("description", "이전 설명"));
