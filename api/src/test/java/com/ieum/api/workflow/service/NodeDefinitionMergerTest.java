@@ -22,48 +22,27 @@ class NodeDefinitionMergerTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * 세 필드를 각각 단언하던 테스트 셋을 하나로 합쳤다 — 전부 같은 사실(값이 null인 필드는 이전
+     * 값을 덮지 않는다)을 확인했고, 셋을 한 번에 생략한 이 요청이 그 상위 집합이다.
+     */
     @Test
-    @DisplayName("description을 보내지 않으면 이전 description이 보존된다")
-    void 이전_description_보존() {
-        List<Map<String, Object>> previous = List.of(
-            previousNode("n1", Map.of("description", "이전 설명", "label", "이전 라벨")));
-
-        List<Map<String, Object>> merged = NodeDefinitionMerger.merge(previous,
-            List.of(node("""
-                {"id":"n1","type":"AI","label":"새 라벨"}
-                """)), objectMapper);
-
-        assertThat(merged).hasSize(1);
-        assertThat(merged.get(0)).containsEntry("description", "이전 설명")
-            .containsEntry("label", "새 라벨");
-    }
-
-    @Test
-    @DisplayName("position을 보내지 않으면 이전 position이 보존된다")
-    void 이전_position_보존() {
-        List<Map<String, Object>> previous = List.of(
-            previousNode("n1", Map.of("position", Map.of("x", 10.0, "y", 20.0))));
+    @DisplayName("description·position·config를 보내지 않으면 이전 값이 모두 보존된다")
+    void 보내지_않은_필드는_이전_값을_유지한다() {
+        List<Map<String, Object>> previous = List.of(previousNode("n1", Map.of(
+            "description", "이전 설명",
+            "position", Map.of("x", 10.0, "y", 20.0),
+            "config", Map.of("prompt", "이전 프롬프트"))));
 
         List<Map<String, Object>> merged = NodeDefinitionMerger.merge(previous,
             List.of(node("""
                 {"id":"n1","type":"AI","label":"라벨"}
                 """)), objectMapper);
 
-        assertThat(merged.get(0)).containsEntry("position", Map.of("x", 10.0, "y", 20.0));
-    }
-
-    @Test
-    @DisplayName("config를 보내지 않으면 이전 config가 보존된다")
-    void 이전_config_보존() {
-        List<Map<String, Object>> previous = List.of(
-            previousNode("n1", Map.of("config", Map.of("prompt", "이전 프롬프트"))));
-
-        List<Map<String, Object>> merged = NodeDefinitionMerger.merge(previous,
-            List.of(node("""
-                {"id":"n1","type":"AI","label":"라벨"}
-                """)), objectMapper);
-
-        assertThat(merged.get(0)).containsEntry("config", Map.of("prompt", "이전 프롬프트"));
+        assertThat(merged).singleElement().satisfies(n -> assertThat(n)
+            .containsEntry("description", "이전 설명")
+            .containsEntry("position", Map.of("x", 10.0, "y", 20.0))
+            .containsEntry("config", Map.of("prompt", "이전 프롬프트")));
     }
 
     @Test

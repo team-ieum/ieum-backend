@@ -229,9 +229,14 @@ class WorkflowPartialUpdateTest {
             description.getValue(), triggerType.getValue(), cron.getValue());
     }
 
+    /**
+     * description과 스케줄을 따로 단언하던 테스트 둘을 합쳤다 — 둘 다 같은 사실(워크플로우 레벨
+     * 필드의 null은 "변경 없음")을 확인했고, 셋을 한 번에 생략한 이 요청이 그 상위 집합이다.
+     */
     @Test
-    @DisplayName("triggerType·cronExpression을 보내지 않으면 저장된 SCHEDULE·cron이 그대로 유지된다")
-    void keepsScheduleWhenTriggerFieldsOmitted() {
+    @DisplayName("description·triggerType·cron을 보내지 않으면 저장된 값이 그대로 유지된다")
+    void keepsWorkflowFieldsWhenOmitted() {
+        given(currentWorkflow.getDescription()).willReturn("매일 아침 리포트를 보냅니다.");
         given(currentWorkflow.getTriggerType()).willReturn(TriggerType.SCHEDULE);
         given(currentWorkflow.getCronExpression()).willReturn("0 0 10 * * ?");
         stubPreviousNodes(null);
@@ -241,6 +246,7 @@ class WorkflowPartialUpdateTest {
             { "id": "%s", "type": "AI", "label": "요약하기" }""".formatted(NODE_ID)));
 
         SavedWorkflowFields saved = capturedWorkflowFields();
+        assertThat(saved.description()).isEqualTo("매일 아침 리포트를 보냅니다.");
         assertThat(saved.triggerType()).isEqualTo(TriggerType.SCHEDULE);
         assertThat(saved.cron()).isEqualTo("0 0 10 * * ?");
     }
@@ -262,17 +268,4 @@ class WorkflowPartialUpdateTest {
         assertThat(saved.cron()).isNull();
     }
 
-    @Test
-    @DisplayName("description을 보내지 않으면 저장된 description이 유지된다")
-    void keepsDescriptionWhenOmitted() {
-        given(currentWorkflow.getDescription()).willReturn("매일 아침 리포트를 보냅니다.");
-        stubPreviousNodes(null);
-        stubSaveSucceeds();
-
-        workflowService.updateWorkflow(userId, workflowId, request("""
-            { "id": "%s", "type": "AI", "label": "요약하기" }""".formatted(NODE_ID)));
-
-        assertThat(capturedWorkflowFields().description())
-            .isEqualTo("매일 아침 리포트를 보냅니다.");
-    }
 }
