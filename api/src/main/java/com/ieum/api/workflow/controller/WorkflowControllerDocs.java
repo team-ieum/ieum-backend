@@ -154,7 +154,7 @@ public interface WorkflowControllerDocs {
                           "position": { "x": 420, "y": 120 },
                           "config": {
                             "llmProvider": "GEMINI",
-                            "model": "gemini-3.5-flash",
+                            "model": "gemini-3.7-flash",
                             "credentialId": "550e8400-e29b-41d4-a716-446655440010",
                             "prompt": "문의 내용과 긴급도를 분류해 주세요.",
                             "agentType": "simple",
@@ -166,7 +166,7 @@ public interface WorkflowControllerDocs {
                           "config": {
                             "serviceType": "SLACK",
                             "llmProvider": "GEMINI",
-                            "model": "gemini-3.5-flash",
+                            "model": "gemini-3.7-flash",
                             "prompt": "다음 분류 결과를 슬랙으로 보내줘: {{nodes.classify-inquiry.output.output}}",
                             "agentType": "react",
                             "tools": [{ "name": "slack" }]

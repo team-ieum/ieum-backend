@@ -66,7 +66,7 @@ workflow-core가 선언한 포트 10개를 여기서 `Default*`로 구현해 Stu
 | `ieum.workflow.queue.reclaim-min-idle` | `PT10M` | 이 시간 넘게 방치된 pending만 회수. **0으로 두지 말 것** — 살아 있는 소비자의 in-flight를 훔치지 않는 유일한 안전장치이자, 뒤집으면 재시작 복구 지연 상한이다. 워크플로우 최대 소요시간보다 넉넉히 길어야 한다 |
 | `ieum.workflow.queue.reclaim-interval` | `PT1M` | 고아 잡 회수 주기 |
 | `ieum.workflow.queue.poll-error-backoff` | `PT5S` | 폴링 실패 시 대기(스핀·로그 폭주 방지) |
-| `ieum.beta.platform-key.allowed-models` | `gemini-3.5-flash` | platform 모드에서 재시도 모델 fallback이 시도할 수 있는 모델. platform 키는 Gemini 한 장이라 비-Gemini를 넣지 말 것 |
+| `ieum.beta.platform-key.allowed-models` | `gemini-3.7-flash` | platform 모드에서 재시도 모델 fallback이 시도할 수 있는 모델. platform 키는 Gemini 한 장이라 비-Gemini를 넣지 말 것 |
 | `DISCORD_OPS_WEBHOOK_URL` | (빈 문자열) | 운영자 실패 알림 채널. `@Value`로 직접 읽는 환경변수 — 비어 있으면 발신 안 함 |
 
 큐 관련 세 키는 yml에 선언돼 있지 않고 `ExecutionJobQueueBootstrap` 생성자의 `@Value` 기본값이다. `allowed-models`는 `application.yml`(`BETA_ALLOWED_MODELS`) + `BetaPlatformKeyProperties`.

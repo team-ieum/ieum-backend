@@ -36,6 +36,9 @@ public class CredentialValidator {
             headers.set("x-api-key", apiKey);
             headers.set("anthropic-version", "2023-06-01");
 
+            // ⚠️ 이 id는 litellm 기준 2026-10-15 폐기 예정이다. Anthropic이 내리면 이 핑이 404 →
+            //    handleClientError 어느 분기에도 안 걸려 멀쩡한 키가 "유효하지 않음"으로 저장된다.
+            //    후속 이슈: Notion "2026-10-15 Claude Haiku 4.5 폐기 대응"
             String body = """
                     {
                       "model": "claude-haiku-4-5-20251001",
