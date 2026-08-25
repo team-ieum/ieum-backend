@@ -115,14 +115,14 @@ class NodeDefinitionMergerTest {
     @DisplayName("이전 노드에만 있던 알 수 없는 키도 보존된다")
     void 알_수_없는_키_보존() {
         List<Map<String, Object>> previous = List.of(
-            previousNode("n1", Map.of("serviceType", "SLACK")));
+            previousNode("n1", Map.of("_legacyFlag", "keep-me")));
 
         List<Map<String, Object>> merged = NodeDefinitionMerger.merge(previous,
             List.of(node("""
                 {"id":"n1","type":"AI","label":"라벨"}
                 """)), objectMapper);
 
-        assertThat(merged.get(0)).containsEntry("serviceType", "SLACK");
+        assertThat(merged.get(0)).containsEntry("_legacyFlag", "keep-me");
     }
 
     @Test

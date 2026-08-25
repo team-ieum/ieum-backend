@@ -22,6 +22,7 @@ import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowVersion;
+import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
@@ -29,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -41,6 +43,9 @@ import org.springframework.http.HttpStatus;
  * <p>병합 규칙 자체는 {@link NodeDefinitionMergerTest}가 본다. 여기서 고정하는 계약은 세 가지다 —
  * ① 이전 정의를 실제로 읽어 병합한 결과가 저장된다 ② 가드가 요청이 아니라 병합 결과에 돈다
  * ③ 소유권 검증이 이전 정의 조회보다 먼저 온다.
+ *
+ * <p>노드 하위 필드뿐 아니라 워크플로우 레벨 optional 필드(description·triggerType·cronExpression)도
+ * 같은 규칙을 따르는지 함께 본다 — 여기가 새면 SCHEDULE 워크플로우가 조용히 MANUAL로 강등된다.
  */
 class WorkflowPartialUpdateTest {
 
@@ -60,6 +65,15 @@ class WorkflowPartialUpdateTest {
     private final UUID workflowId = UUID.randomUUID();
 
     private static final String NODE_ID = "node-ai";
+
+    /** 저장돼 있는 워크플로우. 수정 요청이 생략한 필드의 폴백 원천이다. */
+    private final Workflow currentWorkflow = mock(Workflow.class);
+
+    @BeforeEach
+    void stubCurrentWorkflow() {
+        given(workflowCrudService.getWorkflowByOwner(userId, workflowId))
+            .willReturn(currentWorkflow);
+    }
 
     /** 직전 버전 정의를 스텁한다. {@code null}이면 버전 자체가 없는 워크플로우다. */
     private void stubPreviousNodes(List<Map<String, Object>> previousNodes) {
@@ -86,12 +100,17 @@ class WorkflowPartialUpdateTest {
     }
 
     private UpdateWorkflowRequest request(String nodeJson) {
+        return request(nodeJson, "");
+    }
+
+    /** {@code extraFields}는 워크플로우 레벨 필드를 덧붙이는 JSON 조각이다(예: {@code ,"triggerType":"MANUAL"}). */
+    private UpdateWorkflowRequest request(String nodeJson, String extraFields) {
         String body = """
             {
               "name": "수정된 워크플로우",
               "nodes": [ %s ],
-              "edges": []
-            }""".formatted(nodeJson);
+              "edges": []%s
+            }""".formatted(nodeJson, extraFields);
         try {
             return jsonMapper.readValue(body, UpdateWorkflowRequest.class);
         } catch (Exception e) {
@@ -194,5 +213,66 @@ class WorkflowPartialUpdateTest {
 
         verify(workflowCrudService, never()).findLatestVersion(any());
         verify(workflowCrudService, never()).loadDefinition(any());
+    }
+
+    /** 저장 경로로 넘어간 워크플로우 레벨 인자(description, triggerType, cronExpression). */
+    private record SavedWorkflowFields(String description, TriggerType triggerType, String cron) {
+    }
+
+    private SavedWorkflowFields capturedWorkflowFields() {
+        ArgumentCaptor<String> description = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<TriggerType> triggerType = ArgumentCaptor.forClass(TriggerType.class);
+        ArgumentCaptor<String> cron = ArgumentCaptor.forClass(String.class);
+        verify(workflowCrudService).updateWorkflow(eq(userId), eq(workflowId), any(),
+            description.capture(), any(), any(), triggerType.capture(), cron.capture());
+        return new SavedWorkflowFields(
+            description.getValue(), triggerType.getValue(), cron.getValue());
+    }
+
+    @Test
+    @DisplayName("triggerType·cronExpression을 보내지 않으면 저장된 SCHEDULE·cron이 그대로 유지된다")
+    void keepsScheduleWhenTriggerFieldsOmitted() {
+        given(currentWorkflow.getTriggerType()).willReturn(TriggerType.SCHEDULE);
+        given(currentWorkflow.getCronExpression()).willReturn("0 0 10 * * ?");
+        stubPreviousNodes(null);
+        stubSaveSucceeds();
+
+        workflowService.updateWorkflow(userId, workflowId, request("""
+            { "id": "%s", "type": "AI", "label": "요약하기" }""".formatted(NODE_ID)));
+
+        SavedWorkflowFields saved = capturedWorkflowFields();
+        assertThat(saved.triggerType()).isEqualTo(TriggerType.SCHEDULE);
+        assertThat(saved.cron()).isEqualTo("0 0 10 * * ?");
+    }
+
+    @Test
+    @DisplayName("triggerType을 MANUAL로 명시하면 저장된 cron이 되살아나지 않는다")
+    void doesNotReviveCronWhenTriggerSwitchedToManual() {
+        given(currentWorkflow.getTriggerType()).willReturn(TriggerType.SCHEDULE);
+        given(currentWorkflow.getCronExpression()).willReturn("0 0 10 * * ?");
+        stubPreviousNodes(null);
+        stubSaveSucceeds();
+
+        workflowService.updateWorkflow(userId, workflowId, request("""
+            { "id": "%s", "type": "AI", "label": "요약하기" }""".formatted(NODE_ID),
+            ",\n  \"triggerType\": \"MANUAL\""));
+
+        SavedWorkflowFields saved = capturedWorkflowFields();
+        assertThat(saved.triggerType()).isEqualTo(TriggerType.MANUAL);
+        assertThat(saved.cron()).isNull();
+    }
+
+    @Test
+    @DisplayName("description을 보내지 않으면 저장된 description이 유지된다")
+    void keepsDescriptionWhenOmitted() {
+        given(currentWorkflow.getDescription()).willReturn("매일 아침 리포트를 보냅니다.");
+        stubPreviousNodes(null);
+        stubSaveSucceeds();
+
+        workflowService.updateWorkflow(userId, workflowId, request("""
+            { "id": "%s", "type": "AI", "label": "요약하기" }""".formatted(NODE_ID)));
+
+        assertThat(capturedWorkflowFields().description())
+            .isEqualTo("매일 아침 리포트를 보냅니다.");
     }
 }

@@ -131,7 +131,7 @@ public class WorkflowService {
     public WorkflowResponse updateWorkflow(UUID userId, UUID workflowId,
             UpdateWorkflowRequest request) {
         // 소유권 검증이 이전 정의 조회보다 먼저다 — 남의 워크플로우 정의를 읽고 나서 거절하면 안 된다.
-        workflowCrudService.getWorkflowByOwner(userId, workflowId);
+        Workflow current = workflowCrudService.getWorkflowByOwner(userId, workflowId);
 
         List<Map<String, Object>> mergedNodes = NodeDefinitionMerger.merge(
             previousNodes(workflowId), request.getNodes(), objectMapper);
@@ -143,17 +143,37 @@ public class WorkflowService {
         rejectRawWebhookUrls(configs);
         rejectForeignCredentialIds(userId, configs);
 
+        // 워크플로우 레벨 optional 필드도 노드와 같은 규칙이다 — 요청의 null은 "변경 없음"이라
+        // 저장된 값을 그대로 넘긴다. 그대로 넘기면 triggerType이 MANUAL로 강등되고 cron이 지워져
+        // Quartz Job까지 삭제된다(200만 돌아와 다음 실행이 없을 때까지 아무도 모른다).
+        TriggerType triggerType = request.getTriggerType() != null
+            ? request.getTriggerType() : current.getTriggerType();
         WorkflowVersion version = workflowCrudService.updateWorkflow(
             userId,
             workflowId,
             request.getName(),
-            request.getDescription(),
+            request.getDescription() != null ? request.getDescription() : current.getDescription(),
             toJson(mergedNodes),
             toJson(request.getEdges()),
-            request.getTriggerType(),
-            request.getCronExpression()
+            triggerType,
+            resolveCronExpression(request.getCronExpression(), triggerType, current)
         );
         return toResponse(version.getWorkflow(), version, ownedWebhookNames(userId));
+    }
+
+    /**
+     * 저장할 cron 표현식. 요청이 보낸 값이 우선이고, 생략했을 때만 저장된 값을 잇는다.
+     *
+     * <p>단 폴백은 유효 triggerType이 SCHEDULE일 때뿐이다 — {@code triggerType: "MANUAL"}로 스케줄을
+     * 끄는 요청에서 저장된 cron을 되살리면 트리거는 MANUAL인데 cron만 남은 유령 값이 된다
+     * ({@code validateScheduleConfig}는 SCHEDULE이 아니면 cron을 아예 보지 않아 걸러 주지 않는다).
+     */
+    private static String resolveCronExpression(String requested, TriggerType triggerType,
+            Workflow current) {
+        if (requested != null) {
+            return requested;
+        }
+        return triggerType == TriggerType.SCHEDULE ? current.getCronExpression() : null;
     }
 
     /**
