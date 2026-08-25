@@ -24,8 +24,9 @@ import java.util.Map;
  * <p>노드 병합과 달리 이전 엣지의 다른 키는 살리지 않는다. 엣지는 {@code source}·{@code target}·
  * {@code conditionType} 셋뿐이고 앞의 둘은 키라, 이을 값은 {@code conditionType} 하나다.
  *
- * <p>저장된 정의의 구조는 BE가 통제하지 못하므로 어떤 입력에도 예외를 던지지 않고, 해석할 수 없는
- * 이전 엣지는 조용히 무시한다.
+ * <p>저장된 정의의 구조는 BE가 통제하지 못하므로 <b>이전 엣지</b>는 어떤 모양이 와도 예외를 만들지
+ * 않고 조용히 무시한다. 반면 요청 엣지는 {@code @NotNull}·{@code @NotBlank}가 요청 경계에서 이미
+ * 걸러 준다는 전제로 읽는다 — 그 검증을 떼면 여기서 NPE가 난다.
  */
 final class EdgeDefinitionMerger {
 
