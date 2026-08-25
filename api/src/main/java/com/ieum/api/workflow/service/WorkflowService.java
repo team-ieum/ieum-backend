@@ -30,6 +30,7 @@ import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -79,8 +80,9 @@ public class WorkflowService {
 
     @Transactional
     public WorkflowResponse createWorkflow(UUID userId, CreateWorkflowRequest request) {
-        rejectRawWebhookUrls(request.getNodes());
-        rejectForeignCredentialIds(userId, request.getNodes());
+        List<Object> configs = configsOf(request.getNodes());
+        rejectRawWebhookUrls(configs);
+        rejectForeignCredentialIds(userId, configs);
         WorkflowVersion version = workflowCrudService.createWorkflow(
             userId,
             request.getName(),
@@ -118,22 +120,61 @@ public class WorkflowService {
         return toResponse(workflow, latestVersion, ownedWebhookNames(userId));
     }
 
+    /**
+     * 워크플로우를 수정한다. 요청이 보내지 않은 노드 필드는 직전 버전 값을 이어받는다 (IEUM-BE-65).
+     *
+     * <p>수정은 정의 전체를 새 버전으로 다시 쓰는 구조라, 요청 노드를 그대로 저장하면 클라이언트가
+     * 보내지 않은 {@code description}·{@code position}이 소실된다. 그래서 직전 버전 정의 위에
+     * 요청 노드를 덮어써({@link NodeDefinitionMerger}) 저장한다.
+     */
     @Transactional
     public WorkflowResponse updateWorkflow(UUID userId, UUID workflowId,
             UpdateWorkflowRequest request) {
-        rejectRawWebhookUrls(request.getNodes());
-        rejectForeignCredentialIds(userId, request.getNodes());
+        // 소유권 검증이 이전 정의 조회보다 먼저다 — 남의 워크플로우 정의를 읽고 나서 거절하면 안 된다.
+        workflowCrudService.getWorkflowByOwner(userId, workflowId);
+
+        List<Map<String, Object>> mergedNodes = NodeDefinitionMerger.merge(
+            previousNodes(workflowId), request.getNodes(), objectMapper);
+
+        // 가드는 병합 결과에 돈다 — 요청이 config를 생략하면 이전 config가 되살아나는데, 그 안에 원문
+        // 웹훅 URL이나 남의 credentialId가 있으면 요청만 검사해서는 통과해 버린다(IEUM-BE-62·64의
+        // "저장되는 정의에는 원문 웹훅 URL·남의 크레덴셜이 없다"는 불변식이 깨진다).
+        List<Object> configs = mergedNodes.stream().map(node -> node.get("config")).toList();
+        rejectRawWebhookUrls(configs);
+        rejectForeignCredentialIds(userId, configs);
+
         WorkflowVersion version = workflowCrudService.updateWorkflow(
             userId,
             workflowId,
             request.getName(),
             request.getDescription(),
-            toJson(request.getNodes()),
+            toJson(mergedNodes),
             toJson(request.getEdges()),
             request.getTriggerType(),
             request.getCronExpression()
         );
         return toResponse(version.getWorkflow(), version, ownedWebhookNames(userId));
+    }
+
+    /**
+     * 병합의 베이스가 될 직전 버전의 노드 목록. 버전이 없거나 정의 문서를 읽지 못하면 {@code null}이다.
+     *
+     * <p>정의 문서를 읽지 못해도 수정을 막지 않는다 — 병합 없이 요청 노드만 저장하는 예전 동작으로
+     * 물러선다. 여기서 404를 던지면 Mongo 문서가 사라진 워크플로우는 수정으로 고칠 길조차 없어진다.
+     */
+    private List<Map<String, Object>> previousNodes(UUID workflowId) {
+        WorkflowVersion latestVersion = workflowCrudService.findLatestVersion(workflowId)
+            .orElse(null);
+        if (latestVersion == null) {
+            return null;
+        }
+        try {
+            return workflowCrudService.loadDefinition(latestVersion).getNodes();
+        } catch (CustomException e) {
+            log.warn("[WorkflowService] 직전 정의를 읽지 못해 병합 없이 저장 — workflowId: {}, errorCode: {}",
+                workflowId, e.getErrorCode());
+            return null;
+        }
     }
 
     @Transactional
@@ -284,12 +325,9 @@ public class WorkflowService {
      * <p>판정과 메시지는 {@link RawWebhookUrlGuard}가 갖는다 — 채팅으로 agent가 만든 정의도 같은
      * 검사를 거치는데(Task 4) 둘이 각자 문구를 들고 있으면 같은 위반에 다른 반응이 나온다.
      */
-    private void rejectRawWebhookUrls(List<NodeDto> nodes) {
-        if (nodes == null) {
-            return;
-        }
-        for (NodeDto node : nodes) {
-            RawWebhookUrlGuard.rejectRawWebhookUrl(node.getConfig());
+    private void rejectRawWebhookUrls(List<Object> configs) {
+        for (Object config : configs) {
+            RawWebhookUrlGuard.rejectRawWebhookUrl(config);
         }
     }
 
@@ -307,18 +345,37 @@ public class WorkflowService {
      * <p>같은 루프에서 비밀 원문 키도 거부한다({@code NodeCredentialGuard.rejectInlineSecret}) —
      * 크레덴셜 참조를 통째로 건너뛰고 API 키를 config에 박으면 소유 검사가 아무것도 보지 못한다.
      */
-    private void rejectForeignCredentialIds(UUID userId, List<NodeDto> nodes) {
-        if (nodes == null || nodes.isEmpty()) {
+    private void rejectForeignCredentialIds(UUID userId, List<Object> configs) {
+        if (configs.isEmpty()) {
             return;
         }
         Set<String> owned = credentialService.getByUserId(userId).stream()
             .map(credential -> credential.getId().toString())
             .collect(Collectors.toSet());
-        for (NodeDto node : nodes) {
-            NodeCredentialGuard.rejectForeignCredentialId(node.getConfig(), owned);
+        for (Object config : configs) {
+            NodeCredentialGuard.rejectForeignCredentialId(config, owned);
             // 남의 크레덴셜을 참조하는 것뿐 아니라, 참조 자체를 건너뛰고 원문을 config에 박는 길도 막는다.
-            NodeCredentialGuard.rejectInlineSecret(node.getConfig());
+            NodeCredentialGuard.rejectInlineSecret(config);
         }
+    }
+
+    /**
+     * 요청 노드에서 config만 뽑는다 — 가드는 노드 전체가 아니라 config만 본다. 생성은 이전 정의가
+     * 없으므로 요청 노드가 곧 저장될 정의다(수정은 병합 결과에서 뽑는다).
+     *
+     * <p>리스트 원소의 {@code null}은 건너뛴다 — {@code @Valid}는 리스트 자체만 검증해 여기까지 온다.
+     */
+    private static List<Object> configsOf(List<NodeDto> nodes) {
+        if (nodes == null) {
+            return List.of();
+        }
+        List<Object> configs = new ArrayList<>(nodes.size());
+        for (NodeDto node : nodes) {
+            if (node != null) {
+                configs.add(node.getConfig());
+            }
+        }
+        return configs;
     }
 
     /**
