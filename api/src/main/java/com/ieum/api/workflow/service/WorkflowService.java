@@ -82,12 +82,15 @@ public class WorkflowService {
         List<Object> configs = request.getNodes().stream().<Object>map(NodeDto::getConfig).toList();
         rejectRawWebhookUrls(configs);
         rejectForeignCredentialIds(userId, configs);
+        // 엣지 맵 변환은 수정 경로와 같은 것을 쓴다 — 이전 정의가 없으면 요청 엣지가 그대로 나온다.
+        List<Map<String, Object>> edges =
+            withEdgeIds(EdgeDefinitionMerger.merge(null, request.getEdges()), request.getEdges());
         WorkflowVersion version = workflowCrudService.createWorkflow(
             userId,
             request.getName(),
             request.getDescription(),
             toJson(request.getNodes()),
-            toJson(request.getEdges()),
+            toJson(edges),
             request.getTriggerType(),
             request.getCronExpression()
         );
@@ -137,8 +140,8 @@ public class WorkflowService {
         WorkflowDefinitionDocument previous = previousDefinition(workflowId);
         List<Map<String, Object>> mergedNodes = NodeDefinitionMerger.merge(
             previous != null ? previous.getNodes() : null, request.getNodes(), objectMapper);
-        List<Map<String, Object>> mergedEdges = EdgeDefinitionMerger.merge(
-            previous != null ? previous.getEdges() : null, request.getEdges());
+        List<Map<String, Object>> mergedEdges = withEdgeIds(EdgeDefinitionMerger.merge(
+            previous != null ? previous.getEdges() : null, request.getEdges()), request.getEdges());
 
         // 가드는 병합 결과에 돈다 — 요청이 config를 생략하면 이전 config가 되살아나는데, 그 안에 원문
         // 웹훅 URL이나 남의 credentialId가 있으면 요청만 검사해서는 통과해 버린다(IEUM-BE-62·64의
@@ -163,6 +166,31 @@ public class WorkflowService {
             resolveCronExpression(request.getCronExpression(), triggerType, current)
         );
         return toResponse(version.getWorkflow(), version, ownedWebhookNames(userId));
+    }
+
+    /**
+     * 저장할 엣지에 id를 채운다 (IEUM-BE-65). 요청이 보낸 id는 그대로 쓰고, 없거나 빈 자리만 서버가
+     * 만든다.
+     *
+     * <p>id가 있어야 같은 {@code (source, target)}을 공유하는 형제 엣지(CONDITION 두 분기가 한 노드로
+     * 합류하는 모양)를 구분할 수 있다. 그런데 엣지 id를 필수로 두면 id 없는 엣지를 만드는 ieum-agent
+     * 정의가 저장·수정 불가가 되므로, 요구하는 대신 서버가 채운다.
+     *
+     * <p>클라이언트가 보낸 id는 검증하지 않는다 — 노드 id가 클라이언트 소유인 것과 같은 선이다.
+     * 중복 id가 와도 거절하지 않는다.
+     *
+     * @param edges        저장 직전의 엣지 맵. {@link EdgeDefinitionMerger}가 요청 엣지 하나당 하나씩
+     *                     같은 순서로 만든 것이라 {@code requestEdges}와 인덱스로 짝지어진다
+     * @param requestEdges 요청 엣지. id의 원천이다
+     */
+    private static List<Map<String, Object>> withEdgeIds(List<Map<String, Object>> edges,
+            List<EdgeDto> requestEdges) {
+        for (int i = 0; i < edges.size(); i++) {
+            String requested = i < requestEdges.size() ? requestEdges.get(i).getId() : null;
+            edges.get(i).put("id", requested != null && !requested.isBlank()
+                ? requested : UUID.randomUUID().toString());
+        }
+        return edges;
     }
 
     /**
