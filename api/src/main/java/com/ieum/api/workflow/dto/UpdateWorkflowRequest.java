@@ -23,9 +23,13 @@ public class UpdateWorkflowRequest {
     @Valid
     private List<EdgeDto> edges;
 
-    /** 트리거 타입. 미입력 시 MANUAL로 처리 */
+    /** 트리거 타입. 미입력 시 저장된 값을 유지한다(부분 갱신 — IEUM-BE-65). */
     private TriggerType triggerType;
 
-    /** SCHEDULE 트리거일 때 필수. Quartz 6자리 Cron 표현식 (예: "0 0 10 * * ?") */
+    /**
+     * SCHEDULE 트리거일 때 필수. Quartz 6자리 Cron 표현식 (예: "0 0 10 * * ?")
+     *
+     * <p>미입력 시 유효 트리거가 SCHEDULE이면 저장된 값을 유지하고, 아니면 비운다(IEUM-BE-65).
+     */
     private String cronExpression;
 }
