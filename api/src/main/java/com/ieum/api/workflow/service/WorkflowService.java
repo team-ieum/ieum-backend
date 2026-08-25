@@ -30,7 +30,6 @@ import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -80,7 +79,7 @@ public class WorkflowService {
 
     @Transactional
     public WorkflowResponse createWorkflow(UUID userId, CreateWorkflowRequest request) {
-        List<Object> configs = configsOf(request.getNodes());
+        List<Object> configs = request.getNodes().stream().<Object>map(NodeDto::getConfig).toList();
         rejectRawWebhookUrls(configs);
         rejectForeignCredentialIds(userId, configs);
         WorkflowVersion version = workflowCrudService.createWorkflow(
@@ -379,24 +378,6 @@ public class WorkflowService {
         }
     }
 
-    /**
-     * 요청 노드에서 config만 뽑는다 — 가드는 노드 전체가 아니라 config만 본다. 생성은 이전 정의가
-     * 없으므로 요청 노드가 곧 저장될 정의다(수정은 병합 결과에서 뽑는다).
-     *
-     * <p>리스트 원소의 {@code null}은 건너뛴다 — {@code @Valid}는 리스트 자체만 검증해 여기까지 온다.
-     */
-    private static List<Object> configsOf(List<NodeDto> nodes) {
-        if (nodes == null) {
-            return List.of();
-        }
-        List<Object> configs = new ArrayList<>(nodes.size());
-        for (NodeDto node : nodes) {
-            if (node != null) {
-                configs.add(node.getConfig());
-            }
-        }
-        return configs;
-    }
 
     /**
      * 저장된 정의(raw {@code Map})를 응답으로 옮긴다.

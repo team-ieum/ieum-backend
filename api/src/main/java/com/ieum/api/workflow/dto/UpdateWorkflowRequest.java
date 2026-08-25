@@ -15,9 +15,13 @@ public class UpdateWorkflowRequest {
 
     private String description;
 
+    /**
+     * 원소의 {@code @NotNull}이 필요하다 — 필드에만 붙이면 리스트 자체만 검증해
+     * {@code "nodes":[null]}이 통과한다(IEUM-BE-65).
+     */
     @NotNull
     @Valid
-    private List<NodeDto> nodes;
+    private List<@NotNull NodeDto> nodes;
 
     @NotNull
     @Valid

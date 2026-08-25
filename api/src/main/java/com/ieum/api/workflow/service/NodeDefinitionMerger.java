@@ -26,24 +26,16 @@ final class NodeDefinitionMerger {
 
     /**
      * @param previousNodes 직전 버전 정의의 nodes (null 가능)
-     * @param requestNodes  요청 nodes (null 가능)
+     * @param requestNodes  요청 nodes. {@code @NotNull}이 리스트와 원소를 모두 강제하므로 null이 아니다
      * @return 요청 순서를 따르는 병합 결과. 요청에 없는 이전 노드는 삭제된 것으로 본다
      */
     static List<Map<String, Object>> merge(List<Map<String, Object>> previousNodes,
         List<NodeDto> requestNodes, ObjectMapper objectMapper) {
 
-        if (requestNodes == null) {
-            return List.of();
-        }
-
         Map<String, Map<String, Object>> previousById = indexById(previousNodes);
         List<Map<String, Object>> merged = new ArrayList<>(requestNodes.size());
 
         for (NodeDto node : requestNodes) {
-            // 요청 리스트에 섞인 null 원소는 무시한다 — @Valid는 리스트 자체만 검증해 여기까지 온다.
-            if (node == null) {
-                continue;
-            }
             Map<String, Object> requested = objectMapper.convertValue(node, NODE_MAP);
             // 값이 null인 필드는 "변경 없음"이다 — 이전 값을 덮어쓰지 않게 뺀다.
             requested.values().removeIf(Objects::isNull);
