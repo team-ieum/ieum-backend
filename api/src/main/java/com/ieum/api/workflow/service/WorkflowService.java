@@ -179,16 +179,25 @@ public class WorkflowService {
      * <p>클라이언트가 보낸 id는 검증하지 않는다 — 노드 id가 클라이언트 소유인 것과 같은 선이다.
      * 중복 id가 와도 거절하지 않는다.
      *
+     * <p>고르는 순서는 <b>요청 id → 병합이 이어 준 이전 id → 새 UUID</b>다. 요청이 id를 생략해도
+     * 짝지어진 이전 엣지의 id가 남아 있어야 저장 회차마다 id가 갈리지 않는다.
+     *
      * @param edges        저장 직전의 엣지 맵. {@link EdgeDefinitionMerger}가 요청 엣지 하나당 하나씩
-     *                     같은 순서로 만든 것이라 {@code requestEdges}와 인덱스로 짝지어진다
+     *                     같은 순서로 만든 것이라 {@code requestEdges}와 인덱스로 짝지어진다. 길이가
+     *                     어긋나면 방어하지 않고 터뜨린다 — 조용히 새 id를 찍는 것이 더 나쁘다
      * @param requestEdges 요청 엣지. id의 원천이다
      */
     private static List<Map<String, Object>> withEdgeIds(List<Map<String, Object>> edges,
             List<EdgeDto> requestEdges) {
         for (int i = 0; i < edges.size(); i++) {
-            String requested = i < requestEdges.size() ? requestEdges.get(i).getId() : null;
-            edges.get(i).put("id", requested != null && !requested.isBlank()
-                ? requested : UUID.randomUUID().toString());
+            String requested = requestEdges.get(i).getId();
+            if (requested != null && !requested.isBlank()) {
+                edges.get(i).put("id", requested);
+            } else {
+                // 병합이 짝지은 이전 엣지의 id를 이미 넣어 뒀으면 그것을 잇는다. 새 UUID는 정말로
+                // 처음 보는 엣지에만 찍힌다 — 아니면 저장할 때마다 id가 전량 교체된다.
+                edges.get(i).putIfAbsent("id", UUID.randomUUID().toString());
+            }
         }
         return edges;
     }

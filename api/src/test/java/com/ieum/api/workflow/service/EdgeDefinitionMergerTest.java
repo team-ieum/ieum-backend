@@ -255,6 +255,34 @@ class EdgeDefinitionMergerTest {
     }
 
     /**
+     * <b>의도된 트레이드오프의 기준선이다 — 버그가 아니다.</b> 이전·요청 양쪽에 id가 있어도 서로
+     * 다르면 id로는 짝을 못 찾고 같은 {@code (source, target)}의 FIFO 폴백으로 내려간다. React Flow가
+     * 엣지 id를 자체 생성하므로(서버가 준 id를 되돌려 보내지 않는 클라이언트가 있다) 이 폴백을
+     * 막으면 conditionType이 통째로 사라진다.
+     *
+     * <p>나중에 "이전 엣지에 id가 있으면 FIFO 후보에서 제외"로 좁히면 이 테스트가 깨진다. 그때
+     * 깨지는 것이 정상이니 값을 바꾸되, 무엇을 포기하는지 알고 바꿔라.
+     */
+    @Test
+    @DisplayName("이전·요청 id가 서로 달라도 같은 (source,target)의 옛 conditionType을 FIFO로 잇는다")
+    void 서로_다른_id는_FIFO로_폴백한다() {
+        List<Map<String, Object>> previous = List.of(
+            previousEdge("server-1", "cond", "merge", "true"),
+            previousEdge("server-2", "cond", "merge", "false"));
+
+        List<Map<String, Object>> merged = EdgeDefinitionMerger.merge(previous, edges("""
+            [{"id":"rf-a","source":"cond","target":"merge"},
+             {"id":"rf-b","source":"cond","target":"merge"}]
+            """));
+
+        assertThat(merged.get(0).get("conditionType")).isEqualTo("true");
+        assertThat(merged.get(1).get("conditionType")).isEqualTo("false");
+        // 짝지은 이전 엣지의 id도 실려 나온다 — 요청 id가 있으면 withEdgeIds가 이 값을 덮어쓴다.
+        assertThat(merged).extracting(edge -> edge.get("id"))
+            .containsExactly("server-1", "server-2");
+    }
+
+    /**
      * {@code WorkflowService.withEdgeIds}는 "요청 엣지 하나당 정확히 하나, 같은 순서"라는 성질에
      * 기대 <b>인덱스로</b> id를 붙인다. 병합이 엣지를 거르거나 재정렬하면 id가 엉뚱한 엣지에 붙고,
      * withEdgeIds의 길이 방어가 그 사고를 조용히 넘긴다(매 저장마다 새 UUID가 생겨 id 안정성이

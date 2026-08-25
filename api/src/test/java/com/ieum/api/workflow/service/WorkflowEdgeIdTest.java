@@ -37,7 +37,7 @@ import org.mockito.ArgumentCaptor;
  * 여기서 고정하는 계약은 두 가지다 — ① 요청이 보낸 id는 그대로 저장된다 ② 없으면 서버가 만든다.
  *
  * <p>id가 필요한 이유는 같은 {@code (source, target)}을 공유하는 형제 엣지를 구분하기 위해서다.
- * id 기준 짝짓기 자체는 아직 {@link EdgeDefinitionMerger}에 없다.
+ * 짝짓기 규칙 자체는 {@link EdgeDefinitionMerger}가 들고 있다.
  */
 class WorkflowEdgeIdTest {
 
@@ -77,10 +77,11 @@ class WorkflowEdgeIdTest {
         }
     }
 
+    private final Workflow workflow = mock(Workflow.class);
+    private final WorkflowVersion version = mock(WorkflowVersion.class);
+
     /** 응답 변환까지 가려면 crud 반환값이 필요하다. */
     private void stubSaveSucceeds() {
-        Workflow workflow = mock(Workflow.class);
-        WorkflowVersion version = mock(WorkflowVersion.class);
         given(version.getWorkflow()).willReturn(workflow);
         given(workflowCrudService.getWorkflowByOwner(userId, workflowId)).willReturn(workflow);
         given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.empty());
@@ -92,6 +93,19 @@ class WorkflowEdgeIdTest {
             .willReturn(version);
         given(workflowCrudService.loadDefinition(version)).willReturn(
             WorkflowDefinitionDocument.builder().nodes(List.of()).edges(List.of()).build());
+    }
+
+    /** 직전 버전 정의가 있는 수정 경로 — 이 엣지들이 병합의 베이스가 된다. */
+    private void stubPreviousEdges(List<Map<String, Object>> previousEdges) {
+        stubSaveSucceeds();
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(workflowCrudService.loadDefinition(version)).willReturn(
+            WorkflowDefinitionDocument.builder().nodes(List.of()).edges(previousEdges).build());
+    }
+
+    private static Map<String, Object> previousEdge(String id, String conditionType) {
+        return Map.of("id", id, "source", "node-if", "target", "node-join",
+            "conditionType", conditionType);
     }
 
     /** 생성 저장 경로로 넘어간 edgesJson을 파싱해 돌려준다. */
@@ -169,5 +183,24 @@ class WorkflowEdgeIdTest {
         assertThat(saved.get(0).get("id")).isEqualTo("edge-true");
         // 공백뿐인 id는 없는 것으로 본다 — 짝짓기 키가 될 수 없다.
         assertThat((String) saved.get(1).get("id")).isNotBlank().isNotEqualTo("   ");
+    }
+
+    /**
+     * 왕복 안정성의 핵심 — 요청이 id를 생략해도 저장되는 id는 이전 것 그대로여야 한다. 새 UUID를
+     * 찍으면 GET이 돌려준 id가 다음 PUT마다 전량 교체돼 "엣지 식별자"가 회차마다 갈리는 nonce가
+     * 된다(FE가 id를 되돌려 보내야만 안정적인 계약은 안정적인 것이 아니다).
+     */
+    @Test
+    @DisplayName("요청이 id를 생략해도 짝지어진 이전 엣지의 id가 그대로 저장된다")
+    void update_keepsPreviousEdgeIdWhenRequestOmitsIt() {
+        stubPreviousEdges(List.of(
+            previousEdge("edge-A", "true"),
+            previousEdge("edge-B", "false")));
+
+        workflowService.updateWorkflow(userId, workflowId,
+            request(UpdateWorkflowRequest.class, SIBLING_EDGES));
+
+        assertThat(updatedEdges()).extracting(edge -> edge.get("id"))
+            .containsExactly("edge-A", "edge-B");
     }
 }

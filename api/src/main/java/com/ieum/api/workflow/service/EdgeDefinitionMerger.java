@@ -29,8 +29,8 @@ import java.util.Map;
  * 남은 자리만 FIFO로 채운다 — 요청에서 id 없는 엣지가 앞에 오더라도 뒤쪽 id 엣지의 짝을
  * 가로채지 못한다.
  *
- * <p>이은 값은 {@code conditionType} 하나다. 노드 병합과 달리 이전 엣지의 다른 키는 살리지 않는다.
- * 짝을 못 찾으면 새 엣지로 본다.
+ * <p>이어 붙이는 값은 {@code conditionType}과 짝지은 이전 엣지의 {@code id} 둘뿐이다. 노드 병합과
+ * 달리 이전 엣지의 다른 키는 살리지 않는다. 짝을 못 찾으면 새 엣지로 본다.
  *
  * <p><b>출력은 요청 엣지와 1:1이고 순서도 같다.</b> {@code WorkflowService.withEdgeIds}가 이 성질에
  * 기대 인덱스로 id를 붙이므로, 요청 엣지를 거르거나 재정렬하면 id가 엉뚱한 엣지에 붙는다.
@@ -93,6 +93,11 @@ final class EdgeDefinitionMerger {
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("source", edge.getSource());
             result.put("target", edge.getTarget());
+            // 짝지은 이전 엣지의 id를 그대로 실어 준다 — 요청이 id를 생략했을 때 withEdgeIds가 이
+            // 값을 잇는다. 버리면 매 저장마다 새 UUID가 찍혀 id가 회차마다 갈리는 nonce가 된다.
+            if (matches[i] != null && matches[i].id != null) {
+                result.put("id", matches[i].id);
+            }
             Object conditionType = edge.getConditionType() != null
                 ? edge.getConditionType()
                 : (matches[i] != null ? matches[i].conditionType : null);
