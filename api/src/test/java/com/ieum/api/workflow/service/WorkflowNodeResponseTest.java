@@ -210,7 +210,8 @@ class WorkflowNodeResponseTest {
             { "id": "node-2", "type": "SLACK",
               "position": { "x": 10.0, "y": 20.0 }, "config": {} }""";
         String edgeJson = """
-            { "source": "node-1", "target": "node-2", "conditionType": "true" }""";
+            { "id": "edge-1", "source": "node-1", "target": "node-2", "conditionType": "true" }""";
+        // id·conditionType 둘 다 키가 없는 엣지 — 예전에 저장된 정의의 모양이다.
         String bareEdgeJson = """
             { "source": "node-1", "target": "node-2" }""";
 
@@ -233,6 +234,7 @@ class WorkflowNodeResponseTest {
             EdgeView edgeView = EdgeView.fromDefinition(List.of(rawEdge), nodes, workflowId).get(0);
             assertSameJsonTree(edge, edgeView, EdgeDto.class);
             assertThat(tree(edgeView).has("conditionType")).isTrue();
+            assertThat(tree(edgeView).has("id")).isTrue();
         }
     }
 
@@ -616,6 +618,42 @@ class WorkflowNodeResponseTest {
             rawList(edge));
 
         assertThat(response.getEdges().get(0).conditionType()).isEqualTo("true");
+    }
+
+    /**
+     * 저장된 엣지 id가 응답에 실려야 프론트가 그 값을 그대로 되돌려 보낼 수 있다 (IEUM-BE-65).
+     * 여기가 새면 수정 요청의 엣지에는 늘 id가 없어 서버가 매번 새 id를 만든다.
+     */
+    @Test
+    @DisplayName("저장된 엣지의 id가 조회 응답에 실린다")
+    void storedEdgeId_isReturned() {
+        Map<String, Object> edge = edge("node-1", "node-2");
+        edge.put("id", "edge-1");
+
+        WorkflowResponse response = getWorkflow(
+            List.of(node("node-1", "TRIGGER", "시작", "실행하면 시작해요.", Map.of("x", 1, "y", 2)),
+                node("node-2", "AI", "분류", "설명이에요.", Map.of("x", 3, "y", 4))),
+            rawList(edge));
+
+        assertThat(response.getEdges()).hasSize(1);
+        assertThat(response.getEdges().get(0).id()).isEqualTo("edge-1");
+    }
+
+    /**
+     * id를 채우기 전에 저장된 정의(그리고 ieum-agent가 만든 정의)에는 엣지 id가 없다. 그 엣지를
+     * 버리면 기존 워크플로우의 연결선이 화면에서 통째로 사라지므로 id만 null로 둔다.
+     */
+    @Test
+    @DisplayName("저장된 엣지에 id가 없어도 조회는 성공하고 id는 null이다")
+    void legacyEdgeWithoutId_isReturnedWithNullId() {
+        WorkflowResponse response = getWorkflow(
+            List.of(node("node-1", "TRIGGER", "시작", "실행하면 시작해요.", Map.of("x", 1, "y", 2)),
+                node("node-2", "AI", "분류", "설명이에요.", Map.of("x", 3, "y", 4))),
+            rawList(edge("node-1", "node-2")));
+
+        assertThat(response.getEdges()).hasSize(1);
+        assertThat(response.getEdges().get(0).id()).isNull();
+        assertThat(response.getEdges().get(0).source()).isEqualTo("node-1");
     }
 
     /** 구조는 문자열로 만들어 봐야 의미 없는 값이라 null이 맞다 — 대신 조용히 사라지면 안 된다. */

@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -87,6 +88,17 @@ class WorkflowCredentialOwnershipTest {
         }
     }
 
+    /**
+     * 수정 경로의 거부는 "새 버전이 남지 않는다"로 확인한다.
+     *
+     * <p>{@code verifyNoInteractions}는 쓸 수 없다 — 수정은 병합할 직전 정의를 읽기 전에 소유권부터
+     * 검증하므로({@code getWorkflowByOwner}) 거부돼도 crud 호출이 0은 아니다 (IEUM-BE-65).
+     */
+    private void verifyNoSave() {
+        verify(workflowCrudService, never()).updateWorkflow(
+            any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
     /** 검증을 통과한 요청이 실제로 저장 경로까지 가는지 보려면 crud 반환값이 필요하다. */
     private void stubSaveSucceeds() {
         Workflow workflow = mock(Workflow.class);
@@ -132,7 +144,7 @@ class WorkflowCredentialOwnershipTest {
             .satisfies(e -> assertThat(((CustomException) e).getErrorCode().getStatus())
                 .isEqualTo(HttpStatus.BAD_REQUEST));
 
-        verifyNoInteractions(workflowCrudService);
+        verifyNoSave();
     }
 
     @Test
@@ -245,7 +257,7 @@ class WorkflowCredentialOwnershipTest {
             .satisfies(e -> assertThat(((CustomException) e).getErrorCode().getStatus())
                 .isEqualTo(HttpStatus.BAD_REQUEST));
 
-        verifyNoInteractions(workflowCrudService);
+        verifyNoSave();
     }
 
     @Test

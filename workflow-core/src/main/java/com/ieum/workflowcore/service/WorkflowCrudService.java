@@ -62,7 +62,8 @@ public class WorkflowCrudService {
     @Transactional
     public WorkflowVersion createWorkflow(UUID userId, String name, String description,
             String nodesJson, String edgesJson, TriggerType triggerType, String cronExpression) {
-        validateScheduleConfig(triggerType, cronExpression);
+        String cron = normalizeCronExpression(triggerType, cronExpression);
+        validateScheduleConfig(triggerType, cron);
 
         Workflow workflow = Workflow.builder()
             .userId(userId)
@@ -70,7 +71,7 @@ public class WorkflowCrudService {
             .description(description)
             .isActive(true)
             .triggerType(triggerType)
-            .cronExpression(cronExpression)
+            .cronExpression(cron)
             .build();
         workflowRepository.save(workflow);
 
@@ -79,7 +80,7 @@ public class WorkflowCrudService {
         // DB 커밋 후 Quartz Job 등록 — 트랜잭션 롤백 시 Job이 고아로 남는 것을 방지
         if (triggerType == TriggerType.SCHEDULE) {
             final UUID scheduledWorkflowId = workflow.getId();
-            afterCommit(() -> workflowScheduler.registerJob(scheduledWorkflowId, cronExpression));
+            afterCommit(() -> workflowScheduler.registerJob(scheduledWorkflowId, cron));
         }
 
         log.info("[WorkflowCrudService] 워크플로우 생성 — workflowId: {}, version: 1, triggerType: {}",
@@ -91,11 +92,12 @@ public class WorkflowCrudService {
     public WorkflowVersion updateWorkflow(UUID userId, UUID workflowId, String name,
             String description, String nodesJson, String edgesJson,
             TriggerType triggerType, String cronExpression) {
-        validateScheduleConfig(triggerType, cronExpression);
+        String cron = normalizeCronExpression(triggerType, cronExpression);
+        validateScheduleConfig(triggerType, cron);
 
         Workflow workflow = getWorkflowByOwner(userId, workflowId);
         workflow.update(name, description);
-        workflow.updateSchedule(triggerType, cronExpression);
+        workflow.updateSchedule(triggerType, cron);
 
         int nextVersion = workflowVersionRepository.findMaxVersionByWorkflowId(workflowId) + 1;
         WorkflowVersion version = saveVersionWithCompensation(workflow, nextVersion, nodesJson, edgesJson);
@@ -361,6 +363,18 @@ public class WorkflowCrudService {
         } else {
             workflowScheduler.deleteJob(workflow.getId());
         }
+    }
+
+    /**
+     * SCHEDULE 트리거가 아니면 cronExpression을 저장하지 않는다 (IEUM-BE-65).
+     *
+     * <p>트리거는 MANUAL인데 cron만 남은 유령 값은 조회에는 보이지만 아무것도 실행하지 않고,
+     * 나중에 {@code triggerType: "SCHEDULE"}만 보내는 요청이 사용자가 지정한 적 없는 시각으로
+     * Job을 등록하는 원천이 된다. {@code validateScheduleConfig}는 SCHEDULE이 아니면 cron을
+     * 보지 않으므로 여기서 미리 버린다(MANUAL의 cron은 실행에 아무 의미가 없어 손실이 아니다).
+     */
+    private static String normalizeCronExpression(TriggerType triggerType, String cronExpression) {
+        return triggerType == TriggerType.SCHEDULE ? cronExpression : null;
     }
 
     /**
