@@ -127,8 +127,14 @@ public class ExecutionJobWorker implements StreamListener<String, MapRecord<Stri
         }
     }
 
+    /**
+     * 실행하지 않고 ack할 상태 — 종료(SUCCESS/FAILED)와 승인 대기(WAITING_APPROVAL).
+     * 대기 실행은 승인되면 원 실행이 아니라 이어진 새 실행이 돈다. 재배달된 대기 실행을 돌리면
+     * 게이트 앞 노드(부작용 포함)가 처음부터 다시 실행된다.
+     */
     private boolean isTerminal(ExecutionStatus status) {
-        return status == ExecutionStatus.SUCCESS || status == ExecutionStatus.FAILED;
+        return status == ExecutionStatus.SUCCESS || status == ExecutionStatus.FAILED
+            || status == ExecutionStatus.WAITING_APPROVAL;
     }
 
     private UUID parseExecutionId(MapRecord<String, String, String> record) {

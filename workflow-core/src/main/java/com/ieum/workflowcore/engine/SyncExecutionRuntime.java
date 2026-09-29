@@ -1,5 +1,6 @@
 package com.ieum.workflowcore.engine;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.common.exception.CustomException;
@@ -22,6 +23,7 @@ import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.util.SensitiveDataMasker;
 import jakarta.annotation.PostConstruct;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -81,6 +83,13 @@ public class SyncExecutionRuntime {
     /** fan-out 병렬 실행 시 동시에 실행할 노드 수(워커 스레드 풀 크기). */
     @Value("${workflow.execution.parallelism:4}")
     private int parallelism;
+
+    /**
+     * 승인 게이트 기한 — 멈춘 시각 + 이 값이 {@code approval_deadline}이 된다. 지나면 sweeper가
+     * FAILED("승인 만료")로 확정한다. 필드 초기값은 {@code new}로 만드는 단위 테스트용이고 스프링이 덮는다.
+     */
+    @Value("${ieum.workflow.approval.timeout:PT24H}")
+    private Duration approvalTimeout = Duration.ofHours(24);
 
     /**
      * 워커 스레드가 메인으로 돌려주는 노드 실행 결과 묶음. attempts는 마지막으로 실행된 시도 회차.
@@ -191,8 +200,9 @@ public class SyncExecutionRuntime {
             assertNoCycle(nodes, edges);
 
             // 2-2. 모든 노드 Executor 존재 사전 검증 (디스패치 도중 throw로 인한 고아 태스크 방지)
+            // APPROVAL은 executor가 없다 — 멈춤은 dispatch()가 맡는다.
             for (Node n : nodes) {
-                if (!executorMap.containsKey(n.getType())) {
+                if (n.getType() != NodeType.APPROVAL && !executorMap.containsKey(n.getType())) {
                     throw new IllegalStateException("NodeExecutor 없음 — type: " + n.getType());
                 }
             }
@@ -218,6 +228,8 @@ public class SyncExecutionRuntime {
             boolean failedNodeRetryExhausted = false;
             String failedNodeId = null;
             String failedNodeError = null;
+            // 승인 전이라 제출하지 않고 멈춰 둔 APPROVAL 노드. dispatch()(메인 스레드)만 쓴다.
+            List<String> waitingGates = new ArrayList<>();
             try (ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, parallelism))) {
                 CompletionService<NodeOutcome> completion = new ExecutorCompletionService<>(pool);
                 int inFlight = 0;
@@ -225,7 +237,7 @@ public class SyncExecutionRuntime {
                     Deque<Node> ready = new ArrayDeque<>();
                     ready.add(triggerNode);   // 트리거는 incoming 0 → 최초 ready
                     inFlight += dispatch(ready, cursor, completion, executionId, workflowId,
-                        preCompleted);
+                        preCompleted, waitingGates);
 
                     while (inFlight > 0) {
                         NodeOutcome outcome = completion.take().get();
@@ -279,7 +291,7 @@ public class SyncExecutionRuntime {
                                 skippedNode.getType(), 0L));
                         }
                         inFlight += dispatch(newReady, cursor, completion, executionId, workflowId,
-                            preCompleted);
+                            preCompleted, waitingGates);
                     }
                 } finally {
                     // 실패/예외 시 남은 in-flight 작업 드레인(완료 대기) 후 close()로 풀 종료.
@@ -306,6 +318,12 @@ public class SyncExecutionRuntime {
             if (failed) {
                 finalizeFailure(execution, executionId, failedNodeRetryExhausted,
                     failedNodeId, failedNodeError);
+                return;
+            }
+
+            // 실패가 없고 게이트가 남았으면 승인 대기로 멈춘다(실패가 대기보다 우선 — 위에서 이미 return).
+            if (!waitingGates.isEmpty()) {
+                pauseForApproval(executionId, workflowId, waitingGates);
                 return;
             }
 
@@ -346,10 +364,32 @@ public class SyncExecutionRuntime {
     }
 
     /**
+     * 승인 게이트에서 실행을 멈춘다 — 실패 없이 루프가 끝났는데 대기 게이트가 남은 경우다.
+     *
+     * <p>종료 전이와 같은 조건부 UPDATE다({@code RUNNING}일 때만). 0행이면 그사이 sweeper 등이 먼저
+     * 끝낸 실행이라 DB 상태로 종료 이벤트만 흘린다. 사용자가 결정할 대기라 실패 알림은 없다.
+     * 스트림은 호출부의 {@code finally}가 닫는다.
+     */
+    private void pauseForApproval(UUID executionId, UUID workflowId, List<String> gateIds)
+            throws JsonProcessingException {
+        LocalDateTime now = LocalDateTime.now();
+        int paused = workflowExecutionRepository.pauseForApproval(executionId,
+            objectMapper.writeValueAsString(gateIds), now.plus(approvalTimeout), now);
+        if (paused == 0) {
+            publishAlreadyFinished(executionId, workflowId, ExecutionStatus.WAITING_APPROVAL);
+            return;
+        }
+        log.info("[Runtime] 승인 대기로 일시정지 — executionId: {}, gates: {}", executionId, gateIds);
+        eventPublisher.publish(executionId, ExecutionEvent.executionCompleted(
+            executionId, workflowId, ExecutionStatus.WAITING_APPROVAL));
+    }
+
+    /**
      * 실패 확정 단일 지점 — 상태 전이 + SSE 종료 이벤트 + 실패 알림을 한 곳에 모은다.
      *
-     * <p>이미 종료(SUCCESS/FAILED)된 실행은 상태를 되돌리지도, 알림을 다시 보내지도 않는다.
+     * <p>이미 종료(SUCCESS/FAILED)·승인 대기인 실행은 상태를 되돌리지도, 알림을 다시 보내지도 않는다.
      * 종료 이벤트만 전이 여부와 무관하게 흘린다 — 늦게 붙은 SSE 구독자가 스트림 종료를 알아야 한다.
+     * 전이하지 못했으면 DB 상태를 싣는다 — 대기로 멈춘 뒤 예외가 새도 가짜 FAILED를 내지 않는다.
      *
      * <p>알림은 상태 전이가 실제로 일어난 경우에만 발신한다. 이 규칙 덕에
      * {@code WorkflowExecutionService.markAsFailed()}가 뒤이어 불려도 중복 발신이 되지 않는다.
@@ -362,11 +402,13 @@ public class SyncExecutionRuntime {
         // 메모리 상태가 아니라 DB 상태로 판정한다 — sweeper가 먼저 확정했어도 메모리는 RUNNING이다.
         boolean transitioned = workflowExecutionRepository.finishIfNotTerminal(
             executionId, ExecutionStatus.FAILED, retryExhausted, LocalDateTime.now()) == 1;
+        if (!transitioned) {
+            publishAlreadyFinished(executionId, execution.getWorkflow().getId(), ExecutionStatus.FAILED);
+            return;
+        }
         eventPublisher.publish(executionId, ExecutionEvent.executionCompleted(
             executionId, execution.getWorkflow().getId(), ExecutionStatus.FAILED));
-        if (transitioned) {
-            notifyFailure(execution, retryExhausted, failedNodeId, errorSummary);
-        }
+        notifyFailure(execution, retryExhausted, failedNodeId, errorSummary);
     }
 
     /**
@@ -403,20 +445,22 @@ public class SyncExecutionRuntime {
      * 돌려준다(재처리 스킵). 메인 루프의 결과 처리·컨텍스트 갱신·엣지 전파는 일반 노드와 같은
      * 경로를 타므로 스케줄러 상태 관리가 갈라지지 않는다.
      *
-     * @return 제출한 노드 수
+     * <p>사전 완료가 아닌 APPROVAL 노드는 제출하지 않고 {@code waitingGates}에 넣는다. 완료 결과가
+     * 오지 않으니 {@code propagate}가 불리지 않아 하류의 남은 입력 수가 줄지 않는다 — 미승인
+     * 게이트의 하류는 이 실행에서 절대 ready가 되지 않는다. 사전 완료 검사가 executor 조회보다
+     * 먼저여야 승인 뒤 이어진 실행에서 게이트가 SKIPPED로 통과한다.
+     *
+     * @param waitingGates 대기에 넣은 게이트 ID가 추가된다
+     * @return 제출한 노드 수(대기 게이트는 세지 않는다)
      */
     private int dispatch(Deque<Node> ready, ExecutionCursor cursor,
                          CompletionService<NodeOutcome> completion, UUID executionId,
                          UUID workflowId,
-                         Map<String, Map<String, Object>> preCompleted) {
+                         Map<String, Map<String, Object>> preCompleted,
+                         List<String> waitingGates) {
         int count = 0;
         while (!ready.isEmpty()) {
             Node node = ready.poll();
-            // executor 존재는 execute() 진입부에서 사전 검증됨 — 여기선 안전망.
-            NodeExecutor executor = executorMap.get(node.getType());
-            if (executor == null) {
-                throw new IllegalStateException("NodeExecutor 없음 — type: " + node.getType());
-            }
             Map<String, Object> preOutput = preCompleted.get(node.getId());
             if (preOutput != null) {
                 log.info("[Runtime] 노드 스킵(재처리 — 원 실행 성공분 재사용) — nodeId: {}", node.getId());
@@ -427,6 +471,18 @@ public class SyncExecutionRuntime {
                     ExecutorResult.success(preOutput, 0L), 0L, 0, false, true));
                 count++;
                 continue;
+            }
+            if (node.getType() == NodeType.APPROVAL) {
+                log.info("[Runtime] 승인 게이트 도달 — nodeId: {}", node.getId());
+                waitingGates.add(node.getId());
+                eventPublisher.publish(executionId,
+                    ExecutionEvent.approvalRequested(executionId, workflowId, node.getId()));
+                continue;
+            }
+            // executor 존재는 execute() 진입부에서 사전 검증됨 — 여기선 안전망.
+            NodeExecutor executor = executorMap.get(node.getType());
+            if (executor == null) {
+                throw new IllegalStateException("NodeExecutor 없음 — type: " + node.getType());
             }
             Map<String, Object> input = prepareNodeInput(node, cursor);
             RetryPolicy policy = RetryPolicy.from(node.getConfig(), node.getType(), retryProperties);

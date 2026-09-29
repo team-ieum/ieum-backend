@@ -1,5 +1,6 @@
 package com.ieum.workflowcore.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.common.exception.CustomException;
@@ -11,6 +12,7 @@ import com.ieum.workflowcore.domain.WorkflowExecutionLog;
 import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.domain.enums.ExecutionLogStatus;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
+import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
@@ -22,10 +24,12 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -210,6 +214,11 @@ public class WorkflowExecutionService {
         return workflowExecutionRepository.findStuckRunningIds(threshold);
     }
 
+    /** 승인 기한이 {@code now}보다 앞선 {@code WAITING_APPROVAL} 실행의 ID(승인 만료 sweeper용). */
+    public List<UUID> findExpiredApprovalExecutionIds(LocalDateTime now) {
+        return workflowExecutionRepository.findExpiredApprovalIds(now);
+    }
+
     /**
      * 실행 시점 버전까지 즉시 로딩해 조회한다. 조회한 버전을 트랜잭션·영속성 컨텍스트 밖
      * (@Async 실행 스레드 등)으로 넘길 때 쓴다 — {@link #getExecution}이 주는 lazy 프록시를
@@ -263,10 +272,24 @@ public class WorkflowExecutionService {
         }
 
         ExecutionStatus status = execution.getStatus();
-        boolean terminal = status == ExecutionStatus.SUCCESS || status == ExecutionStatus.FAILED;
+        // 승인 대기도 종료로 본다 — 런타임은 이미 스트림을 닫았고 이 실행에 더 올 이벤트가 없다.
+        // 비종료로 두면 늦게 붙은 구독자가 라이브 스트림에 매달려 MVC async 타임아웃까지 기다린다.
+        boolean terminal = status == ExecutionStatus.SUCCESS || status == ExecutionStatus.FAILED
+            || status == ExecutionStatus.WAITING_APPROVAL;
         if (terminal) {
+            // 대기 실행엔 finishedAt이 없다 — 멈춘 시각은 조건부 UPDATE가 찍은 updatedAt이다.
+            LocalDateTime endedAt = status == ExecutionStatus.WAITING_APPROVAL
+                ? execution.getUpdatedAt() : execution.getFinishedAt();
+            if (status == ExecutionStatus.WAITING_APPROVAL) {
+                // 라이브는 게이트마다 APPROVAL_REQUESTED를 낸다. 게이트엔 node_runs 행이 없으니
+                // 멈출 때 저장한 대기 목록에서 되살린다 — 라이브·재생 모양 일치.
+                for (String gateId : execution.waitingApprovalNodeIdList()) {
+                    events.add(ExecutionEvent.approvalRequested(executionId, workflowId, gateId)
+                        .withOccurredAt(toInstant(endedAt)));
+                }
+            }
             events.add(ExecutionEvent.executionCompleted(executionId, workflowId, status)
-                .withOccurredAt(toInstant(execution.getFinishedAt())));
+                .withOccurredAt(toInstant(endedAt)));
         }
         return new ExecutionEventSnapshot(status, terminal, events);
     }
@@ -294,13 +317,53 @@ public class WorkflowExecutionService {
     }
 
     /**
+     * 승인 게이트의 결정을 대기 게이트마다 {@code node_runs} 한 행으로 남긴다 — 런타임 밖에서 노드 로그를
+     * 쓰는 유일한 경로다(게이트는 실행되지 않은 노드라 런타임이 행을 남기지 않는다).
+     *
+     * <p>승인은 {@code SUCCESS} + 출력(승인 정보)이다. 이어진 실행의 {@link #loadReusableNodeOutputs}가
+     * 이 출력을 읽어 게이트를 SKIPPED로 통과시키고, 하류가 {@code {{nodes.<gate>.output.approvedBy}}}로
+     * 참조한다. 거부는 {@code FAILED}라 재사용 대상이 아니다 — 거부된 실행을 재처리해도 게이트가 다시 멈춘다.
+     *
+     * <p>출력은 승인자 ID·시각·사유뿐이라 {@code SensitiveDataMasker}를 거치지 않는다. 호출자 트랜잭션에 참여한다.
+     *
+     * @param errorMessage 노드 로그의 오류 문구(거부 사유). {@code node_runs.error_message}는 VARCHAR(255)다
+     */
+    @Transactional
+    public void recordApprovalDecision(WorkflowExecution execution, ExecutionLogStatus status,
+            Map<String, Object> output, String errorMessage) {
+        String outputJson;
+        try {
+            outputJson = objectMapper.writeValueAsString(output);
+        } catch (JsonProcessingException e) {
+            throw new CustomException(ErrorCode.INTERNAL_SERVER_ERROR, "승인 결정을 기록하지 못했습니다.");
+        }
+        for (String gateId : execution.waitingApprovalNodeIdList()) {
+            workflowExecutionLogRepository.save(WorkflowExecutionLog.builder()
+                .execution(execution)
+                .nodeId(gateId)
+                .nodeType(NodeType.APPROVAL)
+                .status(status)
+                .outputJson(outputJson)
+                .errorMessage(errorMessage)
+                .durationMs(0L)
+                .traceId(execution.getTraceId())
+                .attemptCount(0)
+                .build());
+        }
+    }
+
+    /**
      * 런타임이 상태를 남기지 못한 실패를 FAILED로 확정한다 — 런타임 진입 전 실패(잡 페이로드 해석
      * 실패, trigger_data 복호 실패)와 실행 도중 프로세스가 죽어 고립된 실행(sweeper가 호출)이다.
-     * 런타임이 이미 확정했으면 아무것도 하지 않는다.
+     * {@code PENDING}·{@code RUNNING}일 때만 전이한다 — 이미 종료됐으면 아무것도 하지 않고,
+     * 승인 대기({@code WAITING_APPROVAL})도 건드리지 않는다. 대기는 승인·거부({@code ExecutionApprovalService})와
+     * 만료({@link #markAsFailed(UUID, String, ExecutionStatus)})만 끝낼 수 있다 — 조회 뒤 멈춘 실행을
+     * 고립 sweeper가, 멈춘 뒤 새어 나온 런타임 예외를 워커·러너가 FAILED로 뒤집지 않게 한다.
      *
      * <p>알림은 상태 전이가 실제로 일어난 분기 안에서만 예약한다 — 런타임의
      * {@code finalizeFailure}가 이미 보냈으면 여기서 다시 보내지 않는다. 이 경로가 잡는 실패는
      * 개별 노드 실패보다 심각한 시스템 결함(AES 키 오설정, 큐 계약 파손)이라 조용히 넘기지 않는다.
+     * 승인 만료도 같은 알림을 탄다(3-인자 오버로드) — 결함이 아니라 사용자 무응답이지만 역시 알린다.
      *
      * <p>실제 발신은 커밋 이후로 미룬다 — Discord POST가 DB 커넥션을 쥔 채 돌면 다수 실행이
      * 동시에 실패하는 상황(이 경로가 잡는 실패가 정확히 그렇다)에서 커넥션 풀이 마른다.
@@ -312,17 +375,30 @@ public class WorkflowExecutionService {
      * @param reason 오류 요약. 알림 문구에 실리고 {@code workflow_runs.error_message}에도 남는다 —
      *               이 경로엔 실패 노드 로그가 없어 여기가 유일한 원인 기록이다.
      *               자격증명·프롬프트 원문이 아닌 값만 넘길 것. null이면 실패 원인 없이 발신된다
-     * @return 이 호출이 실제로 FAILED로 전이시켰으면 그 실행의 workflowId. 이미 종료됐거나 실행이
-     *         없으면 빈 Optional — 호출부가 이 실행을 실패로 취급하는 후속 처리(SSE 종료 이벤트 등)를
-     *         걸 때 쓴다. workflowId를 함께 주는 이유는 SSE 종료 이벤트가 그 값을 싣는데,
+     * @return 이 호출이 실제로 FAILED로 전이시켰으면 그 실행의 workflowId. 전이 대상 상태가 아니거나
+     *         (종료·승인 대기) 실행이 없으면 빈 Optional — 호출부가 이 실행을 실패로 취급하는
+     *         후속 처리(SSE 종료 이벤트 등)를 걸 때 쓴다. workflowId를 함께 주는 이유는 SSE 종료 이벤트가 그 값을 싣는데,
      *         호출부(sweeper)는 트랜잭션 밖이라 LAZY 연관을 직접 읽을 수 없기 때문이다
      */
     @Transactional
     public Optional<UUID> markAsFailed(UUID executionId, String reason) {
+        return failIfStatusIn(executionId, reason,
+            EnumSet.of(ExecutionStatus.PENDING, ExecutionStatus.RUNNING));
+    }
+
+    /**
+     * 승인 만료 전용 — 실행이 {@code expected} 상태일 때만 FAILED로 확정한다. 그 사이 승인·거부로 끝났으면
+     * 아무것도 하지 않는다. 알림·사유 기록·반환값은 {@link #markAsFailed(UUID, String)}와 같다.
+     */
+    @Transactional
+    public Optional<UUID> markAsFailed(UUID executionId, String reason, ExecutionStatus expected) {
+        return failIfStatusIn(executionId, reason, EnumSet.of(expected));
+    }
+
+    private Optional<UUID> failIfStatusIn(UUID executionId, String reason, Set<ExecutionStatus> from) {
         // 행 잠금으로 읽는다 — 잠금 없이 읽으면 런타임이 SUCCESS를 커밋한 직후의 옛 RUNNING을 보고 FAILED로 덮는다.
         return workflowExecutionRepository.findByIdForUpdate(executionId).<Optional<UUID>>map(execution -> {
-            if (execution.getStatus() == ExecutionStatus.FAILED
-                    || execution.getStatus() == ExecutionStatus.SUCCESS) {
+            if (!from.contains(execution.getStatus())) {
                 return Optional.empty();
             }
             execution.fail();

@@ -41,8 +41,17 @@
 `execute(version, executionId, triggerData, preCompletedOutputs)` 4-인자 오버로드. `preCompletedOutputs`에 있는 노드는 executor를 부르지 않고 주어진 출력을 성공 결과로 삼아 `SKIPPED` 로그를 남긴다. 빈 Map이면 3-인자와 완전히 동일 동작.
 **TRIGGER 노드는 스킵 대상에서 제외한다** — `node_runs`의 output은 `SensitiveDataMasker`를 거쳐 민감값이 `***`인데, `TriggerNodeExecutor`는 부작용이 없어 재실행이 공짜이고 복호된 triggerData로 같은 출력을 다시 만든다.
 
+### 승인 게이트 (HITL, IEUM-BE-45)
+`APPROVAL` 노드는 NodeExecutor가 없다 — `dispatch()`가 사전 완료 출력(`preCompleted`)이 없는 APPROVAL을 **제출하지 않고** 대기 목록에 넣고 `APPROVAL_REQUESTED`를 발행한다. 제출하지 않으니 `propagate`가 불리지 않아 하류의 남은 입력 수가 줄지 않는다 — 미승인 게이트의 하류는 이 실행에서 절대 ready가 되지 않는다. 게이트와 무관한 분기는 계속 돈다.
+- 루프가 끝나면: 실패 있음 → `FAILED`(실패가 대기보다 우선) / 대기 게이트 있음 → `pauseForApproval` 조건부 UPDATE(`RUNNING`일 때만)로 `WAITING_APPROVAL` + `EXECUTION_COMPLETED(WAITING_APPROVAL)` / 둘 다 없음 → `SUCCESS`. 0행이면 `publishAlreadyFinished`. **실패 알림 없음**
+- `dispatch()`에서 사전 완료 검사가 executor 조회보다 **먼저**다 — 승인 뒤 이어진 실행에서 게이트는 재처리 스킵 경로(SKIPPED)로 통과한다. 순서를 뒤집으면 APPROVAL에서 "NodeExecutor 없음"이 난다. `execute()`의 executor 사전 검증도 APPROVAL만 뺀다
+- CONDITION 죽은 분기의 게이트는 dispatch되지 않아 대기에 들지 않는다. 그래서 대기 집합을 그래프에서 역산하지 않고 `waiting_approval_node_ids`에 저장한다
+- 승인(api `ExecutionApprovalService`) = 게이트마다 `node_runs` SUCCESS 행(출력 `{approved, approvedBy, approvedAt}`, `WorkflowExecutionService.recordApprovalDecision`) + 원 실행 SUCCESS + 재처리와 같은 경로로 이어진 새 실행(`retriedBy` 링크). 거부 = 게이트 FAILED 행 + 원 실행 FAILED(`error_message = "승인 거부: <사유>"`, 사유 없으면 `"승인 거부"`), 알림 없음. 만료 = sweeper가 `markAsFailed(id, "승인 만료", WAITING_APPROVAL)`, 알림 있음
+- 거부된 실행의 게이트 FAILED 행은 재사용 대상(SUCCESS·SKIPPED)이 아니고 만료된 실행엔 게이트 행 자체가 없어, 재처리해도 게이트가 다시 멈춘다 — 우회 경로 없음
+- `WAITING_APPROVAL`은 런타임·워커 입장에서 종료 상태다: `startIfNotTerminal`·`finishIfNotTerminal`·`ExecutionJobWorker`·`loadEventSnapshot`이 전부 종료로 취급한다. 2-인자 `markAsFailed`(고립 sweeper·워커·러너)도 `PENDING`·`RUNNING`만 끝내고 대기는 건드리지 않는다 — **대기를 끝내는 건 승인·거부·만료뿐이다**
+
 ### 노드 타입 (NodeType)
-`TRIGGER`, `AI`, `CONDITION`, `HTTP`, `TRANSFORM` — 5종뿐. 외부 서비스(Gmail·Notion 등) 연동은 별도 노드 타입이 아니라 AI 노드의 도구/HTTP 노드로 처리한다.
+`TRIGGER`, `AI`, `CONDITION`, `HTTP`, `TRANSFORM`, `APPROVAL` — 6종. 외부 서비스(Gmail·Notion 등) 연동은 별도 노드 타입이 아니라 AI 노드의 도구/HTTP 노드로 처리한다. `APPROVAL`은 NodeExecutor가 없다(위 "승인 게이트").
 
 ### NodeExecutor
 `NodeExecutor` 인터페이스 + 타입별 구현체(`AgentNodeExecutor`, `ConditionNodeExecutor`, `HttpNodeExecutor`, `TransformNodeExecutor`, `TriggerNodeExecutor`). 결과는 `ExecutorResult`.
@@ -83,6 +92,8 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 - 건너뛴 노드는 `ExecutionEvent.nodeSkipped()` — **`type`은 `NODE_COMPLETED`이고 `status`만 `SKIPPED`다.** 새 `type` 값을 만들면 이미 배포된 프론트(`nodeId + type` 멱등 처리)가 그 노드의 종료를 못 받는다. 죽은 조건 분기 스킵과 재처리 스킵 둘 다 이 모양으로 나간다
 - **죽은 조건 분기로 건너뛴 노드도 `node_runs`에 `SKIPPED` 행을 남긴다**(`saveSkippedLog`, output/input 없음·`attempt_count`=0). 재생은 `node_runs`만 읽으므로 행이 없으면 늦게 구독한 화면이 그 노드를 재현하지 못한다. output을 채우면 `loadReusableNodeOutputs`가 재사용 대상으로 읽어 버리니 비워 둘 것
 - 라이브·재생 모양 일치는 `LiveAndSnapshotEventParityTest`가 실제 실행 산출물(`node_runs` 행)을 스냅샷 조회에 물려 검증한다. 다만 **실패로 중단된 실행의 드레인 노드**는 로그만 남고 이벤트가 없다(기존 동작, 이 테스트 범위 밖)
+- 승인 게이트는 `APPROVAL_REQUESTED`(`nodeType: APPROVAL`, `status: PENDING`) → `EXECUTION_COMPLETED(WAITING_APPROVAL)`. 게이트엔 `node_runs` 행이 없어 스냅샷은 `waiting_approval_node_ids`에서 같은 이벤트를 되살린다(`LiveAndSnapshotEventParityTest`). 대기 실행의 종료 이벤트 시각은 `finishedAt`이 아니라 `updatedAt`(멈춘 시각)
+- 게이트가 대기에 든 뒤 다른 분기가 실패하거나(실행은 `FAILED`) `pauseForApproval`이 0행이면, 라이브는 이미 `APPROVAL_REQUESTED`를 흘렸지만 스냅샷 재생엔 없다(재생은 `WAITING_APPROVAL`일 때만 게이트 이벤트를 되살린다). **소비자는 `EXECUTION_COMPLETED`가 `WAITING_APPROVAL`을 실었을 때만 게이트를 대기로 다룰 것**
 
 ## 영속 (domain/, repository/)
 
@@ -95,7 +106,7 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 | `ChatMessage`/`ChatSession` | chat/ 하위 | 워크플로우 채팅 |
 | `WorkflowDefinitionDocument` | Mongo | nodes/edges 정의. PG `mongoDefinitionId`로 조인 |
 
-enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED, `ExecutionLogStatus`=SUCCESS/FAILED/SKIPPED, `TriggerType`=MANUAL/WEBHOOK/SCHEDULE.
+enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROVAL, `ExecutionLogStatus`=SUCCESS/FAILED/SKIPPED, `TriggerType`=MANUAL/WEBHOOK/SCHEDULE.
 
 새 컬럼 (IEUM-BE-46):
 - `node_runs.attempt_count` — 결과가 나오기까지의 시도 횟수. 재시도 없이 끝나면 1, **`SKIPPED`(재처리 스킵)은 0**
@@ -106,17 +117,23 @@ enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED, `ExecutionLog
 새 컬럼 (IEUM-BE-50):
 - `workflow_runs.error_message` — **실행 단위** 실패 사유. 노드 로그(`node_runs.error_message`)가 남지 않은 실패(런타임 진입 전 실패, 고립 실행 sweeper 확정)에서 유일한 원인 기록이라 `markAsFailed`만 채운다. 노드가 특정된 실패는 여기가 null이고 노드 로그에 원인이 있다. 대시보드 에러 목록이 "노드 로그 → 이 컬럼 → 기본 문구" 순으로 고른다
 
+새 컬럼 (IEUM-BE-45):
+- `workflow_runs.waiting_approval_node_ids` — 멈춘 순간 대기 중인 게이트 ID(JSON 배열 TEXT). `pauseForApproval`만 쓴다. 승인·거부 뒤에도 지우지 않는다(이력) — "대기 중"은 `status = WAITING_APPROVAL`일 때만의 의미. 읽기는 `WorkflowExecution.waitingApprovalNodeIdList()`(해석 실패 시 빈 목록 → 게이트 재대기, 우회 아님)
+- `workflow_runs.approval_deadline` — 멈춘 시각 + `ieum.workflow.approval.timeout`
+
 **DDL은 Flyway가 아니라 `ddl-auto: update`** — 마이그레이션 파일 없음. 컬럼 추가는 엔티티 필드만 넣으면 된다.
 단, **`nullable = false` 컬럼을 기존 행이 있는 테이블에 추가할 때는 `@ColumnDefault`가 반드시 필요하다.** 없으면 PostgreSQL이 DDL을 거부하는데 `ddl-auto: update`는 그 오류를 경고로만 남기고 부팅을 계속해 **컬럼 없이 앱이 뜬다.** 테스트는 `ddl-auto: create-drop`(빈 스키마)이라 이 사고를 잡지 못한다 — 이번에 `retry_exhausted`·`alert_target`이 걸릴 뻔했다.
+**enum 값을 추가하면 DB CHECK 제약도 손으로 고쳐야 한다.** Hibernate 6는 `@Enumerated(STRING)` 컬럼을 `CHECK (col IN (...))`와 함께 만드는데 `ddl-auto: update`는 이 제약을 갱신하지 않는다 — 새 값을 쓰는 순간 제약 위반이다. 테스트(`create-drop`)는 새 스키마라 못 잡는다. `docs/schema/V7`(connected_accounts.provider)·`V8`(workflow_runs.status·node_runs.node_type, IEUM-BE-45)이 그 수동 DDL이다 — 배포 전에 대상 DB에 적용할 것.
 
 ## 스케줄러 (scheduler/, config/)
 Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `ScheduleJobRestorer`(부팅 시 복원), `WorkflowCleanupScheduler`, `JobKeyGenerator`.
 `WorkflowScheduleJob`은 `ExecutionJobEnqueuer`로 api의 잡 큐에 넣고 바로 반환한다(IEUM-BE-51) — 수동·웹훅·재처리와 같은 재시작 복구를 받는다. 투입이 실패하면(Redis 장애·Stub) 유실되지 않게 `SyncExecutionRuntime`을 직접 부르고, 이 경우만 내구성이 없다.
 **겹침 방지는 `@DisallowConcurrentExecution`만으로 성립하지 않는다** — 잡이 실행 끝까지 블록하지 않으니 다음 발화가 그대로 들어온다. 그래서 같은 워크플로우에 끝나지 않은(PENDING/RUNNING) SCHEDULE 실행이 있으면 `prepareExecution` 전에 스킵한다(`WorkflowExecutionService.hasUnfinishedScheduleRun`). 판정은 `startedAt > now - workflow.execution.stuck.threshold`로 하한을 둔다 — sweeper는 `RUNNING`만 정리하므로 준비만 되고 버려진 고아 `PENDING`이 하한 없이 잡히면 그 스케줄이 **영구히 멈춘다.** `@DisallowConcurrentExecution`은 여전히 필요하다(JobKey가 워크플로우당 1개라 판정↔레코드 생성 사이에 다른 발화가 끼지 않게 직렬화). 재처리 API가 만든 실행도 원본의 `triggerType`(SCHEDULE)을 물려받으므로 겹침 판정에 걸린다.
 
-`WorkflowCleanupScheduler`는 두 가지를 돈다(둘 다 `@Scheduled` cron, Quartz 아님):
+`WorkflowCleanupScheduler`는 세 가지를 돈다(셋 다 `@Scheduled` cron, Quartz 아님):
 - `cleanupOrphanWorkflows()` — 고아 빈 워크플로우 hard delete
 - `failStuckRunningExecutions()` — **고립 `RUNNING` 실행 sweeper**(IEUM-BE-50). 프로세스가 죽어 런타임이 종료 처리를 못 한 실행은 영원히 `RUNNING`으로 남고, 재처리 API가 `FAILED`만 받으므로 다시 돌릴 수 없다. 재처리로 생긴 실행이 이렇게 굳으면 원본까지 "재처리 진행 중"으로 판정돼 **영구히 막힌다.** 확정은 `WorkflowExecutionService.markAsFailed()`에 맡긴다 — 런타임 밖 실패 확정 경로가 이미 종료 상태 가드·알림·커밋 후 발신을 갖췄다. 런타임의 `finalizeFailure`는 실행 중 인스턴스 상태를 쥔 private 경로라 타지 않는다. `retryExhausted`는 false(재시도 소진이 아니라 재시도 판정 자체가 못 이뤄진 실패)
+- `expireWaitingApprovals()` — 승인 기한(`approval_deadline`)이 지난 `WAITING_APPROVAL`을 `markAsFailed(id, "승인 만료", WAITING_APPROVAL)`로 확정(IEUM-BE-45) — 기대 상태를 넘겨 그 사이 승인·거부로 끝난 실행은 건드리지 않는다. 행 잠금이라 같은 순간의 승인·거부와 하나만 이긴다. SSE는 건드리지 않는다(멈출 때 이미 닫혔다). 정밀도는 주기(10분)
 
 ## 설정 (workflow-core가 읽는 키)
 | 키 | 기본값 | 용도 |
@@ -129,6 +146,7 @@ Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `Sche
 | `workflow.execution.retry.max-backoff-ms` | 30000 | 단일 대기 상한 |
 | `workflow.execution.retry.jitter` | true | full jitter 적용 여부 |
 | `workflow.execution.stuck.threshold` | `PT2H` | 이 시간 넘게 `RUNNING`인 실행을 고립으로 보고 `FAILED`로 확정. **내리지 말 것** — 잡 큐 회수(`reclaim-min-idle` 10분)로 복구될 실행을 먼저 FAILED로 굳히면 워커가 종료 상태로 보고 건너뛰어 복구가 취소된다. 스케줄 겹침 판정의 하한으로도 쓴다 |
+| `ieum.workflow.approval.timeout` | `PT24H` | 승인 게이트 기한(멈춘 시각 + 이 값). `SyncExecutionRuntime`의 `@Value` 기본값이고 yml에 선언돼 있지 않다 |
 
 `retry.*`는 `RetryProperties`(`@ConfigurationProperties`)의 필드 기본값이고 yml에 선언돼 있지 않다 — 장애 시 `ai-max-attempts: 1`로 재시도를 전역으로 끌 수 있게 코드 상수가 아니라 설정으로 뒀다. 노드 config의 `retry` 선언이 이 기본값보다 우선한다.
 

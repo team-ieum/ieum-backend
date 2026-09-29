@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.ieum.api.common.GlobalExceptionHandler;
+import com.ieum.api.workflow.service.ExecutionApprovalService;
 import com.ieum.api.workflow.service.ExecutionRetryService;
 import com.ieum.api.workflow.service.WorkflowService;
 import com.ieum.auth.security.CustomUserDetails;
@@ -38,7 +39,7 @@ class WorkflowControllerValidationTest {
     private final ExecutableValidator executableValidator =
         Validation.buildDefaultValidatorFactory().getValidator().forExecutables();
 
-    private final WorkflowController controller = new WorkflowController(mock(WorkflowService.class), mock(ExecutionRetryService.class));
+    private final WorkflowController controller = new WorkflowController(mock(WorkflowService.class), mock(ExecutionRetryService.class), mock(ExecutionApprovalService.class));
     private final CustomUserDetails userDetails =
         CustomUserDetails.of(UUID.randomUUID(), "user@example.com", "ROLE_USER");
 
@@ -102,7 +103,7 @@ class WorkflowControllerValidationTest {
             postProcessor.setProxyTargetClass(true);
             postProcessor.afterPropertiesSet();
             Object validatedController = postProcessor.postProcessAfterInitialization(
-                new WorkflowController(mock(WorkflowService.class), mock(ExecutionRetryService.class)), "workflowController");
+                new WorkflowController(mock(WorkflowService.class), mock(ExecutionRetryService.class), mock(ExecutionApprovalService.class)), "workflowController");
 
             mockMvc = MockMvcBuilders.standaloneSetup(validatedController)
                 .setControllerAdvice(new GlobalExceptionHandler())

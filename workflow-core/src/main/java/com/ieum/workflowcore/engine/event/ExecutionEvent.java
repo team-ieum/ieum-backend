@@ -77,6 +77,16 @@ public record ExecutionEvent(
             nodeId, nodeType, NodeEventStatus.FAILED, durationMs, errorMessage, null);
     }
 
+    /**
+     * 승인 게이트 대기. 게이트는 실행되지 않은 채 승인을 기다리므로 {@code status}는 {@code PENDING}이고
+     * {@code durationMs}는 없다. 스냅샷 재생도 같은 팩토리로 되살린다(게이트엔 node_runs 행이 없다).
+     */
+    public static ExecutionEvent approvalRequested(UUID executionId, UUID workflowId, String nodeId) {
+        return new ExecutionEvent(
+            ExecutionEventType.APPROVAL_REQUESTED, executionId, workflowId, Instant.now(),
+            nodeId, NodeType.APPROVAL, NodeEventStatus.PENDING, null, null, null);
+    }
+
     public static ExecutionEvent executionCompleted(
         UUID executionId, UUID workflowId, ExecutionStatus executionStatus) {
         return new ExecutionEvent(

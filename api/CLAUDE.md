@@ -21,7 +21,7 @@
 | `oauth` | Google/Notion/GitHubOAuthController, OAuthConnectionController | 소셜 연동·토큰 저장·연동 해제 |
 | `credential` | CredentialController | AI API Key BYOK CRUD·검증 |
 | `provider` | ProviderController | 지원 프로바이더 목록 |
-| `workflow` | WorkflowController, WorkflowDashboardController | 워크플로우 CRUD·실행·실행 이력 조회·SSE 진행 스트림, 실패 실행 재처리(`POST /api/v1/workflows/executions/{executionId}/retry`, 202), 대시보드 요약/최근실행/에러 |
+| `workflow` | WorkflowController, WorkflowDashboardController | 워크플로우 CRUD·실행·실행 이력 조회·SSE 진행 스트림, 실패 실행 재처리(`POST /api/v1/workflows/executions/{executionId}/retry`, 202), 대시보드 요약/최근실행/에러, 승인 대기 실행 승인·거부(`POST /api/v1/workflows/executions/{executionId}/approve` 202 새 실행 / `.../reject` 200) |
 | `chat` | ChatController | 워크플로우 채팅 (+ `AgentClient`가 ieum-agent 호출, WebSocket 핸들러) |
 | `webhook` / `webhookcredential` | WebhookController, WebhookCredentialController | 웹훅 트리거 수신·웹훅 크레덴셜, 실패 알림 대상 지정(`PUT /api/v1/webhook-credentials/{id}/alert-target`) |
 | `alert` | (Controller 없음) | 실패 알림 발신 — `AlertCooldownStore`, `DiscordWebhookSender` |
@@ -37,12 +37,14 @@
 
 `workflow/queue/` — `ExecutionJobQueue`(발행), `ExecutionJobWorker`(소비), `ExecutionJobQueueBootstrap`(그룹 생성·소비 시작·고아 잡 주기 회수·폴링 오류 복구), `ExecutionJobQueueConfig`(컨테이너 빈).
 **워커를 별도 프로세스로 빼지 말 것** — `ExecutionEventPublisher`가 in-memory `Sinks.Many`라 SSE가 즉시 깨진다. 큐의 목적은 수평 확장이 아니라 재시작 복구다.
-**배달 보장은 at-least-once다 — exactly-once가 아니다.** 실행 도중 프로세스가 죽으면 run은 `RUNNING`으로 남고 잡은 pending에 남아 회수되어 **처음부터 다시** 실행된다(이미 부작용을 낸 노드까지 되풀이). 중복 가드는 ① 종료 상태(SUCCESS/FAILED) ② 이 프로세스의 in-flight Set 두 가지뿐이다. 이 큐 위에 뭘 얹을 때 exactly-once로 오해하지 말 것.
+**배달 보장은 at-least-once다 — exactly-once가 아니다.** 실행 도중 프로세스가 죽으면 run은 `RUNNING`으로 남고 잡은 pending에 남아 회수되어 **처음부터 다시** 실행된다(이미 부작용을 낸 노드까지 되풀이). 중복 가드는 ① 종료·대기 상태(SUCCESS/FAILED/WAITING_APPROVAL) ② 이 프로세스의 in-flight Set 두 가지뿐이다. 이 큐 위에 뭘 얹을 때 exactly-once로 오해하지 말 것.
 **단일 인스턴스 배포(stop-then-start) 전제** — 컨슈머 이름이 상수라 인스턴스를 구분하지 않는다. 롤링 배포로 두 인스턴스가 겹치면 고아 잡 회수가 살아 있는 쪽의 in-flight를 뺏어 이중 실행할 수 있다(`ieum.workflow.queue.reclaim-min-idle`, 기본 10분이 유일한 안전장치). 스케일아웃은 SSE 허브 교체가 선행 조건.
 고아 잡 회수는 **부팅 1회가 아니라 주기 실행**(`@Scheduled`)이다 — `reclaim-min-idle` 때문에 재시작 직후엔 고아 잡의 idle이 아직 짧아 회수 대상이 아니고, 다시 볼 기회가 없으면 영영 유실된다.
 Quartz 스케줄 실행(`WorkflowScheduleJob`)은 workflow-core 포트 `ExecutionJobEnqueuer` → `config/DefaultExecutionJobEnqueuer` → `ExecutionJobQueue.enqueue()`로 같은 큐를 탄다(IEUM-BE-51). 투입 실패 시 폴백은 러너가 아니라 잡이 `SyncExecutionRuntime`을 직접 부르는 것이다.
 
 `workflow/service/ExecutionRetryService` — 실패 실행 재처리. DLQ는 별도 저장소가 아니라 `status=FAILED`인 실행 목록 자체다. 원 실행을 되살리지 않고 **같은 버전·같은 트리거 입력으로 새 실행을 만들어** 큐에 넣고, 원 실행엔 `retriedByExecutionId` 링크만 남긴다. 원본 행을 비관적 락(`lockExecutionWithVersion`)으로 읽어 동시 요청이 재처리를 둘 만드는 것을 막고, 큐 투입은 `afterCommit`에서 한다(워커가 링크를 읽어야 스킵 대상을 안다).
+
+`workflow/service/ExecutionApprovalService` — 승인 게이트(IEUM-BE-45)에서 멈춘 `WAITING_APPROVAL` 실행의 승인·거부. 원 실행 행 잠금(`lockExecutionWithVersion`) → 소유자 검증(ADMIN 우회 없음) → 대기 상태가 아니면 409 `EXECUTION_NOT_WAITING_APPROVAL`. 승인은 원 실행을 되살리지 않고 **재처리와 같은 `ExecutionRetryService.startContinuation()`**(같은 버전·트리거 입력으로 새 실행 + `retriedBy` 링크 + `afterCommit` 큐 투입)으로 이어진 실행을 만들고 원 실행은 SUCCESS. 응답은 새 실행이라 프론트는 그 ID로 SSE를 다시 구독한다. 거부는 FAILED + 사유이고, 사용자 결정이라 `markAsFailed`(알림)를 타지 않는다. 거부 사유 `@Size(max=200)` — `node_runs.error_message`가 VARCHAR(255)다. `startContinuation`을 별도 빈으로 빼지 말 것 — `ExecutionRetryServiceTest`의 `@InjectMocks`가 깨진다.
 
 ## config/ — Provider 포트 실구현
 workflow-core가 선언한 포트 11개를 여기서 `Default*`로 구현해 Stub을 대체한다 (`@Primary`).

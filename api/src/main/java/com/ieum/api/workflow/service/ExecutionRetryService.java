@@ -82,27 +82,43 @@ public class ExecutionRetryService {
             }
         }
 
-        // 원 실행이 고정한 버전을 그대로 쓴다 — 최신 버전으로 갈아타면 재처리가 아니라 새 실행이다.
+        WorkflowExecution retry = startContinuation(workflow, original);
+        log.info("[ExecutionRetryService] 실패 실행 재처리 — originalId: {}, retryId: {}",
+            executionId, retry.getId());
+        return WorkflowExecutionResponse.from(retry);
+    }
+
+    /**
+     * 원 실행에 이어지는 새 실행을 만든다 — 같은 버전·같은 트리거 입력으로 실행을 준비하고, 원 실행에
+     * {@code retriedByExecutionId} 링크를 남긴 뒤, 커밋 후 큐에 넣는다. 실패 재처리와 승인 재개
+     * ({@code ExecutionApprovalService})가 공유한다.
+     *
+     * <p>이어진 실행은 워커가 이 링크를 역방향으로 따라가 원 실행의 SUCCESS·SKIPPED 출력을 재사용한다.
+     * 그래서 큐 투입은 반드시 커밋 뒤다 — 링크가 보이기 전에 워커가 꺼내면 스킵 대상을 모른 채 처음부터 돈다.
+     *
+     * <p><b>호출자 트랜잭션 안에서, 그 트랜잭션에서 잠가 읽은 원 실행으로 불러라</b> — 링크는 더티 체킹으로
+     * 반영된다. 상태 검증(재처리는 FAILED, 승인은 WAITING_APPROVAL)은 호출자 몫이다.
+     */
+    @Transactional
+    public WorkflowExecution startContinuation(Workflow workflow, WorkflowExecution original) {
+        // 원 실행이 고정한 버전을 그대로 쓴다 — 최신 버전으로 갈아타면 이어짐이 아니라 새 실행이다.
         WorkflowVersion version = original.getWorkflowVersion();
         Map<String, Object> triggerData = workflowExecutionService.decryptTriggerData(original);
 
-        WorkflowExecution retry = workflowExecutionService.prepareExecution(
+        WorkflowExecution next = workflowExecutionService.prepareExecution(
             workflow, version, original.getTriggerType(), triggerData);
-        original.markRetriedBy(retry.getId());
+        original.markRetriedBy(next.getId());
 
-        final UUID retryExecutionId = retry.getId();
+        final UUID nextExecutionId = next.getId();
         // 커밋 후 투입 — 워커가 retriedByExecutionId 링크를 읽어야 스킵 대상을 알 수 있다.
         TransactionSynchronizationManager.registerSynchronization(
             new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    workflowExecutionRunner.run(version, retryExecutionId, triggerData);
+                    workflowExecutionRunner.run(version, nextExecutionId, triggerData);
                 }
             }
         );
-
-        log.info("[ExecutionRetryService] 실패 실행 재처리 — originalId: {}, retryId: {}",
-            executionId, retryExecutionId);
-        return WorkflowExecutionResponse.from(retry);
+        return next;
     }
 }

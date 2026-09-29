@@ -60,6 +60,15 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
     List<UUID> findStuckRunningIds(@Param("threshold") LocalDateTime threshold);
 
     /**
+     * 승인 기한이 지난 {@code WAITING_APPROVAL} 실행의 ID(승인 만료 sweeper용). {@link #findStuckRunningIds}와
+     * 같은 이유로 ID만 돌려준다 — 후보마다 {@code markAsFailed}가 별도 트랜잭션에서 잠가 확정한다.
+     */
+    @Query("SELECT e.id FROM WorkflowExecution e "
+        + "WHERE e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL "
+        + "AND e.approvalDeadline < :now")
+    List<UUID> findExpiredApprovalIds(@Param("now") LocalDateTime now);
+
+    /**
      * 주어진 시각 이후 시작해 아직 주어진 상태에 있는 실행이 있는지 본다(스케줄 발화 겹침 판정용).
      * {@code startedAt} 하한이 있어야 준비만 되고 버려진 고아 PENDING이 판정을 영구히 막지 않는다.
      */
@@ -68,11 +77,13 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
         LocalDateTime startedAt);
 
     /**
-     * 아직 종료(SUCCESS/FAILED)되지 않은 실행만 종료 상태로 전이한다. 전이했으면 1, 이미 종료됐으면 0.
+     * 아직 종료(SUCCESS/FAILED)·승인 대기(WAITING_APPROVAL)가 아닌 실행만 종료 상태로 전이한다.
+     * 전이했으면 1, 아니면 0.
      *
      * <p>런타임은 실행 시작 때 읽은 detached 엔티티를 들고 있어 {@code save()}로 종료하면 그사이
      * 다른 종료자(고립 실행 sweeper)가 쓴 상태·{@code error_message}·재처리 링크를 메모리 값으로
      * 덮어쓴다. 판정과 전이를 한 문장의 조건부 UPDATE로 묶고 종료 컬럼만 갱신해 그 경합을 막는다.
+     * 승인 대기는 승인·거부·만료만 끝낼 수 있다 — 런타임이 덮지 않게 여기서도 뺀다.
      * bulk UPDATE는 감사 리스너를 거치지 않으므로 {@code updatedAt}을 직접 세팅한다.
      */
     @Transactional
@@ -81,16 +92,18 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
         + "e.finishedAt = :now, e.updatedAt = :now "
         + "WHERE e.id = :id AND e.status NOT IN ("
         + "com.ieum.workflowcore.domain.enums.ExecutionStatus.SUCCESS, "
-        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.FAILED)")
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.FAILED, "
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL)")
     int finishIfNotTerminal(@Param("id") UUID id, @Param("status") ExecutionStatus status,
                             @Param("retryExhausted") boolean retryExhausted,
                             @Param("now") LocalDateTime now);
 
     /**
-     * 아직 종료되지 않은 실행만 {@code RUNNING}으로 전이한다. 전이했으면 1, 이미 종료됐으면 0.
+     * 아직 종료·승인 대기가 아닌 실행만 {@code RUNNING}으로 전이한다. 전이했으면 1, 아니면 0.
      *
      * <p>{@link #finishIfNotTerminal}과 같은 이유다 — 시작 시점에 {@code save()}하면 워커의 종료 확인
-     * 이후 sweeper가 확정한 FAILED·{@code error_message}를 RUNNING으로 되돌린다.
+     * 이후 sweeper가 확정한 FAILED·{@code error_message}를 RUNNING으로 되돌린다. 재배달된 승인 대기
+     * 실행을 RUNNING으로 되살리지 않는 것도 이 조건이다(되살리면 게이트 앞 노드가 다시 돈다).
      * {@code startedAt}은 재처리·회수 재실행에서도 지금으로 덮는다({@code start()}와 같다).
      */
     @Transactional
@@ -100,8 +113,25 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
         + "e.startedAt = :now, e.updatedAt = :now "
         + "WHERE e.id = :id AND e.status NOT IN ("
         + "com.ieum.workflowcore.domain.enums.ExecutionStatus.SUCCESS, "
-        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.FAILED)")
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.FAILED, "
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL)")
     int startIfNotTerminal(@Param("id") UUID id, @Param("now") LocalDateTime now);
+
+    /**
+     * {@code RUNNING}인 실행만 승인 대기로 멈춘다. 멈췄으면 1, 그사이 다른 종료자가 끝냈으면 0.
+     *
+     * <p>종료 전이와 같은 조건부 UPDATE다 — 메모리 엔티티를 {@code save()}하면 sweeper가 확정한
+     * FAILED·사유를 덮는다. {@code waitingNodeIdsJson}은 멈춘 순간 대기 중인 게이트 ID의 JSON 배열.
+     */
+    @Transactional
+    @Modifying
+    @Query("UPDATE WorkflowExecution e "
+        + "SET e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL, "
+        + "e.waitingApprovalNodeIds = :nodeIds, e.approvalDeadline = :deadline, e.updatedAt = :now "
+        + "WHERE e.id = :id "
+        + "AND e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.RUNNING")
+    int pauseForApproval(@Param("id") UUID id, @Param("nodeIds") String waitingNodeIdsJson,
+                         @Param("deadline") LocalDateTime deadline, @Param("now") LocalDateTime now);
 
     List<WorkflowExecution> findByWorkflow(Workflow workflow);
 

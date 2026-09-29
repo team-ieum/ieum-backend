@@ -32,6 +32,8 @@ import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.service.WorkflowCrudService;
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -127,6 +129,7 @@ class SyncExecutionRuntimeTest {
         // 기본은 "아직 종료되지 않은 실행" — 조건부 시작·종료 UPDATE가 행 1개를 전이시킨다.
         when(executionRepository.startIfNotTerminal(any(), any())).thenReturn(1);
         when(executionRepository.finishIfNotTerminal(any(), any(), anyBoolean(), any())).thenReturn(1);
+        when(executionRepository.pauseForApproval(any(), any(), any(), any())).thenReturn(1);
 
         log = new ConcurrentLinkedQueue<>();
         failNodeIds = new java.util.HashSet<>();
@@ -392,6 +395,9 @@ class SyncExecutionRuntimeTest {
     @DisplayName("sweeper가 먼저 FAILED로 확정한 실행이 노드 실패로 끝나면 알림은 다시 보내지 않고 종료 이벤트만 흘린다")
     void failure_afterExternalFailed_sendsNoAlert() throws Exception {
         when(executionRepository.finishIfNotTerminal(any(), any(), anyBoolean(), any())).thenReturn(0);
+        WorkflowExecution failedRow = mock(WorkflowExecution.class);
+        when(failedRow.getStatus()).thenReturn(ExecutionStatus.FAILED);
+        when(executionRepository.findById(executionId)).thenReturn(Optional.of(failedRow));
         failNodeIds.add("a");
         stubDefinition(
             List.of(node("t", "TRIGGER"), node("a", "AI")),
@@ -1375,6 +1381,215 @@ class SyncExecutionRuntimeTest {
             ExecutionEvent lastEvent = events.get(events.size() - 1);
             assertThat(lastEvent.type()).isEqualTo(ExecutionEventType.EXECUTION_COMPLETED);
             assertThat(lastEvent.executionStatus()).isEqualTo(ExecutionStatus.FAILED);
+        }
+    }
+
+    @Nested
+    @DisplayName("승인 게이트 (IEUM-BE-45)")
+    class ApprovalGate {
+
+        private List<ExecutionEvent> publishedEvents() {
+            ArgumentCaptor<ExecutionEvent> captor = ArgumentCaptor.forClass(ExecutionEvent.class);
+            verify(eventPublisher, atLeastOnce()).publish(eq(executionId), captor.capture());
+            return captor.getAllValues();
+        }
+
+        /** pauseForApproval에 넘어간 대기 게이트 JSON. */
+        private String pausedGateJson() {
+            ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+            verify(executionRepository).pauseForApproval(eq(executionId), captor.capture(), any(), any());
+            return captor.getValue();
+        }
+
+        @Test
+        @DisplayName("게이트에 닿으면 하류를 실행하지 않고 WAITING_APPROVAL로 멈춘다 — 이벤트·스트림 종료, 실패 알림 없음")
+        void gate_pauses_and_blocks_downstream() throws Exception {
+            // t -> g -> b
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("g", "APPROVAL"), node("b", "AI")),
+                List.of(edge("t", "g", null), edge("g", "b", null)));
+
+            run();
+
+            assertThat(log).containsExactly("t");
+            assertThat(pausedGateJson()).isEqualTo("[\"g\"]");
+            verify(executionRepository, never()).finishIfNotTerminal(any(), any(), anyBoolean(), any());
+            List<ExecutionEvent> events = publishedEvents();
+            assertThat(events).anySatisfy(e -> {
+                assertThat(e.type()).isEqualTo(ExecutionEventType.APPROVAL_REQUESTED);
+                assertThat(e.nodeId()).isEqualTo("g");
+                assertThat(e.nodeType()).isEqualTo(NodeType.APPROVAL);
+                assertThat(e.status()).isEqualTo(NodeEventStatus.PENDING);
+                assertThat(e.workflowId()).isEqualTo(workflowId);
+            });
+            ExecutionEvent last = events.get(events.size() - 1);
+            assertThat(last.type()).isEqualTo(ExecutionEventType.EXECUTION_COMPLETED);
+            assertThat(last.executionStatus()).isEqualTo(ExecutionStatus.WAITING_APPROVAL);
+            verify(eventPublisher).complete(executionId);
+            verify(alertNotifier, never()).notifyExecutionFailed(any());
+            // 게이트는 실행된 노드가 아니다 — node_runs 행은 승인·거부 결정이 남긴다.
+            ArgumentCaptor<WorkflowExecutionLog> logs = ArgumentCaptor.forClass(WorkflowExecutionLog.class);
+            verify(logRepository).save(logs.capture());
+            assertThat(logs.getValue().getNodeId()).isEqualTo("t");
+        }
+
+        @Test
+        @DisplayName("승인 기한은 멈춘 시각 + 기본 24시간이다")
+        void deadline_defaults_to_24h() throws Exception {
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("g", "APPROVAL")),
+                List.of(edge("t", "g", null)));
+            LocalDateTime before = LocalDateTime.now();
+
+            run();
+
+            ArgumentCaptor<LocalDateTime> deadline = ArgumentCaptor.forClass(LocalDateTime.class);
+            ArgumentCaptor<LocalDateTime> now = ArgumentCaptor.forClass(LocalDateTime.class);
+            verify(executionRepository).pauseForApproval(
+                eq(executionId), any(), deadline.capture(), now.capture());
+            assertThat(now.getValue()).isAfterOrEqualTo(before);
+            assertThat(Duration.between(now.getValue(), deadline.getValue())).isEqualTo(Duration.ofHours(24));
+        }
+
+        @Test
+        @DisplayName("게이트와 무관한 병렬 분기는 끝까지 돌고, 그 뒤에 멈춘다")
+        void unrelated_branch_completes_while_gate_waits() throws Exception {
+            // t -> g -> b, t -> c
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("g", "APPROVAL"), node("b", "AI"), node("c", "AI")),
+                List.of(edge("t", "g", null), edge("g", "b", null), edge("t", "c", null)));
+
+            run();
+
+            assertThat(log).containsExactlyInAnyOrder("t", "c");
+            assertThat(pausedGateJson()).isEqualTo("[\"g\"]");
+        }
+
+        @Test
+        @DisplayName("다른 분기가 실패하면 대기보다 실패가 우선 — FAILED로 끝나고 알림이 나간다")
+        void failure_in_other_branch_wins_over_waiting() throws Exception {
+            failNodeIds.add("a");
+            // t -> g -> b, t -> a(실패)
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("g", "APPROVAL"), node("b", "AI"), node("a", "AI")),
+                List.of(edge("t", "g", null), edge("g", "b", null), edge("t", "a", null)));
+
+            run();
+
+            verifyFinished(ExecutionStatus.FAILED, false);
+            verify(executionRepository, never()).pauseForApproval(any(), any(), any(), any());
+            verify(alertNotifier).notifyExecutionFailed(any());
+        }
+
+        @Test
+        @DisplayName("사전 완료 출력에 게이트가 있으면(승인 후 이어진 실행) SKIPPED로 통과하고 하류가 승인자를 참조한다")
+        void precompleted_gate_passes_as_skipped() throws Exception {
+            Map<String, Object> b = node("b", "AI");
+            b.put("config", new HashMap<>(Map.of("prompt", "{{nodes.g.output.approvedBy}}")));
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("g", "APPROVAL"), b),
+                List.of(edge("t", "g", null), edge("g", "b", null)));
+
+            runtime().execute(mock(WorkflowVersion.class), executionId, new HashMap<>(),
+                Map.of("g", Map.of("approved", true, "approvedBy", "user-1")));
+
+            assertThat(log).containsExactlyInAnyOrder("t", "b");
+            verify(executionRepository, never()).pauseForApproval(any(), any(), any(), any());
+            verifyFinished(ExecutionStatus.SUCCESS, false);
+            ArgumentCaptor<WorkflowExecutionLog> captor = ArgumentCaptor.forClass(WorkflowExecutionLog.class);
+            verify(logRepository, times(3)).save(captor.capture());
+            WorkflowExecutionLog gateLog = captor.getAllValues().stream()
+                .filter(l -> "g".equals(l.getNodeId())).findFirst().orElseThrow();
+            assertThat(gateLog.getStatus()).isEqualTo(ExecutionLogStatus.SKIPPED);
+            assertThat(gateLog.getNodeType()).isEqualTo(NodeType.APPROVAL);
+            WorkflowExecutionLog bLog = captor.getAllValues().stream()
+                .filter(l -> "b".equals(l.getNodeId())).findFirst().orElseThrow();
+            assertThat(bLog.getInputJson()).contains("user-1");
+        }
+
+        @Test
+        @DisplayName("CONDITION 죽은 분기 위의 게이트는 대기에 넣지 않는다 — 실행은 SUCCESS")
+        void gate_on_dead_branch_does_not_wait() throws Exception {
+            conditionResults.put("cond", true);
+            // t -> cond, cond(true) -> yes, cond(false) -> g -> no
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("cond", "CONDITION"), node("yes", "AI"),
+                    node("g", "APPROVAL"), node("no", "AI")),
+                List.of(edge("t", "cond", null), edge("cond", "yes", "true"),
+                    edge("cond", "g", "false"), edge("g", "no", null)));
+
+            run();
+
+            assertThat(log).containsExactlyInAnyOrder("t", "cond", "yes");
+            verify(executionRepository, never()).pauseForApproval(any(), any(), any(), any());
+            verifyFinished(ExecutionStatus.SUCCESS, false);
+        }
+
+        @Test
+        @DisplayName("병렬 분기의 두 게이트가 모두 대기 목록에 들어간다")
+        void parallel_gates_are_all_recorded() throws Exception {
+            // t -> g1 -> b, t -> g2 -> c
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("g1", "APPROVAL"), node("b", "AI"),
+                    node("g2", "APPROVAL"), node("c", "AI")),
+                List.of(edge("t", "g1", null), edge("g1", "b", null),
+                    edge("t", "g2", null), edge("g2", "c", null)));
+
+            run();
+
+            assertThat(log).containsExactly("t");
+            assertThat(objectMapper.readValue(pausedGateJson(), List.class))
+                .containsExactlyInAnyOrder("g1", "g2");
+        }
+
+        @Test
+        @DisplayName("멈추기 전에 외부에서 종료됐으면(조건부 UPDATE 0행) DB 상태로 종료 이벤트만 흘린다")
+        void pause_after_external_finish_publishes_db_status() throws Exception {
+            when(executionRepository.pauseForApproval(any(), any(), any(), any())).thenReturn(0);
+            WorkflowExecution failedRow = mock(WorkflowExecution.class);
+            when(failedRow.getStatus()).thenReturn(ExecutionStatus.FAILED);
+            when(executionRepository.findById(executionId)).thenReturn(Optional.of(failedRow));
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("g", "APPROVAL")),
+                List.of(edge("t", "g", null)));
+
+            run();
+
+            verify(eventPublisher).publish(eq(executionId),
+                org.mockito.ArgumentMatchers.argThat(
+                    event -> event.type() == ExecutionEventType.EXECUTION_COMPLETED
+                        && event.executionStatus() == ExecutionStatus.FAILED));
+            verify(eventPublisher, never()).publish(eq(executionId),
+                org.mockito.ArgumentMatchers.argThat(
+                    event -> event.executionStatus() == ExecutionStatus.WAITING_APPROVAL));
+            verify(eventPublisher).complete(executionId);
+            verify(alertNotifier, never()).notifyExecutionFailed(any());
+        }
+
+        @Test
+        @DisplayName("실패 확정이 0행이고 DB가 승인 대기면 FAILED가 아니라 WAITING_APPROVAL로 스트림을 닫고 알림도 없다")
+        void failure_on_waiting_row_publishes_db_status() throws Exception {
+            // 대기로 멈춘 뒤 예외가 바깥 catch로 새면 finalizeFailure가 불린다 — 조건부 UPDATE는 대기 행을
+            // 건드리지 않으니(0행) 가짜 FAILED 종료 이벤트를 내면 안 된다. 노드 실패로 같은 분기를 태운다.
+            when(executionRepository.finishIfNotTerminal(any(), any(), anyBoolean(), any())).thenReturn(0);
+            WorkflowExecution waitingRow = mock(WorkflowExecution.class);
+            when(waitingRow.getStatus()).thenReturn(ExecutionStatus.WAITING_APPROVAL);
+            when(executionRepository.findById(executionId)).thenReturn(Optional.of(waitingRow));
+            failNodeIds.add("a");
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI")),
+                List.of(edge("t", "a", null)));
+
+            run();
+
+            verify(eventPublisher).publish(eq(executionId),
+                org.mockito.ArgumentMatchers.argThat(
+                    event -> event.type() == ExecutionEventType.EXECUTION_COMPLETED
+                        && event.executionStatus() == ExecutionStatus.WAITING_APPROVAL));
+            verify(eventPublisher, never()).publish(eq(executionId),
+                org.mockito.ArgumentMatchers.argThat(
+                    event -> event.executionStatus() == ExecutionStatus.FAILED));
+            verify(alertNotifier, never()).notifyExecutionFailed(any());
         }
     }
 }

@@ -170,6 +170,17 @@ class WorkflowNodeResponseTest {
         assertThat(node.config()).containsKey("mappings");
     }
 
+    @Test
+    @DisplayName("APPROVAL 노드는 조회 응답에서 null로 버려지지 않고 enum으로 매핑된다 (IEUM-BE-45)")
+    void approvalType_mapsToEnum() throws Exception {
+        NodeView view = viewOf("""
+            { "id": "gate-1", "type": "APPROVAL", "label": "발송 전 승인",
+              "config": { "message": "보내도 될까요?" } }""");
+
+        assertThat(view.type()).isEqualTo(NodeType.APPROVAL);
+        assertThat(view.config()).containsEntry("message", "보내도 될까요?");
+    }
+
     private JsonNode tree(Object value) throws Exception {
         return jsonMapper.readTree(jsonMapper.writeValueAsString(value));
     }

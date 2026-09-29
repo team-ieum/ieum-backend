@@ -2,6 +2,7 @@ package com.ieum.api.workflow.controller;
 
 import com.ieum.api.workflow.dto.CreateWorkflowRequest;
 import com.ieum.api.workflow.dto.ExecuteWorkflowRequest;
+import com.ieum.api.workflow.dto.RejectExecutionRequest;
 import com.ieum.api.workflow.dto.UpdateWorkflowRequest;
 import com.ieum.api.workflow.dto.WorkflowExecutionLogResponse;
 import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
@@ -386,12 +387,33 @@ public interface WorkflowControllerDocs {
             CustomUserDetails userDetails,
             @Parameter(description = "재처리할 실행 ID") UUID executionId);
 
+    @Operation(summary = "승인 대기 실행 승인",
+        description = "WAITING_APPROVAL 실행의 대기 게이트를 모두 승인하고, 게이트 다음부터 이어지는 새 실행을 "
+            + "만든다(원 실행은 SUCCESS). 게이트 앞에서 이미 성공한 노드는 재사용되어 SKIPPED로 기록된다. "
+            + "응답은 **새 실행**이다 — 진행 SSE는 새 실행 ID로 다시 구독할 것. 게이트 출력 "
+            + "`{approved, approvedBy, approvedAt}`은 하류에서 `{{nodes.<게이트ID>.output.approvedBy}}`로 참조한다. "
+            + "워크플로우 소유자만 가능. 대기 상태가 아니면 409.")
+    @PreAuthorize("hasRole('USER')")
+    ResponseEntity<ApiResponse<WorkflowExecutionResponse>> approveExecution(
+            CustomUserDetails userDetails,
+            @Parameter(description = "승인할 실행 ID") UUID executionId);
+
+    @Operation(summary = "승인 대기 실행 거부",
+        description = "WAITING_APPROVAL 실행을 FAILED로 끝낸다(errorMessage = \"승인 거부: <사유>\"). "
+            + "사용자 결정이라 실패 알림은 가지 않는다. 본문과 사유는 선택이며 사유는 200자 이하. "
+            + "워크플로우 소유자만 가능. 대기 상태가 아니면 409.")
+    @PreAuthorize("hasRole('USER')")
+    ResponseEntity<ApiResponse<WorkflowExecutionResponse>> rejectExecution(
+            CustomUserDetails userDetails,
+            @Parameter(description = "거부할 실행 ID") UUID executionId,
+            @Valid RejectExecutionRequest request);
+
     @Operation(summary = "실행 목록 조회")
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<PageResponse<WorkflowExecutionResponse>>> getExecutions(
             CustomUserDetails userDetails,
             @Parameter(description = "워크플로우 ID") UUID id,
-            @Parameter(description = "실행 상태 필터 (PENDING/RUNNING/SUCCESS/FAILED)") ExecutionStatus status,
+            @Parameter(description = "실행 상태 필터 (PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROVAL)") ExecutionStatus status,
             @Parameter(description = "시작 시각 하한 (ISO-8601, 예: 2026-07-01T00:00:00)") LocalDateTime from,
             @Parameter(description = "시작 시각 상한 (ISO-8601)") LocalDateTime to,
             @Parameter(description = "커서 (페이지 번호)") String cursor,
@@ -419,7 +441,11 @@ public interface WorkflowControllerDocs {
             + "- 스냅샷 재생과 라이브가 같은 **모양**을 낸다(필드 구성·`type`·`status`가 일치). "
             + "다만 재생은 이미 끝난 노드의 결과만 재현하므로 `NODE_STARTED`는 나오지 않는다 — "
             + "늦게 구독하면 그 노드의 시작 프레임 없이 종료 프레임부터 받는다.\n"
-            + "- 경계 노드가 중복될 수 있으니 프론트는 `nodeId + type`으로 멱등 처리할 것.")
+            + "- 경계 노드가 중복될 수 있으니 프론트는 `nodeId + type`으로 멱등 처리할 것.\n"
+            + "- **승인 게이트(APPROVAL)에 닿으면 `APPROVAL_REQUESTED`(`nodeId`, `nodeType: APPROVAL`, "
+            + "`status: PENDING`)가 나가고 `EXECUTION_COMPLETED`(`executionStatus: WAITING_APPROVAL`)로 "
+            + "스트림이 닫힌다.** 늦게 구독해도 재생이 같은 이벤트를 되살린다. 승인 후엔 승인 응답의 새 실행 ID로 "
+            + "다시 구독할 것.")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(
         responseCode = "200",
         description = "SSE 스트림. data는 ExecutionEvent JSON이다.",

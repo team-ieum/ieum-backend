@@ -10,6 +10,7 @@ import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -171,6 +172,57 @@ class WorkflowExecutionServiceTest {
 
         assertThat(snapshot.terminal()).isFalse();
         assertThat(snapshot.events()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("승인 대기 실행 스냅샷은 terminal=true, 종료 이벤트는 WAITING_APPROVAL + 멈춘 시각(updatedAt)")
+    void 승인대기_실행_스냅샷() {
+        UUID workflowId = UUID.randomUUID();
+        UUID executionId = UUID.randomUUID();
+        LocalDateTime pausedAt = LocalDateTime.of(2026, 9, 29, 10, 0, 0);
+
+        WorkflowExecution execution = mockExecution(workflowId, ExecutionStatus.WAITING_APPROVAL);
+        given(execution.getUpdatedAt()).willReturn(pausedAt);
+        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+        given(workflowExecutionLogRepository.findByExecutionIdOrderByCreatedAtAsc(executionId))
+            .willReturn(List.of());
+
+        ExecutionEventSnapshot snapshot = service.loadEventSnapshot(workflowId, executionId);
+
+        // 비종료로 두면 늦게 붙은 구독자가 라이브 스트림에 매달려 MVC async 타임아웃까지 기다린다.
+        assertThat(snapshot.terminal()).isTrue();
+        var last = snapshot.events().get(snapshot.events().size() - 1);
+        assertThat(last.type()).isEqualTo(ExecutionEventType.EXECUTION_COMPLETED);
+        assertThat(last.executionStatus()).isEqualTo(ExecutionStatus.WAITING_APPROVAL);
+        assertThat(last.occurredAt()).isEqualTo(pausedAt.atZone(ZoneId.systemDefault()).toInstant());
+    }
+
+    @Test
+    @DisplayName("승인 대기 스냅샷은 게이트마다 APPROVAL_REQUESTED를 되살린 뒤 EXECUTION_COMPLETED로 끝난다 — 라이브와 같은 모양")
+    void 승인대기_스냅샷_게이트_재생() {
+        UUID workflowId = UUID.randomUUID();
+        UUID executionId = UUID.randomUUID();
+        LocalDateTime pausedAt = LocalDateTime.of(2026, 9, 29, 10, 0, 0);
+
+        WorkflowExecution execution = mockExecution(workflowId, ExecutionStatus.WAITING_APPROVAL);
+        given(execution.getUpdatedAt()).willReturn(pausedAt);
+        given(execution.waitingApprovalNodeIdList()).willReturn(List.of("gate-1"));
+        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+        WorkflowExecutionLog ok = mockLog(ExecutionLogStatus.SUCCESS, "node-1", NodeType.TRIGGER, 10L, null);
+        given(workflowExecutionLogRepository.findByExecutionIdOrderByCreatedAtAsc(executionId))
+            .willReturn(List.of(ok));
+
+        ExecutionEventSnapshot snapshot = service.loadEventSnapshot(workflowId, executionId);
+
+        assertThat(snapshot.events().stream().map(e -> e.type()).toList()).containsExactly(
+            ExecutionEventType.NODE_COMPLETED,
+            ExecutionEventType.APPROVAL_REQUESTED,
+            ExecutionEventType.EXECUTION_COMPLETED);
+        var gate = snapshot.events().get(1);
+        assertThat(gate.nodeId()).isEqualTo("gate-1");
+        assertThat(gate.nodeType()).isEqualTo(NodeType.APPROVAL);
+        assertThat(gate.status()).isEqualTo(NodeEventStatus.PENDING);
+        assertThat(gate.occurredAt()).isEqualTo(pausedAt.atZone(ZoneId.systemDefault()).toInstant());
     }
 
     @Test
@@ -388,6 +440,32 @@ class WorkflowExecutionServiceTest {
     }
 
     @Test
+    @DisplayName("승인 결정은 대기 게이트마다 APPROVAL 노드 로그 한 행 — 승인 출력이 실려야 이어진 실행이 게이트를 재사용한다")
+    void recordApprovalDecision_writesOneRowPerWaitingGate() {
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        given(execution.waitingApprovalNodeIdList()).willReturn(List.of("g1", "g2"));
+        given(execution.getTraceId()).willReturn("11112222333344445555666677778888");
+
+        service.recordApprovalDecision(execution, ExecutionLogStatus.SUCCESS,
+            Map.of("approved", true), null);
+
+        ArgumentCaptor<WorkflowExecutionLog> captor = ArgumentCaptor.forClass(WorkflowExecutionLog.class);
+        verify(workflowExecutionLogRepository, times(2)).save(captor.capture());
+        assertThat(captor.getAllValues()).extracting(WorkflowExecutionLog::getNodeId)
+            .containsExactly("g1", "g2");
+        assertThat(captor.getAllValues()).allSatisfy(row -> {
+            assertThat(row.getExecution()).isSameAs(execution);
+            assertThat(row.getNodeType()).isEqualTo(NodeType.APPROVAL);
+            assertThat(row.getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
+            assertThat(row.getOutputJson()).isEqualTo("{\"approved\":true}");
+            assertThat(row.getErrorMessage()).isNull();
+            assertThat(row.getTraceId()).isEqualTo("11112222333344445555666677778888");
+            // 게이트는 실행되지 않은 노드다 — SKIPPED 행과 같은 규칙으로 시도 횟수 0.
+            assertThat(row.getAttemptCount()).isZero();
+        });
+    }
+
+    @Test
     @DisplayName("markAsFailed가 상태를 전이시키면 실패 알림을 발신한다")
     void markAsFailed_statusTransitioned_sendsAlert() {
         UUID executionId = UUID.randomUUID();
@@ -451,6 +529,59 @@ class WorkflowExecutionServiceTest {
 
         service.markAsFailed(executionId, "무시되어야 한다");
 
+        verify(execution, never()).fail();
+        verify(alertNotifier, never()).notifyExecutionFailed(any());
+    }
+
+    @Test
+    @DisplayName("2-인자 markAsFailed(sweeper·워커·러너)는 승인 대기 실행을 끝내지 않는다 — 승인·거부·만료만 끝낼 수 있다")
+    void markAsFailed_waitingApproval_leavesUntouched() {
+        UUID executionId = UUID.randomUUID();
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        given(execution.getStatus()).willReturn(ExecutionStatus.WAITING_APPROVAL);
+        given(workflowExecutionRepository.findByIdForUpdate(executionId)).willReturn(Optional.of(execution));
+
+        Optional<UUID> result = service.markAsFailed(executionId, "프로세스 이상 종료 추정");
+
+        assertThat(result).isEmpty();
+        verify(execution, never()).fail();
+        verify(execution, never()).recordError(any());
+        verify(alertNotifier, never()).notifyExecutionFailed(any());
+    }
+
+    @Test
+    @DisplayName("만료 경로(기대 상태 WAITING_APPROVAL)는 대기 실행을 '승인 만료'로 FAILED 확정하고 알린다")
+    void markAsFailed_expectedWaitingApproval_expiresAndAlerts() {
+        UUID executionId = UUID.randomUUID();
+        UUID workflowId = UUID.randomUUID();
+        Workflow workflow = mock(Workflow.class);
+        given(workflow.getId()).willReturn(workflowId);
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        given(execution.getStatus()).willReturn(ExecutionStatus.WAITING_APPROVAL);
+        given(execution.getWorkflow()).willReturn(workflow);
+        given(workflowExecutionRepository.findByIdForUpdate(executionId)).willReturn(Optional.of(execution));
+
+        Optional<UUID> result =
+            service.markAsFailed(executionId, "승인 만료", ExecutionStatus.WAITING_APPROVAL);
+
+        assertThat(result).contains(workflowId);
+        verify(execution).fail();
+        verify(execution).recordError("승인 만료");
+        verify(alertNotifier).notifyExecutionFailed(any());
+    }
+
+    @Test
+    @DisplayName("만료 경로는 기대 상태가 아닌 실행(RUNNING)을 건드리지 않는다")
+    void markAsFailed_expectedWaitingApproval_runningRow_noop() {
+        UUID executionId = UUID.randomUUID();
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        given(execution.getStatus()).willReturn(ExecutionStatus.RUNNING);
+        given(workflowExecutionRepository.findByIdForUpdate(executionId)).willReturn(Optional.of(execution));
+
+        Optional<UUID> result =
+            service.markAsFailed(executionId, "승인 만료", ExecutionStatus.WAITING_APPROVAL);
+
+        assertThat(result).isEmpty();
         verify(execution, never()).fail();
         verify(alertNotifier, never()).notifyExecutionFailed(any());
     }

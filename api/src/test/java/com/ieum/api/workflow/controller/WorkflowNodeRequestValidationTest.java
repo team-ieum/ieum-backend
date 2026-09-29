@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.ieum.api.common.GlobalExceptionHandler;
+import com.ieum.api.workflow.service.ExecutionApprovalService;
 import com.ieum.api.workflow.service.ExecutionRetryService;
 import com.ieum.api.workflow.service.WorkflowService;
 import com.ieum.auth.security.CustomUserDetails;
@@ -38,7 +39,8 @@ class WorkflowNodeRequestValidationTest {
     void setUp() {
         mockMvc = MockMvcBuilders
             .standaloneSetup(new WorkflowController(
-                mock(WorkflowService.class), mock(ExecutionRetryService.class)))
+                mock(WorkflowService.class), mock(ExecutionRetryService.class),
+                mock(ExecutionApprovalService.class)))
             .setControllerAdvice(new GlobalExceptionHandler())
             .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
             .build();
@@ -146,6 +148,15 @@ class WorkflowNodeRequestValidationTest {
               "description": "슬랙으로 보내요.",
               "position": { "x": 40, "y": 120 }, "config": {} }""";
         expectStatus(body(node, ""), 400);
+    }
+
+    @Test
+    @DisplayName("APPROVAL 노드 type은 저장 요청에서 허용된다 (IEUM-BE-45)")
+    void approvalNodeType_returns201() throws Exception {
+        String node = """
+            { "id": "node-gate", "type": "APPROVAL", "label": "발송 전 승인",
+              "config": { "message": "보내도 될까요?" } }""";
+        expectStatus(body(node, ""), 201);
     }
 
     @Test
