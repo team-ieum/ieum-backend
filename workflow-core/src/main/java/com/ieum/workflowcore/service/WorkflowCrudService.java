@@ -14,6 +14,7 @@ import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowRepository;
 import com.ieum.workflowcore.repository.WorkflowVersionRepository;
+import com.ieum.workflowcore.scheduler.CronConverter;
 import com.ieum.workflowcore.scheduler.WorkflowScheduler;
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -92,29 +93,31 @@ public class WorkflowCrudService {
     public WorkflowVersion updateWorkflow(UUID userId, UUID workflowId, String name,
             String description, String nodesJson, String edgesJson,
             TriggerType triggerType, String cronExpression) {
-        String cron = normalizeCronExpression(triggerType, cronExpression);
-        validateScheduleConfig(triggerType, cron);
-
         Workflow workflow = getWorkflowByOwner(userId, workflowId);
         workflow.update(name, description);
-        workflow.updateSchedule(triggerType, cron);
+        applySchedule(workflow, triggerType, cronExpression);
 
         int nextVersion = workflowVersionRepository.findMaxVersionByWorkflowId(workflowId) + 1;
         WorkflowVersion version = saveVersionWithCompensation(workflow, nextVersion, nodesJson, edgesJson);
-
-        // DB 커밋 후 Job 동기화 — 트랜잭션 롤백 시 Quartz 상태가 DB와 불일치하는 것을 방지
-        final Workflow updatedWorkflow = workflow;
-        afterCommit(() -> syncScheduleJob(updatedWorkflow));
 
         log.info("[WorkflowCrudService] 워크플로우 업데이트 — workflowId: {}, version: {}, triggerType: {}",
             workflowId, nextVersion, triggerType);
         return version;
     }
 
+    /**
+     * agent가 만든 정의를 새 버전으로 저장한다. {@code triggerType}이 null이면(TRIGGER 노드 없음)
+     * 트리거 타입·cron·Quartz Job을 건드리지 않는다.
+     */
     @Transactional
-    public WorkflowVersion saveAgentVersion(UUID workflowId, String nodesJson, String edgesJson) {
+    public WorkflowVersion saveAgentVersion(UUID workflowId, String nodesJson, String edgesJson,
+            TriggerType triggerType, String cronExpression) {
         Workflow workflow = workflowRepository.findById(workflowId)
             .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+        // AI 저장에선 TRIGGER 노드가 진실원이다 — 그 값이 워크플로우 최상위 triggerType/cron을 덮는다.
+        if (triggerType != null) {
+            applySchedule(workflow, triggerType, cronExpression);
+        }
 
         int nextVersion = workflowVersionRepository.findMaxVersionByWorkflowId(workflowId) + 1;
         WorkflowVersion version = saveVersionWithCompensation(workflow, nextVersion, nodesJson, edgesJson);
@@ -351,6 +354,17 @@ public class WorkflowCrudService {
     }
 
     /**
+     * 트리거 타입·cron을 정규화·검증해 반영하고 커밋 후 Quartz Job을 맞춘다 — REST 수정과 AI 저장이 공유한다.
+     * Job 동기화를 커밋 뒤로 미뤄 트랜잭션 롤백 시 Quartz 상태가 DB와 어긋나는 것을 막는다.
+     */
+    private void applySchedule(Workflow workflow, TriggerType triggerType, String cronExpression) {
+        String cron = normalizeCronExpression(triggerType, cronExpression);
+        validateScheduleConfig(triggerType, cron);
+        workflow.updateSchedule(triggerType, cron);
+        afterCommit(() -> syncScheduleJob(workflow));
+    }
+
+    /**
      * 워크플로우의 현재 상태(triggerType + isActive)에 따라 Quartz Job을 동기화한다.
      * <ul>
      *   <li>SCHEDULE + 활성 → registerJob (신규 or Cron 갱신)
@@ -372,9 +386,16 @@ public class WorkflowCrudService {
      * 나중에 {@code triggerType: "SCHEDULE"}만 보내는 요청이 사용자가 지정한 적 없는 시각으로
      * Job을 등록하는 원천이 된다. {@code validateScheduleConfig}는 SCHEDULE이 아니면 cron을
      * 보지 않으므로 여기서 미리 버린다(MANUAL의 cron은 실행에 아무 의미가 없어 손실이 아니다).
+     *
+     * <p>SCHEDULE이면 Quartz 형식으로 옮긴다 — agent는 Unix 5필드를 만든다. REST·AI 저장이 모두 여기를
+     * 지나므로 변환은 이 한 곳뿐이다 (IEUM-AI-56). 비어 있으면 {@code validateScheduleConfig}가 거부한다.
      */
     private static String normalizeCronExpression(TriggerType triggerType, String cronExpression) {
-        return triggerType == TriggerType.SCHEDULE ? cronExpression : null;
+        if (triggerType != TriggerType.SCHEDULE) {
+            return null;
+        }
+        return cronExpression == null || cronExpression.isBlank()
+            ? cronExpression : CronConverter.toQuartz(cronExpression);
     }
 
     /**

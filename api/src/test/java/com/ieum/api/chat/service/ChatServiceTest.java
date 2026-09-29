@@ -22,6 +22,7 @@ import com.ieum.workflowcore.chat.repository.ChatMessageRepository;
 import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.WorkflowVersion;
+import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.executor.BetaPlatformProvider;
 import com.ieum.workflowcore.engine.executor.CredentialProvider;
 import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
@@ -53,6 +54,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -653,7 +655,7 @@ class ChatServiceTest {
         ChatResponse result = chatService.finalizeStream(
             workflowId, sessionId, resp, config, UUID.randomUUID(), userId);
 
-        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any());
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any(), any(), any());
         verify(workflowCrudService).updateWorkflowName(workflowId, "테스트 WF");
         verify(messageRepository).save(any(ChatMessage.class));
         assertThat(result.getType()).isEqualTo(AgentResponseType.WORKFLOW_GENERATED);
@@ -765,7 +767,7 @@ class ChatServiceTest {
         ChatResponse result = chatService.finalizeStream(
             workflowId, sessionId, resp, config, UUID.randomUUID(), userId);
 
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
         verify(messageRepository).save(any(ChatMessage.class));
         assertThat(result.getContent()).isEqualTo("좀 더 알려주세요");
     }
@@ -789,7 +791,7 @@ class ChatServiceTest {
                 .isEqualTo(ErrorCode.INVALID_WORKFLOW));
 
         // 거부는 저장 경로에 닿기 전에 끝나야 한다 — 새 버전이 남으면 막은 의미가 없다.
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
         verify(workflowCrudService, never()).updateWorkflowName(any(), any());
         verify(messageRepository, never()).save(any(ChatMessage.class));
     }
@@ -816,7 +818,7 @@ class ChatServiceTest {
             .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
                 .isEqualTo(ErrorCode.INVALID_WORKFLOW));
 
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -850,7 +852,7 @@ class ChatServiceTest {
 
         chatService.finalizeStream(workflowId, sessionId, resp, config, UUID.randomUUID(), userId);
 
-        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any());
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any(), any(), any());
     }
 
     // ─────────────────── agent 생성 정의의 남의 credentialId 거부 (IEUM-BE-64) ─
@@ -881,7 +883,7 @@ class ChatServiceTest {
             .satisfies(e -> assertThat(e.getMessage())
                 .doesNotContain(foreignCredentialId.toString()));
 
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -903,7 +905,7 @@ class ChatServiceTest {
         verify(workflowCrudService).saveAgentVersion(
             eq(workflowId),
             argThat(nodesJson -> nodesJson.contains(fallbackCredentialId.toString())),
-            any());
+            any(), any(), any());
     }
 
     @Test
@@ -927,7 +929,7 @@ class ChatServiceTest {
             .satisfies(e -> assertThat(e.getMessage())
                 .doesNotContain(foreignCredentialId.toString()));
 
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -959,7 +961,7 @@ class ChatServiceTest {
             .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
                 .isEqualTo(ErrorCode.INVALID_WORKFLOW));
 
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -987,7 +989,7 @@ class ChatServiceTest {
             // 메시지는 WS 핸들러가 사용자에게 그대로 보내고 로그에도 남는다.
             .satisfies(e -> assertThat(e.getMessage()).doesNotContain("sk-live-not-a-real-key"));
 
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
     }
 
     // ─────────────────── 채팅 저장 경로의 엣지 id 채우기 (IEUM-BE-65) ────────
@@ -1051,13 +1053,82 @@ class ChatServiceTest {
         chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
 
         ArgumentCaptor<String> edgesJson = ArgumentCaptor.forClass(String.class);
-        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), edgesJson.capture());
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), edgesJson.capture(), any(), any());
         List<Object> saved = objectMapper.readValue(edgesJson.getValue(), new TypeReference<>() {});
         // 비-Map 원소는 그대로 통과하고, Map 원소는 source/target이 없어도 id를 받는다.
         assertThat(saved).hasSize(3);
         assertThat(saved.get(0)).isEqualTo("엣지가 아닌 원소");
         assertThat(((Map<?, ?>) saved.get(1)).get("id")).isNotNull();
         assertThat(((Map<?, ?>) saved.get(2)).get("id")).isNotNull();
+    }
+
+    // ─────────────────── TRIGGER 노드 → 트리거 타입·cron 전달 (IEUM-AI-56) ───────────
+
+    @Test
+    @DisplayName("SCHEDULE TRIGGER 노드의 triggerType·cron 원문이 저장 경로로 넘어간다 — 변환은 저장 쪽이 한다")
+    void finalizeStream_scheduleTrigger_passesTriggerTypeAndCron() throws Exception {
+        ChatAgentResponse resp = buildTriggerResponse("{ \"triggerType\": \"SCHEDULE\", \"cron\": \"0 9 * * *\" }");
+        givenFinalizeStreamSession();
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+
+        verify(workflowCrudService).saveAgentVersion(
+            eq(workflowId), any(), any(), eq(TriggerType.SCHEDULE), eq("0 9 * * *"));
+    }
+
+    @Test
+    @DisplayName("WEBHOOK TRIGGER 노드면 WEBHOOK이 넘어간다 — 웹훅 호출이 트리거 타입 불일치로 막히지 않게")
+    void finalizeStream_webhookTrigger_passesWebhook() throws Exception {
+        ChatAgentResponse resp = buildTriggerResponse("{ \"triggerType\": \"WEBHOOK\" }");
+        givenFinalizeStreamSession();
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+
+        verify(workflowCrudService).saveAgentVersion(
+            eq(workflowId), any(), any(), eq(TriggerType.WEBHOOK), isNull());
+    }
+
+    @Test
+    @DisplayName("TRIGGER 노드가 없으면 트리거 정보를 null로 넘겨 기존 스케줄을 건드리지 않는다")
+    void finalizeStream_noTriggerNode_passesNull() throws Exception {
+        ChatAgentResponse resp = buildWorkflowResponse("{ \"method\": \"GET\" }");
+        givenFinalizeStreamSession();
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+
+        verify(workflowCrudService).saveAgentVersion(
+            eq(workflowId), any(), any(), isNull(), isNull());
+    }
+
+    @Test
+    @DisplayName("TRIGGER 노드의 triggerType이 알 수 없는 값이면 저장하지 않는다 — REST의 잘못된 enum 거부와 같다")
+    void finalizeStream_unknownTriggerType_notSaved() throws Exception {
+        ChatAgentResponse resp = buildTriggerResponse("{ \"triggerType\": \"DAILY\" }");
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        assertThatThrownBy(() ->
+            chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId))
+            .isInstanceOfSatisfying(CustomException.class, e ->
+                assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
+
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+    }
+
+    /** TRIGGER 노드 하나짜리 WORKFLOW_GENERATED 응답. config만 테스트마다 바꾼다. */
+    private ChatAgentResponse buildTriggerResponse(String triggerConfig) throws Exception {
+        return objectMapper.readValue("""
+            {
+                "message": "완성됐어요",
+                "type": "WORKFLOW_GENERATED",
+                "nodes": [
+                    { "id": "node-trigger", "type": "TRIGGER", "config": %s }
+                ],
+                "edges": []
+            }
+            """.formatted(triggerConfig), ChatAgentResponse.class);
     }
 
     /** finalizeStream이 메시지를 저장하는 데 필요한 최소 스텁. */
@@ -1071,7 +1142,7 @@ class ChatServiceTest {
     /** saveAgentVersion에 넘어간 edgesJson을 캡처해 파싱한다. */
     private List<Map<String, Object>> captureSavedEdges() throws Exception {
         ArgumentCaptor<String> edgesJson = ArgumentCaptor.forClass(String.class);
-        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), edgesJson.capture());
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), edgesJson.capture(), any(), any());
         return objectMapper.readValue(edgesJson.getValue(), new TypeReference<>() {});
     }
 

@@ -30,6 +30,7 @@ import com.ieum.workflowcore.chat.repository.ChatMessageRepository;
 import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
 import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.domain.enums.NodeType;
+import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.executor.BetaPlatformProvider;
 import com.ieum.workflowcore.engine.executor.CredentialProvider;
@@ -550,6 +551,10 @@ public class ChatService {
                 .map(credential -> credential.getId().toString())
                 .collect(Collectors.toSet());
 
+            // TRIGGER 노드가 없거나 triggerType이 없으면 null — 저장 쪽이 스케줄을 건드리지 않는다.
+            TriggerType triggerType = null;
+            String cron = null;
+
             // AI 노드에 credentialId / llmProvider 주입 (agent가 생성 시 누락하는 경우 보완)
             for (Map<String, Object> node : nodes) {
                 // agent가 만든 정의도 REST 생성·수정과 같은 웹훅 URL 원문 검사를 받는다. agent에는
@@ -558,6 +563,11 @@ public class ChatService {
                 RawWebhookUrlGuard.rejectRawWebhookUrl(node.get("config"));
 
                 String nodeType = (String) node.get("type");
+                if ("TRIGGER".equals(nodeType) && node.get("config") instanceof Map<?, ?> triggerConfig
+                        && triggerConfig.get("triggerType") != null) {
+                    triggerType = parseTriggerType(triggerConfig.get("triggerType"));
+                    cron = triggerConfig.get("cron") instanceof String value ? value : null;
+                }
                 if ("AI".equals(nodeType)) {
                     Map<String, Object> config = (Map<String, Object>) node.get("config");
                     if (config != null) {
@@ -592,12 +602,22 @@ public class ChatService {
 
             String nodesJson = objectMapper.writeValueAsString(nodes);
             String edgesJson = objectMapper.writeValueAsString(fillEdgeIds(agentResponse.getEdges()));
-            workflowCrudService.saveAgentVersion(workflowId, nodesJson, edgesJson);
+            workflowCrudService.saveAgentVersion(workflowId, nodesJson, edgesJson, triggerType, cron);
             log.info("[ChatService] 워크플로우 버전 저장 완료 — workflowId: {}, type: {}",
                 workflowId, agentResponse.getType());
         } catch (JsonProcessingException e) {
             log.error("[ChatService] 노드/엣지 직렬화 실패 — workflowId: {}", workflowId, e);
             throw new CustomException(ErrorCode.INVALID_WORKFLOW);
+        }
+    }
+
+    /** 알 수 없는 값이면 저장 전체를 거부한다 — REST가 잘못된 triggerType enum을 400으로 거부하는 것과 같다. */
+    private static TriggerType parseTriggerType(Object value) {
+        try {
+            return TriggerType.valueOf(value.toString());
+        } catch (IllegalArgumentException e) {
+            throw new CustomException(ErrorCode.INVALID_WORKFLOW,
+                "TRIGGER 노드의 triggerType이 올바르지 않습니다: " + value);
         }
     }
 
