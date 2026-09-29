@@ -22,6 +22,7 @@ import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.util.SensitiveDataMasker;
 import jakarta.annotation.PostConstruct;
+import java.time.LocalDateTime;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -306,8 +307,19 @@ public class SyncExecutionRuntime {
                 return;
             }
 
-            execution.complete();
-            workflowExecutionRepository.save(execution);
+            // 메모리 엔티티를 save()하면 그사이 sweeper가 확정한 FAILED·사유를 덮어쓴다 — 조건부 전이만 한다.
+            if (workflowExecutionRepository.finishIfNotTerminal(
+                    executionId, ExecutionStatus.SUCCESS, false, LocalDateTime.now()) == 0) {
+                // 종료 이벤트는 여기서 흘린다 — 외부 종료자의 이벤트는 finally가 스트림을 닫은 뒤 새 Sink로
+                // 흩어질 수 있다. 상태는 DB 값을 쓴다(중복 런타임이 SUCCESS로 끝냈을 수도 있다).
+                ExecutionStatus finalStatus = workflowExecutionRepository.findById(executionId)
+                    .map(WorkflowExecution::getStatus).orElse(ExecutionStatus.FAILED);
+                log.warn("[Runtime] 이미 종료된 실행이라 SUCCESS로 전이하지 않음 — executionId: {}, DB 상태: {}",
+                    executionId, finalStatus);
+                eventPublisher.publish(executionId,
+                    ExecutionEvent.executionCompleted(executionId, workflowId, finalStatus));
+                return;
+            }
             log.info("[Runtime] 워크플로우 성공 — executionId: {}", execution.getId());
             eventPublisher.publish(executionId, ExecutionEvent.executionCompleted(
                 executionId, workflowId, ExecutionStatus.SUCCESS));
@@ -338,12 +350,9 @@ public class SyncExecutionRuntime {
      */
     private void finalizeFailure(WorkflowExecution execution, UUID executionId,
                                  boolean retryExhausted, String failedNodeId, String errorSummary) {
-        boolean transitioned = execution.getStatus() != ExecutionStatus.SUCCESS
-            && execution.getStatus() != ExecutionStatus.FAILED;
-        if (transitioned) {
-            execution.fail(retryExhausted);
-            workflowExecutionRepository.save(execution);
-        }
+        // 메모리 상태가 아니라 DB 상태로 판정한다 — sweeper가 먼저 확정했어도 메모리는 RUNNING이다.
+        boolean transitioned = workflowExecutionRepository.finishIfNotTerminal(
+            executionId, ExecutionStatus.FAILED, retryExhausted, LocalDateTime.now()) == 1;
         eventPublisher.publish(executionId, ExecutionEvent.executionCompleted(
             executionId, execution.getWorkflow().getId(), ExecutionStatus.FAILED));
         if (transitioned) {

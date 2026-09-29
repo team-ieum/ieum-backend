@@ -2,6 +2,7 @@ package com.ieum.workflowcore.repository;
 
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
+import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import jakarta.persistence.LockModeType;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -12,6 +13,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecution, UUID> {
 
@@ -54,6 +56,25 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
         + "WHERE e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.RUNNING "
         + "AND e.startedAt < :threshold")
     List<UUID> findStuckRunningIds(@Param("threshold") LocalDateTime threshold);
+
+    /**
+     * 아직 종료(SUCCESS/FAILED)되지 않은 실행만 종료 상태로 전이한다. 전이했으면 1, 이미 종료됐으면 0.
+     *
+     * <p>런타임은 실행 시작 때 읽은 detached 엔티티를 들고 있어 {@code save()}로 종료하면 그사이
+     * 다른 종료자(고립 실행 sweeper)가 쓴 상태·{@code error_message}·재처리 링크를 메모리 값으로
+     * 덮어쓴다. 판정과 전이를 한 문장의 조건부 UPDATE로 묶고 종료 컬럼만 갱신해 그 경합을 막는다.
+     * bulk UPDATE는 감사 리스너를 거치지 않으므로 {@code updatedAt}을 직접 세팅한다.
+     */
+    @Transactional
+    @Modifying
+    @Query("UPDATE WorkflowExecution e SET e.status = :status, e.retryExhausted = :retryExhausted, "
+        + "e.finishedAt = :now, e.updatedAt = :now "
+        + "WHERE e.id = :id AND e.status NOT IN ("
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.SUCCESS, "
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.FAILED)")
+    int finishIfNotTerminal(@Param("id") UUID id, @Param("status") ExecutionStatus status,
+                            @Param("retryExhausted") boolean retryExhausted,
+                            @Param("now") LocalDateTime now);
 
     List<WorkflowExecution> findByWorkflow(Workflow workflow);
 

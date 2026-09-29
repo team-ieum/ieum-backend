@@ -5,6 +5,7 @@ import static com.ieum.api.workflow.queue.ExecutionJobQueue.STREAM_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.entry;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -199,6 +200,20 @@ class ExecutionRetryQueueIntegrationTest {
         when(repository.findWithVersionById(any())).thenAnswer(this::findRow);
         when(repository.findWithWorkflowById(any())).thenAnswer(this::findRow);
         when(repository.findByIdForUpdate(any())).thenAnswer(this::findRow);
+        // 조건부 종료 UPDATE 대역 — 종료되지 않은 행만 전이시키고 전이한 행 수를 돌려준다.
+        when(repository.finishIfNotTerminal(any(), any(), anyBoolean(), any())).thenAnswer(invocation -> {
+            WorkflowExecution row = rows.get((UUID) invocation.getArgument(0));
+            if (row == null || row.getStatus() == ExecutionStatus.SUCCESS
+                    || row.getStatus() == ExecutionStatus.FAILED) {
+                return 0;
+            }
+            if (invocation.getArgument(1) == ExecutionStatus.SUCCESS) {
+                row.complete();
+            } else {
+                row.fail((boolean) invocation.getArgument(2));
+            }
+            return 1;
+        });
         when(repository.findByRetriedByExecutionId(any())).thenAnswer(invocation -> {
             UUID retryExecutionId = invocation.getArgument(0);
             return rows.values().stream()
