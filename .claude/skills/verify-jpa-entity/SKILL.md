@@ -29,11 +29,11 @@ JPA 엔티티와 Repository가 프로젝트 규칙에 맞게 작성되었는지 
 | `auth/src/main/java/com/ieum/auth/repository/UserRepositoryImpl.java` | 쿼리 Repository 구현체 예시 |
 | `auth/src/main/java/com/ieum/auth/domain/RefreshToken.java` | Redis 도메인 예시 (`@RedisHash`) |
 | `auth/src/main/java/com/ieum/auth/repository/RefreshTokenRepository.java` | Redis CrudRepository 예시 |
-| `ai/src/main/java/com/ieum/ai/credential/domain/Credential.java` | 크레덴셜 엔티티 |
-| `ai/src/main/java/com/ieum/ai/credential/domain/AiProvider.java` | AI 프로바이더 Enum |
-| `ai/src/main/java/com/ieum/ai/credential/domain/CredentialType.java` | 크레덴셜 타입 Enum |
-| `ai/src/main/java/com/ieum/ai/credential/repository/CredentialRepository.java` | 크레덴셜 커맨드 Repository |
-| `ai/src/main/java/com/ieum/ai/credential/repository/CredentialQueryRepository.java` | 크레덴셜 쿼리 Repository (QueryDSL 독립 클래스 패턴) |
+| `api/src/main/java/com/ieum/api/credential/domain/Credential.java` | 크레덴셜 엔티티 |
+| `api/src/main/java/com/ieum/api/credential/domain/AiProvider.java` | AI 프로바이더 Enum |
+| `api/src/main/java/com/ieum/api/credential/domain/CredentialType.java` | 크레덴셜 타입 Enum |
+| `api/src/main/java/com/ieum/api/credential/repository/CredentialRepository.java` | 크레덴셜 커맨드 Repository |
+| `api/src/main/java/com/ieum/api/credential/repository/CredentialQueryRepository.java` | 크레덴셜 쿼리 Repository (QueryDSL 독립 클래스 패턴) |
 | `workflow-core/src/main/java/com/ieum/workflowcore/domain/Workflow.java` | 워크플로우 엔티티 |
 | `workflow-core/src/main/java/com/ieum/workflowcore/domain/WorkflowVersion.java` | 워크플로우 버전 엔티티 |
 | `workflow-core/src/main/java/com/ieum/workflowcore/domain/WorkflowExecution.java` | 워크플로우 실행 엔티티 (`workflow_runs` 테이블) |
@@ -177,5 +177,5 @@ grep -rln "@Modifying" --include="*.java" . | grep -v test | grep -v build | \
 5. **@AllArgsConstructor(access = AccessLevel.PRIVATE)** — 엔티티에서 PRIVATE은 Builder 패턴과 함께 허용
 6. **@RedisHash 도메인** — `RefreshToken` 등 Redis 엔티티는 `@Entity`가 없으므로 Check 1, 2 제외. `BaseEntity` 상속 불필요
 7. **CrudRepository (Redis용)** — `RefreshTokenRepository`처럼 `CrudRepository`를 상속하는 Redis Repository는 Check 5(JpaRepository 쌍 검사) 제외
-8. **`{Entity}QueryRepository` 단독 클래스 패턴** — ai 모듈처럼 `RepositoryCustom`/`RepositoryImpl` 인터페이스 분리 없이 `@Repository` 클래스에 직접 JPAQueryFactory를 주입하는 `{Entity}QueryRepository` 방식은 CLAUDE.md 공식 패턴으로 Check 5 예외. Check 6(`JPAQueryFactory` 사용 여부)은 동일하게 적용
+8. **`{Entity}QueryRepository` 단독 클래스 패턴** — `CredentialQueryRepository`처럼 `RepositoryCustom`/`RepositoryImpl` 인터페이스 분리 없이 `@Repository` 클래스에 직접 JPAQueryFactory를 주입하는 `{Entity}QueryRepository` 방식은 CLAUDE.md 공식 패턴으로 Check 5 예외. Check 6(`JPAQueryFactory` 사용 여부)은 동일하게 적용
 9. **단순 `@Query` JPQL 패턴** — `WorkflowVersionRepository`처럼 ORDER BY + LIMIT 등 단순 JPQL이 필요한 경우 JpaRepository 인터페이스에 `@Query`를 직접 선언하는 것은 허용. QueryDSL이 필요한 복잡한 동적 쿼리(다중 조건, 정렬 동적 처리 등)에만 `QueryRepository` 분리 필요

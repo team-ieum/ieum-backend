@@ -4,6 +4,6 @@ import org.springframework.boot.autoconfigure.AutoConfigurationPackage;
 import org.springframework.context.annotation.Configuration;
 
 @Configuration
-@AutoConfigurationPackage(basePackages = {"com.ieum.auth", "com.ieum.ai", "com.ieum.workflowcore"})
+@AutoConfigurationPackage(basePackages = {"com.ieum.auth", "com.ieum.workflowcore"})
 public class JpaConfig {
 }

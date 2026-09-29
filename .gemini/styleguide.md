@@ -21,7 +21,6 @@ auth          → common
 - `common` 모듈은 다른 모듈을 참조하지 않는다
 - `workflow-core`는 `api`, `auth`를 참조하지 않는다
 - `auth`는 `api`, `workflow-core`를 참조하지 않는다
-- `ai/`·`integration/` 디렉터리는 죽은 껍데기이므로 여기에 새 코드를 만들지 않는다 (`settings.gradle`의 실제 모듈은 위 4개뿐이다)
 - 모듈 경계를 넘는 직접 클래스 참조는 금지한다
 - `api` 모듈만 `org.springframework.boot` 플러그인을 적용한다
 
