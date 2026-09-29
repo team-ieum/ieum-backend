@@ -5,7 +5,6 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.connection.RedisStreamCommands.XAddOptions;
 import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.StreamRecords;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -44,9 +43,6 @@ public class ExecutionJobQueue {
     public static final String CONSUMER = "runner";
     public static final String FIELD_EXECUTION_ID = "executionId";
 
-    /** 소비되지 않은 잡이 쌓여도 스트림이 무한히 자라지 않도록 근사 트리밍한다. */
-    private static final long MAX_STREAM_LENGTH = 10_000L;
-
     private final StringRedisTemplate redisTemplate;
     private final StreamMessageListenerContainer<String, MapRecord<String, String, String>>
         executionJobListenerContainer;
@@ -73,10 +69,11 @@ public class ExecutionJobQueue {
             return false;
         }
         try {
+            // MAXLEN 트리밍은 걸지 않는다 — 미배달 잡까지 잘려 실행이 PENDING으로 무로그 방치된다.
+            // 처리 끝난 엔트리는 워커가 ack 직후 지우므로 스트림 길이가 곧 남은 작업량이다.
             redisTemplate.opsForStream().add(
                 StreamRecords.mapBacked(Map.of(FIELD_EXECUTION_ID, executionId.toString()))
-                    .withStreamKey(STREAM_KEY),
-                XAddOptions.maxlen(MAX_STREAM_LENGTH).approximateTrimming(true));
+                    .withStreamKey(STREAM_KEY));
             return true;
         } catch (Exception e) {
             log.warn("[ExecutionJobQueue] 발행 실패 — 큐 우회, 재시작 복구 불가. executionId: {}, error: {}",

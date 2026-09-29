@@ -155,7 +155,17 @@ public class ExecutionJobWorker implements StreamListener<String, MapRecord<Stri
             redisTemplate.opsForStream().acknowledge(STREAM_KEY, GROUP, record.getId());
         } catch (Exception e) {
             // ack 실패는 실행 결과를 뒤집지 않는다. 재배달돼도 종료 상태 검사에서 걸러진다.
+            // 엔트리도 지우지 않는다 — pending에 남아야 회수·재배달로 정리된다.
             log.warn("[ExecutionJobWorker] ack 실패 — recordId: {}, error: {}",
+                record.getId(), e.toString());
+            return;
+        }
+        try {
+            // 스트림에 트리밍이 없으므로(ExecutionJobQueue) 끝난 엔트리는 여기서 지운다.
+            redisTemplate.opsForStream().delete(STREAM_KEY, record.getId());
+        } catch (Exception e) {
+            // 이미 ack돼 재배달되지 않는다. 남은 엔트리는 자리만 차지한다.
+            log.warn("[ExecutionJobWorker] 엔트리 삭제 실패 — recordId: {}, error: {}",
                 record.getId(), e.toString());
         }
     }

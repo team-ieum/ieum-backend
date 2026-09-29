@@ -101,6 +101,34 @@ class ExecutionJobWorkerTest {
     }
 
     @Test
+    @DisplayName("ack한 뒤 스트림에서 엔트리를 지운다 — 스트림에는 끝나지 않은 잡만 남는다")
+    void onMessage_acknowledgesThenDeletesEntry() throws Exception {
+        WorkflowExecution execution = execution(ExecutionStatus.PENDING);
+        when(execution.getWorkflowVersion()).thenReturn(version);
+        when(workflowExecutionRepository.findWithVersionById(executionId))
+            .thenReturn(Optional.of(execution));
+        when(workflowExecutionService.decryptTriggerData(execution)).thenReturn(Map.of());
+
+        worker.onMessage(jobRecord(executionId.toString()));
+
+        InOrder inOrder = Mockito.inOrder(streamOperations);
+        inOrder.verify(streamOperations).acknowledge(
+            ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
+        inOrder.verify(streamOperations).delete(ExecutionJobQueue.STREAM_KEY, RECORD_ID);
+    }
+
+    @Test
+    @DisplayName("ack에 실패하면 엔트리를 지우지 않는다 — 남겨 둬야 회수·재배달로 정리된다")
+    void onMessage_ackFailure_keepsEntry() {
+        when(streamOperations.acknowledge(ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID))
+            .thenThrow(new RuntimeException("redis down"));
+
+        worker.onMessage(jobRecord("not-a-uuid"));
+
+        verify(streamOperations, never()).delete(ExecutionJobQueue.STREAM_KEY, RECORD_ID);
+    }
+
+    @Test
     @DisplayName("회수한 잡의 실행이 이미 SUCCESS면 재실행하지 않고 ack만 한다")
     void onMessage_alreadySucceeded_acknowledgesWithoutRerun() throws Exception {
         WorkflowExecution execution = execution(ExecutionStatus.SUCCESS);
