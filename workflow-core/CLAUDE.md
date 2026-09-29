@@ -21,6 +21,7 @@
 - `RetryPolicy` — 노드 config의 `retry` 객체를 파싱한 record(정책 파싱·백오프 계산·회차별 모델 선택). 사용자 편집값이라 `maxAttempts` ≤ 10, 단일 백오프 ≤ 10분으로 상·하한 강제
 - `FailureKind` — 실패 원인 enum이 **재시도 가능 여부를 스스로 보유**한다(`isRetryable()`). TIMEOUT·RATE_LIMIT·SERVER_ERROR·NETWORK만 재시도 대상, CLIENT_ERROR·UNKNOWN은 아님
 - `FailureClassifier` — agent errorCode / HTTP status / 예외 cause 체인 → `FailureKind`. 문자열 추론이 아니라 Executor가 실패를 반환할 때 명시적으로 채운다
+- **`retry.timeoutMs`는 호출 타임아웃이 아니다** — MARKER in-flight 마커 TTL(`timeoutMs`+30초, 미선언 5분) 산정 전용(`NodeExecutor.markerTtl()`). 실제 호출 타임아웃은 AI 노드=agent 호출(`ieum.agent.timeout-seconds`, api yml 180초), HTTP 노드=공유 RestTemplate read 30초(`ieum.http.read-timeout-seconds`)이고 노드별로 못 바꾼다. 의도적으로 배선하지 않았다(BE-55) — BE가 먼저 끊어도 agent는 도구를 계속 실행해 실패 기록 뒤에 부수효과가 남고, 같은 키 재시도는 `DUPLICATE_REQUEST`를 받는다
 - `RetryProperties`(`workflow.execution.retry.*`) — 기본값. **AI 노드만 기본 재시도(3회)**, 그 외는 1회(= 명시 선언 없으면 재시도 없음) — HTTP는 멱등성을 보장할 수 없어 기본 재시도가 위험하다
 - 백오프는 지수 + **full jitter**(`[0, computed]` 균등 난수). 지터 난수는 `ThreadLocalRandom`이다 — 워커 스레드가 공유하는 필드이므로 `RandomGenerator.getDefault()`로 바꾸지 말 것(스레드 안전하지 않다)
 - **대기는 워커 스레드의 `Thread.sleep`이다.** 메인 스레드 JPA 독점 구조를 유지하려 그렇게 뒀고, 그 대가로 재시도 대기가 워커 슬롯을 점유한다(fan-out이 넓으면 슬롯 고갈)
