@@ -108,6 +108,22 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
         + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL)")
     int startIfNotTerminal(@Param("id") UUID id, @Param("now") LocalDateTime now);
 
+    /**
+     * {@code RUNNING}인 실행만 승인 대기로 멈춘다. 멈췄으면 1, 그사이 다른 종료자가 끝냈으면 0.
+     *
+     * <p>종료 전이와 같은 조건부 UPDATE다 — 메모리 엔티티를 {@code save()}하면 sweeper가 확정한
+     * FAILED·사유를 덮는다. {@code waitingNodeIdsJson}은 멈춘 순간 대기 중인 게이트 ID의 JSON 배열.
+     */
+    @Transactional
+    @Modifying
+    @Query("UPDATE WorkflowExecution e "
+        + "SET e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL, "
+        + "e.waitingApprovalNodeIds = :nodeIds, e.approvalDeadline = :deadline, e.updatedAt = :now "
+        + "WHERE e.id = :id "
+        + "AND e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.RUNNING")
+    int pauseForApproval(@Param("id") UUID id, @Param("nodeIds") String waitingNodeIdsJson,
+                         @Param("deadline") LocalDateTime deadline, @Param("now") LocalDateTime now);
+
     List<WorkflowExecution> findByWorkflow(Workflow workflow);
 
     @Modifying(clearAutomatically = true)

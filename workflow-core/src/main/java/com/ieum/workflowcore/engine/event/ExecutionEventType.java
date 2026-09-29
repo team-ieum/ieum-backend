@@ -8,6 +8,12 @@ public enum ExecutionEventType {
     NODE_COMPLETED,
     /** 노드 실행 실패 */
     NODE_FAILED,
+    /**
+     * 승인 게이트 대기 — {@code nodeId}의 APPROVAL 노드에서 멈췄다. 뒤이어
+     * {@code EXECUTION_COMPLETED(WAITING_APPROVAL)}가 스트림을 닫는다. 이 값을 모르는 기존
+     * 프론트는 이벤트를 무시한다.
+     */
+    APPROVAL_REQUESTED,
     /** 워크플로우 전체 실행 종료 (성공/실패) */
     EXECUTION_COMPLETED
 }

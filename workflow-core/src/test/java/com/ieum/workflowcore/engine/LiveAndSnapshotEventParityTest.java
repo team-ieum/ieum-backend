@@ -225,4 +225,24 @@ class LiveAndSnapshotEventParityTest {
             .containsOnly(NodeEventStatus.SUCCESS);
         assertThat(live).extracting(NodeEventShape::nodeId).containsExactly("t", "a");
     }
+
+    @Test
+    @DisplayName("승인 게이트: 라이브의 APPROVAL_REQUESTED를 재생도 같은 nodeId·type·status로 되살린다")
+    void approval_gate_has_same_shape_in_both_paths() throws Exception {
+        when(executionRepository.pauseForApproval(any(), any(), any(), any())).thenReturn(1);
+        stubDefinition(
+            List.of(node("t", "TRIGGER"), node("g", "APPROVAL"), node("b", "AI")),
+            List.of(edge("t", "g", null), edge("g", "b", null))
+        );
+
+        runRuntime(Map.of());
+        // 런타임이 멈춘 뒤의 DB 상태 — 스냅샷은 이 행을 읽는다.
+        when(execution.getStatus()).thenReturn(ExecutionStatus.WAITING_APPROVAL);
+        when(execution.waitingApprovalNodeIdList()).thenReturn(List.of("g"));
+
+        List<NodeEventShape> live = liveShapes();
+        assertThat(live).containsExactlyElementsOf(snapshotShapes());
+        assertThat(live).contains(new NodeEventShape(
+            "g", ExecutionEventType.APPROVAL_REQUESTED, NodeEventStatus.PENDING, null));
+    }
 }

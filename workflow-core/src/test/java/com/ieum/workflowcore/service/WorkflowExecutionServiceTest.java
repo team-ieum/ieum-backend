@@ -197,6 +197,34 @@ class WorkflowExecutionServiceTest {
     }
 
     @Test
+    @DisplayName("승인 대기 스냅샷은 게이트마다 APPROVAL_REQUESTED를 되살린 뒤 EXECUTION_COMPLETED로 끝난다 — 라이브와 같은 모양")
+    void 승인대기_스냅샷_게이트_재생() {
+        UUID workflowId = UUID.randomUUID();
+        UUID executionId = UUID.randomUUID();
+        LocalDateTime pausedAt = LocalDateTime.of(2026, 9, 29, 10, 0, 0);
+
+        WorkflowExecution execution = mockExecution(workflowId, ExecutionStatus.WAITING_APPROVAL);
+        given(execution.getUpdatedAt()).willReturn(pausedAt);
+        given(execution.waitingApprovalNodeIdList()).willReturn(List.of("gate-1"));
+        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+        WorkflowExecutionLog ok = mockLog(ExecutionLogStatus.SUCCESS, "node-1", NodeType.TRIGGER, 10L, null);
+        given(workflowExecutionLogRepository.findByExecutionIdOrderByCreatedAtAsc(executionId))
+            .willReturn(List.of(ok));
+
+        ExecutionEventSnapshot snapshot = service.loadEventSnapshot(workflowId, executionId);
+
+        assertThat(snapshot.events().stream().map(e -> e.type()).toList()).containsExactly(
+            ExecutionEventType.NODE_COMPLETED,
+            ExecutionEventType.APPROVAL_REQUESTED,
+            ExecutionEventType.EXECUTION_COMPLETED);
+        var gate = snapshot.events().get(1);
+        assertThat(gate.nodeId()).isEqualTo("gate-1");
+        assertThat(gate.nodeType()).isEqualTo(NodeType.APPROVAL);
+        assertThat(gate.status()).isEqualTo(NodeEventStatus.PENDING);
+        assertThat(gate.occurredAt()).isEqualTo(pausedAt.atZone(ZoneId.systemDefault()).toInstant());
+    }
+
+    @Test
     @DisplayName("executionId가 다른 워크플로우 소속이면 FORBIDDEN")
     void 워크플로우_불일치() {
         UUID workflowId = UUID.randomUUID();

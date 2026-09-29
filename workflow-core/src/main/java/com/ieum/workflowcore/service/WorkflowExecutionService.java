@@ -271,6 +271,14 @@ public class WorkflowExecutionService {
             // 대기 실행엔 finishedAt이 없다 — 멈춘 시각은 조건부 UPDATE가 찍은 updatedAt이다.
             LocalDateTime endedAt = status == ExecutionStatus.WAITING_APPROVAL
                 ? execution.getUpdatedAt() : execution.getFinishedAt();
+            if (status == ExecutionStatus.WAITING_APPROVAL) {
+                // 라이브는 게이트마다 APPROVAL_REQUESTED를 낸다. 게이트엔 node_runs 행이 없으니
+                // 멈출 때 저장한 대기 목록에서 되살린다 — 라이브·재생 모양 일치.
+                for (String gateId : execution.waitingApprovalNodeIdList()) {
+                    events.add(ExecutionEvent.approvalRequested(executionId, workflowId, gateId)
+                        .withOccurredAt(toInstant(endedAt)));
+                }
+            }
             events.add(ExecutionEvent.executionCompleted(executionId, workflowId, status)
                 .withOccurredAt(toInstant(endedAt)));
         }
