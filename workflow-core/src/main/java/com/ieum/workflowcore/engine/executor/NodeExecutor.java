@@ -58,7 +58,10 @@ public interface NodeExecutor {
         public static final NodeAttempt NONE = new NodeAttempt(1, null, null);
     }
 
-    /** MARKER 마커 TTL: 정책에 {@code timeoutMs}가 있으면 그 값 + 여유, 없으면 기본값. */
+    /**
+     * MARKER 마커 TTL: 정책에 {@code timeoutMs}가 있으면 그 값 + 여유, 없으면 기본값.
+     * 이 값은 마커 수명 산정용일 뿐 실제 호출 타임아웃과 무관하다(호출 타임아웃은 {@code RetryPolicy} javadoc 참조).
+     */
     static Duration markerTtl(RetryPolicy policy) {
         Long timeoutMs = policy.timeoutMs();
         return timeoutMs == null ? DEFAULT_MARKER_TTL : Duration.ofMillis(timeoutMs).plus(MARKER_TTL_MARGIN);

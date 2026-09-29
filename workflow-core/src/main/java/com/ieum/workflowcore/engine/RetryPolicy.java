@@ -17,6 +17,13 @@ import java.util.Map;
  * }
  * }</pre>
  *
+ * <p><b>{@code timeoutMs}는 호출 타임아웃이 아니다.</b> MARKER 모드 in-flight 마커 TTL
+ * ({@code timeoutMs}+30초, 미선언 시 5분) 산정에만 쓰이며 {@code NodeExecutor.markerTtl()} 외에는 읽는 곳이 없다.
+ * 실제 호출 타임아웃은 AI 노드 = agent 호출 타임아웃({@code ieum.agent.timeout-seconds}, api yml 기본 180초),
+ * HTTP 노드 = 공유 RestTemplate read 타임아웃({@code ieum.http.read-timeout-seconds}, 기본 30초)이고
+ * 노드별로 바꿀 수 없다. 배선하지 않은 이유: BE가 먼저 끊어도 agent는 도구를 계속 실행해
+ * "실패로 기록됐는데 부수효과는 진행"이 되고, 같은 멱등성 키 재시도는 {@code DUPLICATE_REQUEST}를 받는다.
+ *
  * <p>선언이 없으면 {@link RetryProperties}의 기본값이 적용된다. AI 노드만 기본적으로
  * 재시도하며(LLM rate-limit·timeout이 잦다), 그 외 노드는 명시 선언이 있어야 재시도한다
  * — HTTP 노드는 멱등성을 보장할 수 없어 기본 재시도가 위험하다.
