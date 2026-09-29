@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.ieum.api.common.GlobalExceptionHandler;
+import com.ieum.api.workflow.service.ExecutionApprovalService;
 import com.ieum.api.workflow.service.ExecutionRetryService;
 import com.ieum.api.workflow.service.WorkflowService;
 import com.ieum.auth.security.CustomUserDetails;
@@ -38,7 +39,8 @@ class WorkflowNodeRequestValidationTest {
     void setUp() {
         mockMvc = MockMvcBuilders
             .standaloneSetup(new WorkflowController(
-                mock(WorkflowService.class), mock(ExecutionRetryService.class)))
+                mock(WorkflowService.class), mock(ExecutionRetryService.class),
+                mock(ExecutionApprovalService.class)))
             .setControllerAdvice(new GlobalExceptionHandler())
             .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
             .build();

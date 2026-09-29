@@ -2,10 +2,12 @@ package com.ieum.api.workflow.controller;
 
 import com.ieum.api.workflow.dto.CreateWorkflowRequest;
 import com.ieum.api.workflow.dto.ExecuteWorkflowRequest;
+import com.ieum.api.workflow.dto.RejectExecutionRequest;
 import com.ieum.api.workflow.dto.UpdateWorkflowRequest;
 import com.ieum.api.workflow.dto.WorkflowExecutionLogResponse;
 import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
 import com.ieum.api.workflow.dto.WorkflowResponse;
+import com.ieum.api.workflow.service.ExecutionApprovalService;
 import com.ieum.api.workflow.service.ExecutionRetryService;
 import com.ieum.api.workflow.service.WorkflowService;
 import com.ieum.auth.security.CustomUserDetails;
@@ -45,6 +47,7 @@ public class WorkflowController implements WorkflowControllerDocs {
 
     private final WorkflowService workflowService;
     private final ExecutionRetryService executionRetryService;
+    private final ExecutionApprovalService executionApprovalService;
 
     @PostMapping
     public ResponseEntity<ApiResponse<WorkflowResponse>> create(
@@ -134,6 +137,28 @@ public class WorkflowController implements WorkflowControllerDocs {
         WorkflowExecutionResponse response =
             executionRetryService.retryExecution(userDetails.getId(), executionId);
         return ResponseEntity.status(202).body(ApiResponse.ok(response));
+    }
+
+    @PostMapping("/executions/{executionId}/approve")
+    public ResponseEntity<ApiResponse<WorkflowExecutionResponse>> approveExecution(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable UUID executionId) {
+
+        WorkflowExecutionResponse response =
+            executionApprovalService.approve(userDetails.getId(), executionId);
+        return ResponseEntity.status(202).body(ApiResponse.ok(response));
+    }
+
+    @PostMapping("/executions/{executionId}/reject")
+    public ResponseEntity<ApiResponse<WorkflowExecutionResponse>> rejectExecution(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable UUID executionId,
+            @RequestBody(required = false) @Valid RejectExecutionRequest request) {
+
+        String reason = request != null ? request.getReason() : null;
+        WorkflowExecutionResponse response =
+            executionApprovalService.reject(userDetails.getId(), executionId, reason);
+        return ResponseEntity.ok(ApiResponse.ok(response));
     }
 
     @GetMapping("/{id}/executions")

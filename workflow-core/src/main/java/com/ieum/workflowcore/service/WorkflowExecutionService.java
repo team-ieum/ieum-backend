@@ -1,5 +1,6 @@
 package com.ieum.workflowcore.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.common.exception.CustomException;
@@ -11,6 +12,7 @@ import com.ieum.workflowcore.domain.WorkflowExecutionLog;
 import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.domain.enums.ExecutionLogStatus;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
+import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
@@ -313,6 +315,41 @@ public class WorkflowExecutionService {
     }
 
     /**
+     * 승인 게이트의 결정을 대기 게이트마다 {@code node_runs} 한 행으로 남긴다 — 런타임 밖에서 노드 로그를
+     * 쓰는 유일한 경로다(게이트는 실행되지 않은 노드라 런타임이 행을 남기지 않는다).
+     *
+     * <p>승인은 {@code SUCCESS} + 출력(승인 정보)이다. 이어진 실행의 {@link #loadReusableNodeOutputs}가
+     * 이 출력을 읽어 게이트를 SKIPPED로 통과시키고, 하류가 {@code {{nodes.<gate>.output.approvedBy}}}로
+     * 참조한다. 거부는 {@code FAILED}라 재사용 대상이 아니다 — 거부된 실행을 재처리해도 게이트가 다시 멈춘다.
+     *
+     * <p>출력은 승인자 ID·시각·사유뿐이라 {@code SensitiveDataMasker}를 거치지 않는다. 호출자 트랜잭션에 참여한다.
+     *
+     * @param errorMessage 노드 로그의 오류 문구(거부 사유). {@code node_runs.error_message}는 VARCHAR(255)다
+     */
+    @Transactional
+    public void recordApprovalDecision(WorkflowExecution execution, ExecutionLogStatus status,
+            Map<String, Object> output, String errorMessage) {
+        String outputJson;
+        try {
+            outputJson = objectMapper.writeValueAsString(output);
+        } catch (JsonProcessingException e) {
+            throw new CustomException(ErrorCode.INTERNAL_SERVER_ERROR, "승인 결정을 기록하지 못했습니다.");
+        }
+        for (String gateId : execution.waitingApprovalNodeIdList()) {
+            workflowExecutionLogRepository.save(WorkflowExecutionLog.builder()
+                .execution(execution)
+                .nodeId(gateId)
+                .nodeType(NodeType.APPROVAL)
+                .status(status)
+                .outputJson(outputJson)
+                .errorMessage(errorMessage)
+                .durationMs(0L)
+                .traceId(execution.getTraceId())
+                .build());
+        }
+    }
+
+    /**
      * 런타임이 상태를 남기지 못한 실패를 FAILED로 확정한다 — 런타임 진입 전 실패(잡 페이로드 해석
      * 실패, trigger_data 복호 실패)와 실행 도중 프로세스가 죽어 고립된 실행(sweeper가 호출)이다.
      * 런타임이 이미 확정했으면 아무것도 하지 않는다.
@@ -320,6 +357,7 @@ public class WorkflowExecutionService {
      * <p>알림은 상태 전이가 실제로 일어난 분기 안에서만 예약한다 — 런타임의
      * {@code finalizeFailure}가 이미 보냈으면 여기서 다시 보내지 않는다. 이 경로가 잡는 실패는
      * 개별 노드 실패보다 심각한 시스템 결함(AES 키 오설정, 큐 계약 파손)이라 조용히 넘기지 않는다.
+     * 승인 만료 sweeper도 이 경로를 탄다(사유 "승인 만료") — 결함이 아니라 사용자 무응답이지만 역시 알린다.
      *
      * <p>실제 발신은 커밋 이후로 미룬다 — Discord POST가 DB 커넥션을 쥔 채 돌면 다수 실행이
      * 동시에 실패하는 상황(이 경로가 잡는 실패가 정확히 그렇다)에서 커넥션 풀이 마른다.

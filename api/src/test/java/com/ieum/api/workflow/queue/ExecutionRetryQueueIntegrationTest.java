@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.workflow.WorkflowExecutionRunner;
+import com.ieum.api.workflow.service.ExecutionApprovalService;
 import com.ieum.api.workflow.service.ExecutionRetryService;
 import com.ieum.common.util.AesEncryptor;
 import com.ieum.workflowcore.config.RetryProperties;
@@ -50,6 +51,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -74,7 +76,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * <b>암호문으로 저장된 트리거 입력</b>과 <b>원 실행의 node_runs에서 읽은 스킵 대상</b>이
  * DB만을 통해 복원되는지.
  *
- * <p><b>실물</b>: {@link ExecutionRetryService}, {@link WorkflowExecutionRunner},
+ * <p><b>실물</b>: {@link ExecutionRetryService}, {@link ExecutionApprovalService}, {@link WorkflowExecutionRunner},
  * {@link ExecutionJobQueue}, {@link ExecutionJobWorker}, {@link SyncExecutionRuntime},
  * {@link WorkflowExecutionService}, {@link AesEncryptor}, {@link TriggerNodeExecutor}.
  * <b>목</b>: Redis(인메모리 스트림), JPA 리포지터리(인메모리 맵), 정의 로드, SSE 퍼블리셔,
@@ -123,6 +125,8 @@ class ExecutionRetryQueueIntegrationTest {
     private WorkflowExecutionService workflowExecutionService;
     private ExecutionJobWorker worker;
     private ExecutionRetryService retryService;
+    private ExecutionApprovalService approvalService;
+    private WorkflowExecutionRunner runner;
 
     private Workflow workflow;
     private WorkflowVersion version;
@@ -159,12 +163,13 @@ class ExecutionRetryQueueIntegrationTest {
         ExecutionJobQueue queue = new ExecutionJobQueue(redisTemplate, container);
         queue.markConsumerHealthy();
 
-        WorkflowExecutionRunner runner = new WorkflowExecutionRunner(
+        runner = new WorkflowExecutionRunner(
             runtime(), workflowExecutionService, queue);
         // 워커 실행 풀은 호출 스레드 직접 실행 — 큐 소비를 결정론적으로 관찰하기 위함.
         worker = new ExecutionJobWorker(redisTemplate, executionRepository,
             workflowExecutionService, runner, Runnable::run);
         retryService = new ExecutionRetryService(crudService, workflowExecutionService, runner);
+        approvalService = new ExecutionApprovalService(crudService, workflowExecutionService, retryService);
 
         workflow = Workflow.builder().userId(userId).name("통합").isActive(true).build();
         ReflectionTestUtils.setField(workflow, "id", UUID.randomUUID());
@@ -199,11 +204,12 @@ class ExecutionRetryQueueIntegrationTest {
         when(repository.findWithVersionById(any())).thenAnswer(this::findRow);
         when(repository.findWithWorkflowById(any())).thenAnswer(this::findRow);
         when(repository.findByIdForUpdate(any())).thenAnswer(this::findRow);
-        // 조건부 시작·종료 UPDATE 대역 — 종료되지 않은 행만 전이시키고 전이한 행 수를 돌려준다.
+        // 조건부 시작·종료 UPDATE 대역 — 종료·승인 대기가 아닌 행만 전이시키고 전이한 행 수를 돌려준다.
         when(repository.startIfNotTerminal(any(), any())).thenAnswer(invocation -> {
             WorkflowExecution row = rows.get((UUID) invocation.getArgument(0));
             if (row == null || row.getStatus() == ExecutionStatus.SUCCESS
-                    || row.getStatus() == ExecutionStatus.FAILED) {
+                    || row.getStatus() == ExecutionStatus.FAILED
+                    || row.getStatus() == ExecutionStatus.WAITING_APPROVAL) {
                 return 0;
             }
             row.start();
@@ -212,7 +218,8 @@ class ExecutionRetryQueueIntegrationTest {
         when(repository.finishIfNotTerminal(any(), any(), anyBoolean(), any())).thenAnswer(invocation -> {
             WorkflowExecution row = rows.get((UUID) invocation.getArgument(0));
             if (row == null || row.getStatus() == ExecutionStatus.SUCCESS
-                    || row.getStatus() == ExecutionStatus.FAILED) {
+                    || row.getStatus() == ExecutionStatus.FAILED
+                    || row.getStatus() == ExecutionStatus.WAITING_APPROVAL) {
                 return 0;
             }
             if (invocation.getArgument(1) == ExecutionStatus.SUCCESS) {
@@ -220,6 +227,17 @@ class ExecutionRetryQueueIntegrationTest {
             } else {
                 row.fail((boolean) invocation.getArgument(2));
             }
+            return 1;
+        });
+        // 승인 게이트 일시정지 대역 — RUNNING인 행만 WAITING_APPROVAL로 전이하고 대기 게이트를 남긴다.
+        when(repository.pauseForApproval(any(), any(), any(), any())).thenAnswer(invocation -> {
+            WorkflowExecution row = rows.get((UUID) invocation.getArgument(0));
+            if (row == null || row.getStatus() != ExecutionStatus.RUNNING) {
+                return 0;
+            }
+            ReflectionTestUtils.setField(row, "status", ExecutionStatus.WAITING_APPROVAL);
+            ReflectionTestUtils.setField(row, "waitingApprovalNodeIds", invocation.getArgument(1));
+            ReflectionTestUtils.setField(row, "approvalDeadline", invocation.getArgument(2));
             return 1;
         });
         when(repository.findByRetriedByExecutionId(any())).thenAnswer(invocation -> {
@@ -366,14 +384,19 @@ class ExecutionRetryQueueIntegrationTest {
 
     /** 재처리 API 호출 + 트랜잭션 커밋. 커밋 콜백에서 큐 투입이 일어난다. */
     private UUID retryAndCommit(UUID originalId) {
+        return callAndCommit(() -> retryService.retryExecution(userId, originalId).getId());
+    }
+
+    /** 이어진 실행을 만드는 API 호출 + 트랜잭션 커밋. 커밋 콜백에서 큐 투입이 일어난다. */
+    private UUID callAndCommit(Supplier<UUID> call) {
         TransactionSynchronizationManager.initSynchronization();
-        UUID retryId = retryService.retryExecution(userId, originalId).getId();
+        UUID executionId = call.get();
         for (TransactionSynchronization sync :
                 TransactionSynchronizationManager.getSynchronizations()) {
             sync.afterCommit();
         }
         TransactionSynchronizationManager.clearSynchronization();
-        return retryId;
+        return executionId;
     }
 
     /** 큐에서 잡 하나를 꺼내 워커에 넘긴다. */
@@ -519,5 +542,72 @@ class ExecutionRetryQueueIntegrationTest {
         assertThat(aiCalls).containsExactly("b");
         assertThat(nodeRuns).hasSize(nodeRunsAfterFirstRun);
         verify(streamOperations, times(2)).acknowledge(STREAM_KEY, GROUP, job.getId());
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // 승인 게이트 (IEUM-BE-45) — 승인 → 큐 → 워커 → 런타임 이음매
+    // ──────────────────────────────────────────────────────────────────────
+
+    /** t(TRIGGER) → a(AI) → g(APPROVAL) → b(AI). b는 게이트 출력(승인자)을 참조한다. */
+    private void stubGatedDefinition() {
+        Map<String, Object> b = node("b", "AI");
+        b.put("config", new HashMap<>(Map.of("prompt", "{{nodes.g.output.approvedBy}}")));
+        WorkflowDefinitionDocument definition = WorkflowDefinitionDocument.builder()
+            .nodes(List.of(node("t", "TRIGGER"), node("a", "AI"), node("g", "APPROVAL"), b))
+            .edges(List.of(edge("t", "a"), edge("a", "g"), edge("g", "b")))
+            .build();
+        when(crudService.loadDefinition(any())).thenReturn(definition);
+    }
+
+    /** 원 실행을 만들어 실제 런타임으로 돌린다 — 게이트에서 WAITING_APPROVAL로 멈춘다. */
+    private WorkflowExecution givenPausedOriginal() {
+        WorkflowExecution original = workflowExecutionService.prepareExecution(
+            workflow, version, TriggerType.WEBHOOK, TRIGGER_DATA);
+        runner.executeNow(version, original.getId(), TRIGGER_DATA);
+        assertThat(original.getStatus()).isEqualTo(ExecutionStatus.WAITING_APPROVAL);
+        return original;
+    }
+
+    /** 승인 API 호출 + 트랜잭션 커밋. 커밋 콜백에서 이어진 실행이 큐에 들어간다. */
+    private UUID approveAndCommit(UUID originalId) {
+        return callAndCommit(() -> approvalService.approve(userId, originalId).getId());
+    }
+
+    @Test
+    @DisplayName("승인하면 이어진 실행이 게이트 하류만 실행한다 — 상류 AI는 다시 부르지 않고, 하류는 승인자를 참조한다")
+    void approve_resumesOnlyDownstreamOfGate() {
+        stubGatedDefinition();
+        WorkflowExecution original = givenPausedOriginal();
+        assertThat(aiCalls).containsExactly("a");   // b는 게이트에 막혀 실행되지 않았다
+
+        UUID continuationId = approveAndCommit(original.getId());
+        consumeOneJob();
+
+        assertThat(original.getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
+        assertThat(original.getRetriedByExecutionId()).isEqualTo(continuationId);
+        assertThat(nodeRunOf(original.getId(), "g").getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
+        assertThat(rows.get(continuationId).getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
+        assertThat(nodeRunOf(continuationId, "a").getStatus()).isEqualTo(ExecutionLogStatus.SKIPPED);
+        assertThat(nodeRunOf(continuationId, "g").getStatus()).isEqualTo(ExecutionLogStatus.SKIPPED);
+        assertThat(aiCalls).containsExactly("a", "b");
+        assertThat(aiInputs.get("b")).containsEntry("prompt", userId.toString());
+    }
+
+    @Test
+    @DisplayName("거부된 실행을 재처리해도 게이트를 우회하지 않고 다시 승인 대기로 멈춘다")
+    void rejectedExecution_retry_pausesAgainAtGate() {
+        stubGatedDefinition();
+        WorkflowExecution original = givenPausedOriginal();
+
+        approvalService.reject(userId, original.getId(), "금액 재확인 필요");
+        assertThat(original.getStatus()).isEqualTo(ExecutionStatus.FAILED);
+        assertThat(original.getErrorMessage()).isEqualTo("승인 거부: 금액 재확인 필요");
+
+        UUID retryId = retryAndCommit(original.getId());
+        consumeOneJob();
+
+        // 게이트의 FAILED 행은 재사용 대상(SUCCESS·SKIPPED)이 아니다 — 새 실행에서 게이트가 다시 멈춘다.
+        assertThat(rows.get(retryId).getStatus()).isEqualTo(ExecutionStatus.WAITING_APPROVAL);
+        assertThat(aiCalls).containsExactly("a");   // a는 SKIPPED로 재사용, b는 여전히 막혔다
     }
 }

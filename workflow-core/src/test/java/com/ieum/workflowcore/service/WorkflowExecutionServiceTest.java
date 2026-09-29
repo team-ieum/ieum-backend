@@ -10,6 +10,7 @@ import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -436,6 +437,30 @@ class WorkflowExecutionServiceTest {
         // 워크플로우 불일치 케이스에서는 상태 조회 전에 throw되므로 lenient로 둔다.
         lenient().when(execution.getStatus()).thenReturn(status);
         return execution;
+    }
+
+    @Test
+    @DisplayName("승인 결정은 대기 게이트마다 APPROVAL 노드 로그 한 행 — 승인 출력이 실려야 이어진 실행이 게이트를 재사용한다")
+    void recordApprovalDecision_writesOneRowPerWaitingGate() {
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        given(execution.waitingApprovalNodeIdList()).willReturn(List.of("g1", "g2"));
+        given(execution.getTraceId()).willReturn("11112222333344445555666677778888");
+
+        service.recordApprovalDecision(execution, ExecutionLogStatus.SUCCESS,
+            Map.of("approved", true), null);
+
+        ArgumentCaptor<WorkflowExecutionLog> captor = ArgumentCaptor.forClass(WorkflowExecutionLog.class);
+        verify(workflowExecutionLogRepository, times(2)).save(captor.capture());
+        assertThat(captor.getAllValues()).extracting(WorkflowExecutionLog::getNodeId)
+            .containsExactly("g1", "g2");
+        assertThat(captor.getAllValues()).allSatisfy(row -> {
+            assertThat(row.getExecution()).isSameAs(execution);
+            assertThat(row.getNodeType()).isEqualTo(NodeType.APPROVAL);
+            assertThat(row.getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
+            assertThat(row.getOutputJson()).isEqualTo("{\"approved\":true}");
+            assertThat(row.getErrorMessage()).isNull();
+            assertThat(row.getTraceId()).isEqualTo("11112222333344445555666677778888");
+        });
     }
 
     @Test
