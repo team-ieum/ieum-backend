@@ -30,7 +30,7 @@
 - `IdempotencyMode` = NONE / HEADER / MARKER / BOTH. 노드 config `retry.idempotency`로 선언. **부수효과가 있는 HTTP·AI 노드가 HEADER 기본**, 나머지는 NONE. AI 노드는 기본 재시도가 3회인데 도구를 쓰므로 NONE이면 회차마다 부수효과가 중복된다(MARKER는 재시도와 양립 불가라 HEADER가 유일한 선택지). agent가 `X-Idempotency-Key`를 소비하며(IEUM-AI-52) 소비하지 않는 배포에선 no-op이라 배포 순서 무관
 - `IdempotencyKeys.generate(executionId, nodeId)` — sha256 앞 32자 hex. **attempt 번호를 절대 섞지 않는다**(섞으면 중복 차단이 성립하지 않음)
 - HEADER: HTTP 노드는 `Idempotency-Key`, AI 노드는 agent에 `X-Idempotency-Key`. `policy.isDisabled()`(재시도 없음)면 붙이지 않는다
-- MARKER: `IdempotencyStore` 포트로 in-flight 마커를 세우고, 마커가 있으면 **재시도를 포기**한다. 마커 해제는 재시도 루프 전체가 끝난 뒤 1회만 — attempt별 finally에서 해제하면 모드가 무력화된다
+- MARKER: `IdempotencyStore` 포트로 in-flight 마커를 세우고, 마커가 있으면 **재시도를 포기**한다. 마커 해제는 재시도 루프 전체가 끝난 뒤 1회만 — attempt별 finally에서 해제하면 모드가 무력화된다. **같은 실행 안의 재시도만 막는다** — 프로세스 크래시 후 큐 회수 재배달(같은 executionId → 같은 키)은 마커 TTL(5분)과 `reclaim-min-idle`(10분) 타이밍에 달려 막지 못할 수 있다(BE-53). 기본 TTL은 일부러 안 올렸다 — 재실행이 그 노드에 닿는 시점에 상한이 없어 올려도 보장이 안 된다
 - 런타임은 MARKER 모드 노드를 attempt 1 이후 곧바로 멈춘다 — 2회차를 시작하면 원 실패 원인이 마커 차단(CLIENT_ERROR)으로 덮여써져 `node_runs` 진단과 `retryExhausted` 신호가 왜곡된다
 
 ### 모델 fallback
