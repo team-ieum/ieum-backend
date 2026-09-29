@@ -14,6 +14,6 @@ public enum ExecutionEventType {
      * 프론트는 이벤트를 무시한다.
      */
     APPROVAL_REQUESTED,
-    /** 워크플로우 전체 실행 종료 (성공/실패) */
+    /** 워크플로우 전체 실행 종료 (성공/실패/승인 대기) */
     EXECUTION_COMPLETED
 }

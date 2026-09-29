@@ -44,7 +44,8 @@ public class ExecutionApprovalService {
 
     /**
      * @return 이어진 새 실행 — 프론트는 이 ID로 SSE를 다시 구독한다
-     * @throws CustomException EXECUTION_NOT_FOUND / WORKFLOW_NOT_FOUND(비소유자, 존재 여부를 흘리지 않는다)
+     * @throws CustomException EXECUTION_NOT_FOUND / WORKFLOW_NOT_FOUND(비소유자 — 실행 조회가 소유자 검증보다 먼저라
+     *                         없는 실행(EXECUTION_NOT_FOUND)과 남의 실행이 구분된다. 재처리와 같은 패턴)
      *                         / EXECUTION_NOT_WAITING_APPROVAL(409) / INVALID_WORKFLOW(대기 중 비활성화된 워크플로우 —
      *                         롤백되어 실행은 대기로 남고 결국 만료된다)
      */
