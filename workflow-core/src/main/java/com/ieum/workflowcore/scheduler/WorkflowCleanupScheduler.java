@@ -18,13 +18,14 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * 워크플로우 주기 정리 스케줄러 — 고아 빈 워크플로우 삭제와 고립 {@code RUNNING} 실행 확정.
+ * 워크플로우 주기 정리 스케줄러 — 고아 빈 워크플로우 삭제, 고립 {@code RUNNING} 실행 확정, 승인 기한 만료.
  *
  * <p>고아 빈 워크플로우: 생성된 지 30분이 지났고 AI가 아직 워크플로우를 설계하지 않은 경우
  * (maxVersion == 1), MongoDB에서 nodes가 비어있음을 확인한 후 완전 삭제(Hard Delete)한다.
  * 2단계 확인 이유는 nodes/edges가 MongoDB에 있어 PostgreSQL 단일 쿼리로 빈 상태를 확인할 수 없어서다.
  *
  * <p>고립 실행: {@link #failStuckRunningExecutions()} 참조.
+ * <p>승인 만료: {@link #expireWaitingApprovals()} 참조.
  */
 @Slf4j
 @Component
@@ -129,6 +130,34 @@ public class WorkflowCleanupScheduler {
                     executionId);
             } catch (Exception e) {
                 log.error("[WorkflowCleanupScheduler] 고립 실행 확정 실패 — executionId: {}",
+                    executionId, e);
+            }
+        }
+    }
+
+    /**
+     * 기한({@code approvalDeadline})이 지난 승인 대기 실행을 {@code FAILED("승인 만료")}로 확정한다.
+     *
+     * <p>확정은 {@link WorkflowExecutionService#markAsFailed}에 맡긴다 — 행 잠금이라 같은 순간의
+     * 승인·거부와 하나만 이기고, 만료는 소유자가 알아야 하는 실패라 그 경로의 실패 알림을 그대로 쓴다.
+     * 정밀도는 이 스케줄 주기(10분)다.
+     *
+     * <p>SSE는 건드리지 않는다 — 런타임이 멈출 때 {@code EXECUTION_COMPLETED(WAITING_APPROVAL)}로 이미
+     * 스트림을 닫았고, 대기 실행의 스냅샷은 종료로 취급돼 라이브 구독자가 붙지 않는다.
+     */
+    @Scheduled(cron = "0 */10 * * * *")
+    public void expireWaitingApprovals() {
+        List<UUID> expiredIds =
+            workflowExecutionService.findExpiredApprovalExecutionIds(LocalDateTime.now());
+        if (expiredIds.isEmpty()) {
+            return;
+        }
+        log.info("[WorkflowCleanupScheduler] 승인 기한 만료 — {}건", expiredIds.size());
+        for (UUID executionId : expiredIds) {
+            try {
+                workflowExecutionService.markAsFailed(executionId, "승인 만료");
+            } catch (Exception e) {
+                log.error("[WorkflowCleanupScheduler] 승인 만료 확정 실패 — executionId: {}",
                     executionId, e);
             }
         }

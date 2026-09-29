@@ -210,6 +210,11 @@ public class WorkflowExecutionService {
         return workflowExecutionRepository.findStuckRunningIds(threshold);
     }
 
+    /** 승인 기한이 {@code now}보다 앞선 {@code WAITING_APPROVAL} 실행의 ID(승인 만료 sweeper용). */
+    public List<UUID> findExpiredApprovalExecutionIds(LocalDateTime now) {
+        return workflowExecutionRepository.findExpiredApprovalIds(now);
+    }
+
     /**
      * 실행 시점 버전까지 즉시 로딩해 조회한다. 조회한 버전을 트랜잭션·영속성 컨텍스트 밖
      * (@Async 실행 스레드 등)으로 넘길 때 쓴다 — {@link #getExecution}이 주는 lazy 프록시를

@@ -282,6 +282,52 @@ class WorkflowCleanupSchedulerTest {
         verify(executionEventPublisher, never()).complete(failId);
     }
 
+    // ─────────────────── 승인 만료 sweeper (IEUM-BE-45) ────────────────────
+
+    @Test
+    @DisplayName("기한 지난 승인 대기는 '승인 만료'로 FAILED 확정한다 — 조회 기준 시각은 지금, SSE는 건드리지 않는다")
+    void expireWaitingApprovals_marksExpiredAsFailed() {
+        UUID expiredId = UUID.randomUUID();
+        ArgumentCaptor<LocalDateTime> nowCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
+        given(workflowExecutionService.findExpiredApprovalExecutionIds(nowCaptor.capture()))
+            .willReturn(List.of(expiredId));
+        LocalDateTime before = LocalDateTime.now();
+
+        scheduler.expireWaitingApprovals();
+
+        assertThat(nowCaptor.getValue()).isAfterOrEqualTo(before).isBeforeOrEqualTo(LocalDateTime.now());
+        // 만료는 소유자가 알아야 하는 실패다 — 알림을 거는 markAsFailed 경로를 그대로 탄다.
+        verify(workflowExecutionService).markAsFailed(expiredId, "승인 만료");
+        // 멈출 때 EXECUTION_COMPLETED(WAITING_APPROVAL)로 스트림이 이미 닫혔다.
+        verify(executionEventPublisher, never()).publish(any(), any());
+        verify(executionEventPublisher, never()).complete(any());
+    }
+
+    @Test
+    @DisplayName("만료 대상이 없으면 확정하지 않는다")
+    void expireWaitingApprovals_noExpired_noOperation() {
+        given(workflowExecutionService.findExpiredApprovalExecutionIds(any())).willReturn(List.of());
+
+        scheduler.expireWaitingApprovals();
+
+        verify(workflowExecutionService, never()).markAsFailed(any(), any());
+    }
+
+    @Test
+    @DisplayName("한 건 확정 중 예외가 나도 나머지는 계속 만료시킨다")
+    void expireWaitingApprovals_exceptionOnOne_continuesOthers() {
+        UUID failId = UUID.randomUUID();
+        UUID okId = UUID.randomUUID();
+        given(workflowExecutionService.findExpiredApprovalExecutionIds(any()))
+            .willReturn(List.of(failId, okId));
+        given(workflowExecutionService.markAsFailed(failId, "승인 만료"))
+            .willThrow(new RuntimeException("DB 연결 오류"));
+
+        scheduler.expireWaitingApprovals();
+
+        verify(workflowExecutionService).markAsFailed(okId, "승인 만료");
+    }
+
     // ─────────────────── 헬퍼 ──────────────────────────────────────────────
 
     private WorkflowDefinitionDocument buildDoc(List<Map<String, Object>> nodes) {
