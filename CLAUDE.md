@@ -23,7 +23,7 @@ Java 21 + Spring Boot 3.5.11 기반의 **멀티모듈 Gradle 모듈러 모노리
 | `auth` | 인증/인가 (JWT + OAuth2) | `auth/CLAUDE.md` |
 | `common` | 공통 예외, DTO, BaseEntity, 유틸 | `common/CLAUDE.md` |
 
-`ai/`·`integration/` 디렉터리는 **죽은 껍데기**다 — `build.gradle`과 `.gitkeep`만 있고 `settings.gradle`에 포함돼 있지 않다. AI 프로바이더 연동은 `api` + `workflow-core`(AgentNodeExecutor → ieum-agent 위임)에, 외부 서비스 연동은 `api/oauth`·`api/integration`에 산다. 새 코드를 여기 만들지 말 것.
+AI 프로바이더 연동은 `api` + `workflow-core`(AgentNodeExecutor → ieum-agent 위임)에, 외부 서비스 연동은 `api/oauth`·`api/integration`에 산다.
 
 ### 의존 방향 (단방향 필수, 순환 참조 금지)
 ```
@@ -116,7 +116,7 @@ docker-compose up -d                                    # PostgreSQL 16 + Redis 
 | `api-endpoint` | REST API 엔드포인트 생성 패턴 (Controller/Service/Repository/DTO) |
 | `jpa-entity` | JPA 엔티티 설계 패턴 (PostgreSQL 기반) |
 | `exception-handling` | 공통 예외 처리 패턴 (CustomException + ErrorCode) |
-| `ai-integration` | AI 모듈 연동 패턴 (Claude, OpenAI 등) |
+| `ai-integration` | AI 프로바이더 연동 패턴 (Claude, OpenAI 등) |
 | `new-module` | Gradle 서브모듈 추가 절차 |
 | `notion-branch-bootstrap` | Notion 이슈 ID 기반 브랜치 준비, 영향 범위 분석, 커밋 계획 |
 | `notion-branch-doc` | 브랜치 작업 완료 후 Notion 이슈 페이지에 작업 내용 문서화 (연동 플로우, API 변경점, 구현 상세) |
