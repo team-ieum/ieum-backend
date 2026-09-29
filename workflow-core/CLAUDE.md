@@ -14,7 +14,7 @@
 - Kahn 위상정렬로 구조적 사이클 검출 → 사이클이면 실행 거부
 - 워커 스레드 풀(`workflow.execution.parallelism`, 코드 기본 4 / api `application.yml`이 3으로 낮춤)에서 노드 실행, 메인 스레드가 상태/JPA 독점
 - CONDITION 분기 시 선택 안 된 경로는 live 입력이 없어 자연 스킵
-- 실행 트리거는 api 모듈 `WorkflowExecutionRunner` → Redis Stream 잡 큐 → 같은 프로세스 워커 (Redis 장애 시 `@Async` 직접 실행 폴백). Quartz 스케줄 실행만 큐를 거치지 않고 런타임을 직접 부른다 — 그래서 내구성이 없다
+- 실행 트리거는 api 모듈 `WorkflowExecutionRunner` → Redis Stream 잡 큐 → 같은 프로세스 워커 (Redis 장애 시 `@Async` 직접 실행 폴백). Quartz 스케줄 실행도 `ExecutionJobEnqueuer` 포트로 같은 큐를 탄다(IEUM-BE-51)
 - 실패 확정은 `finalizeFailure()` 한 곳 — 상태 전이 + SSE 종료 이벤트 + `AlertNotifier` 발신. 이미 종료된 실행은 상태·알림을 다시 건드리지 않는다(중복 알림 방지)
 
 ### 노드 재시도 (retry)
@@ -50,7 +50,7 @@
 3-인자 `execute(node, input, cursor)`가 기본이고, 외부 호출이 멱등 가드를 적용해야 하는 Executor(HTTP·AI)만 4-인자 오버로드 `execute(node, input, cursor, NodeAttempt)`를 override한다. `NodeAttempt(attempt, idempotencyKey, policy)`가 회차·멱등성 키·재시도 정책을 실어 온다 — **`ExecutionCursor`/`ExecutionContext`에 attempt 정보를 넣지 말 것**(워커 스레드 간 공유 객체다).
 
 ### Provider 포트 + Stub 패턴
-workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능은 **포트 인터페이스**로 선언하고 api 모듈이 구현체를 제공한다. 포트마다 `@ConditionalOnMissingBean` Stub이 있어 workflow-core 단독 테스트가 가능하다 (현재 10개).
+workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능은 **포트 인터페이스**로 선언하고 api 모듈이 구현체를 제공한다. 포트마다 `@ConditionalOnMissingBean` Stub이 있어 workflow-core 단독 테스트가 가능하다 (현재 11개).
 
 | 포트 | 실구현 위치 |
 |------|------------|
@@ -64,6 +64,7 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 | `BetaPlatformProvider` | api (베타 플랫폼 키 쿼터 + fallback 모델 허용 판정) |
 | `IdempotencyStore` | api (Redis SETNX in-flight 마커) |
 | `AlertNotifier` | api (실행 실패 Discord 알림) |
+| `ExecutionJobEnqueuer` | api (스케줄 실행을 Redis Stream 잡 큐에 투입) |
 
 새 포트 추가 시 Stub도 같이 만들 것 — 없으면 workflow-core 테스트 컨텍스트가 깨진다.
 `IdempotencyStore`·`AlertNotifier` 구현체는 **저장소·발신 장애를 삼켜야 한다** — 실행 종료 처리를 깨는 것보다 중복 호출·알림 유실을 감수한다(의도적 트레이드오프).
@@ -110,7 +111,8 @@ enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED, `ExecutionLog
 
 ## 스케줄러 (scheduler/, config/)
 Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `ScheduleJobRestorer`(부팅 시 복원), `WorkflowCleanupScheduler`, `JobKeyGenerator`.
-`WorkflowScheduleJob`은 `SyncExecutionRuntime`을 직접 부른다 — api의 잡 큐를 거치지 않아 **스케줄 실행에는 내구성이 없다**(프로세스가 죽으면 유실). 해결 경로는 `boolean enqueue(UUID)` Provider 포트지만 별도 이슈다.
+`WorkflowScheduleJob`은 `ExecutionJobEnqueuer`로 api의 잡 큐에 넣고 바로 반환한다(IEUM-BE-51) — 수동·웹훅·재처리와 같은 재시작 복구를 받는다. 투입이 실패하면(Redis 장애·Stub) 유실되지 않게 `SyncExecutionRuntime`을 직접 부르고, 이 경우만 내구성이 없다.
+**겹침 방지는 `@DisallowConcurrentExecution`만으로 성립하지 않는다** — 잡이 실행 끝까지 블록하지 않으니 다음 발화가 그대로 들어온다. 그래서 같은 워크플로우에 끝나지 않은(PENDING/RUNNING) SCHEDULE 실행이 있으면 `prepareExecution` 전에 스킵한다(`WorkflowExecutionService.hasUnfinishedScheduleRun`). 판정은 `startedAt > now - workflow.execution.stuck.threshold`로 하한을 둔다 — sweeper는 `RUNNING`만 정리하므로 준비만 되고 버려진 고아 `PENDING`이 하한 없이 잡히면 그 스케줄이 **영구히 멈춘다.** `@DisallowConcurrentExecution`은 여전히 필요하다(JobKey가 워크플로우당 1개라 판정↔레코드 생성 사이에 다른 발화가 끼지 않게 직렬화). 재처리 API가 만든 실행도 원본의 `triggerType`(SCHEDULE)을 물려받으므로 겹침 판정에 걸린다.
 
 `WorkflowCleanupScheduler`는 두 가지를 돈다(둘 다 `@Scheduled` cron, Quartz 아님):
 - `cleanupOrphanWorkflows()` — 고아 빈 워크플로우 hard delete
@@ -126,7 +128,7 @@ Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `Sche
 | `workflow.execution.retry.multiplier` | 2.0 | 회차당 대기 증가 배수 |
 | `workflow.execution.retry.max-backoff-ms` | 30000 | 단일 대기 상한 |
 | `workflow.execution.retry.jitter` | true | full jitter 적용 여부 |
-| `workflow.execution.stuck.threshold` | `PT2H` | 이 시간 넘게 `RUNNING`인 실행을 고립으로 보고 `FAILED`로 확정. **내리지 말 것** — 잡 큐 회수(`reclaim-min-idle` 10분)로 복구될 실행을 먼저 FAILED로 굳히면 워커가 종료 상태로 보고 건너뛰어 복구가 취소된다 |
+| `workflow.execution.stuck.threshold` | `PT2H` | 이 시간 넘게 `RUNNING`인 실행을 고립으로 보고 `FAILED`로 확정. **내리지 말 것** — 잡 큐 회수(`reclaim-min-idle` 10분)로 복구될 실행을 먼저 FAILED로 굳히면 워커가 종료 상태로 보고 건너뛰어 복구가 취소된다. 스케줄 겹침 판정의 하한으로도 쓴다 |
 
 `retry.*`는 `RetryProperties`(`@ConfigurationProperties`)의 필드 기본값이고 yml에 선언돼 있지 않다 — 장애 시 `ai-max-attempts: 1`로 재시도를 전역으로 끌 수 있게 코드 상수가 아니라 설정으로 뒀다. 노드 config의 `retry` 선언이 이 기본값보다 우선한다.
 

@@ -190,6 +190,19 @@ public class WorkflowExecutionService {
     }
 
     /**
+     * {@code startedAfter} 이후 시작해 아직 끝나지 않은(PENDING/RUNNING) SCHEDULE 실행이 있는지 본다.
+     * 스케줄 발화가 이전 실행과 겹치지 않게 하는 판정이다 — 잡이 큐에 넣고 바로 반환하므로
+     * {@code @DisallowConcurrentExecution}만으로는 겹침을 막지 못한다.
+     *
+     * @param startedAfter 이보다 먼저 시작한 실행은 고아로 보고 무시한다(stuck 임계 하한)
+     */
+    public boolean hasUnfinishedScheduleRun(Workflow workflow, LocalDateTime startedAfter) {
+        return workflowExecutionRepository.existsByWorkflowAndTriggerTypeAndStatusInAndStartedAtAfter(
+            workflow, TriggerType.SCHEDULE, List.of(ExecutionStatus.PENDING, ExecutionStatus.RUNNING),
+            startedAfter);
+    }
+
+    /**
      * 임계 시각보다 먼저 시작해 아직 {@code RUNNING}인 실행의 ID를 조회한다.
      * 실행 중이던 프로세스가 죽어 상태를 확정하지 못한 실행을 찾아내는 용도다.
      */

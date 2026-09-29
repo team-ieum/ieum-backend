@@ -40,13 +40,13 @@
 **배달 보장은 at-least-once다 — exactly-once가 아니다.** 실행 도중 프로세스가 죽으면 run은 `RUNNING`으로 남고 잡은 pending에 남아 회수되어 **처음부터 다시** 실행된다(이미 부작용을 낸 노드까지 되풀이). 중복 가드는 ① 종료 상태(SUCCESS/FAILED) ② 이 프로세스의 in-flight Set 두 가지뿐이다. 이 큐 위에 뭘 얹을 때 exactly-once로 오해하지 말 것.
 **단일 인스턴스 배포(stop-then-start) 전제** — 컨슈머 이름이 상수라 인스턴스를 구분하지 않는다. 롤링 배포로 두 인스턴스가 겹치면 고아 잡 회수가 살아 있는 쪽의 in-flight를 뺏어 이중 실행할 수 있다(`ieum.workflow.queue.reclaim-min-idle`, 기본 10분이 유일한 안전장치). 스케일아웃은 SSE 허브 교체가 선행 조건.
 고아 잡 회수는 **부팅 1회가 아니라 주기 실행**(`@Scheduled`)이다 — `reclaim-min-idle` 때문에 재시작 직후엔 고아 잡의 idle이 아직 짧아 회수 대상이 아니고, 다시 볼 기회가 없으면 영영 유실된다.
-Quartz 스케줄 실행(`WorkflowScheduleJob`)은 큐를 거치지 않아 내구성이 없다 — Provider 포트로 뒤집으면 해결되나 별도 이슈.
+Quartz 스케줄 실행(`WorkflowScheduleJob`)은 workflow-core 포트 `ExecutionJobEnqueuer` → `config/DefaultExecutionJobEnqueuer` → `ExecutionJobQueue.enqueue()`로 같은 큐를 탄다(IEUM-BE-51). 투입 실패 시 폴백은 러너가 아니라 잡이 `SyncExecutionRuntime`을 직접 부르는 것이다.
 
 `workflow/service/ExecutionRetryService` — 실패 실행 재처리. DLQ는 별도 저장소가 아니라 `status=FAILED`인 실행 목록 자체다. 원 실행을 되살리지 않고 **같은 버전·같은 트리거 입력으로 새 실행을 만들어** 큐에 넣고, 원 실행엔 `retriedByExecutionId` 링크만 남긴다. 원본 행을 비관적 락(`lockExecutionWithVersion`)으로 읽어 동시 요청이 재처리를 둘 만드는 것을 막고, 큐 투입은 `afterCommit`에서 한다(워커가 링크를 읽어야 스킵 대상을 안다).
 
 ## config/ — Provider 포트 실구현
-workflow-core가 선언한 포트 10개를 여기서 `Default*`로 구현해 Stub을 대체한다 (`@Primary`).
-`DefaultCredentialProvider`, `DefaultGoogleTokenProvider`, `DefaultNotionTokenProvider`, `DefaultGitHubTokenProvider`, `DefaultWebhookCredentialProvider`, `DefaultMcpCatalogProvider`, `DefaultUserRoleProvider`, `DefaultBetaPlatformProvider`, `DefaultIdempotencyStore`, `DefaultAlertNotifier`.
+workflow-core가 선언한 포트 11개를 여기서 `Default*`로 구현해 Stub을 대체한다 (`@Primary`).
+`DefaultCredentialProvider`, `DefaultGoogleTokenProvider`, `DefaultNotionTokenProvider`, `DefaultGitHubTokenProvider`, `DefaultWebhookCredentialProvider`, `DefaultMcpCatalogProvider`, `DefaultUserRoleProvider`, `DefaultBetaPlatformProvider`, `DefaultIdempotencyStore`, `DefaultAlertNotifier`, `DefaultExecutionJobEnqueuer`.
 
 `DefaultIdempotencyStore`(Redis SETNX)·`AlertCooldownStore`는 **Redis 장애를 삼키고 진행을 허용한다** — 중복 호출·알림 도배 위험을 감수하고 가용성을 택한 의도적 트레이드오프다. 예외를 전파하도록 되돌리지 말 것.
 

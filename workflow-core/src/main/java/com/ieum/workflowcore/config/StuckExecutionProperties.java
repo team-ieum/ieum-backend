@@ -32,6 +32,9 @@ public class StuckExecutionProperties {
      * 재실행될 실행을 이 sweeper가 먼저 FAILED로 확정하면 워커가 종료 상태로 보고 건너뛰어
      * <b>복구가 취소된다.</b> 재실행은 {@code startedAt}을 다시 찍으므로 임계는 누적이 아니라
      * 한 번의 실행 시간만 덮으면 되지만, 회수 지연(최대 11분)보다는 확실히 길어야 한다.
+     *
+     * <p>올리기 전에 확인할 것: 스케줄 겹침 판정({@code WorkflowScheduleJob})의 하한으로도 쓴다 —
+     * 올리면 고아 SCHEDULE 실행이 그 워크플로우의 스케줄을 막는 시간도 같이 늘어난다.
      */
     private Duration threshold = Duration.ofHours(2);
 }

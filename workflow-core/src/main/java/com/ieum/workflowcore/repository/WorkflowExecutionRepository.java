@@ -3,8 +3,10 @@ package com.ieum.workflowcore.repository;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
+import com.ieum.workflowcore.domain.enums.TriggerType;
 import jakarta.persistence.LockModeType;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -56,6 +58,14 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
         + "WHERE e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.RUNNING "
         + "AND e.startedAt < :threshold")
     List<UUID> findStuckRunningIds(@Param("threshold") LocalDateTime threshold);
+
+    /**
+     * 주어진 시각 이후 시작해 아직 주어진 상태에 있는 실행이 있는지 본다(스케줄 발화 겹침 판정용).
+     * {@code startedAt} 하한이 있어야 준비만 되고 버려진 고아 PENDING이 판정을 영구히 막지 않는다.
+     */
+    boolean existsByWorkflowAndTriggerTypeAndStatusInAndStartedAtAfter(
+        Workflow workflow, TriggerType triggerType, Collection<ExecutionStatus> statuses,
+        LocalDateTime startedAt);
 
     /**
      * 아직 종료(SUCCESS/FAILED)되지 않은 실행만 종료 상태로 전이한다. 전이했으면 1, 이미 종료됐으면 0.
