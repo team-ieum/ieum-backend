@@ -7,6 +7,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -136,7 +138,10 @@ class WorkflowWebhookUrlRejectionTest {
             .satisfies(e -> assertThat(((CustomException) e).getErrorCode().getStatus())
                 .isEqualTo(HttpStatus.BAD_REQUEST));
 
-        verifyNoInteractions(workflowCrudService);
+        // verifyNoInteractions는 쓸 수 없다 — 수정은 병합할 직전 정의를 읽기 전에 소유권부터 검증하므로
+        // 거부돼도 crud 호출이 0은 아니다. 확인할 불변식은 "새 버전이 남지 않는다"다 (IEUM-BE-65).
+        verify(workflowCrudService, never()).updateWorkflow(
+            any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test

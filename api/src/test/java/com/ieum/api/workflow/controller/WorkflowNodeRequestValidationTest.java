@@ -2,6 +2,7 @@ package com.ieum.api.workflow.controller;
 
 import static org.mockito.Mockito.mock;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.ieum.api.common.GlobalExceptionHandler;
@@ -70,6 +71,40 @@ class WorkflowNodeRequestValidationTest {
         { "id": "node-trigger", "type": "TRIGGER", "label": "시작",
           "description": "실행하면 시작해요.",
           "position": { "x": 40, "y": 120 }, "config": {} }""";
+
+    /**
+     * {@code nodes} 리스트의 <b>원소</b> null이다 (IEUM-BE-65). 필드에만 {@code @NotNull}을 붙이면
+     * 리스트 자체만 검증해 이 본문이 통과하고, 그 null이 저장 경로까지 흘러 병합·가드마다 방어
+     * 코드를 요구했다. 제약을 여기(요청 경계)로 옮기고 그 방어들을 지웠으므로, 이 두 테스트가
+     * 깨지면 지워진 방어가 다시 필요해진다.
+     *
+     * <p>수정 경로도 함께 본다 — 두 요청 DTO가 각자 제약을 들고 있어 한쪽만 풀려도 알아채야 한다.
+     */
+    @Test
+    @DisplayName("nodes에 null 원소가 있으면 400 — 생성")
+    void nullNodeElement_returns400() throws Exception {
+        expectStatus(body("null", ""), 400);
+    }
+
+    @Test
+    @DisplayName("nodes에 null 원소가 있으면 400 — 수정")
+    void nullNodeElementOnUpdate_returns400() throws Exception {
+        mockMvc.perform(put("/api/v1/workflows/{id}", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body("null", "")))
+            .andExpect(status().is(400));
+    }
+
+    /**
+     * {@code edges}도 원소 null을 막아야 한다 (IEUM-BE-65). 저장되면 실행 시 엣지를 훑는 자리에서
+     * NPE가 난다. 생성 경로 하나면 충분하다 — 두 DTO를 함께 지키는 일은 위 {@code nodes} 테스트가
+     * 하고, 여기서 볼 것은 {@code edges} 필드에 제약이 실제로 붙었는가다.
+     */
+    @Test
+    @DisplayName("edges에 null 원소가 있으면 400")
+    void nullEdgeElement_returns400() throws Exception {
+        expectStatus(body(VALID_NODE, "null"), 400);
+    }
 
     @Test
     @DisplayName("description·position이 모두 있으면 201")

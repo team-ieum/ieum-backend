@@ -30,12 +30,14 @@ import com.ieum.workflowcore.engine.executor.NotionTokenProvider;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
@@ -986,6 +988,107 @@ class ChatServiceTest {
             .satisfies(e -> assertThat(e.getMessage()).doesNotContain("sk-live-not-a-real-key"));
 
         verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any());
+    }
+
+    // ─────────────────── 채팅 저장 경로의 엣지 id 채우기 (IEUM-BE-65) ────────
+
+    @Test
+    @DisplayName("agent 엣지에 id가 없으면 저장 직전에 채워진다 — 다음 PUT이 FIFO 폴백으로 떨어지지 않는다")
+    void finalizeStream_agentEdgesWithoutId_idsFilled() throws Exception {
+        ChatAgentResponse resp = buildResponseWithEdges("""
+            [
+                { "source": "node-a", "target": "node-b", "conditionType": "true" },
+                { "source": "node-a", "target": "node-b", "conditionType": "false" }
+            ]
+            """);
+
+        givenFinalizeStreamSession();
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+
+        List<Map<String, Object>> saved = captureSavedEdges();
+        assertThat(saved).hasSize(2);
+        assertThat(saved).allSatisfy(edge ->
+            assertThat((String) edge.get("id")).isNotBlank());
+        // 형제 엣지는 서로 다른 id를 받아야 한다 — 같으면 병합의 id 짝짓기가 하나만 집는다.
+        assertThat(saved.get(0).get("id")).isNotEqualTo(saved.get(1).get("id"));
+        // conditionType은 건드리지 않는다.
+        assertThat(saved.get(0).get("conditionType")).isEqualTo("true");
+        assertThat(saved.get(1).get("conditionType")).isEqualTo("false");
+    }
+
+    @Test
+    @DisplayName("agent 엣지에 id가 이미 있으면 그대로 유지한다 — FE currentEdges pass-through 경로")
+    void finalizeStream_agentEdgesWithId_idsPreserved() throws Exception {
+        ChatAgentResponse resp = buildResponseWithEdges("""
+            [ { "id": "edge-keep", "source": "node-a", "target": "node-b" } ]
+            """);
+
+        givenFinalizeStreamSession();
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+
+        assertThat(captureSavedEdges()).singleElement()
+            .satisfies(edge -> assertThat(edge.get("id")).isEqualTo("edge-keep"));
+    }
+
+    @Test
+    @DisplayName("엣지 목록에 Map이 아닌 원소가 섞여 있어도 예외 없이 저장된다 — 채팅이 500이 되면 안 된다")
+    void finalizeStream_nonMapEdgeElement_savedWithoutException() throws Exception {
+        ChatAgentResponse resp = buildResponseWithEdges("""
+            [
+                "엣지가 아닌 원소",
+                { "source": "node-a", "target": "node-b" },
+                { "target": "node-b" }
+            ]
+            """);
+
+        givenFinalizeStreamSession();
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+
+        ArgumentCaptor<String> edgesJson = ArgumentCaptor.forClass(String.class);
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), edgesJson.capture());
+        List<Object> saved = objectMapper.readValue(edgesJson.getValue(), new TypeReference<>() {});
+        // 비-Map 원소는 그대로 통과하고, Map 원소는 source/target이 없어도 id를 받는다.
+        assertThat(saved).hasSize(3);
+        assertThat(saved.get(0)).isEqualTo("엣지가 아닌 원소");
+        assertThat(((Map<?, ?>) saved.get(1)).get("id")).isNotNull();
+        assertThat(((Map<?, ?>) saved.get(2)).get("id")).isNotNull();
+    }
+
+    /** finalizeStream이 메시지를 저장하는 데 필요한 최소 스텁. */
+    private void givenFinalizeStreamSession() {
+        ChatSession session = buildSession(workflowId, userId);
+        given(sessionRepository.findById(sessionId)).willReturn(Optional.of(session));
+        given(messageRepository.save(any(ChatMessage.class)))
+            .willReturn(buildMessage(session, MessageType.AGENT, "완성됐어요"));
+    }
+
+    /** saveAgentVersion에 넘어간 edgesJson을 캡처해 파싱한다. */
+    private List<Map<String, Object>> captureSavedEdges() throws Exception {
+        ArgumentCaptor<String> edgesJson = ArgumentCaptor.forClass(String.class);
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), edgesJson.capture());
+        return objectMapper.readValue(edgesJson.getValue(), new TypeReference<>() {});
+    }
+
+    /** 노드 두 개 + 주어진 엣지 배열을 가진 WORKFLOW_GENERATED 응답. */
+    private ChatAgentResponse buildResponseWithEdges(String edgesJson) throws Exception {
+        String json = """
+            {
+                "message": "완성됐어요",
+                "type": "WORKFLOW_GENERATED",
+                "nodes": [
+                    { "id": "node-a", "type": "HTTP", "config": {} },
+                    { "id": "node-b", "type": "HTTP", "config": {} }
+                ],
+                "edges": %s
+            }
+            """.formatted(edgesJson);
+        return objectMapper.readValue(json, ChatAgentResponse.class);
     }
 
     /** credentialId가 비어 있는 AI 노드 하나짜리 응답 — fallback 주입이 일어나는 모양이다. */

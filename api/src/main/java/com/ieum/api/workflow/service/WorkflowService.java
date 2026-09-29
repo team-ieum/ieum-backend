@@ -79,14 +79,18 @@ public class WorkflowService {
 
     @Transactional
     public WorkflowResponse createWorkflow(UUID userId, CreateWorkflowRequest request) {
-        rejectRawWebhookUrls(request.getNodes());
-        rejectForeignCredentialIds(userId, request.getNodes());
+        List<Object> configs = request.getNodes().stream().<Object>map(NodeDto::getConfig).toList();
+        rejectRawWebhookUrls(configs);
+        rejectForeignCredentialIds(userId, configs);
+        // 엣지 맵 변환은 수정 경로와 같은 것을 쓴다 — 이전 정의가 없으면 요청 엣지가 그대로 나온다.
+        List<Map<String, Object>> edges =
+            withEdgeIds(EdgeDefinitionMerger.merge(null, request.getEdges()), request.getEdges());
         WorkflowVersion version = workflowCrudService.createWorkflow(
             userId,
             request.getName(),
             request.getDescription(),
             toJson(request.getNodes()),
-            toJson(request.getEdges()),
+            toJson(edges),
             request.getTriggerType(),
             request.getCronExpression()
         );
@@ -118,22 +122,126 @@ public class WorkflowService {
         return toResponse(workflow, latestVersion, ownedWebhookNames(userId));
     }
 
+    /**
+     * 워크플로우를 수정한다. 요청이 보내지 않은 노드 필드는 직전 버전 값을 이어받는다 (IEUM-BE-65).
+     *
+     * <p>수정은 정의 전체를 새 버전으로 다시 쓰는 구조라, 요청 노드를 그대로 저장하면 클라이언트가
+     * 보내지 않은 {@code description}·{@code position}이 소실된다. 그래서 직전 버전 정의 위에
+     * 요청 노드를 덮어써({@link NodeDefinitionMerger}) 저장한다. 엣지의 {@code conditionType}도
+     * 같은 이유로 이어받는다({@link EdgeDefinitionMerger}).
+     */
     @Transactional
     public WorkflowResponse updateWorkflow(UUID userId, UUID workflowId,
             UpdateWorkflowRequest request) {
-        rejectRawWebhookUrls(request.getNodes());
-        rejectForeignCredentialIds(userId, request.getNodes());
+        // 소유권 검증이 이전 정의 조회보다 먼저다 — 남의 워크플로우 정의를 읽고 나서 거절하면 안 된다.
+        Workflow current = workflowCrudService.getWorkflowByOwner(userId, workflowId);
+
+        // 정의 문서는 요청당 한 번만 읽는다 — 노드와 엣지가 같은 문서에서 온다.
+        WorkflowDefinitionDocument previous = previousDefinition(workflowId);
+        List<Map<String, Object>> mergedNodes = NodeDefinitionMerger.merge(
+            previous != null ? previous.getNodes() : null, request.getNodes(), objectMapper);
+        List<Map<String, Object>> mergedEdges = withEdgeIds(EdgeDefinitionMerger.merge(
+            previous != null ? previous.getEdges() : null, request.getEdges()), request.getEdges());
+
+        // 가드는 병합 결과에 돈다 — 요청이 config를 생략하면 이전 config가 되살아나는데, 그 안에 원문
+        // 웹훅 URL이나 남의 credentialId가 있으면 요청만 검사해서는 통과해 버린다(IEUM-BE-62·64의
+        // "저장되는 정의에는 원문 웹훅 URL·남의 크레덴셜이 없다"는 불변식이 깨진다).
+        List<Object> configs = mergedNodes.stream().map(node -> node.get("config")).toList();
+        rejectRawWebhookUrls(configs);
+        rejectForeignCredentialIds(userId, configs);
+
+        // 워크플로우 레벨 optional 필드도 노드와 같은 규칙이다 — 요청의 null은 "변경 없음"이라
+        // 저장된 값을 그대로 넘긴다. 그대로 넘기면 triggerType이 MANUAL로 강등되고 cron이 지워져
+        // Quartz Job까지 삭제된다(200만 돌아와 다음 실행이 없을 때까지 아무도 모른다).
+        TriggerType triggerType = request.getTriggerType() != null
+            ? request.getTriggerType() : current.getTriggerType();
         WorkflowVersion version = workflowCrudService.updateWorkflow(
             userId,
             workflowId,
             request.getName(),
-            request.getDescription(),
-            toJson(request.getNodes()),
-            toJson(request.getEdges()),
-            request.getTriggerType(),
-            request.getCronExpression()
+            request.getDescription() != null ? request.getDescription() : current.getDescription(),
+            toJson(mergedNodes),
+            toJson(mergedEdges),
+            triggerType,
+            resolveCronExpression(request.getCronExpression(), triggerType, current)
         );
         return toResponse(version.getWorkflow(), version, ownedWebhookNames(userId));
+    }
+
+    /**
+     * 저장할 엣지에 id를 채운다 (IEUM-BE-65). 요청이 보낸 id는 그대로 쓰고, 없거나 빈 자리만 서버가
+     * 만든다.
+     *
+     * <p>id가 있어야 같은 {@code (source, target)}을 공유하는 형제 엣지(CONDITION 두 분기가 한 노드로
+     * 합류하는 모양)를 구분할 수 있다. 그런데 엣지 id를 필수로 두면 id 없는 엣지를 만드는 ieum-agent
+     * 정의가 저장·수정 불가가 되므로, 요구하는 대신 서버가 채운다.
+     *
+     * <p>클라이언트가 보낸 id는 검증하지 않는다 — 노드 id가 클라이언트 소유인 것과 같은 선이다.
+     * 중복 id가 와도 거절하지 않는다.
+     *
+     * <p>고르는 순서는 <b>요청 id → 병합이 이어 준 이전 id → 새 UUID</b>다. 요청이 id를 생략해도
+     * 짝지어진 이전 엣지의 id가 남아 있어야 저장 회차마다 id가 갈리지 않는다.
+     *
+     * @param edges        저장 직전의 엣지 맵. {@link EdgeDefinitionMerger}가 요청 엣지 하나당 하나씩
+     *                     같은 순서로 만든 것이라 {@code requestEdges}와 인덱스로 짝지어진다. 길이가
+     *                     어긋나면 방어하지 않고 터뜨린다 — 조용히 새 id를 찍는 것이 더 나쁘다
+     * @param requestEdges 요청 엣지. id의 원천이다
+     */
+    private static List<Map<String, Object>> withEdgeIds(List<Map<String, Object>> edges,
+            List<EdgeDto> requestEdges) {
+        for (int i = 0; i < edges.size(); i++) {
+            String requested = requestEdges.get(i).getId();
+            if (requested != null && !requested.isBlank()) {
+                edges.get(i).put("id", requested);
+            } else {
+                // 병합이 짝지은 이전 엣지의 id를 이미 넣어 뒀으면 그것을 잇는다. 새 UUID는 정말로
+                // 처음 보는 엣지에만 찍힌다 — 아니면 저장할 때마다 id가 전량 교체된다.
+                edges.get(i).putIfAbsent("id", UUID.randomUUID().toString());
+            }
+        }
+        return edges;
+    }
+
+    /**
+     * 저장할 cron 표현식. 요청이 보낸 값이 우선이고, 생략했을 때만 저장된 값을 잇는다.
+     *
+     * <p>단 폴백은 유효 triggerType이 SCHEDULE일 때뿐이다 — {@code triggerType: "MANUAL"}로 스케줄을
+     * 끄는 요청에서 저장된 cron을 되살리면 트리거는 MANUAL인데 cron만 남은 유령 값이 된다
+     * ({@code validateScheduleConfig}는 SCHEDULE이 아니면 cron을 아예 보지 않아 걸러 주지 않는다).
+     *
+     * <p>저장된 트리거도 SCHEDULE이어야 한다. 그 유령 cron(MANUAL인데 cron이 남은 워크플로우)은 실제로
+     * 만들어지므로, 이 조건이 없으면 {@code triggerType: "SCHEDULE"}만 보낸 요청이 사용자가 이번에
+     * 지정한 적 없는 시각으로 Quartz Job을 등록한다. 여기서 {@code null}을 넘겨야 crud가 400으로 막는다.
+     */
+    private static String resolveCronExpression(String requested, TriggerType triggerType,
+            Workflow current) {
+        if (requested != null) {
+            return requested;
+        }
+        boolean keepsSchedule = triggerType == TriggerType.SCHEDULE
+            && current.getTriggerType() == TriggerType.SCHEDULE;
+        return keepsSchedule ? current.getCronExpression() : null;
+    }
+
+    /**
+     * 병합의 베이스가 될 직전 버전의 정의 문서. 버전이 없거나 문서를 읽지 못하면 {@code null}이다.
+     *
+     * <p>정의 문서를 읽지 못해도 수정을 막지 않는다 — 병합 없이 요청 값만 저장하는 예전 동작으로
+     * 물러선다. 여기서 404를 던지면 Mongo 문서가 사라진 워크플로우는 수정으로 고칠 길조차 없어진다.
+     */
+    private WorkflowDefinitionDocument previousDefinition(UUID workflowId) {
+        WorkflowVersion latestVersion = workflowCrudService.findLatestVersion(workflowId)
+            .orElse(null);
+        if (latestVersion == null) {
+            return null;
+        }
+        try {
+            return workflowCrudService.loadDefinition(latestVersion);
+        } catch (CustomException e) {
+            log.warn("[WorkflowService] 직전 정의를 읽지 못해 병합 없이 저장 — workflowId: {}, errorCode: {}",
+                workflowId, e.getErrorCode());
+            return null;
+        }
     }
 
     @Transactional
@@ -284,12 +392,9 @@ public class WorkflowService {
      * <p>판정과 메시지는 {@link RawWebhookUrlGuard}가 갖는다 — 채팅으로 agent가 만든 정의도 같은
      * 검사를 거치는데(Task 4) 둘이 각자 문구를 들고 있으면 같은 위반에 다른 반응이 나온다.
      */
-    private void rejectRawWebhookUrls(List<NodeDto> nodes) {
-        if (nodes == null) {
-            return;
-        }
-        for (NodeDto node : nodes) {
-            RawWebhookUrlGuard.rejectRawWebhookUrl(node.getConfig());
+    private void rejectRawWebhookUrls(List<Object> configs) {
+        for (Object config : configs) {
+            RawWebhookUrlGuard.rejectRawWebhookUrl(config);
         }
     }
 
@@ -307,19 +412,20 @@ public class WorkflowService {
      * <p>같은 루프에서 비밀 원문 키도 거부한다({@code NodeCredentialGuard.rejectInlineSecret}) —
      * 크레덴셜 참조를 통째로 건너뛰고 API 키를 config에 박으면 소유 검사가 아무것도 보지 못한다.
      */
-    private void rejectForeignCredentialIds(UUID userId, List<NodeDto> nodes) {
-        if (nodes == null || nodes.isEmpty()) {
+    private void rejectForeignCredentialIds(UUID userId, List<Object> configs) {
+        if (configs.isEmpty()) {
             return;
         }
         Set<String> owned = credentialService.getByUserId(userId).stream()
             .map(credential -> credential.getId().toString())
             .collect(Collectors.toSet());
-        for (NodeDto node : nodes) {
-            NodeCredentialGuard.rejectForeignCredentialId(node.getConfig(), owned);
+        for (Object config : configs) {
+            NodeCredentialGuard.rejectForeignCredentialId(config, owned);
             // 남의 크레덴셜을 참조하는 것뿐 아니라, 참조 자체를 건너뛰고 원문을 config에 박는 길도 막는다.
-            NodeCredentialGuard.rejectInlineSecret(node.getConfig());
+            NodeCredentialGuard.rejectInlineSecret(config);
         }
     }
+
 
     /**
      * 저장된 정의(raw {@code Map})를 응답으로 옮긴다.

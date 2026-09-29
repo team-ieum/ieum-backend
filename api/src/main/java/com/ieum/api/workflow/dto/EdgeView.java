@@ -17,6 +17,9 @@ import lombok.extern.slf4j.Slf4j;
  */
 @Slf4j
 public record EdgeView(
+    @Schema(description = "엣지 식별자. IEUM-BE-65 이전에 저장된 정의(레거시)의 엣지에서는 null이다."
+        + " 그 뒤로는 REST·채팅 두 저장 경로 모두 서버가 채운다.")
+    String id,
     String source,
     String target,
     @Schema(description = "CONDITION 노드의 분기 값(\"true\"/\"false\"). 일반 연결에서는 비어 있다.")
@@ -30,6 +33,10 @@ public record EdgeView(
      *   <li>{@code source}·{@code target} — 둘 다 {@link NodeView#asText} 규칙으로 읽히고 비어 있지
      *       않아야 한다. 아니면 버린다.
      *   <li>{@code nodes}에 없는 id를 가리키는 엣지 → 버린다.
+     *   <li>{@code id} — {@link NodeView#asText} 규칙. 없으면 null이고 <b>엣지는 남긴다</b>. REST
+     *       ({@code WorkflowService})·채팅({@code ChatService}) 두 저장 경로 모두 서버가 저장 직전에
+     *       채우므로(IEUM-BE-65) 비는 것은 그 전에 저장된 레거시 정의뿐인데, 그것 때문에 엣지를
+     *       버리면 기존 워크플로우의 연결선이 화면에서 통째로 사라진다.
      *   <li>{@code conditionType} — {@link NodeView#asText} 규칙. 문자열 {@code "true"}가 와야 할
      *       자리에 boolean {@code true}가 오는 저장 경로가 있어 스칼라를 받는다.
      * </ul>
@@ -71,7 +78,9 @@ public record EdgeView(
                     workflowId, source, target);
                 continue;
             }
-            edges.add(new EdgeView(source, target,
+            edges.add(new EdgeView(
+                NodeView.asText(map.get("id"), "id", workflowId),
+                source, target,
                 NodeView.asText(map.get("conditionType"), "conditionType", workflowId)));
         }
         return edges;

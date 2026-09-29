@@ -591,7 +591,7 @@ public class ChatService {
             }
 
             String nodesJson = objectMapper.writeValueAsString(nodes);
-            String edgesJson = objectMapper.writeValueAsString(agentResponse.getEdges());
+            String edgesJson = objectMapper.writeValueAsString(fillEdgeIds(agentResponse.getEdges()));
             workflowCrudService.saveAgentVersion(workflowId, nodesJson, edgesJson);
             log.info("[ChatService] 워크플로우 버전 저장 완료 — workflowId: {}, type: {}",
                 workflowId, agentResponse.getType());
@@ -599,6 +599,38 @@ public class ChatService {
             log.error("[ChatService] 노드/엣지 직렬화 실패 — workflowId: {}", workflowId, e);
             throw new CustomException(ErrorCode.INVALID_WORKFLOW);
         }
+    }
+
+    /**
+     * agent가 만든 엣지에 id가 없으면 저장 직전에 채운다 (IEUM-BE-65).
+     *
+     * <p>id 없이 저장하면 다음 PUT의 병합이 {@code (source, target)} FIFO 폴백으로 떨어져 형제
+     * CONDITION 엣지의 {@code conditionType}이 뒤바뀐다. 그리고 그 회차에 REST 경로가 붕괴한 값에
+     * id를 찍어 고정해 버린다 — 채팅 한 번이 자가 고착을 만든다.
+     *
+     * <p>이전 정의와 병합하지 않는다. agent는 정의를 통째로 다시 쓰므로 이어 붙일 값이 없고,
+     * 필요한 것은 id를 채우는 것뿐이다. 이미 id가 있으면 그대로 둔다 — agent가 프론트의
+     * {@code currentEdges}를 pass-through해 id가 살아 오는 경로가 있다.
+     *
+     * <p>{@code Map}이 아닌 원소는 건너뛴다. agent 응답의 모양은 BE가 통제하지 못하므로 여기서
+     * 예외를 내면 채팅 전체가 500이 된다 — id를 못 붙이는 것이 저장 실패보다 낫다. 노드 id는
+     * 클라이언트/agent 소유라 손대지 않는다.
+     */
+    @SuppressWarnings("unchecked")
+    private List<Object> fillEdgeIds(List<Object> edges) {
+        if (edges == null) {
+            return null;
+        }
+        for (Object edge : edges) {
+            if (!(edge instanceof Map<?, ?> map)) {
+                continue;
+            }
+            Object id = map.get("id");
+            if (id == null || (id instanceof String text && text.isBlank())) {
+                ((Map<String, Object>) map).put("id", UUID.randomUUID().toString());
+            }
+        }
+        return edges;
     }
 
     /**
