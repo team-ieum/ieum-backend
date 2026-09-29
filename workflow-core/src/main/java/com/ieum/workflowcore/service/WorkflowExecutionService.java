@@ -306,7 +306,8 @@ public class WorkflowExecutionService {
      */
     @Transactional
     public Optional<UUID> markAsFailed(UUID executionId, String reason) {
-        return workflowExecutionRepository.findById(executionId).<Optional<UUID>>map(execution -> {
+        // 행 잠금으로 읽는다 — 잠금 없이 읽으면 런타임이 SUCCESS를 커밋한 직후의 옛 RUNNING을 보고 FAILED로 덮는다.
+        return workflowExecutionRepository.findByIdForUpdate(executionId).<Optional<UUID>>map(execution -> {
             if (execution.getStatus() == ExecutionStatus.FAILED
                     || execution.getStatus() == ExecutionStatus.SUCCESS) {
                 return Optional.empty();

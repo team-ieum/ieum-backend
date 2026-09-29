@@ -3,6 +3,7 @@ package com.ieum.workflowcore.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
@@ -121,9 +122,11 @@ class SyncExecutionRuntimeTest {
         when(workflow.getUserId()).thenReturn(UUID.randomUUID());
         when(workflow.getId()).thenReturn(workflowId);
         when(execution.getWorkflow()).thenReturn(workflow);
-        when(execution.getStatus()).thenReturn(ExecutionStatus.RUNNING);
         when(execution.getTraceId()).thenReturn("11112222333344445555666677778888");
         when(executionRepository.findWithWorkflowById(executionId)).thenReturn(Optional.of(execution));
+        // 기본은 "아직 종료되지 않은 실행" — 조건부 시작·종료 UPDATE가 행 1개를 전이시킨다.
+        when(executionRepository.startIfNotTerminal(any(), any())).thenReturn(1);
+        when(executionRepository.finishIfNotTerminal(any(), any(), anyBoolean(), any())).thenReturn(1);
 
         log = new ConcurrentLinkedQueue<>();
         failNodeIds = new java.util.HashSet<>();
@@ -180,6 +183,13 @@ class SyncExecutionRuntimeTest {
         runtime().execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
     }
 
+    /** 종료 전이가 정확히 한 번, 주어진 상태로 요청됐는지. */
+    private void verifyFinished(ExecutionStatus status, boolean retryExhausted) {
+        verify(executionRepository).finishIfNotTerminal(any(), any(), anyBoolean(), any());
+        verify(executionRepository).finishIfNotTerminal(
+            eq(executionId), eq(status), eq(retryExhausted), any());
+    }
+
     @Test
     @DisplayName("fan-out: 한 노드의 두 분기 모두 실행된다")
     void fanout_runs_all_branches() throws Exception {
@@ -190,7 +200,7 @@ class SyncExecutionRuntimeTest {
         );
         run();
         assertThat(log).containsExactlyInAnyOrder("t", "a", "b", "c");
-        verify(execution).complete();
+        verifyFinished(ExecutionStatus.SUCCESS, false);
     }
 
     @Test
@@ -222,7 +232,7 @@ class SyncExecutionRuntimeTest {
         run();
         assertThat(log).contains("t", "cond", "yes");
         assertThat(log).doesNotContain("no");
-        verify(execution).complete();
+        verifyFinished(ExecutionStatus.SUCCESS, false);
     }
 
     @Test
@@ -238,8 +248,7 @@ class SyncExecutionRuntimeTest {
         assertThat(log).contains("t", "a");
         assertThat(log).doesNotContain("b");
         // 재시도 대상이 아닌 실패(UNKNOWN, attempt=1)이므로 소진 아님
-        verify(execution).fail(false);
-        verify(execution, never()).complete();
+        verifyFinished(ExecutionStatus.FAILED, false);
     }
 
     @Test
@@ -298,8 +307,7 @@ class SyncExecutionRuntimeTest {
 
         run();
 
-        verify(execution).fail(false);
-        verify(executionRepository, atLeastOnce()).save(execution);
+        verifyFinished(ExecutionStatus.FAILED, false);
         verify(eventPublisher).publish(eq(executionId),
             org.mockito.ArgumentMatchers.argThat(
                 event -> event.type() == ExecutionEventType.EXECUTION_COMPLETED));
@@ -307,9 +315,102 @@ class SyncExecutionRuntimeTest {
     }
 
     @Test
+    @DisplayName("시작 전에 sweeper가 FAILED로 확정한 실행은 RUNNING으로 되돌리지 않고 노드도 실행하지 않는다")
+    void start_afterExternalFailed_doesNotRunNodes() throws Exception {
+        when(executionRepository.startIfNotTerminal(any(), any())).thenReturn(0);
+        WorkflowExecution failedRow = mock(WorkflowExecution.class);
+        when(failedRow.getStatus()).thenReturn(ExecutionStatus.FAILED);
+        when(executionRepository.findById(executionId)).thenReturn(Optional.of(failedRow));
+        stubDefinition(
+            List.of(node("t", "TRIGGER"), node("a", "AI")),
+            List.of(edge("t", "a", null))
+        );
+
+        run();
+
+        assertThat(log).isEmpty();
+        verify(executionRepository, never()).save(any());
+        verify(executionRepository, never()).finishIfNotTerminal(any(), any(), anyBoolean(), any());
+        verify(eventPublisher).publish(eq(executionId),
+            org.mockito.ArgumentMatchers.argThat(
+                event -> event.type() == ExecutionEventType.EXECUTION_COMPLETED
+                    && event.executionStatus() == ExecutionStatus.FAILED));
+        verify(eventPublisher).complete(executionId);
+        verify(alertNotifier, never()).notifyExecutionFailed(any());
+    }
+
+    @Test
+    @DisplayName("sweeper가 먼저 FAILED로 확정한 실행은 성공으로 끝나도 SUCCESS로 되뒤집지 않고 DB의 종료 상태로 스트림을 닫는다")
+    void success_afterExternalFailed_doesNotFlipToSuccess() throws Exception {
+        when(executionRepository.finishIfNotTerminal(any(), any(), anyBoolean(), any())).thenReturn(0);
+        WorkflowExecution failedRow = mock(WorkflowExecution.class);
+        when(failedRow.getStatus()).thenReturn(ExecutionStatus.FAILED);
+        when(executionRepository.findById(executionId)).thenReturn(Optional.of(failedRow));
+        stubDefinition(
+            List.of(node("t", "TRIGGER"), node("a", "AI")),
+            List.of(edge("t", "a", null))
+        );
+
+        run();
+
+        verify(eventPublisher, never()).publish(eq(executionId),
+            org.mockito.ArgumentMatchers.argThat(
+                event -> event.type() == ExecutionEventType.EXECUTION_COMPLETED
+                    && event.executionStatus() == ExecutionStatus.SUCCESS));
+        // sweeper의 종료 이벤트는 이 스트림이 닫힌 뒤 새 Sink로 흩어질 수 있다 — 런타임이 직접 흘린다.
+        verify(eventPublisher).publish(eq(executionId),
+            org.mockito.ArgumentMatchers.argThat(
+                event -> event.type() == ExecutionEventType.EXECUTION_COMPLETED
+                    && event.executionStatus() == ExecutionStatus.FAILED));
+        verify(eventPublisher).complete(executionId);
+    }
+
+    @Test
+    @DisplayName("중복 런타임이 먼저 SUCCESS로 끝낸 실행은 FAILED로 오표시하지 않고 DB의 SUCCESS로 스트림을 닫는다")
+    void success_afterDuplicateRuntimeSucceeded_publishesDbStatus() throws Exception {
+        when(executionRepository.finishIfNotTerminal(any(), any(), anyBoolean(), any())).thenReturn(0);
+        WorkflowExecution succeededRow = mock(WorkflowExecution.class);
+        when(succeededRow.getStatus()).thenReturn(ExecutionStatus.SUCCESS);
+        when(executionRepository.findById(executionId)).thenReturn(Optional.of(succeededRow));
+        stubDefinition(
+            List.of(node("t", "TRIGGER"), node("a", "AI")),
+            List.of(edge("t", "a", null))
+        );
+
+        run();
+
+        verify(eventPublisher).publish(eq(executionId),
+            org.mockito.ArgumentMatchers.argThat(
+                event -> event.type() == ExecutionEventType.EXECUTION_COMPLETED
+                    && event.executionStatus() == ExecutionStatus.SUCCESS));
+        verify(eventPublisher, never()).publish(eq(executionId),
+            org.mockito.ArgumentMatchers.argThat(
+                event -> event.executionStatus() == ExecutionStatus.FAILED));
+    }
+
+    @Test
+    @DisplayName("sweeper가 먼저 FAILED로 확정한 실행이 노드 실패로 끝나면 알림은 다시 보내지 않고 종료 이벤트만 흘린다")
+    void failure_afterExternalFailed_sendsNoAlert() throws Exception {
+        when(executionRepository.finishIfNotTerminal(any(), any(), anyBoolean(), any())).thenReturn(0);
+        failNodeIds.add("a");
+        stubDefinition(
+            List.of(node("t", "TRIGGER"), node("a", "AI")),
+            List.of(edge("t", "a", null))
+        );
+
+        run();
+
+        verify(alertNotifier, never()).notifyExecutionFailed(any());
+        verify(eventPublisher).publish(eq(executionId),
+            org.mockito.ArgumentMatchers.argThat(
+                event -> event.type() == ExecutionEventType.EXECUTION_COMPLETED
+                    && event.executionStatus() == ExecutionStatus.FAILED));
+        verify(eventPublisher).complete(executionId);
+    }
+
+    @Test
     @DisplayName("정의 로드 실패(실패 노드 특정 불가)도 알림을 발신한다 — failedNodeId는 null")
     void definitionLoadFailure_sendsAlertWithoutNodeId() {
-        when(execution.getStatus()).thenReturn(ExecutionStatus.PENDING);
         when(crudService.loadDefinition(any())).thenThrow(new IllegalStateException("정의 없음"));
 
         assertThatThrownBy(this::run).isInstanceOf(Exception.class);
@@ -638,7 +739,7 @@ class SyncExecutionRuntimeTest {
             assertThat(logOf(logs, "a").getOutputJson()).contains("원본-a-출력");
             assertThat(logOf(logs, "t").getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
             assertThat(logOf(logs, "b").getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
-            verify(execution).complete();
+            verifyFinished(ExecutionStatus.SUCCESS, false);
         }
 
         @Test
@@ -668,7 +769,7 @@ class SyncExecutionRuntimeTest {
             runWith(Map.of("a", Map.of("output", "x")));
 
             assertThat(log).containsExactlyInAnyOrder("t", "b", "c");
-            verify(execution).complete();
+            verifyFinished(ExecutionStatus.SUCCESS, false);
         }
 
         @Test
@@ -686,7 +787,7 @@ class SyncExecutionRuntimeTest {
 
             assertThat(log).containsExactlyInAnyOrder("t", "no");
             assertThat(log).doesNotContain("cond", "yes");
-            verify(execution).complete();
+            verifyFinished(ExecutionStatus.SUCCESS, false);
         }
 
         @Test
@@ -721,7 +822,7 @@ class SyncExecutionRuntimeTest {
             assertThat(log).containsExactlyInAnyOrder("t", "a", "b");
             assertThat(capturedLogs(3))
                 .noneMatch(l -> l.getStatus() == ExecutionLogStatus.SKIPPED);
-            verify(execution).complete();
+            verifyFinished(ExecutionStatus.SUCCESS, false);
         }
 
         @Test
@@ -752,7 +853,7 @@ class SyncExecutionRuntimeTest {
 
             assertThat(log).contains("b");
             assertThat(log).doesNotContain("a");
-            verify(execution).fail(false);
+            verifyFinished(ExecutionStatus.FAILED, false);
         }
     }
 
@@ -976,7 +1077,7 @@ class SyncExecutionRuntimeTest {
 
             assertThat(ai.callCount("a")).isEqualTo(2);
             assertThat(ai.callCount("b")).isEqualTo(1);
-            verify(execution).complete();
+            verifyFinished(ExecutionStatus.SUCCESS, false);
         }
 
         @Test
@@ -992,8 +1093,7 @@ class SyncExecutionRuntimeTest {
                 .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
 
             assertThat(ai.callCount("a")).isEqualTo(1);
-            verify(execution).fail(false);
-            verify(execution, never()).complete();
+            verifyFinished(ExecutionStatus.FAILED, false);
 
             ArgumentCaptor<com.ieum.workflowcore.domain.WorkflowExecutionLog> captor =
                 ArgumentCaptor.forClass(com.ieum.workflowcore.domain.WorkflowExecutionLog.class);
@@ -1017,8 +1117,7 @@ class SyncExecutionRuntimeTest {
                 .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
 
             assertThat(ai.callCount("a")).isEqualTo(3);
-            verify(execution).fail(true);
-            verify(execution, never()).complete();
+            verifyFinished(ExecutionStatus.FAILED, true);
 
             ArgumentCaptor<com.ieum.workflowcore.domain.WorkflowExecutionLog> captor =
                 ArgumentCaptor.forClass(com.ieum.workflowcore.domain.WorkflowExecutionLog.class);
@@ -1093,8 +1192,7 @@ class SyncExecutionRuntimeTest {
             String key = ai.lastAttempt().idempotencyKey();
             verify(idempotencyStore, times(1)).clearInFlight(key);
             // 소진(retryExhausted)이 아니라 attempt=1의 원인 그대로 FAILED다
-            verify(execution).fail(false);
-            verify(execution, never()).complete();
+            verifyFinished(ExecutionStatus.FAILED, false);
 
             ArgumentCaptor<com.ieum.workflowcore.domain.WorkflowExecutionLog> captor =
                 ArgumentCaptor.forClass(com.ieum.workflowcore.domain.WorkflowExecutionLog.class);
@@ -1153,7 +1251,7 @@ class SyncExecutionRuntimeTest {
 
             // maxAttempts=3까지 못 가고 2회차 인터럽트로 중단됨(attempt<maxAttempts)
             assertThat(calls.get()).isEqualTo(2);
-            verify(execution).fail(false);
+            verifyFinished(ExecutionStatus.FAILED, false);
         }
 
         @Test
@@ -1207,7 +1305,7 @@ class SyncExecutionRuntimeTest {
                 .as("a가 재시도하는 동안 형제 브랜치 d가 완료될 기회를 얻어야 한다")
                 .isTrue();
             assertThat(completionOrder).containsExactly("d", "a");
-            verify(execution).complete();
+            verifyFinished(ExecutionStatus.SUCCESS, false);
         }
 
         @Test
@@ -1246,7 +1344,7 @@ class SyncExecutionRuntimeTest {
 
             assertThat(aAttempts.get()).isEqualTo(2);
             assertThat(capturedInputs.get("b")).containsEntry("value", "retried-value");
-            verify(execution).complete();
+            verifyFinished(ExecutionStatus.SUCCESS, false);
         }
 
         @Test
