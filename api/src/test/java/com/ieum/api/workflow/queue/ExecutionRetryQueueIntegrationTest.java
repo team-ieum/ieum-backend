@@ -55,7 +55,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
-import org.springframework.data.redis.connection.RedisStreamCommands.XAddOptions;
 import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.core.StreamOperations;
@@ -149,7 +148,7 @@ class ExecutionRetryQueueIntegrationTest {
         container = Mockito.mock(StreamMessageListenerContainer.class);
         when(redisTemplate.opsForStream()).thenReturn((StreamOperations) streamOperations);
         when(container.isRunning()).thenReturn(true);
-        when(streamOperations.add(any(MapRecord.class), any(XAddOptions.class)))
+        when(streamOperations.add(any(MapRecord.class)))
             .thenAnswer(invocation -> {
                 MapRecord<String, String, String> published = invocation.getArgument(0);
                 RecordId id = RecordId.of(nextRecordId++ + "-0");

@@ -62,17 +62,26 @@ class ExecutionJobQueueTest {
             .containsExactly(entry(ExecutionJobQueue.FIELD_EXECUTION_ID, executionId.toString()));
     }
 
+    @Test
+    @DisplayName("트리밍 없이 발행한다 — MAXLEN이 미배달 잡을 잘라 실행이 PENDING으로 방치되지 않게")
+    void enqueue_publishesWithoutTrimming() {
+        queue.enqueue(UUID.randomUUID());
+
+        verify(streamOperations).add(any(MapRecord.class));
+        verify(streamOperations, never()).add(any(MapRecord.class), any(XAddOptions.class));
+    }
+
     private MapRecord<String, String, String> publishedRecord() {
         ArgumentCaptor<MapRecord<String, String, String>> captor =
             ArgumentCaptor.forClass(MapRecord.class);
-        verify(streamOperations).add(captor.capture(), any(XAddOptions.class));
+        verify(streamOperations).add(captor.capture());
         return captor.getValue();
     }
 
     @Test
     @DisplayName("Redis 장애로 발행이 실패하면 예외 대신 false를 반환한다(호출자가 직접 실행하도록)")
     void enqueue_redisFailure_returnsFalse() {
-        when(streamOperations.add(any(MapRecord.class), any(XAddOptions.class)))
+        when(streamOperations.add(any(MapRecord.class)))
             .thenThrow(new RuntimeException("redis down"));
 
         boolean result = queue.enqueue(UUID.randomUUID());
@@ -88,7 +97,7 @@ class ExecutionJobQueueTest {
         boolean result = queue.enqueue(UUID.randomUUID());
 
         assertThat(result).isFalse();
-        verify(streamOperations, never()).add(any(MapRecord.class), any(XAddOptions.class));
+        verify(streamOperations, never()).add(any(MapRecord.class));
     }
 
     @Test
@@ -99,7 +108,7 @@ class ExecutionJobQueueTest {
         boolean result = queue.enqueue(UUID.randomUUID());
 
         assertThat(result).isFalse();
-        verify(streamOperations, never()).add(any(MapRecord.class), any(XAddOptions.class));
+        verify(streamOperations, never()).add(any(MapRecord.class));
     }
 
     @Test
