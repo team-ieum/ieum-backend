@@ -6,9 +6,11 @@ import com.ieum.common.exception.ErrorCode;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
 /**
@@ -28,6 +30,20 @@ public class BetaQuotaService {
 
     private static final DateTimeFormatter DAILY_KEY_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final Duration DAILY_KEY_TTL = Duration.ofHours(48);
+
+    /** INCR과 첫 EXPIRE를 한 번에 — 둘이 분리돼 있으면 사이에서 끊길 때 TTL 없는 키가 남아 그 사용자가 영구 차단된다. */
+    static final DefaultRedisScript<Long> INCREMENT_DAILY_CALL = new DefaultRedisScript<>("""
+            local c = redis.call('INCR', KEYS[1])
+            if c == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
+            return c
+            """, Long.class);
+
+    /** 양수일 때만 DECR — DECR 후 음수 보정을 따로 하면 동시 환불끼리 경쟁하고, 없는 키엔 TTL 없는 키를 만든다. */
+    static final DefaultRedisScript<Long> RELEASE_DAILY_CALL = new DefaultRedisScript<>("""
+            local c = tonumber(redis.call('GET', KEYS[1]))
+            if c and c > 0 then return redis.call('DECR', KEYS[1]) end
+            return 0
+            """, Long.class);
 
     private final StringRedisTemplate redisTemplate;
     private final BetaPlatformKeyProperties properties;
@@ -63,10 +79,8 @@ public class BetaQuotaService {
      */
     public String incrementAndCheckDailyCalls(UUID userId) {
         String key = dailyCallsKey(userId);
-        Long count = redisTemplate.opsForValue().increment(key);
-        if (count != null && count == 1L) {
-            redisTemplate.expire(key, DAILY_KEY_TTL);
-        }
+        Long count = redisTemplate.execute(
+                INCREMENT_DAILY_CALL, List.of(key), String.valueOf(DAILY_KEY_TTL.toSeconds()));
         if (count != null && count > properties.getDailyCallQuota()) {
             redisTemplate.opsForValue().decrement(key);
             throw new CustomException(ErrorCode.BETA_QUOTA_EXCEEDED);
@@ -86,12 +100,7 @@ public class BetaQuotaService {
      * @param dailyCallKey reserveQuota/checkQuota가 반환한 일일 카운터 키
      */
     public void releaseDailyCall(String dailyCallKey) {
-        Long count = redisTemplate.opsForValue().decrement(dailyCallKey);
-        if (count != null && count < 0) {
-            // ponytail: 음수 방지 보정 — 동시 환불 경쟁 시 완벽한 원자성은 아니지만 일일 쿼터
-            // 규모(수십 건)에선 오차 무시 가능. 처리량이 문제되면 Lua 스크립트로 원자화.
-            redisTemplate.opsForValue().increment(dailyCallKey);
-        }
+        redisTemplate.execute(RELEASE_DAILY_CALL, List.of(dailyCallKey));
     }
 
     /** 응답 usage의 totalTokens만큼 누적 토큰 사용량에 사후 가산한다. */

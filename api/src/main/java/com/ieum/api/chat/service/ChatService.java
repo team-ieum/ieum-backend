@@ -37,6 +37,7 @@ import com.ieum.workflowcore.engine.executor.CredentialProvider;
 import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
 import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
 import com.ieum.workflowcore.engine.executor.NotionTokenProvider;
+import com.ieum.workflowcore.engine.executor.UserRoleProvider;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import java.util.List;
 import java.util.Map;
@@ -328,7 +329,7 @@ public class ChatService {
             // 여기서는 자격(eligibility) 판정만 한다 — 실제 쿼터 예약(INCR)은 agent 호출 직전(chat()/스트림 subscribe 직전)에서
             // 수행해, 그 사이의 사전작업(메시지 저장/연동 조회/토큰 조회 등) 예외가 불필요한 환불 대상을 만들지 않게 한다.
             if (credentialId == null || credentialId.isBlank()) {
-                if (isSelfHostedEligible(userRole)) {
+                if (UserRoleProvider.isSelfHostedEligible(userRole)) {
                     return new AgentConfig(llmProvider != null ? llmProvider : "CLAUDE", null, tools, false);
                 }
                 if (isBetaEligible(userId)) {
@@ -345,7 +346,7 @@ public class ChatService {
         if (fallbackCredentialId == null) {
             List<Credential> credentials = credentialService.getByUserId(userId);
             if (credentials.isEmpty()) {
-                if (isSelfHostedEligible(userRole)) {
+                if (UserRoleProvider.isSelfHostedEligible(userRole)) {
                     // 크레덴셜이 하나도 없어도 개발/테스트 계정은 자체 호스팅 LLM으로 채팅 가능
                     return new AgentConfig("CLAUDE", null, null, false);
                 }
@@ -363,11 +364,6 @@ public class ChatService {
         Credential credential = credentialService.getByIdAndUserId(fallbackCredentialId, userId);
         String decryptedApiKey = credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString(), userId);
         return new AgentConfig(credential.getProvider().name(), decryptedApiKey, null, false);
-    }
-
-    /** 자체 호스팅 LLM(키 없음) 경로 자격 — 최종 게이트는 agent의 credential 검증이 담당한다. */
-    private static boolean isSelfHostedEligible(String userRole) {
-        return "ROLE_ADMIN".equals(userRole) || "ROLE_TESTER".equals(userRole);
     }
 
     /** 베타 플랫폼 키(Gemini) 폴백 자격 — self-hosted 자격이 없을 때만 폴백 순위로 확인한다. */
@@ -468,14 +464,7 @@ public class ChatService {
      * @param reservationKey reserveBetaQuota가 반환한 일일 카운터 키 (null이면 no-op)
      */
     public void releaseBetaQuotaOnFailure(String reservationKey) {
-        if (reservationKey == null) {
-            return;
-        }
-        try {
-            betaPlatformProvider.releaseDailyCall(reservationKey);
-        } catch (Exception e) {
-            log.warn("[ChatService] 베타 일일 카운터 환불 실패 — key: {}", reservationKey, e);
-        }
+        betaPlatformProvider.releaseQuietly(reservationKey);
     }
 
     // ─────────────────────────────────────── PRIVATE ──────────────────────────

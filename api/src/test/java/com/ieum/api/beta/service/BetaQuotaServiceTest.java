@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -15,6 +16,7 @@ import com.ieum.common.exception.ErrorCode;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -47,29 +49,30 @@ class BetaQuotaServiceTest {
     }
 
     @Test
-    @DisplayName("일일 호출 - 첫 호출은 INCR 후 TTL 48h 설정")
-    void incrementAndCheckDailyCalls_firstCall_setsTtl() {
-        when(valueOperations.increment(dailyKey())).thenReturn(1L);
+    @DisplayName("일일 호출 - INCR과 첫 EXPIRE(48h=172800초)를 스크립트 한 번으로 실행한다")
+    void incrementAndCheckDailyCalls_runsIncrementScriptOnce() {
+        stubIncrement(1L);
 
         service.incrementAndCheckDailyCalls(userId);
 
-        verify(redisTemplate).expire(dailyKey(), Duration.ofHours(48));
+        verify(redisTemplate).execute(BetaQuotaService.INCREMENT_DAILY_CALL, List.of(dailyKey()), "172800");
     }
 
     @Test
-    @DisplayName("일일 호출 - 두 번째 호출부터는 TTL 재설정하지 않음")
-    void incrementAndCheckDailyCalls_secondCall_doesNotResetTtl() {
-        when(valueOperations.increment(dailyKey())).thenReturn(2L);
+    @DisplayName("일일 호출 - 개별 INCR/EXPIRE를 따로 호출하지 않는다(TTL 없는 키가 남는 창 제거)")
+    void incrementAndCheckDailyCalls_doesNotCallIncrementOrExpireSeparately() {
+        stubIncrement(1L);
 
         service.incrementAndCheckDailyCalls(userId);
 
+        verify(valueOperations, never()).increment(anyString());
         verify(redisTemplate, never()).expire(anyString(), any(Duration.class));
     }
 
     @Test
     @DisplayName("일일 호출 - 쿼터 이내면 예외 없음")
     void incrementAndCheckDailyCalls_withinQuota_noException() {
-        when(valueOperations.increment(dailyKey())).thenReturn(30L);
+        stubIncrement(30L);
 
         service.incrementAndCheckDailyCalls(userId);
     }
@@ -77,7 +80,7 @@ class BetaQuotaServiceTest {
     @Test
     @DisplayName("일일 호출 - 쿼터 초과 시 BETA_QUOTA_EXCEEDED")
     void incrementAndCheckDailyCalls_exceeded_throws() {
-        when(valueOperations.increment(dailyKey())).thenReturn(31L);
+        stubIncrement(31L);
 
         assertThatThrownBy(() -> service.incrementAndCheckDailyCalls(userId))
                 .isInstanceOf(CustomException.class)
@@ -87,7 +90,7 @@ class BetaQuotaServiceTest {
     @Test
     @DisplayName("일일 호출 - 원자성: 초과로 거부된 호출은 DECR로 되돌려 카운터를 소모하지 않는다")
     void incrementAndCheckDailyCalls_exceeded_decrementsBack() {
-        when(valueOperations.increment(dailyKey())).thenReturn(31L);
+        stubIncrement(31L);
 
         assertThatThrownBy(() -> service.incrementAndCheckDailyCalls(userId))
                 .isInstanceOf(CustomException.class);
@@ -157,11 +160,11 @@ class BetaQuotaServiceTest {
     @DisplayName("checkQuota - 토큰/일일 모두 이내면 통과하고 일일 카운터 증가")
     void checkQuota_withinLimits_incrementsDailyCalls() {
         when(valueOperations.get(tokenKey())).thenReturn("0");
-        when(valueOperations.increment(dailyKey())).thenReturn(1L);
+        stubIncrement(1L);
 
         service.checkQuota(userId);
 
-        verify(valueOperations).increment(dailyKey());
+        verify(redisTemplate).execute(BetaQuotaService.INCREMENT_DAILY_CALL, List.of(dailyKey()), "172800");
     }
 
     @Test
@@ -173,44 +176,31 @@ class BetaQuotaServiceTest {
                 .isInstanceOf(CustomException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.BETA_QUOTA_EXCEEDED);
 
-        verify(valueOperations, never()).increment(dailyKey());
+        verify(redisTemplate, never()).execute(eq(BetaQuotaService.INCREMENT_DAILY_CALL), any(), any());
     }
 
     @Test
-    @DisplayName("releaseDailyCall(key) - 전달받은 키를 그대로 DECR한다")
-    void releaseDailyCall_decrementsCounter() {
-        when(valueOperations.decrement(dailyKey())).thenReturn(0L);
-
+    @DisplayName("releaseDailyCall(key) - 전달받은 키로 환불 스크립트를 한 번 실행한다")
+    void releaseDailyCall_runsReleaseScriptOnce() {
         service.releaseDailyCall(dailyKey());
 
-        verify(valueOperations).decrement(dailyKey());
+        verify(redisTemplate).execute(BetaQuotaService.RELEASE_DAILY_CALL, List.of(dailyKey()));
     }
 
     @Test
-    @DisplayName("releaseDailyCall(key) - DECR 결과가 음수면 0으로 보정(INCR)한다")
-    void releaseDailyCall_negativeResult_correctsToZero() {
-        when(valueOperations.decrement(dailyKey())).thenReturn(-1L);
-
+    @DisplayName("releaseDailyCall(key) - DECR 후 음수 보정을 개별 명령으로 하지 않는다(동시 환불 레이스 제거)")
+    void releaseDailyCall_doesNotCallDecrementOrIncrementSeparately() {
         service.releaseDailyCall(dailyKey());
 
-        verify(valueOperations).increment(dailyKey());
-    }
-
-    @Test
-    @DisplayName("releaseDailyCall(key) - DECR 결과가 0 이상이면 보정하지 않는다")
-    void releaseDailyCall_nonNegativeResult_doesNotCorrect() {
-        when(valueOperations.decrement(dailyKey())).thenReturn(5L);
-
-        service.releaseDailyCall(dailyKey());
-
-        verify(valueOperations, never()).increment(dailyKey());
+        verify(valueOperations, never()).decrement(anyString());
+        verify(valueOperations, never()).increment(anyString());
     }
 
     @Test
     @DisplayName("checkQuota/incrementAndCheckDailyCalls - 예약에 사용한 일일 카운터 키를 반환한다")
     void checkQuota_returnsUsedDailyKey() {
         when(valueOperations.get(tokenKey())).thenReturn("0");
-        when(valueOperations.increment(dailyKey())).thenReturn(1L);
+        stubIncrement(1L);
 
         String key = service.checkQuota(userId);
 
@@ -222,12 +212,16 @@ class BetaQuotaServiceTest {
             "LocalDate.now()로 재계산한 오늘 키는 건드리지 않는다")
     void releaseDailyCall_midnightBoundary_usesReservedKeyNotToday() {
         String yesterdayKey = "beta:calls:%s:20260101".formatted(userId);
-        when(valueOperations.decrement(yesterdayKey)).thenReturn(0L);
 
         service.releaseDailyCall(yesterdayKey);
 
-        verify(valueOperations).decrement(yesterdayKey);
-        verify(valueOperations, never()).decrement(dailyKey());
+        verify(redisTemplate).execute(BetaQuotaService.RELEASE_DAILY_CALL, List.of(yesterdayKey));
+        verify(redisTemplate, never()).execute(BetaQuotaService.RELEASE_DAILY_CALL, List.of(dailyKey()));
+    }
+
+    private void stubIncrement(long count) {
+        when(redisTemplate.execute(BetaQuotaService.INCREMENT_DAILY_CALL, List.of(dailyKey()), "172800"))
+                .thenReturn(count);
     }
 
     private String dailyKey() {
