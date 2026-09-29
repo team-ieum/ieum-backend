@@ -120,6 +120,9 @@ public class ExecutionJobQueueBootstrap implements ApplicationRunner {
             StreamOperations<String, String, String> ops = redisTemplate.opsForStream();
             PendingMessages pending =
                 ops.pending(STREAM_KEY, GROUP, Range.unbounded(), RECLAIM_LIMIT);
+            // XPENDING 성공 = Redis와 그룹이 살아 있다. 폴링 복구가 실패한 뒤 폴링이 조용히 되살아나면
+            // onPollError가 다시 불리지 않으므로, 트래픽과 무관하게 여기서 헬스를 되돌린다.
+            executionJobQueue.markConsumerHealthy();
             if (pending.isEmpty()) {
                 return;
             }
