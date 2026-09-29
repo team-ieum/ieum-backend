@@ -296,8 +296,9 @@ class WorkflowCleanupSchedulerTest {
         scheduler.expireWaitingApprovals();
 
         assertThat(nowCaptor.getValue()).isAfterOrEqualTo(before).isBeforeOrEqualTo(LocalDateTime.now());
-        // 만료는 소유자가 알아야 하는 실패다 — 알림을 거는 markAsFailed 경로를 그대로 탄다.
-        verify(workflowExecutionService).markAsFailed(expiredId, "승인 만료");
+        // 만료는 소유자가 알아야 하는 실패다 — 알림을 거는 markAsFailed 경로를 타되, 대기 실행만 끝내게 기대 상태를 준다.
+        verify(workflowExecutionService)
+            .markAsFailed(expiredId, "승인 만료", ExecutionStatus.WAITING_APPROVAL);
         // 멈출 때 EXECUTION_COMPLETED(WAITING_APPROVAL)로 스트림이 이미 닫혔다.
         verify(executionEventPublisher, never()).publish(any(), any());
         verify(executionEventPublisher, never()).complete(any());
@@ -310,7 +311,7 @@ class WorkflowCleanupSchedulerTest {
 
         scheduler.expireWaitingApprovals();
 
-        verify(workflowExecutionService, never()).markAsFailed(any(), any());
+        verify(workflowExecutionService, never()).markAsFailed(any(), any(), any());
     }
 
     @Test
@@ -320,12 +321,13 @@ class WorkflowCleanupSchedulerTest {
         UUID okId = UUID.randomUUID();
         given(workflowExecutionService.findExpiredApprovalExecutionIds(any()))
             .willReturn(List.of(failId, okId));
-        given(workflowExecutionService.markAsFailed(failId, "승인 만료"))
+        given(workflowExecutionService.markAsFailed(failId, "승인 만료", ExecutionStatus.WAITING_APPROVAL))
             .willThrow(new RuntimeException("DB 연결 오류"));
 
         scheduler.expireWaitingApprovals();
 
-        verify(workflowExecutionService).markAsFailed(okId, "승인 만료");
+        verify(workflowExecutionService)
+            .markAsFailed(okId, "승인 만료", ExecutionStatus.WAITING_APPROVAL);
     }
 
     // ─────────────────── 헬퍼 ──────────────────────────────────────────────

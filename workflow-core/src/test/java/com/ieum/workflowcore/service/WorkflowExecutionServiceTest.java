@@ -460,6 +460,8 @@ class WorkflowExecutionServiceTest {
             assertThat(row.getOutputJson()).isEqualTo("{\"approved\":true}");
             assertThat(row.getErrorMessage()).isNull();
             assertThat(row.getTraceId()).isEqualTo("11112222333344445555666677778888");
+            // 게이트는 실행되지 않은 노드다 — SKIPPED 행과 같은 규칙으로 시도 횟수 0.
+            assertThat(row.getAttemptCount()).isZero();
         });
     }
 
@@ -527,6 +529,59 @@ class WorkflowExecutionServiceTest {
 
         service.markAsFailed(executionId, "무시되어야 한다");
 
+        verify(execution, never()).fail();
+        verify(alertNotifier, never()).notifyExecutionFailed(any());
+    }
+
+    @Test
+    @DisplayName("2-인자 markAsFailed(sweeper·워커·러너)는 승인 대기 실행을 끝내지 않는다 — 승인·거부·만료만 끝낼 수 있다")
+    void markAsFailed_waitingApproval_leavesUntouched() {
+        UUID executionId = UUID.randomUUID();
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        given(execution.getStatus()).willReturn(ExecutionStatus.WAITING_APPROVAL);
+        given(workflowExecutionRepository.findByIdForUpdate(executionId)).willReturn(Optional.of(execution));
+
+        Optional<UUID> result = service.markAsFailed(executionId, "프로세스 이상 종료 추정");
+
+        assertThat(result).isEmpty();
+        verify(execution, never()).fail();
+        verify(execution, never()).recordError(any());
+        verify(alertNotifier, never()).notifyExecutionFailed(any());
+    }
+
+    @Test
+    @DisplayName("만료 경로(기대 상태 WAITING_APPROVAL)는 대기 실행을 '승인 만료'로 FAILED 확정하고 알린다")
+    void markAsFailed_expectedWaitingApproval_expiresAndAlerts() {
+        UUID executionId = UUID.randomUUID();
+        UUID workflowId = UUID.randomUUID();
+        Workflow workflow = mock(Workflow.class);
+        given(workflow.getId()).willReturn(workflowId);
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        given(execution.getStatus()).willReturn(ExecutionStatus.WAITING_APPROVAL);
+        given(execution.getWorkflow()).willReturn(workflow);
+        given(workflowExecutionRepository.findByIdForUpdate(executionId)).willReturn(Optional.of(execution));
+
+        Optional<UUID> result =
+            service.markAsFailed(executionId, "승인 만료", ExecutionStatus.WAITING_APPROVAL);
+
+        assertThat(result).contains(workflowId);
+        verify(execution).fail();
+        verify(execution).recordError("승인 만료");
+        verify(alertNotifier).notifyExecutionFailed(any());
+    }
+
+    @Test
+    @DisplayName("만료 경로는 기대 상태가 아닌 실행(RUNNING)을 건드리지 않는다")
+    void markAsFailed_expectedWaitingApproval_runningRow_noop() {
+        UUID executionId = UUID.randomUUID();
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        given(execution.getStatus()).willReturn(ExecutionStatus.RUNNING);
+        given(workflowExecutionRepository.findByIdForUpdate(executionId)).willReturn(Optional.of(execution));
+
+        Optional<UUID> result =
+            service.markAsFailed(executionId, "승인 만료", ExecutionStatus.WAITING_APPROVAL);
+
+        assertThat(result).isEmpty();
         verify(execution, never()).fail();
         verify(alertNotifier, never()).notifyExecutionFailed(any());
     }

@@ -46,9 +46,9 @@
 - 루프가 끝나면: 실패 있음 → `FAILED`(실패가 대기보다 우선) / 대기 게이트 있음 → `pauseForApproval` 조건부 UPDATE(`RUNNING`일 때만)로 `WAITING_APPROVAL` + `EXECUTION_COMPLETED(WAITING_APPROVAL)` / 둘 다 없음 → `SUCCESS`. 0행이면 `publishAlreadyFinished`. **실패 알림 없음**
 - `dispatch()`에서 사전 완료 검사가 executor 조회보다 **먼저**다 — 승인 뒤 이어진 실행에서 게이트는 재처리 스킵 경로(SKIPPED)로 통과한다. 순서를 뒤집으면 APPROVAL에서 "NodeExecutor 없음"이 난다. `execute()`의 executor 사전 검증도 APPROVAL만 뺀다
 - CONDITION 죽은 분기의 게이트는 dispatch되지 않아 대기에 들지 않는다. 그래서 대기 집합을 그래프에서 역산하지 않고 `waiting_approval_node_ids`에 저장한다
-- 승인(api `ExecutionApprovalService`) = 게이트마다 `node_runs` SUCCESS 행(출력 `{approved, approvedBy, approvedAt}`, `WorkflowExecutionService.recordApprovalDecision`) + 원 실행 SUCCESS + 재처리와 같은 경로로 이어진 새 실행(`retriedBy` 링크). 거부 = 게이트 FAILED 행 + 원 실행 FAILED(`error_message = "승인 거부: <사유>"`, 사유 없으면 `"승인 거부"`), 알림 없음. 만료 = sweeper가 `markAsFailed("승인 만료")`, 알림 있음
+- 승인(api `ExecutionApprovalService`) = 게이트마다 `node_runs` SUCCESS 행(출력 `{approved, approvedBy, approvedAt}`, `WorkflowExecutionService.recordApprovalDecision`) + 원 실행 SUCCESS + 재처리와 같은 경로로 이어진 새 실행(`retriedBy` 링크). 거부 = 게이트 FAILED 행 + 원 실행 FAILED(`error_message = "승인 거부: <사유>"`, 사유 없으면 `"승인 거부"`), 알림 없음. 만료 = sweeper가 `markAsFailed(id, "승인 만료", WAITING_APPROVAL)`, 알림 있음
 - 거부된 실행의 게이트 FAILED 행은 재사용 대상(SUCCESS·SKIPPED)이 아니고 만료된 실행엔 게이트 행 자체가 없어, 재처리해도 게이트가 다시 멈춘다 — 우회 경로 없음
-- `WAITING_APPROVAL`은 런타임·워커 입장에서 종료 상태다: `startIfNotTerminal`·`finishIfNotTerminal`·`ExecutionJobWorker`·`loadEventSnapshot`이 전부 종료로 취급한다
+- `WAITING_APPROVAL`은 런타임·워커 입장에서 종료 상태다: `startIfNotTerminal`·`finishIfNotTerminal`·`ExecutionJobWorker`·`loadEventSnapshot`이 전부 종료로 취급한다. 2-인자 `markAsFailed`(고립 sweeper·워커·러너)도 `PENDING`·`RUNNING`만 끝내고 대기는 건드리지 않는다 — **대기를 끝내는 건 승인·거부·만료뿐이다**
 
 ### 노드 타입 (NodeType)
 `TRIGGER`, `AI`, `CONDITION`, `HTTP`, `TRANSFORM`, `APPROVAL` — 6종. 외부 서비스(Gmail·Notion 등) 연동은 별도 노드 타입이 아니라 AI 노드의 도구/HTTP 노드로 처리한다. `APPROVAL`은 NodeExecutor가 없다(위 "승인 게이트").
@@ -130,10 +130,10 @@ Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `Sche
 `WorkflowScheduleJob`은 `ExecutionJobEnqueuer`로 api의 잡 큐에 넣고 바로 반환한다(IEUM-BE-51) — 수동·웹훅·재처리와 같은 재시작 복구를 받는다. 투입이 실패하면(Redis 장애·Stub) 유실되지 않게 `SyncExecutionRuntime`을 직접 부르고, 이 경우만 내구성이 없다.
 **겹침 방지는 `@DisallowConcurrentExecution`만으로 성립하지 않는다** — 잡이 실행 끝까지 블록하지 않으니 다음 발화가 그대로 들어온다. 그래서 같은 워크플로우에 끝나지 않은(PENDING/RUNNING) SCHEDULE 실행이 있으면 `prepareExecution` 전에 스킵한다(`WorkflowExecutionService.hasUnfinishedScheduleRun`). 판정은 `startedAt > now - workflow.execution.stuck.threshold`로 하한을 둔다 — sweeper는 `RUNNING`만 정리하므로 준비만 되고 버려진 고아 `PENDING`이 하한 없이 잡히면 그 스케줄이 **영구히 멈춘다.** `@DisallowConcurrentExecution`은 여전히 필요하다(JobKey가 워크플로우당 1개라 판정↔레코드 생성 사이에 다른 발화가 끼지 않게 직렬화). 재처리 API가 만든 실행도 원본의 `triggerType`(SCHEDULE)을 물려받으므로 겹침 판정에 걸린다.
 
-`WorkflowCleanupScheduler`는 세 가지를 돈다(둘 다 `@Scheduled` cron, Quartz 아님):
+`WorkflowCleanupScheduler`는 세 가지를 돈다(셋 다 `@Scheduled` cron, Quartz 아님):
 - `cleanupOrphanWorkflows()` — 고아 빈 워크플로우 hard delete
 - `failStuckRunningExecutions()` — **고립 `RUNNING` 실행 sweeper**(IEUM-BE-50). 프로세스가 죽어 런타임이 종료 처리를 못 한 실행은 영원히 `RUNNING`으로 남고, 재처리 API가 `FAILED`만 받으므로 다시 돌릴 수 없다. 재처리로 생긴 실행이 이렇게 굳으면 원본까지 "재처리 진행 중"으로 판정돼 **영구히 막힌다.** 확정은 `WorkflowExecutionService.markAsFailed()`에 맡긴다 — 런타임 밖 실패 확정 경로가 이미 종료 상태 가드·알림·커밋 후 발신을 갖췄다. 런타임의 `finalizeFailure`는 실행 중 인스턴스 상태를 쥔 private 경로라 타지 않는다. `retryExhausted`는 false(재시도 소진이 아니라 재시도 판정 자체가 못 이뤄진 실패)
-- `expireWaitingApprovals()` — 승인 기한(`approval_deadline`)이 지난 `WAITING_APPROVAL`을 `markAsFailed(id, "승인 만료")`로 확정(IEUM-BE-45). 행 잠금이라 같은 순간의 승인·거부와 하나만 이긴다. SSE는 건드리지 않는다(멈출 때 이미 닫혔다). 정밀도는 주기(10분)
+- `expireWaitingApprovals()` — 승인 기한(`approval_deadline`)이 지난 `WAITING_APPROVAL`을 `markAsFailed(id, "승인 만료", WAITING_APPROVAL)`로 확정(IEUM-BE-45) — 기대 상태를 넘겨 그 사이 승인·거부로 끝난 실행은 건드리지 않는다. 행 잠금이라 같은 순간의 승인·거부와 하나만 이긴다. SSE는 건드리지 않는다(멈출 때 이미 닫혔다). 정밀도는 주기(10분)
 
 ## 설정 (workflow-core가 읽는 키)
 | 키 | 기본값 | 용도 |

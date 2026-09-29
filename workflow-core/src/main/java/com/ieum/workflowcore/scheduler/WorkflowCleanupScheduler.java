@@ -138,8 +138,9 @@ public class WorkflowCleanupScheduler {
     /**
      * 기한({@code approvalDeadline})이 지난 승인 대기 실행을 {@code FAILED("승인 만료")}로 확정한다.
      *
-     * <p>확정은 {@link WorkflowExecutionService#markAsFailed}에 맡긴다 — 행 잠금이라 같은 순간의
-     * 승인·거부와 하나만 이기고, 만료는 소유자가 알아야 하는 실패라 그 경로의 실패 알림을 그대로 쓴다.
+     * <p>확정은 {@link WorkflowExecutionService#markAsFailed(UUID, String, ExecutionStatus)}에 기대 상태
+     * {@code WAITING_APPROVAL}로 맡긴다 — 행 잠금이라 같은 순간의 승인·거부와 하나만 이기고(진 쪽은 no-op),
+     * 만료는 소유자가 알아야 하는 실패라 그 경로의 실패 알림을 그대로 쓴다.
      * 정밀도는 이 스케줄 주기(10분)다.
      *
      * <p>SSE는 건드리지 않는다 — 런타임이 멈출 때 {@code EXECUTION_COMPLETED(WAITING_APPROVAL)}로 이미
@@ -155,7 +156,8 @@ public class WorkflowCleanupScheduler {
         log.info("[WorkflowCleanupScheduler] 승인 기한 만료 — {}건", expiredIds.size());
         for (UUID executionId : expiredIds) {
             try {
-                workflowExecutionService.markAsFailed(executionId, "승인 만료");
+                workflowExecutionService.markAsFailed(
+                    executionId, "승인 만료", ExecutionStatus.WAITING_APPROVAL);
             } catch (Exception e) {
                 log.error("[WorkflowCleanupScheduler] 승인 만료 확정 실패 — executionId: {}",
                     executionId, e);

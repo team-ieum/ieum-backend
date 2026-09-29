@@ -594,6 +594,41 @@ class ExecutionRetryQueueIntegrationTest {
     }
 
     @Test
+    @DisplayName("하류에 또 게이트가 있으면 이어진 실행이 거기서 다시 멈추고, 두 번째 승인 뒤엔 마지막 구간만 실행된다")
+    void approve_chainedGates_pausesAgainAtNextGate() {
+        // t → a → g1 → b → g2 → c
+        WorkflowDefinitionDocument definition = WorkflowDefinitionDocument.builder()
+            .nodes(List.of(node("t", "TRIGGER"), node("a", "AI"), node("g1", "APPROVAL"),
+                node("b", "AI"), node("g2", "APPROVAL"), node("c", "AI")))
+            .edges(List.of(edge("t", "a"), edge("a", "g1"), edge("g1", "b"),
+                edge("b", "g2"), edge("g2", "c")))
+            .build();
+        when(crudService.loadDefinition(any())).thenReturn(definition);
+        WorkflowExecution original = givenPausedOriginal();
+        assertThat(original.waitingApprovalNodeIdList()).containsExactly("g1");
+
+        UUID firstId = approveAndCommit(original.getId());
+        consumeOneJob();
+
+        WorkflowExecution first = rows.get(firstId);
+        assertThat(first.getStatus()).isEqualTo(ExecutionStatus.WAITING_APPROVAL);
+        assertThat(first.waitingApprovalNodeIdList()).containsExactly("g2");
+        assertThat(aiCalls).containsExactly("a", "b");   // c는 두 번째 게이트에 막혔다
+
+        UUID secondId = approveAndCommit(firstId);
+        consumeOneJob();
+
+        assertThat(first.getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
+        assertThat(first.getRetriedByExecutionId()).isEqualTo(secondId);
+        assertThat(rows.get(secondId).getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
+        // 앞 구간은 직전 실행의 SUCCESS·SKIPPED 출력을 재사용해 SKIPPED로 지나고 c만 실행된다.
+        for (String nodeId : List.of("a", "g1", "b", "g2")) {
+            assertThat(nodeRunOf(secondId, nodeId).getStatus()).isEqualTo(ExecutionLogStatus.SKIPPED);
+        }
+        assertThat(aiCalls).containsExactly("a", "b", "c");
+    }
+
+    @Test
     @DisplayName("거부된 실행을 재처리해도 게이트를 우회하지 않고 다시 승인 대기로 멈춘다")
     void rejectedExecution_retry_pausesAgainAtGate() {
         stubGatedDefinition();
