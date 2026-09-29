@@ -21,6 +21,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.test.web.client.MockRestServiceServer;
@@ -29,8 +30,8 @@ import org.springframework.web.client.RestTemplate;
 /**
  * 프로바이더 키 검증의 판정 규칙을 고정한다 (IEUM-BE-66).
  *
- * <p>Claude·OpenAI는 검증 요청 자체(메서드·URL·모델)가 바뀔 예정이라 요청 모양은 단언하지 않고
- * 판정 결과만 본다.
+ * <p>세 프로바이더 모두 모델 목록 GET으로 검증하므로, 요청 모양은 프로바이더별로 보고 응답 판정은
+ * 프로바이더를 가리지 않고 같은지 본다.
  */
 class CredentialValidatorTest {
 
@@ -60,6 +61,35 @@ class CredentialValidatorTest {
         assertThat(result.failureReason()).isNull();
     }
 
+    @Test
+    @DisplayName("Claude는 x-api-key·anthropic-version 헤더로 모델 목록을 조회한다 — 200이면 유효")
+    void claudeOkIsValid() {
+        server.expect(requestTo("https://api.anthropic.com/v1/models"))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("x-api-key", "claude-key"))
+            .andExpect(header("anthropic-version", "2023-06-01"))
+            .andRespond(withSuccess());
+
+        CredentialValidationResult result = validator.validate(AiProvider.CLAUDE, "claude-key");
+
+        assertThat(result.valid()).isTrue();
+        assertThat(result.provider()).isEqualTo("CLAUDE");
+    }
+
+    @Test
+    @DisplayName("OpenAI는 Bearer 헤더로 모델 목록을 조회한다 — 200이면 유효")
+    void openAiOkIsValid() {
+        server.expect(requestTo("https://api.openai.com/v1/models"))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Authorization", "Bearer openai-key"))
+            .andRespond(withSuccess());
+
+        CredentialValidationResult result = validator.validate(AiProvider.OPENAI, "openai-key");
+
+        assertThat(result.valid()).isTrue();
+        assertThat(result.provider()).isEqualTo("OPENAI");
+    }
+
     @ParameterizedTest(name = "{0} {1}")
     @CsvSource({
         "CLAUDE, 401", "CLAUDE, 403",
@@ -77,38 +107,51 @@ class CredentialValidatorTest {
         assertThat(result.failureReason()).isNotBlank();
     }
 
-    @Test
-    @DisplayName("Gemini 429는 판정하지 않고 PROVIDER_UNAVAILABLE — 본문에 quota가 있어도 결제 오류로 보지 않는다")
-    void geminiRateLimitIsUndetermined() {
-        server.expect(requestTo(GEMINI_MODELS_URL))
+    @ParameterizedTest
+    @EnumSource(AiProvider.class)
+    @DisplayName("429는 판정하지 않고 PROVIDER_UNAVAILABLE — 본문에 quota·billing이 있어도 결제 오류로 보지 않는다")
+    void rateLimitIsUndetermined(AiProvider provider) {
+        server.expect(anything())
             .andRespond(withStatus(HttpStatusCode.valueOf(429))
-                .body("{\"error\":{\"status\":\"RESOURCE_EXHAUSTED\",\"message\":\"Quota exceeded\"}}"));
+                .body("{\"error\":{\"message\":\"You exceeded your current quota, please check your plan and billing details.\"}}"));
 
-        assertErrorCode(AiProvider.GEMINI, ErrorCode.PROVIDER_UNAVAILABLE);
+        assertErrorCode(provider, ErrorCode.PROVIDER_UNAVAILABLE);
     }
 
-    @Test
+    @ParameterizedTest
+    @EnumSource(AiProvider.class)
+    @DisplayName("402면 CREDENTIAL_NO_BILLING")
+    void paymentRequiredIsNoBilling(AiProvider provider) {
+        server.expect(anything()).andRespond(withStatus(HttpStatusCode.valueOf(402)));
+
+        assertErrorCode(provider, ErrorCode.CREDENTIAL_NO_BILLING);
+    }
+
+    @ParameterizedTest
+    @EnumSource(AiProvider.class)
     @DisplayName("5xx면 PROVIDER_UNAVAILABLE")
-    void serverErrorIsProviderUnavailable() {
-        server.expect(requestTo(GEMINI_MODELS_URL)).andRespond(withServerError());
+    void serverErrorIsProviderUnavailable(AiProvider provider) {
+        server.expect(anything()).andRespond(withServerError());
 
-        assertErrorCode(AiProvider.GEMINI, ErrorCode.PROVIDER_UNAVAILABLE);
+        assertErrorCode(provider, ErrorCode.PROVIDER_UNAVAILABLE);
     }
 
-    @Test
+    @ParameterizedTest
+    @EnumSource(AiProvider.class)
     @DisplayName("응답 시간 초과면 CREDENTIAL_VALIDATION_TIMEOUT")
-    void timeoutIsValidationTimeout() {
-        server.expect(requestTo(GEMINI_MODELS_URL)).andRespond(withException(new SocketTimeoutException()));
+    void timeoutIsValidationTimeout(AiProvider provider) {
+        server.expect(anything()).andRespond(withException(new SocketTimeoutException()));
 
-        assertErrorCode(AiProvider.GEMINI, ErrorCode.CREDENTIAL_VALIDATION_TIMEOUT);
+        assertErrorCode(provider, ErrorCode.CREDENTIAL_VALIDATION_TIMEOUT);
     }
 
-    @Test
+    @ParameterizedTest
+    @EnumSource(AiProvider.class)
     @DisplayName("연결 실패면 CREDENTIAL_VALIDATION_NETWORK_ERROR")
-    void connectFailureIsNetworkError() {
-        server.expect(requestTo(GEMINI_MODELS_URL)).andRespond(withException(new ConnectException()));
+    void connectFailureIsNetworkError(AiProvider provider) {
+        server.expect(anything()).andRespond(withException(new ConnectException()));
 
-        assertErrorCode(AiProvider.GEMINI, ErrorCode.CREDENTIAL_VALIDATION_NETWORK_ERROR);
+        assertErrorCode(provider, ErrorCode.CREDENTIAL_VALIDATION_NETWORK_ERROR);
     }
 
     private void assertErrorCode(AiProvider provider, ErrorCode expected) {
