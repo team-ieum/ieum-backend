@@ -124,7 +124,8 @@ class SyncExecutionRuntimeTest {
         when(execution.getWorkflow()).thenReturn(workflow);
         when(execution.getTraceId()).thenReturn("11112222333344445555666677778888");
         when(executionRepository.findWithWorkflowById(executionId)).thenReturn(Optional.of(execution));
-        // 기본은 "아직 종료되지 않은 실행" — 조건부 종료 UPDATE가 행 1개를 전이시킨다.
+        // 기본은 "아직 종료되지 않은 실행" — 조건부 시작·종료 UPDATE가 행 1개를 전이시킨다.
+        when(executionRepository.startIfNotTerminal(any(), any())).thenReturn(1);
         when(executionRepository.finishIfNotTerminal(any(), any(), anyBoolean(), any())).thenReturn(1);
 
         log = new ConcurrentLinkedQueue<>();
@@ -311,6 +312,31 @@ class SyncExecutionRuntimeTest {
             org.mockito.ArgumentMatchers.argThat(
                 event -> event.type() == ExecutionEventType.EXECUTION_COMPLETED));
         verify(eventPublisher).complete(executionId);
+    }
+
+    @Test
+    @DisplayName("시작 전에 sweeper가 FAILED로 확정한 실행은 RUNNING으로 되돌리지 않고 노드도 실행하지 않는다")
+    void start_afterExternalFailed_doesNotRunNodes() throws Exception {
+        when(executionRepository.startIfNotTerminal(any(), any())).thenReturn(0);
+        WorkflowExecution failedRow = mock(WorkflowExecution.class);
+        when(failedRow.getStatus()).thenReturn(ExecutionStatus.FAILED);
+        when(executionRepository.findById(executionId)).thenReturn(Optional.of(failedRow));
+        stubDefinition(
+            List.of(node("t", "TRIGGER"), node("a", "AI")),
+            List.of(edge("t", "a", null))
+        );
+
+        run();
+
+        assertThat(log).isEmpty();
+        verify(executionRepository, never()).save(any());
+        verify(executionRepository, never()).finishIfNotTerminal(any(), any(), anyBoolean(), any());
+        verify(eventPublisher).publish(eq(executionId),
+            org.mockito.ArgumentMatchers.argThat(
+                event -> event.type() == ExecutionEventType.EXECUTION_COMPLETED
+                    && event.executionStatus() == ExecutionStatus.FAILED));
+        verify(eventPublisher).complete(executionId);
+        verify(alertNotifier, never()).notifyExecutionFailed(any());
     }
 
     @Test

@@ -76,6 +76,23 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
                             @Param("retryExhausted") boolean retryExhausted,
                             @Param("now") LocalDateTime now);
 
+    /**
+     * 아직 종료되지 않은 실행만 {@code RUNNING}으로 전이한다. 전이했으면 1, 이미 종료됐으면 0.
+     *
+     * <p>{@link #finishIfNotTerminal}과 같은 이유다 — 시작 시점에 {@code save()}하면 워커의 종료 확인
+     * 이후 sweeper가 확정한 FAILED·{@code error_message}를 RUNNING으로 되돌린다.
+     * {@code startedAt}은 재처리·회수 재실행에서도 지금으로 덮는다({@code start()}와 같다).
+     */
+    @Transactional
+    @Modifying
+    @Query("UPDATE WorkflowExecution e "
+        + "SET e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.RUNNING, "
+        + "e.startedAt = :now, e.updatedAt = :now "
+        + "WHERE e.id = :id AND e.status NOT IN ("
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.SUCCESS, "
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.FAILED)")
+    int startIfNotTerminal(@Param("id") UUID id, @Param("now") LocalDateTime now);
+
     List<WorkflowExecution> findByWorkflow(Workflow workflow);
 
     @Modifying(clearAutomatically = true)

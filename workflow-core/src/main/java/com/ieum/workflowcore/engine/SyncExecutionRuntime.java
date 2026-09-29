@@ -197,9 +197,11 @@ public class SyncExecutionRuntime {
                 }
             }
 
-            // 3. RUNNING 상태로 전환
-            execution.start();
-            workflowExecutionRepository.save(execution);
+            // 3. RUNNING 상태로 전환 — 종료 전이와 같은 조건부 UPDATE(save()는 sweeper의 FAILED·사유를 되돌린다)
+            if (workflowExecutionRepository.startIfNotTerminal(executionId, LocalDateTime.now()) == 0) {
+                publishAlreadyFinished(executionId, workflowId, ExecutionStatus.RUNNING);
+                return;
+            }
 
             // 4. 위상 스케줄러 상태: pending=미해소 incoming 수, hasLive=live 입력 보유 여부
             Map<String, Integer> pending = new HashMap<>();
@@ -310,14 +312,7 @@ public class SyncExecutionRuntime {
             // 메모리 엔티티를 save()하면 그사이 sweeper가 확정한 FAILED·사유를 덮어쓴다 — 조건부 전이만 한다.
             if (workflowExecutionRepository.finishIfNotTerminal(
                     executionId, ExecutionStatus.SUCCESS, false, LocalDateTime.now()) == 0) {
-                // 종료 이벤트는 여기서 흘린다 — 외부 종료자의 이벤트는 finally가 스트림을 닫은 뒤 새 Sink로
-                // 흩어질 수 있다. 상태는 DB 값을 쓴다(중복 런타임이 SUCCESS로 끝냈을 수도 있다).
-                ExecutionStatus finalStatus = workflowExecutionRepository.findById(executionId)
-                    .map(WorkflowExecution::getStatus).orElse(ExecutionStatus.FAILED);
-                log.warn("[Runtime] 이미 종료된 실행이라 SUCCESS로 전이하지 않음 — executionId: {}, DB 상태: {}",
-                    executionId, finalStatus);
-                eventPublisher.publish(executionId,
-                    ExecutionEvent.executionCompleted(executionId, workflowId, finalStatus));
+                publishAlreadyFinished(executionId, workflowId, ExecutionStatus.SUCCESS);
                 return;
             }
             log.info("[Runtime] 워크플로우 성공 — executionId: {}", execution.getId());
@@ -334,6 +329,20 @@ public class SyncExecutionRuntime {
             // 성공·노드 실패(return)·예외 등 모든 종료 경로에서 SSE 스트림을 닫는다.
             eventPublisher.complete(executionId);
         }
+    }
+
+    /**
+     * 다른 종료자(sweeper·중복 런타임)가 먼저 끝낸 실행의 종료 이벤트를 흘린다. 그쪽 이벤트는 finally가
+     * 스트림을 닫은 뒤 새 Sink로 흩어질 수 있어 여기서 직접 낸다. 상태는 DB 값을 쓴다 —
+     * 중복 런타임이 SUCCESS로 끝냈을 수도 있다.
+     */
+    private void publishAlreadyFinished(UUID executionId, UUID workflowId, ExecutionStatus attempted) {
+        ExecutionStatus finalStatus = workflowExecutionRepository.findById(executionId)
+            .map(WorkflowExecution::getStatus).orElse(ExecutionStatus.FAILED);
+        log.warn("[Runtime] 이미 종료된 실행이라 {} 전이 생략 — executionId: {}, DB 상태: {}",
+            attempted, executionId, finalStatus);
+        eventPublisher.publish(executionId,
+            ExecutionEvent.executionCompleted(executionId, workflowId, finalStatus));
     }
 
     /**

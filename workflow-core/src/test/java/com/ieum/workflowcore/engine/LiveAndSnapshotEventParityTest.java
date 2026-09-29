@@ -106,6 +106,7 @@ class LiveAndSnapshotEventParityTest {
         when(execution.getTraceId()).thenReturn("11112222333344445555666677778888");
         when(executionRepository.findWithWorkflowById(executionId)).thenReturn(Optional.of(execution));
         when(executionRepository.findById(executionId)).thenReturn(Optional.of(execution));
+        when(executionRepository.startIfNotTerminal(any(), any())).thenReturn(1);
         when(executionRepository.finishIfNotTerminal(any(), any(), anyBoolean(), any())).thenReturn(1);
     }
 
