@@ -1,6 +1,7 @@
 package com.ieum.workflowcore.engine.executor;
 
 import java.util.UUID;
+import org.slf4j.LoggerFactory;
 
 /**
  * 베타 플랫폼 키(IEUM 소유 Gemini 키) 자격·쿼터 게이트 포트 인터페이스.
@@ -49,6 +50,24 @@ public interface BetaPlatformProvider {
      * @param reservationKey reserveQuota가 반환한 일일 카운터 키
      */
     void releaseDailyCall(String reservationKey);
+
+    /**
+     * {@link #releaseDailyCall(String)}의 best-effort 버전 — agent 호출 실패 뒤 환불 경로에서 쓴다.
+     * 키가 null(예약 전에 실패)이면 no-op이고, 환불 실패는 원래 실패를 가리지 않도록 warn만 남긴다.
+     *
+     * @param reservationKey reserveQuota가 반환한 일일 카운터 키 (null 허용)
+     */
+    default void releaseQuietly(String reservationKey) {
+        if (reservationKey == null) {
+            return;
+        }
+        try {
+            releaseDailyCall(reservationKey);
+        } catch (Exception e) {
+            LoggerFactory.getLogger(BetaPlatformProvider.class)
+                .warn("[BetaPlatformProvider] 베타 일일 카운터 환불 실패 — key: {}", reservationKey, e);
+        }
+    }
 
     /**
      * 재시도 모델 fallback 후보가 베타 플랫폼 키로 호출 가능한 모델인지 확인한다.

@@ -132,7 +132,7 @@ public class AgentNodeExecutor implements NodeExecutor {
             injectWebhookUrls(tools, userId);
 
             // credentialId가 없으면 키 없이 전달 — self-hosted 자격(ADMIN/TESTER role)이 최우선이며,
-            // 이 경우 agent가 라우팅/차단을 판단한다(ChatService.isSelfHostedEligible과 동일 우선순위).
+            // 이 경우 agent가 라우팅/차단을 판단한다(ChatService와 동일 우선순위).
             // self-hosted 자격이 없을 때만 베타 자격(User.betaAccess)을 확인해 플랫폼 Gemini 키로 폴백한다.
             // 쿼터 예약(INCR)은 위 사전작업이 모두 끝난 뒤, agent 호출 바로 직전에 한다 — 그 앞에서 예외가
             // 나면 INCR 자체가 없으므로 환불이 필요 없다. 쿼터 초과로 reserveQuota가 거부하면
@@ -141,7 +141,7 @@ public class AgentNodeExecutor implements NodeExecutor {
             String decryptedApiKey = null;
             if (credentialId != null && !credentialId.isBlank()) {
                 decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId, userId);
-            } else if (!isSelfHostedEligible(userRole) && userId != null && betaPlatformProvider.isBetaEligible(userId)) {
+            } else if (!UserRoleProvider.isSelfHostedEligible(userRole) && userId != null && betaPlatformProvider.isBetaEligible(userId)) {
                 betaReservationKey = betaPlatformProvider.reserveQuota(userId);
                 useBetaPlatformKey = true;
             }
@@ -164,7 +164,7 @@ public class AgentNodeExecutor implements NodeExecutor {
 
             if (policy != null && policy.idempotency().usesMarker()) {
                 if (!idempotencyStore.markInFlight(attempt.idempotencyKey(), NodeExecutor.markerTtl(policy))) {
-                    releaseBetaQuotaOnFailure(betaReservationKey);
+                    betaPlatformProvider.releaseQuietly(betaReservationKey);
                     log.warn("[AgentNodeExecutor] 멱등성 마커 충돌로 호출 차단 — nodeId: {}", node.getId());
                     return ExecutorResult.failure(
                         "중복 호출 차단 — 이전 시도가 외부 서비스에 도달했을 수 있어 재시도를 중단합니다.",
@@ -182,7 +182,7 @@ public class AgentNodeExecutor implements NodeExecutor {
                 cursor.getContext().getTraceId(), idempotencyHeaderKey);
 
             if (!agentResult.isSuccess()) {
-                releaseBetaQuotaOnFailure(betaReservationKey);
+                betaPlatformProvider.releaseQuietly(betaReservationKey);
                 log.error("[AgentNodeExecutor] 에이전트 실행 실패 — nodeId: {}, error: {}",
                     node.getId(), agentResult.getErrorMessage());
                 return ExecutorResult.failure(agentResult.getErrorMessage(),
@@ -212,16 +212,11 @@ public class AgentNodeExecutor implements NodeExecutor {
                 toTokenUsage(agentResult.getUsage()));
 
         } catch (Exception e) {
-            releaseBetaQuotaOnFailure(betaReservationKey);
+            betaPlatformProvider.releaseQuietly(betaReservationKey);
             log.error("[AgentNodeExecutor] 실행 실패 — nodeId: {}", node.getId(), e);
             return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime,
                 FailureClassifier.fromException(e));
         }
-    }
-
-    /** 자체 호스팅 LLM(키 없음) 경로 자격 — ChatService.isSelfHostedEligible과 동일 판정. */
-    private static boolean isSelfHostedEligible(String userRole) {
-        return "ROLE_ADMIN".equals(userRole) || "ROLE_TESTER".equals(userRole);
     }
 
     /**
@@ -254,24 +249,6 @@ public class AgentNodeExecutor implements NodeExecutor {
                 + "originalModel: {}, fallbackModel: {}",
             nodeId, attempt.attempt(), originalModel, candidate);
         return candidate;
-    }
-
-    /**
-     * 베타 platform 키로 쿼터를 예약(INCR)했는데 이후 agent 호출이 실패/예외로 끝난 경우에만
-     * 일일 호출 카운터를 환불한다(best-effort). reserveQuota 자체가 실패(쿼터 초과)한 경우는
-     * betaReservationKey가 세팅되지 않으므로 이 메서드가 호출돼도 자연히 무시된다.
-     *
-     * @param betaReservationKey reserveQuota가 반환한 키(자정 경계에도 reserve와 동일한 날짜 키를 환불)
-     */
-    private void releaseBetaQuotaOnFailure(String betaReservationKey) {
-        if (betaReservationKey == null) {
-            return;
-        }
-        try {
-            betaPlatformProvider.releaseDailyCall(betaReservationKey);
-        } catch (Exception e) {
-            log.warn("[AgentNodeExecutor] 베타 일일 카운터 환불 실패 — key: {}", betaReservationKey, e);
-        }
     }
 
     /** agent 응답 usage를 엔진 표준 타입으로 변환한다. usage가 없으면 null. */

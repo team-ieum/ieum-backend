@@ -38,6 +38,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Answers;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -78,7 +79,7 @@ class ChatServiceTest {
     @Mock private AgentClient agentClient;
     @Mock private McpServerCatalogRepository mcpServerCatalogRepository;
     @Mock private WebhookCredentialRepository webhookCredentialRepository;
-    @Mock private BetaPlatformProvider betaPlatformProvider;
+    @Mock(answer = Answers.CALLS_REAL_METHODS) private BetaPlatformProvider betaPlatformProvider;
 
     @InjectMocks
     private ChatService chatService;

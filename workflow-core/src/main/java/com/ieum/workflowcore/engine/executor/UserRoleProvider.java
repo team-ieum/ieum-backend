@@ -19,4 +19,9 @@ public interface UserRoleProvider {
      * @return role 문자열, 사용자를 찾을 수 없으면 null
      */
     String findRoleByUserId(UUID userId);
+
+    /** 자체 호스팅 LLM(키 없음) 경로 자격 — 최종 게이트는 agent의 credential 검증이 담당한다. */
+    static boolean isSelfHostedEligible(String userRole) {
+        return "ROLE_ADMIN".equals(userRole) || "ROLE_TESTER".equals(userRole);
+    }
 }

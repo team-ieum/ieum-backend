@@ -25,6 +25,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -602,7 +603,7 @@ class AgentNodeExecutorTest {
     @DisplayName("credentialId 없음 + 베타 자격 - X-Key-Mode:platform, X-LLM-Provider:GEMINI, 키 헤더 없음")
     void execute_credentialIdMissingAndBetaEligible_usesPlatformKeyHeaders() throws InterruptedException {
         UUID userId = UUID.randomUUID();
-        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class, CALLS_REAL_METHODS);
         when(betaProvider.isBetaEligible(userId)).thenReturn(true);
         AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
 
@@ -629,7 +630,7 @@ class AgentNodeExecutorTest {
     @DisplayName("credentialId 있음(BYOK) - 베타 자격이어도 platform 미적용, 기존 키 헤더 유지")
     void execute_credentialIdPresent_ignoresBetaEvenIfEligible() throws InterruptedException {
         UUID userId = UUID.randomUUID();
-        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class, CALLS_REAL_METHODS);
         when(betaProvider.isBetaEligible(userId)).thenReturn(true);
         AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
 
@@ -655,7 +656,7 @@ class AgentNodeExecutorTest {
     @DisplayName("credentialId 없음 + 베타 비자격 - 기존 keyless(self-hosted) 경로 유지, platform 헤더 없음")
     void execute_credentialIdMissingAndBetaNotEligible_keepsExistingKeylessBehavior() throws InterruptedException {
         UUID userId = UUID.randomUUID();
-        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class, CALLS_REAL_METHODS);
         when(betaProvider.isBetaEligible(userId)).thenReturn(false);
         AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
 
@@ -681,7 +682,7 @@ class AgentNodeExecutorTest {
     @DisplayName("베타 쿼터 초과 - BETA_QUOTA_EXCEEDED가 노드 실행 실패로 전파된다")
     void execute_betaQuotaExceeded_propagatesAsExecutionFailure() {
         UUID userId = UUID.randomUUID();
-        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class, CALLS_REAL_METHODS);
         when(betaProvider.isBetaEligible(userId)).thenReturn(true);
         org.mockito.Mockito.doThrow(
             new com.ieum.common.exception.CustomException(com.ieum.common.exception.ErrorCode.BETA_QUOTA_EXCEEDED)
@@ -703,7 +704,7 @@ class AgentNodeExecutorTest {
     @DisplayName("recordTokens 실패(Redis 장애) - 이미 성공한 AI 호출은 실패로 뒤집히지 않는다")
     void execute_recordTokensThrows_stillReturnsSuccess() throws InterruptedException {
         UUID userId = UUID.randomUUID();
-        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class, CALLS_REAL_METHODS);
         when(betaProvider.isBetaEligible(userId)).thenReturn(true);
         org.mockito.Mockito.doThrow(new RuntimeException("Redis 연결 실패"))
             .when(betaProvider).recordTokens(userId, 150L);
@@ -725,7 +726,7 @@ class AgentNodeExecutorTest {
     @Test
     @DisplayName("credentialId 없음 + userId 없음 - 베타 자격 조회 없이 기존 keyless 경로 유지")
     void execute_credentialIdMissingAndNoUserId_skipsBetaCheck() throws InterruptedException {
-        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class, CALLS_REAL_METHODS);
         AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
 
         mockWebServer.enqueue(new MockResponse()
@@ -747,7 +748,7 @@ class AgentNodeExecutorTest {
     @DisplayName("베타 platform 키 사용 + agent 응답 실패(success=false) - 일일 카운터를 환불한다")
     void execute_betaPlatformKeyAndAgentResponseFailure_releasesDailyCall() throws InterruptedException {
         UUID userId = UUID.randomUUID();
-        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class, CALLS_REAL_METHODS);
         when(betaProvider.isBetaEligible(userId)).thenReturn(true);
         when(betaProvider.reserveQuota(userId)).thenReturn("beta:calls:" + userId + ":test-key");
         AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
@@ -770,7 +771,7 @@ class AgentNodeExecutorTest {
     @DisplayName("베타 platform 키 사용 + agent 응답 성공 - 일일 카운터를 환불하지 않는다")
     void execute_betaPlatformKeyAndAgentResponseSuccess_doesNotReleaseDailyCall() throws InterruptedException {
         UUID userId = UUID.randomUUID();
-        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class, CALLS_REAL_METHODS);
         when(betaProvider.isBetaEligible(userId)).thenReturn(true);
         AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
 
@@ -792,7 +793,7 @@ class AgentNodeExecutorTest {
         // 사전작업(google/tool/mcp/webhook)은 reserveQuota보다 먼저 실행되므로, reserve 이후에만
         // 발생하는 실패를 재현하려면 agent 호출 자체가 예외로 끝나야 한다 — 연결 불가 포트로 그 상황을 만든다.
         UUID userId = UUID.randomUUID();
-        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class, CALLS_REAL_METHODS);
         when(betaProvider.isBetaEligible(userId)).thenReturn(true);
         when(betaProvider.reserveQuota(userId)).thenReturn("beta:calls:" + userId + ":test-key");
         AgentNodeExecutor exec = new AgentNodeExecutor(
@@ -816,13 +817,13 @@ class AgentNodeExecutorTest {
         verify(betaProvider).releaseDailyCall("beta:calls:" + userId + ":test-key");
     }
 
-    // ── self-hosted 우선순위 (ChatService.isSelfHostedEligible과 동일 판정) ─────
+    // ── self-hosted 우선순위 (UserRoleProvider.isSelfHostedEligible) ─────
 
     @Test
     @DisplayName("self-hosted 자격(ROLE_ADMIN)이면 베타 자격이 있어도 베타 분기로 가지 않는다")
     void execute_selfHostedEligible_skipsBetaBranchEvenIfBetaEligible() throws InterruptedException {
         UUID userId = UUID.randomUUID();
-        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class, CALLS_REAL_METHODS);
         when(betaProvider.isBetaEligible(userId)).thenReturn(true);
         AgentNodeExecutor exec = buildExecutor(betaProvider, uid -> "ROLE_ADMIN");
 
@@ -849,7 +850,7 @@ class AgentNodeExecutorTest {
     @DisplayName("self-hosted 자격 없는(ROLE_USER) 베타 대상자는 기존대로 베타 platform 분기로 간다")
     void execute_notSelfHostedEligible_stillUsesBetaBranch() throws InterruptedException {
         UUID userId = UUID.randomUUID();
-        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class, CALLS_REAL_METHODS);
         when(betaProvider.isBetaEligible(userId)).thenReturn(true);
         AgentNodeExecutor exec = buildExecutor(betaProvider, uid -> "ROLE_USER");
 
@@ -933,7 +934,7 @@ class AgentNodeExecutorTest {
     @DisplayName("platform-key 모드에서 허용 목록 밖 fallback 모델은 건너뛰고 원 모델로 호출한다")
     void execute_modelFallback_platformKeyMode_disallowedModel_keepsOriginal() throws InterruptedException {
         UUID userId = UUID.randomUUID();
-        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class, CALLS_REAL_METHODS);
         when(betaProvider.isBetaEligible(userId)).thenReturn(true);
         when(betaProvider.isModelAllowed("gpt-4")).thenReturn(false);
         AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
@@ -957,7 +958,7 @@ class AgentNodeExecutorTest {
     @DisplayName("platform-key 모드에서 허용 목록 안 fallback 모델은 그대로 적용된다")
     void execute_modelFallback_platformKeyMode_allowedModel_appliesFallback() throws InterruptedException {
         UUID userId = UUID.randomUUID();
-        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class);
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class, CALLS_REAL_METHODS);
         when(betaProvider.isBetaEligible(userId)).thenReturn(true);
         when(betaProvider.isModelAllowed("gemini-3.5-flash")).thenReturn(true);
         AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
