@@ -54,8 +54,9 @@ public interface BetaPlatformProvider {
      * 재시도 모델 fallback 후보가 베타 플랫폼 키로 호출 가능한 모델인지 확인한다.
      *
      * <p>platform 모드는 IEUM 소유 Gemini 키 한 장으로 호출하며 {@code X-LLM-Provider}를 항상
-     * {@code GEMINI}로 고정한다. 따라서 비-Gemini 모델로 fallback하면 agent가 resolve 자체에
-     * 실패해 재시도가 확실히 죽는다 — 이 판정은 정책적 제한이 아니라 그 물리적 제약의 코드화다.
+     * {@code GEMINI}로 고정하며, 이 모드에서 agent는 노드 model을 무시하고 provider 기본 모델로
+     * 조용히 강등한다(agent {@code core/agent.py}). 그래서 허용 목록 밖 fallback 모델을 보내도
+     * 요청이 깨지지는 않는다 — 이 판정은 fallback 후보를 BE 쪽에서 먼저 거르는 이중 방어다.
      *
      * @param model 시도하려는 모델명
      * @return 베타 허용 목록에 있으면 true

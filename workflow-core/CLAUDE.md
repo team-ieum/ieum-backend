@@ -35,7 +35,7 @@
 
 ### 모델 fallback
 `RetryPolicy.modelForAttempt()` — 1회차는 원 모델, 2회차부터 `retry.modelFallback` 목록을 차례로 쓴다.
-`AgentNodeExecutor`가 **platform-key 모드가 정해진 뒤에** 적용하며, 그 모드에선 `BetaPlatformProvider.isModelAllowed()`로 허용 목록을 검증한다 — platform 키는 Gemini 한 장이라 비-Gemini fallback은 agent resolve 자체가 실패한다.
+`AgentNodeExecutor`가 **platform-key 모드가 정해진 뒤에** 적용하며, 그 모드에선 `BetaPlatformProvider.isModelAllowed()`로 허용 목록을 검증한다 — platform 모드에서 agent는 노드 model을 무시하고 provider 기본 모델로 강등하므로(agent `core/agent.py`) 요청이 깨지진 않지만, 허용 목록 밖 fallback을 BE에서 먼저 거르는 이중 방어다.
 
 ### 성공 노드 스킵 (실패 실행 재처리)
 `execute(version, executionId, triggerData, preCompletedOutputs)` 4-인자 오버로드. `preCompletedOutputs`에 있는 노드는 executor를 부르지 않고 주어진 출력을 성공 결과로 삼아 `SKIPPED` 로그를 남긴다. 빈 Map이면 3-인자와 완전히 동일 동작.
