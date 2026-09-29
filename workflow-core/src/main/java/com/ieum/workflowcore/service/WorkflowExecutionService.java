@@ -263,10 +263,16 @@ public class WorkflowExecutionService {
         }
 
         ExecutionStatus status = execution.getStatus();
-        boolean terminal = status == ExecutionStatus.SUCCESS || status == ExecutionStatus.FAILED;
+        // 승인 대기도 종료로 본다 — 런타임은 이미 스트림을 닫았고 이 실행에 더 올 이벤트가 없다.
+        // 비종료로 두면 늦게 붙은 구독자가 라이브 스트림에 매달려 MVC async 타임아웃까지 기다린다.
+        boolean terminal = status == ExecutionStatus.SUCCESS || status == ExecutionStatus.FAILED
+            || status == ExecutionStatus.WAITING_APPROVAL;
         if (terminal) {
+            // 대기 실행엔 finishedAt이 없다 — 멈춘 시각은 조건부 UPDATE가 찍은 updatedAt이다.
+            LocalDateTime endedAt = status == ExecutionStatus.WAITING_APPROVAL
+                ? execution.getUpdatedAt() : execution.getFinishedAt();
             events.add(ExecutionEvent.executionCompleted(executionId, workflowId, status)
-                .withOccurredAt(toInstant(execution.getFinishedAt())));
+                .withOccurredAt(toInstant(endedAt)));
         }
         return new ExecutionEventSnapshot(status, terminal, events);
     }

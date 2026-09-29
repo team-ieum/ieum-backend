@@ -174,6 +174,29 @@ class WorkflowExecutionServiceTest {
     }
 
     @Test
+    @DisplayName("승인 대기 실행 스냅샷은 terminal=true, 종료 이벤트는 WAITING_APPROVAL + 멈춘 시각(updatedAt)")
+    void 승인대기_실행_스냅샷() {
+        UUID workflowId = UUID.randomUUID();
+        UUID executionId = UUID.randomUUID();
+        LocalDateTime pausedAt = LocalDateTime.of(2026, 9, 29, 10, 0, 0);
+
+        WorkflowExecution execution = mockExecution(workflowId, ExecutionStatus.WAITING_APPROVAL);
+        given(execution.getUpdatedAt()).willReturn(pausedAt);
+        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+        given(workflowExecutionLogRepository.findByExecutionIdOrderByCreatedAtAsc(executionId))
+            .willReturn(List.of());
+
+        ExecutionEventSnapshot snapshot = service.loadEventSnapshot(workflowId, executionId);
+
+        // 비종료로 두면 늦게 붙은 구독자가 라이브 스트림에 매달려 MVC async 타임아웃까지 기다린다.
+        assertThat(snapshot.terminal()).isTrue();
+        var last = snapshot.events().get(snapshot.events().size() - 1);
+        assertThat(last.type()).isEqualTo(ExecutionEventType.EXECUTION_COMPLETED);
+        assertThat(last.executionStatus()).isEqualTo(ExecutionStatus.WAITING_APPROVAL);
+        assertThat(last.occurredAt()).isEqualTo(pausedAt.atZone(ZoneId.systemDefault()).toInstant());
+    }
+
+    @Test
     @DisplayName("executionId가 다른 워크플로우 소속이면 FORBIDDEN")
     void 워크플로우_불일치() {
         UUID workflowId = UUID.randomUUID();

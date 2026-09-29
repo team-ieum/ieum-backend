@@ -149,6 +149,15 @@ class WorkflowNodeRequestValidationTest {
     }
 
     @Test
+    @DisplayName("APPROVAL 노드 type은 저장 요청에서 허용된다 (IEUM-BE-45)")
+    void approvalNodeType_returns201() throws Exception {
+        String node = """
+            { "id": "node-gate", "type": "APPROVAL", "label": "발송 전 승인",
+              "config": { "message": "보내도 될까요?" } }""";
+        expectStatus(body(node, ""), 201);
+    }
+
+    @Test
     @DisplayName("엣지 source가 비어 있으면 400")
     void blankEdgeSource_returns400() throws Exception {
         String edge = """

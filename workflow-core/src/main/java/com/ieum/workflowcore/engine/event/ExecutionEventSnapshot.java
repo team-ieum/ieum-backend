@@ -9,7 +9,7 @@ import java.util.List;
  * <p>구독 시점까지 완료된 노드 이벤트와, 이미 종료된 실행이면 종료 이벤트까지 포함한다.
  *
  * @param status   현재 실행 상태
- * @param terminal 실행이 이미 종료(SUCCESS/FAILED)되었는지 — true면 라이브 구독이 불필요하다
+ * @param terminal 실행이 이미 종료(SUCCESS/FAILED)됐거나 승인 대기(WAITING_APPROVAL)로 멈췄는지 — true면 라이브 구독이 불필요하다
  * @param events   구독 시작 시 먼저 재생할 과거 이벤트 목록
  */
 public record ExecutionEventSnapshot(
