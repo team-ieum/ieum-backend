@@ -33,7 +33,8 @@ public class ExecutionJobQueue {
      * Redis가 비영속 재기동하거나 키가 evict돼 스트림·그룹이 사라지면 폴링은 매번 {@code NOGROUP}으로
      * 실패하는데 컨테이너는 여전히 running이다. 그 상태로 발행하면 {@code XADD}가 스트림을 새로
      * 만들며 성공해서, 아무도 소비하지 않는 잡이 쌓이고 실행이 PENDING인 채 방치된다.
-     * {@link ExecutionJobQueueBootstrap}이 폴링 성공/실패에 따라 이 플래그를 갱신한다.
+     * {@link ExecutionJobQueueBootstrap}이 갱신한다 — 폴링 실패 시 내리고, 기동·폴링 복구 성공 시와
+     * 주기 회수의 {@code XPENDING} 성공 시 올린다(복구 프로브가 실패해도 최대 회수 주기 안에 되돌아온다).
      */
     private final AtomicBoolean consumerHealthy = new AtomicBoolean(false);
 
@@ -47,7 +48,7 @@ public class ExecutionJobQueue {
     private final StreamMessageListenerContainer<String, MapRecord<String, String, String>>
         executionJobListenerContainer;
 
-    /** 소비가 정상 동작 중임을 표시한다(기동 성공 / 폴링 오류 복구 후). */
+    /** 소비가 정상 동작 중임을 표시한다(기동 성공 / 폴링 오류 복구 후 / 주기 회수 프로브 성공). */
     void markConsumerHealthy() {
         if (consumerHealthy.compareAndSet(false, true)) {
             log.info("[ExecutionJobQueue] 소비 정상 — 큐 경유 실행 재개");

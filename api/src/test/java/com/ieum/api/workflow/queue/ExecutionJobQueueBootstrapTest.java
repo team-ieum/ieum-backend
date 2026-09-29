@@ -199,6 +199,25 @@ class ExecutionJobQueueBootstrapTest {
         assertThat(queue.enqueue(UUID.randomUUID())).isTrue();
     }
 
+    @Test
+    @DisplayName("폴링 복구에 실패해 unhealthy로 굳어도, 회수 주기의 XPENDING이 성공하면 헬스가 복구된다")
+    void reclaim_probeSucceeds_restoresHealthAfterFailedRecovery() {
+        bootstrap.run(null);
+        when(container.isRunning()).thenReturn(true);
+
+        when(streamOperations.createGroup(anyString(), any(ReadOffset.class), anyString()))
+            .thenThrow(new RedisSystemException("redis down", new RuntimeException()));
+        bootstrap.onPollError(new RedisSystemException("redis down", new RuntimeException()));
+        assertThat(queue.enqueue(UUID.randomUUID())).isFalse();
+
+        // 이후 폴링이 성공해도 onPollError가 다시 불리지 않으니, 복구 기회는 회수 주기뿐이다
+        when(streamOperations.pending(anyString(), anyString(), any(Range.class), anyLong()))
+            .thenReturn(new PendingMessages(ExecutionJobQueue.GROUP, List.of()));
+        bootstrap.reclaimOrphanedJobs();
+
+        assertThat(queue.enqueue(UUID.randomUUID())).isTrue();
+    }
+
     private void givenPending(RecordId id) {
         when(streamOperations.pending(anyString(), anyString(), any(Range.class), anyLong()))
             .thenReturn(new PendingMessages("runners", List.of(new PendingMessage(id,
