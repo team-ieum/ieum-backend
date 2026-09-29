@@ -2,6 +2,7 @@ package com.ieum.workflowcore.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
@@ -105,6 +106,8 @@ class LiveAndSnapshotEventParityTest {
         when(execution.getTraceId()).thenReturn("11112222333344445555666677778888");
         when(executionRepository.findWithWorkflowById(executionId)).thenReturn(Optional.of(execution));
         when(executionRepository.findById(executionId)).thenReturn(Optional.of(execution));
+        when(executionRepository.startIfNotTerminal(any(), any())).thenReturn(1);
+        when(executionRepository.finishIfNotTerminal(any(), any(), anyBoolean(), any())).thenReturn(1);
     }
 
     private void runRuntime(Map<String, Map<String, Object>> preCompleted) throws Exception {

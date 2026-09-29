@@ -1,12 +1,16 @@
 package com.ieum.workflowcore.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.common.exception.CustomException;
+import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.document.WorkflowDefinitionRepository;
 import com.ieum.workflowcore.domain.Workflow;
@@ -21,6 +25,9 @@ import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -106,6 +113,90 @@ class WorkflowCrudServiceScheduleTest {
         assertThat(stored.getTriggerType()).isEqualTo(TriggerType.SCHEDULE);
         verify(workflowScheduler).registerJob(stored.getId(), CRON);
         verify(workflowScheduler, never()).deleteJob(any());
+    }
+
+    @Test
+    @DisplayName("REST 수정이 Unix 5필드 cron을 보내면 Quartz로 변환해 저장·등록한다 (IEUM-AI-56)")
+    void update_unixCron_convertedToQuartz() {
+        stubDefinitionSave();
+        Workflow stored = workflow(TriggerType.MANUAL, null);
+        given(workflowRepository.findByIdAndUserId(workflowId, userId))
+            .willReturn(Optional.of(stored));
+
+        runInTransaction(() -> service.updateWorkflow(userId, workflowId, "이름", "설명",
+            NODES_JSON, EDGES_JSON, TriggerType.SCHEDULE, "0 9 * * *"));
+
+        assertThat(stored.getCronExpression()).isEqualTo("0 0 9 * * ?");
+        verify(workflowScheduler).registerJob(stored.getId(), "0 0 9 * * ?");
+    }
+
+    // ─────────────── AI 저장 경로 — TRIGGER 노드가 트리거 타입·cron의 진실원 (IEUM-AI-56) ───────────────
+
+    @ParameterizedTest(name = "[{0}] → [{1}]")
+    @CsvSource(delimiter = '|', value = {
+        "0 9 * * *  | 0 0 9 * * ?",
+        "0 17 * * 5 | 0 0 17 ? * 6",
+    })
+    @DisplayName("AI 저장이 SCHEDULE + Unix cron을 실으면 Quartz로 변환해 저장하고 커밋 후 Job을 등록한다")
+    void saveAgentVersion_scheduleTrigger_registersQuartzCron(String unixCron, String quartzCron) {
+        stubDefinitionSave();
+        Workflow stored = workflow(TriggerType.MANUAL, null);
+        given(workflowRepository.findById(workflowId)).willReturn(Optional.of(stored));
+
+        runInTransaction(() -> service.saveAgentVersion(workflowId, NODES_JSON, EDGES_JSON,
+            TriggerType.SCHEDULE, unixCron));
+
+        assertThat(stored.getTriggerType()).isEqualTo(TriggerType.SCHEDULE);
+        assertThat(stored.getCronExpression()).isEqualTo(quartzCron);
+        verify(workflowScheduler).registerJob(stored.getId(), quartzCron);
+        verify(workflowScheduler, never()).deleteJob(any());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = TriggerType.class, names = {"MANUAL", "WEBHOOK"})
+    @DisplayName("AI 저장이 SCHEDULE 아닌 트리거를 실으면 트리거 타입이 바뀌고 기존 스케줄이 해제된다")
+    void saveAgentVersion_nonScheduleTrigger_unschedules(TriggerType triggerType) {
+        stubDefinitionSave();
+        Workflow stored = workflow(TriggerType.SCHEDULE, CRON);
+        given(workflowRepository.findById(workflowId)).willReturn(Optional.of(stored));
+
+        runInTransaction(() -> service.saveAgentVersion(workflowId, NODES_JSON, EDGES_JSON,
+            triggerType, null));
+
+        assertThat(stored.getTriggerType()).isEqualTo(triggerType);
+        assertThat(stored.getCronExpression()).isNull();
+        verify(workflowScheduler).deleteJob(stored.getId());
+        verify(workflowScheduler, never()).registerJob(any(), any());
+    }
+
+    @Test
+    @DisplayName("AI 저장에 트리거 정보가 없으면 트리거 타입·cron·Job을 건드리지 않는다")
+    void saveAgentVersion_noTrigger_leavesScheduleUntouched() {
+        stubDefinitionSave();
+        Workflow stored = workflow(TriggerType.SCHEDULE, CRON);
+        given(workflowRepository.findById(workflowId)).willReturn(Optional.of(stored));
+
+        runInTransaction(() -> service.saveAgentVersion(workflowId, NODES_JSON, EDGES_JSON, null, null));
+
+        assertThat(stored.getTriggerType()).isEqualTo(TriggerType.SCHEDULE);
+        assertThat(stored.getCronExpression()).isEqualTo(CRON);
+        verifyNoInteractions(workflowScheduler);
+    }
+
+    @Test
+    @DisplayName("AI 저장의 cron을 Quartz로 옮길 수 없으면 버전을 저장하기 전에 거부한다")
+    void saveAgentVersion_unconvertibleCron_rejectedBeforeSave() {
+        Workflow stored = workflow(TriggerType.MANUAL, null);
+        given(workflowRepository.findById(workflowId)).willReturn(Optional.of(stored));
+
+        // 일·요일 동시 지정 — Unix는 OR로 실행하지만 Quartz는 표현하지 못한다.
+        assertThatThrownBy(() -> runInTransaction(() -> service.saveAgentVersion(
+                workflowId, NODES_JSON, EDGES_JSON, TriggerType.SCHEDULE, "0 9 1 * 1")))
+            .isInstanceOfSatisfying(CustomException.class, e ->
+                assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_CRON_EXPRESSION));
+
+        verify(definitionRepository, never()).save(any());
+        verifyNoInteractions(workflowScheduler);
     }
 
     private Workflow workflow(TriggerType triggerType, String cronExpression) {

@@ -401,7 +401,7 @@ class WorkflowExecutionServiceTest {
         given(execution.getStatus()).willReturn(ExecutionStatus.RUNNING);
         given(execution.getId()).willReturn(executionId);
         given(execution.getWorkflow()).willReturn(workflow);
-        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+        given(workflowExecutionRepository.findByIdForUpdate(executionId)).willReturn(Optional.of(execution));
 
         service.markAsFailed(executionId, "trigger_data 복호 실패");
 
@@ -429,7 +429,7 @@ class WorkflowExecutionServiceTest {
         WorkflowExecution execution = mock(WorkflowExecution.class);
         given(execution.getStatus()).willReturn(ExecutionStatus.RUNNING);
         given(execution.getWorkflow()).willReturn(workflow);
-        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+        given(workflowExecutionRepository.findByIdForUpdate(executionId)).willReturn(Optional.of(execution));
 
         service.markAsFailed(executionId, "프로세스 이상 종료 추정");
 
@@ -447,7 +447,7 @@ class WorkflowExecutionServiceTest {
         UUID executionId = UUID.randomUUID();
         WorkflowExecution execution = mock(WorkflowExecution.class);
         given(execution.getStatus()).willReturn(ExecutionStatus.FAILED);
-        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+        given(workflowExecutionRepository.findByIdForUpdate(executionId)).willReturn(Optional.of(execution));
 
         service.markAsFailed(executionId, "무시되어야 한다");
 
@@ -464,7 +464,7 @@ class WorkflowExecutionServiceTest {
         WorkflowExecution execution = mock(WorkflowExecution.class);
         given(execution.getStatus()).willReturn(ExecutionStatus.RUNNING);
         given(execution.getWorkflow()).willReturn(workflow);
-        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+        given(workflowExecutionRepository.findByIdForUpdate(executionId)).willReturn(Optional.of(execution));
 
         TransactionSynchronizationManager.initSynchronization();
         try {
@@ -492,7 +492,7 @@ class WorkflowExecutionServiceTest {
         WorkflowExecution execution = mock(WorkflowExecution.class);
         given(execution.getStatus()).willReturn(ExecutionStatus.RUNNING);
         given(execution.getWorkflow()).willReturn(workflow);
-        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+        given(workflowExecutionRepository.findByIdForUpdate(executionId)).willReturn(Optional.of(execution));
 
         TransactionSynchronizationManager.initSynchronization();
         try {
@@ -517,7 +517,7 @@ class WorkflowExecutionServiceTest {
         WorkflowExecution execution = mock(WorkflowExecution.class);
         given(execution.getStatus()).willReturn(ExecutionStatus.RUNNING);
         given(execution.getWorkflow()).willReturn(workflow);
-        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+        given(workflowExecutionRepository.findByIdForUpdate(executionId)).willReturn(Optional.of(execution));
         doThrow(new RuntimeException("discord down"))
             .when(alertNotifier).notifyExecutionFailed(any());
 

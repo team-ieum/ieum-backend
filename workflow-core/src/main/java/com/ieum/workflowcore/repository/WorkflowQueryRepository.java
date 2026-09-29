@@ -228,8 +228,24 @@ public class WorkflowQueryRepository {
     }
 
     /**
+     * 사용자 소유 워크플로우들의 <b>최신 버전</b> 정의 ID({@code mongoDefinitionId})만 조회합니다.
+     * (연동 서비스별 워크플로우 목록 1단계 — Mongo 집계 범위를 사용자 정의로 좁히는 데 쓴다)
+     */
+    public List<String> findOwnedLatestMongoDefinitionIds(UUID userId) {
+        return queryFactory
+            .select(workflowVersion.mongoDefinitionId)
+            .from(workflowVersion)
+            .join(workflowVersion.workflow, workflow)
+            .where(
+                workflow.userId.eq(userId),
+                isLatestVersion()
+            )
+            .fetch();
+    }
+
+    /**
      * 주어진 MongoDB 정의 ID({@code mongoDefinitionId}) 집합 중, 각 워크플로우의 <b>최신 버전</b>
-     * 이면서 해당 사용자 소유인 워크플로우를 페이징 조회합니다. (연동 서비스별 워크플로우 목록 2단계)
+     * 이면서 해당 사용자 소유인 워크플로우를 페이징 조회합니다. (연동 서비스별 워크플로우 목록 3단계)
      *
      * <p>반환 Tuple = [Workflow, WorkflowVersion(최신)]. WorkflowVersion.mongoDefinitionId로
      * usedNodeCount를 매핑합니다. 정렬은 워크플로우 생성일 내림차순.

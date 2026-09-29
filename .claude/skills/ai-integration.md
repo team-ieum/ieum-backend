@@ -1,7 +1,7 @@
-# Skill: AI 모듈 연동 패턴
+# Skill: AI 프로바이더 연동 패턴
 
 ## 목적
-`ai` 모듈에서 외부 AI API(Claude, OpenAI, Gemini)를 연동하는 일관된 패턴을 제공한다.
+외부 AI API(Claude, OpenAI, Gemini) 연동 패턴을 제공한다. 자격증명은 `api/credential`이 관리하고, 실제 AI 호출은 `workflow-core`의 `AgentNodeExecutor`가 ieum-agent에 위임한다.
 IEUM에서는 플랫폼 공용 키가 아닌 **사용자 본인 자격증명**으로 AI 노드를 실행한다.
 
 ## 자격증명 방식 (Notion 스펙 기반)
@@ -83,7 +83,7 @@ IEUM에서는 플랫폼 공용 키가 아닌 **사용자 본인 자격증명**�
 ## AI 클라이언트 인터페이스
 
 ```java
-// com.ieum.ai.client
+// 설계 예시 (미구현) — 실제 호출 경로는 AgentNodeExecutor → ieum-agent
 public interface AiClient {
     AiResponse execute(AiRequest request);
 }

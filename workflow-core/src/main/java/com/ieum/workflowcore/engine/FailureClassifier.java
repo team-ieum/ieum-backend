@@ -27,6 +27,8 @@ public final class FailureClassifier {
         // 도구 미호출·프롬프트 문제 등 같은 입력이면 같은 결과가 나오는 실패
         "AGENT_TOOL_NOT_CALLED", FailureKind.CLIENT_ERROR,
         "MISSING_CREDENTIAL", FailureKind.CLIENT_ERROR,
+        // 같은 멱등 키의 앞선 요청이 실행 중 = 호출자 측 중복 요청이라 재시도해도 같은 결과
+        "DUPLICATE_REQUEST", FailureKind.CLIENT_ERROR,
         // LLM 호출 자체가 실패했으나 원인이 특정되지 않음 — 반복해도 같을 가능성이 높다
         "AGENT_EXECUTION_FAILED", FailureKind.UNKNOWN,
         // 아래 둘은 agent 어휘가 아니라, agent 서비스가 본문 없이 HTTP 오류만 준 경우

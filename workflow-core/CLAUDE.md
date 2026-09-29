@@ -21,6 +21,7 @@
 - `RetryPolicy` — 노드 config의 `retry` 객체를 파싱한 record(정책 파싱·백오프 계산·회차별 모델 선택). 사용자 편집값이라 `maxAttempts` ≤ 10, 단일 백오프 ≤ 10분으로 상·하한 강제
 - `FailureKind` — 실패 원인 enum이 **재시도 가능 여부를 스스로 보유**한다(`isRetryable()`). TIMEOUT·RATE_LIMIT·SERVER_ERROR·NETWORK만 재시도 대상, CLIENT_ERROR·UNKNOWN은 아님
 - `FailureClassifier` — agent errorCode / HTTP status / 예외 cause 체인 → `FailureKind`. 문자열 추론이 아니라 Executor가 실패를 반환할 때 명시적으로 채운다
+- **`retry.timeoutMs`는 호출 타임아웃이 아니다** — MARKER in-flight 마커 TTL(`timeoutMs`+30초, 미선언 5분) 산정 전용(`NodeExecutor.markerTtl()`). 실제 호출 타임아웃은 AI 노드=agent 호출(`ieum.agent.timeout-seconds`, api yml 180초), HTTP 노드=공유 RestTemplate read 30초(`ieum.http.read-timeout-seconds`)이고 노드별로 못 바꾼다. 의도적으로 배선하지 않았다(BE-55) — BE가 먼저 끊어도 agent는 도구를 계속 실행해 실패 기록 뒤에 부수효과가 남고, 같은 키 재시도는 `DUPLICATE_REQUEST`를 받는다
 - `RetryProperties`(`workflow.execution.retry.*`) — 기본값. **AI 노드만 기본 재시도(3회)**, 그 외는 1회(= 명시 선언 없으면 재시도 없음) — HTTP는 멱등성을 보장할 수 없어 기본 재시도가 위험하다
 - 백오프는 지수 + **full jitter**(`[0, computed]` 균등 난수). 지터 난수는 `ThreadLocalRandom`이다 — 워커 스레드가 공유하는 필드이므로 `RandomGenerator.getDefault()`로 바꾸지 말 것(스레드 안전하지 않다)
 - **대기는 워커 스레드의 `Thread.sleep`이다.** 메인 스레드 JPA 독점 구조를 유지하려 그렇게 뒀고, 그 대가로 재시도 대기가 워커 슬롯을 점유한다(fan-out이 넓으면 슬롯 고갈)
@@ -29,12 +30,12 @@
 - `IdempotencyMode` = NONE / HEADER / MARKER / BOTH. 노드 config `retry.idempotency`로 선언. **부수효과가 있는 HTTP·AI 노드가 HEADER 기본**, 나머지는 NONE. AI 노드는 기본 재시도가 3회인데 도구를 쓰므로 NONE이면 회차마다 부수효과가 중복된다(MARKER는 재시도와 양립 불가라 HEADER가 유일한 선택지). agent가 `X-Idempotency-Key`를 소비하며(IEUM-AI-52) 소비하지 않는 배포에선 no-op이라 배포 순서 무관
 - `IdempotencyKeys.generate(executionId, nodeId)` — sha256 앞 32자 hex. **attempt 번호를 절대 섞지 않는다**(섞으면 중복 차단이 성립하지 않음)
 - HEADER: HTTP 노드는 `Idempotency-Key`, AI 노드는 agent에 `X-Idempotency-Key`. `policy.isDisabled()`(재시도 없음)면 붙이지 않는다
-- MARKER: `IdempotencyStore` 포트로 in-flight 마커를 세우고, 마커가 있으면 **재시도를 포기**한다. 마커 해제는 재시도 루프 전체가 끝난 뒤 1회만 — attempt별 finally에서 해제하면 모드가 무력화된다
+- MARKER: `IdempotencyStore` 포트로 in-flight 마커를 세우고, 마커가 있으면 **재시도를 포기**한다. 마커 해제는 재시도 루프 전체가 끝난 뒤 1회만 — attempt별 finally에서 해제하면 모드가 무력화된다. **같은 실행 안의 재시도만 막는다** — 프로세스 크래시 후 큐 회수 재배달(같은 executionId → 같은 키)은 마커 TTL(5분)과 `reclaim-min-idle`(10분) 타이밍에 달려 막지 못할 수 있다(BE-53). 기본 TTL은 일부러 안 올렸다 — 재실행이 그 노드에 닿는 시점에 상한이 없어 올려도 보장이 안 된다
 - 런타임은 MARKER 모드 노드를 attempt 1 이후 곧바로 멈춘다 — 2회차를 시작하면 원 실패 원인이 마커 차단(CLIENT_ERROR)으로 덮여써져 `node_runs` 진단과 `retryExhausted` 신호가 왜곡된다
 
 ### 모델 fallback
 `RetryPolicy.modelForAttempt()` — 1회차는 원 모델, 2회차부터 `retry.modelFallback` 목록을 차례로 쓴다.
-`AgentNodeExecutor`가 **platform-key 모드가 정해진 뒤에** 적용하며, 그 모드에선 `BetaPlatformProvider.isModelAllowed()`로 허용 목록을 검증한다 — platform 키는 Gemini 한 장이라 비-Gemini fallback은 agent resolve 자체가 실패한다.
+`AgentNodeExecutor`가 **platform-key 모드가 정해진 뒤에** 적용하며, 그 모드에선 `BetaPlatformProvider.isModelAllowed()`로 허용 목록을 검증한다 — platform 모드에서 agent는 노드 model을 무시하고 provider 기본 모델로 강등하므로(agent `core/agent.py`) 요청이 깨지진 않지만, 허용 목록 밖 fallback을 BE에서 먼저 거르는 이중 방어다.
 
 ### 성공 노드 스킵 (실패 실행 재처리)
 `execute(version, executionId, triggerData, preCompletedOutputs)` 4-인자 오버로드. `preCompletedOutputs`에 있는 노드는 executor를 부르지 않고 주어진 출력을 성공 결과로 삼아 `SKIPPED` 로그를 남긴다. 빈 Map이면 3-인자와 완전히 동일 동작.

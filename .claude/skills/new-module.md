@@ -9,17 +9,14 @@ ieum-backend/
 ├── api/             # 메인 진입점, REST API (SpringBoot 실행 모듈)
 ├── auth/            # 인증/인가 (JWT + OAuth2)
 ├── workflow-core/   # 워크플로우 엔진
-├── ai/              # AI 연동 (Claude, OpenAI 등)
-├── integration/     # 외부 서비스 연동 (Google, Notion)
 └── common/          # 공통 유틸, 예외, BaseEntity
 ```
 
 ### 모듈 간 의존 방향 (단방향 유지 필수)
 ```
-api → workflow-core, auth
-workflow-core → integration, ai
-integration → auth
-모든 모듈 → common
+api → workflow-core, auth, common
+workflow-core → common
+auth → common
 ```
 
 ## 절차
@@ -51,8 +48,6 @@ rootProject.name = 'ieum-backend'
 include(
         'api',
         'workflow-core',
-        'integration',
-        'ai',
         'auth',
         'common',
         '<새모듈명>'   // 추가

@@ -215,6 +215,8 @@ class RetryPolicyTest {
                 .isEqualTo(FailureKind.TIMEOUT);
             assertThat(FailureClassifier.fromAgentErrorCode("AGENT_TOOL_NOT_CALLED"))
                 .isEqualTo(FailureKind.CLIENT_ERROR);
+            assertThat(FailureClassifier.fromAgentErrorCode("DUPLICATE_REQUEST"))
+                .isEqualTo(FailureKind.CLIENT_ERROR);
         }
 
         @Test

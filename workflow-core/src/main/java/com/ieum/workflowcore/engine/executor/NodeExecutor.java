@@ -15,7 +15,10 @@ import java.util.Map;
  */
 public interface NodeExecutor {
 
-    /** MARKER 마커의 timeoutMs 미선언 시 기본 TTL(5분) */
+    /**
+     * MARKER 마커의 timeoutMs 미선언 시 기본 TTL(5분). 잡 큐 {@code reclaim-min-idle}(10분)과 서로 영향을
+     * 줘 크래시 재배달의 마커 보호는 타이밍 의존이다 — 올려도 보장되지 않는다({@code IdempotencyMode.MARKER}).
+     */
     Duration DEFAULT_MARKER_TTL = Duration.ofMinutes(5);
     /** MARKER 마커 TTL = timeoutMs + 이 여유 시간 */
     Duration MARKER_TTL_MARGIN = Duration.ofSeconds(30);
@@ -58,7 +61,10 @@ public interface NodeExecutor {
         public static final NodeAttempt NONE = new NodeAttempt(1, null, null);
     }
 
-    /** MARKER 마커 TTL: 정책에 {@code timeoutMs}가 있으면 그 값 + 여유, 없으면 기본값. */
+    /**
+     * MARKER 마커 TTL: 정책에 {@code timeoutMs}가 있으면 그 값 + 여유, 없으면 기본값.
+     * 이 값은 마커 수명 산정용일 뿐 실제 호출 타임아웃과 무관하다(호출 타임아웃은 {@code RetryPolicy} javadoc 참조).
+     */
     static Duration markerTtl(RetryPolicy policy) {
         Long timeoutMs = policy.timeoutMs();
         return timeoutMs == null ? DEFAULT_MARKER_TTL : Duration.ofMillis(timeoutMs).plus(MARKER_TTL_MARGIN);

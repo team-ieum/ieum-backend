@@ -229,8 +229,9 @@ public class AgentNodeExecutor implements NodeExecutor {
      * 후보를 얻고, 베타 platform 키 모드에서는 그 후보가 베타 허용 모델인지 확인한다.
      *
      * <p>platform 모드는 Gemini 키 한 장으로 호출하며 {@code X-LLM-Provider}를 항상 GEMINI로
-     * 고정하므로, 허용 목록 밖(비-Gemini 등) 모델로 fallback하면 agent가 resolve에 실패해
-     * 재시도가 확실히 죽는다 — 그 경우 fallback을 건너뛰고 원 모델을 유지한다.
+     * 고정한다. 이 모드에서 agent는 노드 model을 무시하고 provider 기본 모델로 조용히 강등하므로
+     * (agent {@code core/agent.py}) 허용 목록 밖 모델을 보내도 요청이 깨지지는 않는다. 이 가드는
+     * fallback 후보가 허용 목록 밖이면 BE 쪽에서 먼저 걸러 원 모델을 유지하는 이중 방어다.
      */
     private String resolveModelForAttempt(
         NodeAttempt attempt, RetryPolicy policy, String originalModel,

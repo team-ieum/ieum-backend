@@ -63,7 +63,7 @@ workflow-core가 선언한 포트 11개를 여기서 `Default*`로 구현해 Stu
 ## 설정 키 (이 모듈이 읽는 것 중 실행 신뢰성 관련)
 | 키 | 기본값 | 용도 |
 |----|--------|------|
-| `ieum.workflow.queue.reclaim-min-idle` | `PT10M` | 이 시간 넘게 방치된 pending만 회수. **0으로 두지 말 것** — 살아 있는 소비자의 in-flight를 훔치지 않는 유일한 안전장치이자, 뒤집으면 재시작 복구 지연 상한이다. 워크플로우 최대 소요시간보다 넉넉히 길어야 한다 |
+| `ieum.workflow.queue.reclaim-min-idle` | `PT10M` | 이 시간 넘게 방치된 pending만 회수. **0으로 두지 말 것** — 살아 있는 소비자의 in-flight를 훔치지 않는 유일한 안전장치이자, 뒤집으면 재시작 복구 지연 상한이다. 워크플로우 최대 소요시간보다 넉넉히 길어야 한다. MARKER 마커 TTL(기본 5분)과 서로 영향을 줘 크래시 재배달의 마커 보호는 타이밍 의존이다(IEUM-BE-53) |
 | `ieum.workflow.queue.reclaim-interval` | `PT1M` | 고아 잡 회수 주기 |
 | `ieum.workflow.queue.poll-error-backoff` | `PT5S` | 폴링 실패 시 대기(스핀·로그 폭주 방지) |
 | `ieum.beta.platform-key.allowed-models` | `gemini-3.7-flash` | platform 모드에서 재시도 모델 fallback이 시도할 수 있는 모델. platform 키는 Gemini 한 장이라 비-Gemini를 넣지 말 것 |
