@@ -24,6 +24,7 @@ public class WorkflowResponse {
     private TriggerType triggerType;
     private String cronExpression;
     private Integer version;
+    private List<WorkflowServiceType> services;
     private List<NodeView> nodes;
     private List<EdgeView> edges;
 
@@ -50,6 +51,7 @@ public class WorkflowResponse {
     public static WorkflowResponse from(Workflow workflow, WorkflowVersion latestVersion,
             List<NodeView> nodes, List<EdgeView> edges,
             Map<String, String> webhookCredentialNames) {
+        List<NodeView> safeNodes = nodes != null ? nodes : Collections.emptyList();
         return WorkflowResponse.builder()
             .id(workflow.getId())
             .userId(workflow.getUserId())
@@ -59,7 +61,8 @@ public class WorkflowResponse {
             .triggerType(workflow.getTriggerType())
             .cronExpression(workflow.getCronExpression())
             .version(latestVersion != null ? latestVersion.getVersion() : null)
-            .nodes(nodes != null ? nodes : Collections.emptyList())
+            .services(WorkflowServiceType.extract(workflow.getTriggerType(), safeNodes))
+            .nodes(safeNodes)
             .edges(edges != null ? edges : Collections.emptyList())
             .webhookCredentialNames(
                 webhookCredentialNames != null ? webhookCredentialNames : Collections.emptyMap())
