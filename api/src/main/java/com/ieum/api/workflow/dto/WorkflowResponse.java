@@ -22,6 +22,7 @@ public class WorkflowResponse {
     private TriggerType triggerType;
     private String cronExpression;
     private Integer version;
+    private List<WorkflowServiceType> services;
     private List<NodeDto> nodes;
     private List<EdgeDto> edges;
     private LocalDateTime createdAt;
@@ -29,6 +30,7 @@ public class WorkflowResponse {
 
     public static WorkflowResponse from(Workflow workflow, WorkflowVersion latestVersion,
             List<NodeDto> nodes, List<EdgeDto> edges) {
+        List<NodeDto> safeNodes = nodes != null ? nodes : Collections.emptyList();
         return WorkflowResponse.builder()
             .id(workflow.getId())
             .userId(workflow.getUserId())
@@ -38,7 +40,8 @@ public class WorkflowResponse {
             .triggerType(workflow.getTriggerType())
             .cronExpression(workflow.getCronExpression())
             .version(latestVersion != null ? latestVersion.getVersion() : null)
-            .nodes(nodes != null ? nodes : Collections.emptyList())
+            .services(WorkflowServiceType.extract(workflow.getTriggerType(), safeNodes))
+            .nodes(safeNodes)
             .edges(edges != null ? edges : Collections.emptyList())
             .createdAt(workflow.getCreatedAt())
             .updatedAt(workflow.getUpdatedAt())
