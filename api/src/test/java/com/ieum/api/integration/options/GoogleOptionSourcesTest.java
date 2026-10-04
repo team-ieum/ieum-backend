@@ -245,6 +245,18 @@ class GoogleOptionSourcesTest {
     }
 
     @Test
+    @DisplayName("403 본문에 Google 오류 reason이 있어도 매핑은 그대로 GOOGLE_RESOURCE_NOT_FOUND")
+    void forbiddenWithReasonBodyKeepsMapping() {
+        connected(SHEETS);
+        server.expect(requestTo(WORKSHEETS_URL)).andRespond(withStatus(HttpStatus.FORBIDDEN)
+            .contentType(MediaType.APPLICATION_JSON)
+            .body("{\"error\":{\"errors\":[{\"reason\":\"accessNotConfigured\"}]}}"));
+
+        assertErrorCode(() -> worksheets.fetch(userId, sheetInput("1Bxi_-9"), null),
+            ErrorCode.GOOGLE_RESOURCE_NOT_FOUND);
+    }
+
+    @Test
     @DisplayName("Google 타임아웃은 GOOGLE_API_UNAVAILABLE")
     void timeoutMapsToUnavailable() {
         connected(SHEETS);

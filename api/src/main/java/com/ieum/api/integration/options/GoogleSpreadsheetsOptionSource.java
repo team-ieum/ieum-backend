@@ -38,7 +38,7 @@ public class GoogleSpreadsheetsOptionSource implements OptionSource {
             .queryParam("supportsAllDrives", true)
             .queryParam("includeItemsFromAllDrives", true);
         Map<String, Object> vars = new HashMap<>(Map.of("q", SPREADSHEETS_QUERY));
-        if (cursor != null && !cursor.isBlank()) {
+        if (cursor != null) {
             uri.queryParam("pageToken", "{cursor}");
             vars.put("cursor", cursor);
         }

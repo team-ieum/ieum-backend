@@ -54,6 +54,9 @@ class GoogleApiReader {
                 .getBody();
             return body != null ? body : JsonNodeFactory.instance.objectNode();
         } catch (HttpClientErrorException e) {
+            // 본문 message엔 리소스 ID가 들어 있을 수 있어 reason 필드만 남긴다
+            log.warn("[GoogleApiReader] Google 요청 거부 — host: {}, status: {}, reason: {}",
+                uri.getHost(), e.getStatusCode().value(), errorReason(e));
             throw clientError(e.getStatusCode().value());
         } catch (RestClientException e) {
             // 5xx·타임아웃·연결 실패 — 사용자가 고칠 수 없는 일시 장애
@@ -71,6 +74,17 @@ class GoogleApiReader {
         List<String> granted = scopes == null ? List.of() : Arrays.asList(scopes.trim().split("[,\\s]+"));
         if (Arrays.stream(acceptedScopes).noneMatch(granted::contains)) {
             throw new CustomException(ErrorCode.GOOGLE_SCOPE_REQUIRED);
+        }
+    }
+
+    /** Drive v3·Sheets v4 {@code error.errors[0].reason} → 없으면 {@code error.status} → {@code "unknown"}. */
+    private static String errorReason(HttpClientErrorException e) {
+        try {
+            JsonNode error = e.getResponseBodyAs(JsonNode.class).path("error");
+            String reason = error.path("errors").path(0).path("reason").asText(null);
+            return reason != null ? reason : error.path("status").asText("unknown");
+        } catch (RuntimeException ignored) {
+            return "unknown"; // 본문 없음·JSON 아님(변환 불가 시 null도 여기로)
         }
     }
 
