@@ -80,7 +80,7 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 
 ### 변수 참조 시스템
 - 문법: `{{nodes.<node_uuid>.output.<field>}}`
-- `ExecutionCursor.renderVariables()`가 실행 시점에 치환. 중첩 참조 불가(1단계만). 실행기는 `input`이 아니라 `node.getConfig()`를 직접 치환한다(`input`은 실행 로그용). AI 노드는 `prompt`와 `tools[]` 전체 문자열 값(재귀)을 치환하며, `tools`는 복사본에 치환해 노드 원본을 건드리지 않는다 — `injectWebhookUrls`가 웹훅 URL 원문을 넣는 자리라서. 미해결 참조는 `""`
+- `ExecutionCursor.renderVariables()`가 실행 시점에 치환. 중첩 참조 불가(1단계만). 실행기는 `input`이 아니라 `node.getConfig()`를 직접 치환한다(`input`은 실행 로그용). AI 노드는 `prompt`와 `tools[]` 전체 문자열 값을 치환하며, `tools`는 `ExecutionCursor.renderDeep()`(재귀, 가변 복사본 — 런타임의 `input` 생성도 같은 함수)으로 치환해 노드 원본을 건드리지 않는다 — `injectWebhookUrls`가 웹훅 URL 원문을 넣는 자리라서. 미해결 참조는 `""`
 
 ### 실행 이벤트 (engine/event/)
 `ExecutionEventPublisher` — executionId 키의 in-memory `Sinks.Many` 멀티캐스트 허브. SSE 구독(HTTP 스레드)과 실행 스레드를 **같은 JVM 안에서** 연결한다 — 그래서 api의 잡 큐 워커를 별도 프로세스로 뺄 수 없다.

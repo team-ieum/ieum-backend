@@ -1,6 +1,8 @@
 package com.ieum.workflowcore.engine;
 
 import com.ieum.workflowcore.domain.enums.NodeType;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -108,6 +110,28 @@ public class ExecutionCursor {
             log.debug("[Cursor] 변수 치환 depth={} 결과: {}", depth + 1, result);
         }
         return result;
+    }
+
+    /**
+     * Map·List를 재귀로 돌며 모든 String 값을 {@link #renderVariables}로 치환한 <b>가변 복사본</b>을 돌려준다.
+     * 원본은 건드리지 않는다 — {@code AgentNodeExecutor}가 tools 복사본에 웹훅 URL 원문을 넣으므로,
+     * 원본을 쓰면 그 원문이 실행 중 공유되는 노드 객체에 남는다. 그 외 타입은 그대로 돌려준다.
+     */
+    public Object renderDeep(Object value) {
+        if (value instanceof String s) {
+            return renderVariables(s);
+        }
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            map.forEach((k, v) -> copy.put(String.valueOf(k), renderDeep(v)));
+            return copy;
+        }
+        if (value instanceof List<?> list) {
+            List<Object> copy = new ArrayList<>(list.size());
+            list.forEach(v -> copy.add(renderDeep(v)));
+            return copy;
+        }
+        return value;
     }
 
     private String doRender(String input) {

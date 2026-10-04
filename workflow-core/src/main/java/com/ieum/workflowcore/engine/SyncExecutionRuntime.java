@@ -31,7 +31,6 @@ import java.util.Deque;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -652,30 +651,7 @@ public class SyncExecutionRuntime {
         if (node.getConfig() == null) {
             return new HashMap<>();
         }
-        return renderMap(node.getConfig(), cursor);
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> renderMap(Map<String, Object> source, ExecutionCursor cursor) {
-        Map<String, Object> result = new LinkedHashMap<>();
-        for (Map.Entry<String, Object> entry : source.entrySet()) {
-            result.put(entry.getKey(), renderValue(entry.getValue(), cursor));
-        }
-        return result;
-    }
-
-    @SuppressWarnings("unchecked")
-    private Object renderValue(Object value, ExecutionCursor cursor) {
-        if (value instanceof String s) {
-            return cursor.renderVariables(s);
-        }
-        if (value instanceof Map<?, ?> map) {
-            return renderMap((Map<String, Object>) map, cursor);
-        }
-        if (value instanceof List<?> list) {
-            return list.stream().map(item -> renderValue(item, cursor)).toList();
-        }
-        return value;
+        return (Map<String, Object>) cursor.renderDeep(node.getConfig());
     }
 
     private void saveExecutionLog(

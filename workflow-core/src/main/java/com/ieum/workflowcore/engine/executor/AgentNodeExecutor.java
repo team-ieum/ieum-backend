@@ -118,7 +118,10 @@ public class AgentNodeExecutor implements NodeExecutor {
             String systemMessage = (String) config.get("systemMessage");
             String model = (String) config.get("model");
             String agentType = (String) config.getOrDefault("agentType", "simple");
-            List<Map<String, Object>> tools = parseTools(renderTools(config.get("tools"), cursor));
+            // 드롭다운으로 고른 리소스 ID(tools[].config.spreadsheet_id 등)의 참조식을 치환한 복사본(IEUM-BE-71).
+            // 미해결 참조는 ""가 되어 agent 도구가 빈 ID를 에러로 거부한다. credentialId 자리의 참조식은 저장 시
+            // NodeCredentialGuard가 막고 webhookCredentialId는 실행 시 소유권을 재확인해, 치환이 새 접근 경로를 만들지 않는다.
+            List<Map<String, Object>> tools = parseTools(cursor.renderDeep(config.get("tools")));
 
             String renderedPrompt = cursor.renderVariables(promptTemplate);
             log.debug("[AgentNodeExecutor] 렌더링된 프롬프트 길이: {}", renderedPrompt.length());
@@ -258,38 +261,6 @@ public class AgentNodeExecutor implements NodeExecutor {
         }
         return new ExecutorResult.TokenUsage(
             usage.getPromptTokens(), usage.getCompletionTokens(), usage.getTotalTokens());
-    }
-
-    /**
-     * tools의 문자열 값에 변수 참조를 치환하며 새 컬렉션으로 복사한다 (IEUM-BE-71).
-     *
-     * <p>드롭다운으로 고른 리소스 ID(예: Sheets {@code spreadsheet_id})는 {@code tools[].config}에 저장되고,
-     * 참조식이면 여기서 선행 노드 출력으로 바뀐다. 미해결 참조는 빈 문자열이 되며 agent 도구가 빈 ID를
-     * 에러로 거부한다 — 다른 리소스에 조용히 쓰지 않는다.
-     *
-     * <p>복사하는 이유: 뒤의 {@code injectWebhookUrls}가 도구 맵에 웹훅 URL 원문을 넣는다. 노드 config
-     * 원본을 그대로 쓰면 그 원문이 실행 중 공유되는 노드 객체에 남는다. 런타임이 넘기는 {@code input}은
-     * 리스트가 불변({@code Stream.toList()})이라 대신 쓸 수도 없다.
-     *
-     * <p>{@code credentialId} 자리의 참조식은 저장 시 {@code NodeCredentialGuard}가 거부하고,
-     * {@code webhookCredentialId}는 실행 시 소유권을 다시 확인하므로 치환이 새 접근 경로를 만들지 않는다.
-     */
-    @SuppressWarnings("unchecked")
-    private static Object renderTools(Object value, ExecutionCursor cursor) {
-        if (value instanceof String s) {
-            return cursor.renderVariables(s);
-        }
-        if (value instanceof Map<?, ?> map) {
-            Map<String, Object> copy = new java.util.LinkedHashMap<>();
-            map.forEach((k, v) -> copy.put(String.valueOf(k), renderTools(v, cursor)));
-            return copy;
-        }
-        if (value instanceof List<?> list) {
-            List<Object> copy = new ArrayList<>(list.size());
-            list.forEach(v -> copy.add(renderTools(v, cursor)));
-            return copy;
-        }
-        return value;
     }
 
     /**
