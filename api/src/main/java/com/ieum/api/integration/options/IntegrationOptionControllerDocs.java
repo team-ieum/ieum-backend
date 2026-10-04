@@ -20,7 +20,9 @@ public interface IntegrationOptionControllerDocs {
             + "지원: google/spreadsheets, google/worksheets(spreadsheet_id 필수), google/calendars, "
             + "google/events(calendar_id 선택 — 비우면 기본 캘린더), google/files, google/folders. "
             + "nextCursor가 있으면 cursor로 다음 페이지를 조회하고, null이면 마지막 페이지입니다. "
-            + "오류 code: GOOGLE_SCOPE_REQUIRED(403, Google 권한 증분 동의 필요 — 목록마다 필요한 scope가 다름), "
+            + "오류 code: GOOGLE_SCOPE_REQUIRED(403, Google 권한 증분 동의 필요 — scope_groups는 "
+            + "spreadsheets·worksheets=sheets, files·folders=drive, calendars·events=calendar. "
+            + "sheets 그룹은 drive를 포함해 파일·폴더도 충족), "
             + "ACCOUNT_NOT_CONNECTED(400), "
             + "AUTHENTICATION_REQUIRED(401, 재연동 필요), GOOGLE_RESOURCE_NOT_FOUND(404), "
             + "GOOGLE_API_UNAVAILABLE(503), INVALID_INPUT(400), NOT_FOUND(404, 알 수 없는 목록)")
@@ -29,5 +31,5 @@ public interface IntegrationOptionControllerDocs {
         CustomUserDetails userDetails,
         @Parameter(description = "연동 앱", example = "google") String app,
         @Parameter(description = "리소스 종류", example = "worksheets") String resource,
-        @Parameter(description = "cursor(선택)와 optionsInputs 필드 값. 예: spreadsheet_id=1Bxi…") Map<String, String> params);
+        @Parameter(description = "cursor(선택)와 optionsInputs 필드 값. 예: spreadsheet_id=1Bxi…, calendar_id=primary") Map<String, String> params);
 }
