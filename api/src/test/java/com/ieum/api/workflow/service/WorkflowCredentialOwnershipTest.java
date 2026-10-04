@@ -271,6 +271,26 @@ class WorkflowCredentialOwnershipTest {
             .doesNotThrowAnyException();
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "{ \"tools\": [ { \"name\": \"builtin:notion_search\", \"credentialId\": \"{{nodes.node-0.output.credId}}\" } ] }",
+        "{ \"tools\": [ { \"name\": \"builtin:notion_search\", \"auth\": { \"credentialId\": \"{{nodes.node-0.output.credId}}\" } } ] }"
+    })
+    @DisplayName("도구 credentialId 자리의 참조식은 저장에서 거부된다 — 실행 시 치환으로 남의 크레덴셜을 가리키는 길을 막는다")
+    void rejectsReferenceExpressionInToolCredentialId(String aiConfig) {
+        given(credentialService.getByUserId(userId)).willReturn(List.of(ownedCredential));
+
+        CreateWorkflowRequest request = read(CreateWorkflowRequest.class, aiConfig);
+
+        // 메시지까지 본다 — 다른 검증의 400으로 통과하면 이 핀은 아무것도 고정하지 못한다.
+        assertThatThrownBy(() -> workflowService.createWorkflow(userId, request))
+            .isInstanceOf(CustomException.class)
+            .hasMessageContaining("본인 소유 크레덴셜이 아닙니다")
+            .satisfies(e -> assertThat(((CustomException) e).getErrorCode().getStatus())
+                .isEqualTo(HttpStatus.BAD_REQUEST));
+        verifyNoInteractions(workflowCrudService);
+    }
+
     @Test
     @DisplayName("참조용 ID 키는 비밀이 아니므로 통과한다")
     void allowsReferenceIdKeys() {

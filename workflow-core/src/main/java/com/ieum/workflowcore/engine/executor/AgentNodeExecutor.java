@@ -118,7 +118,10 @@ public class AgentNodeExecutor implements NodeExecutor {
             String systemMessage = (String) config.get("systemMessage");
             String model = (String) config.get("model");
             String agentType = (String) config.getOrDefault("agentType", "simple");
-            List<Map<String, Object>> tools = parseTools(config.get("tools"));
+            // 드롭다운으로 고른 리소스 ID(tools[].config.spreadsheet_id 등)의 참조식을 치환한 복사본(IEUM-BE-71).
+            // 미해결 참조는 ""가 되어 agent 도구가 빈 ID를 에러로 거부한다. credentialId 자리의 참조식은 저장 시
+            // NodeCredentialGuard가 막고 webhookCredentialId는 실행 시 소유권을 재확인해, 치환이 새 접근 경로를 만들지 않는다.
+            List<Map<String, Object>> tools = parseTools(cursor.renderDeep(config.get("tools")));
 
             String renderedPrompt = cursor.renderVariables(promptTemplate);
             log.debug("[AgentNodeExecutor] 렌더링된 프롬프트 길이: {}", renderedPrompt.length());

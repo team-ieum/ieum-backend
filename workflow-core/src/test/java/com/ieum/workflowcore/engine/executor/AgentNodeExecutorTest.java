@@ -572,6 +572,56 @@ class AgentNodeExecutorTest {
         String body = recorded.getBody().readUtf8();
         assertThat(body).contains("webhook_url");
         assertThat(body).contains(webhookUrl);
+        // 노드 config 원본은 그대로여야 한다 — 웹훅 URL 원문이 실행 중 공유되는 노드 객체에 남지 않게(IEUM-BE-71)
+        assertThat(discordTool.get("config"))
+            .isEqualTo(Map.of("webhookCredentialId", credentialId.toString()));
+    }
+
+    @Test
+    @DisplayName("tools[].config의 참조식을 선행 노드 출력으로 치환해 보내고, 노드 config 원본은 그대로 둔다")
+    void execute_rendersReferenceInToolConfig() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Map<String, Object> toolConfig = new java.util.HashMap<>();
+        toolConfig.put("spreadsheet_id", "{{nodes.node-0.output.sheetId}}");
+        toolConfig.put("sheet_name", "매출");
+        Map<String, Object> sheetsTool = new java.util.HashMap<>();
+        sheetsTool.put("name", "builtin:google_sheets_append");
+        sheetsTool.put("config", toolConfig);
+        Node node = buildAgentNodeWithTools("행 추가해줘", "CLAUDE", "cred-id", List.of(sheetsTool));
+        ExecutionCursor cursor = buildCursor();
+        cursor.getContext().setNodeOutput("node-0", Map.of("sheetId", "1Bxi"));
+
+        executor.execute(node, Collections.emptyMap(), cursor);
+
+        String body = mockWebServer.takeRequest().getBody().readUtf8();
+        assertThat(body).contains("\"spreadsheet_id\":\"1Bxi\"");
+        assertThat(body).contains("\"sheet_name\":\"매출\"");
+        assertThat(body).doesNotContain("{{nodes");
+        assertThat(toolConfig.get("spreadsheet_id")).isEqualTo("{{nodes.node-0.output.sheetId}}");
+    }
+
+    @Test
+    @DisplayName("tools[].config의 미해결 참조는 빈 문자열로 간다 — agent 도구가 빈 ID를 에러로 거부해 다른 시트에 쓰지 않는다")
+    void execute_unresolvedToolReferenceBecomesEmpty() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        Map<String, Object> sheetsTool = new java.util.HashMap<>();
+        sheetsTool.put("name", "builtin:google_sheets_read");
+        sheetsTool.put("config", new java.util.HashMap<>(
+            Map.of("spreadsheet_id", "{{nodes.node-9.output.sheetId}}")));
+        Node node = buildAgentNodeWithTools("읽어줘", "CLAUDE", "cred-id", List.of(sheetsTool));
+
+        executor.execute(node, Collections.emptyMap(), buildCursor());
+
+        String body = mockWebServer.takeRequest().getBody().readUtf8();
+        assertThat(body).contains("\"spreadsheet_id\":\"\"");
     }
 
     // ── 베타 플랫폼 키 케이스 ─────────────────────────────────────────────────

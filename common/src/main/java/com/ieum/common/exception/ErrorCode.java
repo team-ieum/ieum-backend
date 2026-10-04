@@ -89,6 +89,9 @@ public enum ErrorCode {
     INVALID_LINK_TOKEN(HttpStatus.BAD_REQUEST, "유효하지 않거나 만료된 연동 토큰입니다."),
     ACCOUNT_ALREADY_LINKED(HttpStatus.CONFLICT, "이미 다른 사용자에게 연동된 계정입니다."),
     UNSUPPORTED_SERVICE_TYPE(HttpStatus.BAD_REQUEST, "지원하지 않는 연동 서비스 타입입니다."),
+    GOOGLE_SCOPE_REQUIRED(HttpStatus.FORBIDDEN, "Google 권한이 부족합니다. 해당 서비스 권한을 추가로 승인해주세요."),
+    GOOGLE_RESOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "Google 리소스를 찾을 수 없거나 접근 권한이 없습니다."),
+    GOOGLE_API_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "Google 서비스에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도해주세요."),
 
     // 채팅
     CHAT_SESSION_NOT_FOUND(HttpStatus.NOT_FOUND, "채팅 세션을 찾을 수 없습니다."),

@@ -80,7 +80,7 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 
 ### 변수 참조 시스템
 - 문법: `{{nodes.<node_uuid>.output.<field>}}`
-- `ExecutionCursor.renderVariables()`가 실행 시점에 치환. 중첩 참조 불가(1단계만)
+- `ExecutionCursor.renderVariables()`가 실행 시점에 치환. 치환 결과에 참조식이 또 있으면 최대 5회까지 반복 확장한다(`MAX_RENDER_DEPTH`) — 상류 데이터에 든 `{{nodes…}}` 문자열도 같은 실행 안의 다른 노드 출력으로 바뀐다. 실행기는 `input`이 아니라 `node.getConfig()`를 직접 치환한다(`input`은 실행 로그용). AI 노드는 `prompt`와 `tools[]` 전체 문자열 값을 치환하며, `tools`는 `ExecutionCursor.renderDeep()`(재귀, 가변 복사본 — 런타임의 `input` 생성도 같은 함수)으로 치환해 노드 원본을 건드리지 않는다 — `injectWebhookUrls`가 웹훅 URL 원문을 넣는 자리라서. 미해결 참조는 `""`
 
 ### 실행 이벤트 (engine/event/)
 `ExecutionEventPublisher` — executionId 키의 in-memory `Sinks.Many` 멀티캐스트 허브. SSE 구독(HTTP 스레드)과 실행 스레드를 **같은 JVM 안에서** 연결한다 — 그래서 api의 잡 큐 워커를 별도 프로세스로 뺄 수 없다.
@@ -151,7 +151,7 @@ Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `Sche
 `retry.*`는 `RetryProperties`(`@ConfigurationProperties`)의 필드 기본값이고 yml에 선언돼 있지 않다 — 장애 시 `ai-max-attempts: 1`로 재시도를 전역으로 끌 수 있게 코드 상수가 아니라 설정으로 뒀다. 노드 config의 `retry` 선언이 이 기본값보다 우선한다.
 
 ## 주의사항
-- `node_runs`의 input/output에 자격증명 원문 저장 금지 — `SensitiveDataMasker.mask()`(util/)가 `apiKey/api_key/token/secret/password/Authorization` 키를 `***`로 마스킹한다. 새 민감 키는 `SENSITIVE_KEYS`에 추가. **중첩 Map·List 내부까지 재귀 적용된다** (IEUM-BE-62에서 확장 — 그 전에는 최상위 키만 검사했다). `workflow_runs.trigger_data`는 마스킹이 아니라 AES-256 암호화다 — `mask()`의 호출부는 `SyncExecutionRuntime` 하나뿐이다. 같은 클래스의 `containsWebhookUrl()`은 api `RawWebhookUrlGuard`(REST 저장 `WorkflowService` + agent 저장 `ChatService` 공용)가 노드 `config.url` 원문 웹훅 저장을 거부할 때, `isSlackWebhookUrl()`/`isDiscordWebhookUrl()`은 api `WebhookCredentialService.create()`가 등록 URL이 provider의 웹훅 호스트인지 볼 때 쓴다(전체 일치 + https 전용). **웹훅 도메인 조각은 `SLACK_WEBHOOK_PREFIX`·`DISCORD_WEBHOOK_PREFIX` 두 곳뿐이어야 한다** — 마스킹·저장 거부·등록 검증이 전부 이 조각을 조립해 쓰므로 도메인이 늘면 여기만 고친다
+- `node_runs`의 input/output에 자격증명 원문 저장 금지 — `SensitiveDataMasker.mask()`(util/)가 `apiKey/api_key/token/secret/password/Authorization` 키를 `***`로 마스킹한다. 키 이름과 별개로 `auth` 키 바로 아래 Map 중 `type`이 `secret`·`plain`인 것의 `value`도 가린다(`tools[].auth` 비밀 원문 — IEUM-BE-71). `auth` 밖의 같은 모양은 건드리지 않는다 — 노드 출력이 가려지면 재처리(`loadReusableNodeOutputs`)가 `***`를 하류에 넘긴다. 새 민감 키는 `SENSITIVE_KEYS`에 추가. **중첩 Map·List 내부까지 재귀 적용된다** (IEUM-BE-62에서 확장 — 그 전에는 최상위 키만 검사했다). `workflow_runs.trigger_data`는 마스킹이 아니라 AES-256 암호화다 — `mask()`의 호출부는 `SyncExecutionRuntime` 하나뿐이다. 같은 클래스의 `containsWebhookUrl()`은 api `RawWebhookUrlGuard`(REST 저장 `WorkflowService` + agent 저장 `ChatService` 공용)가 노드 `config.url` 원문 웹훅 저장을 거부할 때, `isSlackWebhookUrl()`/`isDiscordWebhookUrl()`은 api `WebhookCredentialService.create()`가 등록 URL이 provider의 웹훅 호스트인지 볼 때 쓴다(전체 일치 + https 전용). **웹훅 도메인 조각은 `SLACK_WEBHOOK_PREFIX`·`DISCORD_WEBHOOK_PREFIX` 두 곳뿐이어야 한다** — 마스킹·저장 거부·등록 검증이 전부 이 조각을 조립해 쓰므로 도메인이 늘면 여기만 고친다
 - 실행 로그 저장 실패는 실행 전체를 중단시키지 않음(warn만) — 이력 누락 가능성이 설계상 허용됨
 - 워크플로우당 트리거 노드 1개만 허용
 - 노드 config에 실제 토큰/키 저장 금지 — credential_id 참조만

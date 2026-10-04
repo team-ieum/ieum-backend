@@ -25,10 +25,11 @@
 | `chat` | ChatController | 워크플로우 채팅 (+ `AgentClient`가 ieum-agent 호출, WebSocket 핸들러) |
 | `webhook` / `webhookcredential` | WebhookController, WebhookCredentialController | 웹훅 트리거 수신·웹훅 크레덴셜, 실패 알림 대상 지정(`PUT /api/v1/webhook-credentials/{id}/alert-target`) |
 | `alert` | (Controller 없음) | 실패 알림 발신 — `AlertCooldownStore`, `DiscordWebhookSender` |
-| `integration` | IntegrationWorkflowController | 연동 서비스별 워크플로우 조회 |
+| `integration` | IntegrationWorkflowController, IntegrationOptionController | 연동 서비스별 워크플로우 조회, 노드 설정 드롭다운 선택지(`GET /api/v1/integrations/{app}/options/{resource}` — 공급원 빈 `OptionSource`를 key `{app}.{resource}`로 고름. `@Transactional` 금지: 토큰 갱신 저장이 readOnly에 합류해 유실) |
 | `mcp` | McpServerCatalogController | MCP 서버 카탈로그 |
 | `prompt` | PromptTemplateController | 프롬프트 템플릿 CRUD·테스트 실행 |
 | `beta` | BetaUsageController | 베타 플랫폼 키 사용량(%) 조회 |
+| `tool` | ToolSchemaController | 노드 도구 설정 폼 스키마(`GET /api/v1/tools/schema`) — agent `GET /v1/tools/schema`를 `AgentClient`로 그대로 전달, 캐시 없음 |
 
 ## 실행 트리거
 `workflow/WorkflowExecutionRunner` — 실행 진입점. Redis Stream 잡 큐(`ieum:exec:jobs`)에 executionId만 발행하고, 같은 프로세스의 워커가 꺼내 `SyncExecutionRuntime`을 돌린다. 큐 발행이 실패하면(Redis 장애) 기존 `@Async` 직접 실행으로 폴백한다. 실행 레코드 생성 자체는 workflow-core `WorkflowExecutionService.prepareExecution()`.

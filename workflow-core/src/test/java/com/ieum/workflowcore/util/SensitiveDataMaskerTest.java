@@ -104,6 +104,74 @@ class SensitiveDataMaskerTest {
     }
 
     @Test
+    @DisplayName("tools[].auth가 type=secret이면 value 원문을 가리고 type은 남긴다")
+    @SuppressWarnings("unchecked")
+    void mask_toolAuthSecretValue_isMasked() {
+        Map<String, Object> data = Map.of("tools", List.of(
+            Map.of("name", "x", "auth", Map.of("type", "secret", "value", "sk-123"))));
+
+        Map<String, Object> masked = SensitiveDataMasker.mask(data);
+
+        Map<String, Object> tool = ((List<Map<String, Object>>) masked.get("tools")).get(0);
+        assertThat((Map<String, Object>) tool.get("auth"))
+            .containsEntry("type", "secret")
+            .containsEntry("value", "***");
+        assertThat(tool).containsEntry("name", "x");
+    }
+
+    @Test
+    @DisplayName("auth type 판정은 대소문자를 구분하지 않는다 — PLAIN도 value를 가린다")
+    @SuppressWarnings("unchecked")
+    void mask_toolAuthPlainUppercase_isMasked() {
+        Map<String, Object> masked = SensitiveDataMasker.mask(
+            Map.of("auth", Map.of("type", "PLAIN", "value", "raw-key")));
+
+        assertThat((Map<String, Object>) masked.get("auth"))
+            .containsEntry("type", "PLAIN")
+            .containsEntry("value", "***");
+    }
+
+    @Test
+    @DisplayName("auth 아래라도 type이 secret·plain이 아니거나 없으면 value는 그대로 둔다")
+    @SuppressWarnings("unchecked")
+    void mask_valueWithoutSecretType_isUntouched() {
+        Map<String, Object> credential = Map.of("auth",
+            Map.of("type", "credential", "credentialId", "cred-1", "value", "keep"));
+
+        assertThat((Map<String, Object>) SensitiveDataMasker.mask(credential).get("auth"))
+            .containsEntry("type", "credential")
+            .containsEntry("credentialId", "cred-1")
+            .containsEntry("value", "keep");
+        assertThat((Map<String, Object>) SensitiveDataMasker.mask(Map.of("auth", Map.of("value", "keep"))).get("auth"))
+            .containsEntry("value", "keep");
+    }
+
+    @Test
+    @DisplayName("auth 밖의 {type: plain, value}는 노드 출력 같은 일반 데이터라 그대로 둔다")
+    @SuppressWarnings("unchecked")
+    void mask_secretTypeOutsideAuth_isUntouched() {
+        Map<String, Object> masked = SensitiveDataMasker.mask(
+            Map.of("output", Map.of("type", "plain", "value", "keep")));
+
+        assertThat((Map<String, Object>) masked.get("output"))
+            .containsEntry("type", "plain")
+            .containsEntry("value", "keep");
+    }
+
+    @Test
+    @DisplayName("auth 규칙은 auth 바로 아래 Map에만 — 그 하위 Map은 일반 규칙")
+    @SuppressWarnings("unchecked")
+    void mask_authRule_appliesOnlyToDirectAuthMap() {
+        Map<String, Object> data = Map.of("auth", Map.of("type", "secret", "value", "x",
+            "nested", Map.of("type", "plain", "value", "keep")));
+
+        Map<String, Object> auth = (Map<String, Object>) SensitiveDataMasker.mask(data).get("auth");
+
+        assertThat(auth).containsEntry("value", "***");
+        assertThat((Map<String, Object>) auth.get("nested")).containsEntry("value", "keep");
+    }
+
+    @Test
     @DisplayName("Slack 웹훅 URL은 서비스는 알아볼 수 있게 두고 토큰 구간만 가린다")
     void mask_slackWebhookUrl_masksTokenSegment() {
         Map<String, Object> data = Map.of(

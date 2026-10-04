@@ -17,6 +17,11 @@ import java.util.regex.Pattern;
  * <p>중첩 {@code Map}·{@code List} 안쪽까지 재귀로 적용하며, 값이 문자열이면 Slack/Discord
  * 웹훅 URL의 토큰 구간도 가린다. 입력은 변형하지 않고 새 컬렉션을 반환한다.
  *
+ * <p>{@code auth} 키 바로 아래 Map 중 {@code type}이 {@code secret}·{@code plain}인 것의 {@code value}도 가린다
+ * (AI 노드 {@code tools[].auth}). 키 이름 규칙과 따로 두는 이유는 {@code value}가 흔한 키라 이름만으로 가리면
+ * 일반 데이터까지 지워지기 때문이고, {@code auth} 아래로 좁힌 이유는 노드 출력의 같은 모양을 가리면 재처리가
+ * 그 출력을 {@code ***}로 재사용하기 때문이다({@code WorkflowExecutionService.loadReusableNodeOutputs}).
+ *
  * <p>웹훅 URL 판정({@link #containsWebhookUrl}, {@link #isSlackWebhookUrl},
  * {@link #isDiscordWebhookUrl})도 여기서 함께 제공한다 — 마스킹·저장 거부·등록 검증이 같은
  * 도메인 집합을 보게 하려면 도메인 조각이 한 곳에만 있어야 하기 때문이다. 셋 다
@@ -80,25 +85,29 @@ public final class SensitiveDataMasker {
         if (data == null) {
             return null;
         }
-        return maskMap(data, 0);
+        return maskMap(data, 0, false);
     }
 
-    private static Map<String, Object> maskMap(Map<?, ?> data, int depth) {
+    /** @param authMap {@code auth} 키 바로 아래 Map인지 — 이때만 type secret/plain의 value를 가린다 */
+    private static Map<String, Object> maskMap(Map<?, ?> data, int depth, boolean authMap) {
         Map<String, Object> masked = new LinkedHashMap<>();
+        // get("type")은 키 타입이 다른 정렬 Map에서 ClassCastException을 던질 수 있어 순회로 찾는다
+        boolean secretAuth = authMap && data.entrySet().stream().anyMatch(e -> "type".equals(e.getKey())
+            && e.getValue() instanceof String t && (t.equalsIgnoreCase("secret") || t.equalsIgnoreCase("plain")));
         data.forEach((k, v) -> {
             String key = (k == null) ? null : k.toString();
-            if (key != null && isSensitiveKey(key)) {
+            if (key != null && (isSensitiveKey(key) || (secretAuth && key.equals("value")))) {
                 masked.put(key, MASK);
             } else {
-                masked.put(key, maskValue(v, depth + 1));
+                masked.put(key, maskValue(v, depth + 1, "auth".equals(key)));
             }
         });
         return masked;
     }
 
-    private static Object maskValue(Object value, int depth) {
+    private static Object maskValue(Object value, int depth, boolean authMap) {
         if (value instanceof Map<?, ?> map) {
-            return depth > MAX_DEPTH ? MASK : maskMap(map, depth);
+            return depth > MAX_DEPTH ? MASK : maskMap(map, depth, authMap);
         }
         if (value instanceof List<?> list) {
             if (depth > MAX_DEPTH) {
@@ -106,7 +115,7 @@ public final class SensitiveDataMasker {
             }
             List<Object> masked = new ArrayList<>(list.size());
             for (Object item : list) {
-                masked.add(maskValue(item, depth + 1));
+                masked.add(maskValue(item, depth + 1, false));
             }
             return masked;
         }
