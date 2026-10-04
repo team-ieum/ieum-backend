@@ -1,10 +1,14 @@
 package com.ieum.api.chat.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.api.chat.service.AgentClient.AgentChatCallParams;
+import com.ieum.common.exception.CustomException;
+import com.ieum.common.exception.ErrorCode;
 import java.io.IOException;
 import java.util.UUID;
 import okhttp3.mockwebserver.MockResponse;
@@ -102,5 +106,34 @@ class AgentClientTest {
         assertThat(recorded.getHeader("X-Key-Mode")).isEqualTo("platform");
         assertThat(recorded.getHeader("X-LLM-Provider")).isEqualTo("GEMINI");
         assertThat(recorded.getHeader("X-LLM-Api-Key")).isNull();
+    }
+
+    @Test
+    @DisplayName("getToolSchema — agent GET /v1/tools/schema 응답 JSON을 그대로 돌려준다")
+    void getToolSchema_returnsAgentBodyAsIs() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody("{\"tools\":[{\"name\":\"builtin:google_sheets_append\",\"fields\":"
+                + "[{\"name\":\"spreadsheet_id\",\"optionsSource\":\"google.spreadsheets\"}]}]}"));
+
+        JsonNode schema = agentClient.getToolSchema();
+
+        assertThat(schema.path("tools").get(0).path("fields").get(0).path("optionsSource").asText())
+            .isEqualTo("google.spreadsheets");
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getMethod()).isEqualTo("GET");
+        assertThat(recorded.getPath()).endsWith("/v1/tools/schema");
+    }
+
+    @Test
+    @DisplayName("getToolSchema — agent 5xx는 기존 chat과 같은 매핑(PROVIDER_ERROR)")
+    void getToolSchema_agentErrorMapsLikeChat() {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(500));
+
+        assertThatThrownBy(() -> agentClient.getToolSchema())
+            .isInstanceOf(CustomException.class)
+            .extracting(e -> ((CustomException) e).getErrorCode())
+            .isEqualTo(ErrorCode.PROVIDER_ERROR);
     }
 }

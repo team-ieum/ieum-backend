@@ -25,7 +25,7 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import reactor.core.publisher.Flux;
 
 /**
- * ieum-agent {@code POST /v1/chat} 클라이언트.
+ * ieum-agent 클라이언트 — {@code POST /v1/chat}(+stream), {@code GET /v1/tools/schema}.
  *
  * <h3>요청 헤더</h3>
  * <ul>
@@ -110,21 +110,48 @@ public class AgentClient {
 
         } catch (CustomException e) {
             throw e;
-        } catch (WebClientResponseException e) {
-            log.error("[AgentClient] 에이전트 HTTP 오류 — status: {}, body: {}",
-                e.getStatusCode(), e.getResponseBodyAsString());
-            if (e.getStatusCode().value() == 429) {
-                throw new CustomException(ErrorCode.PROVIDER_RATE_LIMITED);
-            }
-            throw new CustomException(ErrorCode.PROVIDER_ERROR);
         } catch (Exception e) {
-            if (e.getCause() instanceof java.util.concurrent.TimeoutException) {
-                log.error("[AgentClient] 에이전트 응답 timeout ({}초)", timeoutSeconds);
-                throw new CustomException(ErrorCode.PROVIDER_TIMEOUT);
-            }
-            log.error("[AgentClient] 에이전트 호출 실패", e);
-            throw new CustomException(ErrorCode.PROVIDER_ERROR);
+            throw toAgentError(e);
         }
+    }
+
+    /**
+     * ieum-agent {@code GET /v1/tools/schema} — 노드 도구 설정 폼 스키마를 그대로 받아 온다 (IEUM-BE-71).
+     * agent 쪽은 무인증 엔드포인트라 크레덴셜 헤더를 싣지 않는다(사용자 인증은 BE 컨트롤러가 한다).
+     */
+    public JsonNode getToolSchema() {
+        try {
+            JsonNode body = webClient.get().uri("/v1/tools/schema")
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .timeout(Duration.ofSeconds(timeoutSeconds))
+                .block();
+            if (body == null) {
+                log.error("[AgentClient] 도구 스키마 응답이 null");
+                throw new CustomException(ErrorCode.PROVIDER_ERROR);
+            }
+            return body;
+        } catch (CustomException e) {
+            throw e;
+        } catch (Exception e) {
+            throw toAgentError(e);
+        }
+    }
+
+    /** agent 호출 실패를 ErrorCode로 옮긴다. {@code chat()}과 {@code getToolSchema()}가 공유한다. */
+    private CustomException toAgentError(Exception e) {
+        if (e instanceof WebClientResponseException we) {
+            log.error("[AgentClient] 에이전트 HTTP 오류 — status: {}, body: {}",
+                we.getStatusCode(), we.getResponseBodyAsString());
+            return new CustomException(we.getStatusCode().value() == 429
+                ? ErrorCode.PROVIDER_RATE_LIMITED : ErrorCode.PROVIDER_ERROR);
+        }
+        if (e.getCause() instanceof java.util.concurrent.TimeoutException) {
+            log.error("[AgentClient] 에이전트 응답 timeout ({}초)", timeoutSeconds);
+            return new CustomException(ErrorCode.PROVIDER_TIMEOUT);
+        }
+        log.error("[AgentClient] 에이전트 호출 실패", e);
+        return new CustomException(ErrorCode.PROVIDER_ERROR);
     }
 
     /**
