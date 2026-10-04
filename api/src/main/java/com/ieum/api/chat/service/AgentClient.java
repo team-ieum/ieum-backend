@@ -51,6 +51,9 @@ import reactor.core.publisher.Flux;
 @Component
 public class AgentClient {
 
+    /** LLM을 거치지 않는 스키마 GET이라 chat timeout(기본 60초)을 쓰지 않는다 — 폼 열 때 agent가 멈추면 서블릿 스레드를 오래 잡는다. */
+    private static final Duration TOOL_SCHEMA_TIMEOUT = Duration.ofSeconds(10);
+
     private final WebClient webClient;
     private final int timeoutSeconds;
     private final ObjectMapper objectMapper;
@@ -124,7 +127,7 @@ public class AgentClient {
             JsonNode body = webClient.get().uri("/v1/tools/schema")
                 .retrieve()
                 .bodyToMono(JsonNode.class)
-                .timeout(Duration.ofSeconds(timeoutSeconds))
+                .timeout(TOOL_SCHEMA_TIMEOUT)
                 .block();
             if (body == null) {
                 log.error("[AgentClient] 도구 스키마 응답이 null");
@@ -147,7 +150,7 @@ public class AgentClient {
                 ? ErrorCode.PROVIDER_RATE_LIMITED : ErrorCode.PROVIDER_ERROR);
         }
         if (e.getCause() instanceof java.util.concurrent.TimeoutException) {
-            log.error("[AgentClient] 에이전트 응답 timeout ({}초)", timeoutSeconds);
+            log.error("[AgentClient] 에이전트 응답 timeout");
             return new CustomException(ErrorCode.PROVIDER_TIMEOUT);
         }
         log.error("[AgentClient] 에이전트 호출 실패", e);

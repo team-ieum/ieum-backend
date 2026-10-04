@@ -12,7 +12,7 @@ import lombok.Getter;
  * {
  *   "scopes": {
  *     "gmail":    ["https://www.googleapis.com/auth/gmail.modify"],
- *     "sheets":   ["https://www.googleapis.com/auth/spreadsheets"],
+ *     "sheets":   ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"],
  *     "drive":    ["https://www.googleapis.com/auth/drive"],
  *     "calendar": ["https://www.googleapis.com/auth/calendar"]
  *   }

@@ -82,6 +82,19 @@ class IntegrationOptionControllerTest {
     }
 
     @Test
+    @DisplayName("빈 cursor(?cursor=)도 첫 페이지라 null로 넘긴다")
+    void blankCursorIsNull() throws Exception {
+        given(worksheets.fetch(userId, Map.of("spreadsheet_id", "1Bxi"), null))
+            .willReturn(new OptionPage(List.of(), null));
+
+        mockMvc.perform(get("/api/v1/integrations/google/options/worksheets")
+                .param("spreadsheet_id", "1Bxi")
+                .param("cursor", ""))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.items").isEmpty());
+    }
+
+    @Test
     @DisplayName("알 수 없는 {app}/{resource}는 404 NOT_FOUND, 공급원을 부르지 않는다")
     void unknownSourceIsNotFound() throws Exception {
         mockMvc.perform(get("/api/v1/integrations/google/options/calendars"))

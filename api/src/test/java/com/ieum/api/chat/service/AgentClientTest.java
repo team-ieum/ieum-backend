@@ -136,4 +136,15 @@ class AgentClientTest {
             .extracting(e -> ((CustomException) e).getErrorCode())
             .isEqualTo(ErrorCode.PROVIDER_ERROR);
     }
+
+    @Test
+    @DisplayName("getToolSchema — agent 429는 PROVIDER_RATE_LIMITED (chat과 공유하는 매핑)")
+    void getToolSchema_agent429MapsToRateLimited() {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(429));
+
+        assertThatThrownBy(() -> agentClient.getToolSchema())
+            .isInstanceOf(CustomException.class)
+            .extracting(e -> ((CustomException) e).getErrorCode())
+            .isEqualTo(ErrorCode.PROVIDER_RATE_LIMITED);
+    }
 }

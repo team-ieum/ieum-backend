@@ -11,7 +11,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.web.util.UriComponentsBuilder;
 
-/** 사용자 Drive의 스프레드시트 목록 — 최근 수정순, 공유 드라이브 포함. */
+/** 사용자 Drive의 스프레드시트 목록 — 최근 수정순. */
 @Component
 @RequiredArgsConstructor
 public class GoogleSpreadsheetsOptionSource implements OptionSource {

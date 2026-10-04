@@ -33,6 +33,9 @@ public class IntegrationOptionService {
         }
         Map<String, String> inputs = new HashMap<>(params);
         String cursor = inputs.remove("cursor");
+        if (cursor != null && cursor.isBlank()) {
+            cursor = null;
+        }
         return source.fetch(userId, inputs, cursor);
     }
 }
