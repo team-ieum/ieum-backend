@@ -121,22 +121,54 @@ class SensitiveDataMaskerTest {
 
     @Test
     @DisplayName("auth type 판정은 대소문자를 구분하지 않는다 — PLAIN도 value를 가린다")
+    @SuppressWarnings("unchecked")
     void mask_toolAuthPlainUppercase_isMasked() {
-        Map<String, Object> masked = SensitiveDataMasker.mask(Map.of("type", "PLAIN", "value", "raw-key"));
+        Map<String, Object> masked = SensitiveDataMasker.mask(
+            Map.of("auth", Map.of("type", "PLAIN", "value", "raw-key")));
 
-        assertThat(masked).containsEntry("type", "PLAIN").containsEntry("value", "***");
+        assertThat((Map<String, Object>) masked.get("auth"))
+            .containsEntry("type", "PLAIN")
+            .containsEntry("value", "***");
     }
 
     @Test
-    @DisplayName("type이 secret·plain이 아니거나 없으면 value는 일반 데이터라 그대로 둔다")
+    @DisplayName("auth 아래라도 type이 secret·plain이 아니거나 없으면 value는 그대로 둔다")
+    @SuppressWarnings("unchecked")
     void mask_valueWithoutSecretType_isUntouched() {
-        Map<String, Object> credential = Map.of("type", "credential", "credentialId", "cred-1", "value", "keep");
+        Map<String, Object> credential = Map.of("auth",
+            Map.of("type", "credential", "credentialId", "cred-1", "value", "keep"));
 
-        assertThat(SensitiveDataMasker.mask(credential))
+        assertThat((Map<String, Object>) SensitiveDataMasker.mask(credential).get("auth"))
             .containsEntry("type", "credential")
             .containsEntry("credentialId", "cred-1")
             .containsEntry("value", "keep");
-        assertThat(SensitiveDataMasker.mask(Map.of("value", "keep"))).containsEntry("value", "keep");
+        assertThat((Map<String, Object>) SensitiveDataMasker.mask(Map.of("auth", Map.of("value", "keep"))).get("auth"))
+            .containsEntry("value", "keep");
+    }
+
+    @Test
+    @DisplayName("auth 밖의 {type: plain, value}는 노드 출력 같은 일반 데이터라 그대로 둔다")
+    @SuppressWarnings("unchecked")
+    void mask_secretTypeOutsideAuth_isUntouched() {
+        Map<String, Object> masked = SensitiveDataMasker.mask(
+            Map.of("output", Map.of("type", "plain", "value", "keep")));
+
+        assertThat((Map<String, Object>) masked.get("output"))
+            .containsEntry("type", "plain")
+            .containsEntry("value", "keep");
+    }
+
+    @Test
+    @DisplayName("auth 규칙은 auth 바로 아래 Map에만 — 그 하위 Map은 일반 규칙")
+    @SuppressWarnings("unchecked")
+    void mask_authRule_appliesOnlyToDirectAuthMap() {
+        Map<String, Object> data = Map.of("auth", Map.of("type", "secret", "value", "x",
+            "nested", Map.of("type", "plain", "value", "keep")));
+
+        Map<String, Object> auth = (Map<String, Object>) SensitiveDataMasker.mask(data).get("auth");
+
+        assertThat(auth).containsEntry("value", "***");
+        assertThat((Map<String, Object>) auth.get("nested")).containsEntry("value", "keep");
     }
 
     @Test
