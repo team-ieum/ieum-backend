@@ -56,6 +56,9 @@ class GoogleOptionSourcesTest {
     private static final String SHEETS = "https://www.googleapis.com/auth/spreadsheets";
     private static final String WORKSHEETS_URL =
         "https://sheets.googleapis.com/v4/spreadsheets/1Bxi_-9?fields=sheets.properties.title";
+    private static final String CALENDAR = "https://www.googleapis.com/auth/calendar";
+    private static final String CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
+    private static final String EVENTS_PREFIX = "https://www.googleapis.com/calendar/v3/calendars/";
 
     private final RestTemplate restTemplate = new RestTemplate();
     private final MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
@@ -64,6 +67,8 @@ class GoogleOptionSourcesTest {
     private final GoogleApiReader reader = new GoogleApiReader(tokenService, accounts, restTemplate);
     private final GoogleSpreadsheetsOptionSource spreadsheets = new GoogleSpreadsheetsOptionSource(reader);
     private final GoogleWorksheetsOptionSource worksheets = new GoogleWorksheetsOptionSource(reader);
+    private final GoogleCalendarsOptionSource calendars = new GoogleCalendarsOptionSource(reader);
+    private final GoogleEventsOptionSource events = new GoogleEventsOptionSource(reader);
     private final UUID userId = UUID.randomUUID();
 
     @AfterEach
@@ -88,6 +93,12 @@ class GoogleOptionSourcesTest {
     private Map<String, String> sheetInput(String spreadsheetId) {
         Map<String, String> inputs = new HashMap<>();
         inputs.put("spreadsheet_id", spreadsheetId);
+        return inputs;
+    }
+
+    private Map<String, String> calendarInput(String calendarId) {
+        Map<String, String> inputs = new HashMap<>();
+        inputs.put("calendar_id", calendarId);
         return inputs;
     }
 
@@ -263,5 +274,113 @@ class GoogleOptionSourcesTest {
         server.expect(requestTo(WORKSHEETS_URL)).andRespond(withException(new SocketTimeoutException("read timed out")));
 
         assertErrorCode(() -> worksheets.fetch(userId, sheetInput("1Bxi_-9"), null), ErrorCode.GOOGLE_API_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("캘린더 목록 — calendarList 250개씩, summaryOverride가 있으면 그 이름, 읽기 전용 캘린더도 포함")
+    void calendarsListsCalendarList() {
+        connected(CALENDAR);
+        server.expect(requestTo(CALENDAR_LIST_URL + "?maxResults=250"))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Authorization", "Bearer g-token"))
+            .andRespond(withSuccess("""
+                {"nextPageToken":"c-2","items":[
+                  {"id":"me@example.com","summary":"me@example.com","summaryOverride":"내 일정","accessRole":"owner"},
+                  {"id":"ko.south_korea#holiday@group.v.calendar.google.com","summary":"대한민국의 휴일",
+                   "summaryOverride":"","accessRole":"reader"}]}
+                """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = calendars.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(
+            new OptionItem("me@example.com", "내 일정"),
+            new OptionItem("ko.south_korea#holiday@group.v.calendar.google.com", "대한민국의 휴일"));
+        assertThat(page.nextCursor()).isEqualTo("c-2");
+    }
+
+    @Test
+    @DisplayName("캘린더 목록 — cursor는 pageToken으로, 마지막 페이지면 nextCursor null")
+    void calendarsPassesCursor() {
+        connected(CALENDAR);
+        server.expect(requestTo(CALENDAR_LIST_URL + "?maxResults=250&pageToken=c-2"))
+            .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
+
+        assertThat(calendars.fetch(userId, Map.of(), "c-2").nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("calendar scope가 없으면 캘린더·일정 둘 다 토큰·Google 호출 없이 GOOGLE_SCOPE_REQUIRED")
+    void calendarSourcesRequireCalendarScope() {
+        connected("openid " + SHEETS + " " + DRIVE);
+
+        assertErrorCode(() -> calendars.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
+        assertErrorCode(() -> events.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
+        verify(tokenService, never()).getValidAccessToken(any());
+    }
+
+    @Test
+    @DisplayName("일정 목록 — 지금 이후·회차별·시작순 50개, 표시명은 제목 · 시작(시각/종일/제목 없음)")
+    void eventsListsUpcomingWithDisplayNames() {
+        connected(CALENDAR);
+        server.expect(requestTo(startsWith(EVENTS_PREFIX + "primary/events?")))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Authorization", "Bearer g-token"))
+            .andExpect(requestTo(containsString("timeMin=20")))
+            .andExpect(requestTo(containsString("singleEvents=true")))
+            .andExpect(requestTo(containsString("orderBy=startTime")))
+            .andExpect(requestTo(containsString("maxResults=50")))
+            .andExpect(requestTo(not(containsString("pageToken"))))
+            .andRespond(withSuccess("""
+                {"nextPageToken":"e-2","items":[
+                  {"id":"evt1","summary":"주간 회의","start":{"dateTime":"2026-10-07T14:00:00+09:00"}},
+                  {"id":"evt2","summary":"창립기념일","start":{"date":"2026-10-08"}},
+                  {"id":"evt3","summary":"  ","start":{"dateTime":"2026-10-09T09:30:00Z"}}]}
+                """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = events.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(
+            new OptionItem("evt1", "주간 회의 · 2026-10-07 14:00"),
+            new OptionItem("evt2", "창립기념일 · 2026-10-08"),
+            new OptionItem("evt3", "(제목 없음) · 2026-10-09 09:30"));
+        assertThat(page.nextCursor()).isEqualTo("e-2");
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"   "})
+    @DisplayName("일정 목록 — calendar_id가 없거나 공백이면 primary(도구 기본값과 같은 의미)")
+    void eventsDefaultToPrimary(String calendarId) {
+        connected(CALENDAR);
+        server.expect(requestTo(startsWith(EVENTS_PREFIX + "primary/events?")))
+            .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
+
+        events.fetch(userId, calendarInput(calendarId), null);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "'ko.south_korea#holiday@group.v.calendar.google.com', 'ko.south_korea%23holiday%40group.v.calendar.google.com'",
+        "'a/b', 'a%2Fb'",
+        "'x?y=1', 'x%3Fy%3D1'"
+    })
+    @DisplayName("calendar_id는 경로 한 세그먼트로 엄격 인코딩된다 — #가 fragment로, /·?가 경로·쿼리로 새지 않는다")
+    void eventsEncodeCalendarIdStrictly(String calendarId, String encoded) {
+        connected(CALENDAR);
+        server.expect(requestTo(startsWith(EVENTS_PREFIX + encoded + "/events?")))
+            .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
+
+        events.fetch(userId, calendarInput(calendarId), null);
+    }
+
+    @Test
+    @DisplayName("일정 cursor에 &·=가 섞여도 쿼리 파라미터로 새지 않는다")
+    void eventsCursorIsStrictlyEncoded() {
+        connected(CALENDAR);
+        server.expect(requestTo(containsString("pageToken=a%26q%3Dx")))
+            .andExpect(requestTo(not(containsString("&q=x"))))
+            .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
+
+        events.fetch(userId, Map.of(), "a&q=x");
     }
 }
