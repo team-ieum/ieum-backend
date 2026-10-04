@@ -55,7 +55,8 @@ spring:
           google:
             client-id: ${GOOGLE_CLIENT_ID}
             client-secret: ${GOOGLE_CLIENT_SECRET}
-            redirect-uri: "{baseUrl}/api/v1/oauth2/callback/{registrationId}"
+            # TLS 종료 프록시 뒤에선 {baseUrl}이 http로 잡혀 Google이 redirect_uri_mismatch로 거부한다 — 배포 환경은 env로 고정
+            redirect-uri: "${GOOGLE_REDIRECT_URI:{baseUrl}/api/v1/oauth2/callback/{registrationId}}"
             # baseline scope만 등록 — 그 외 scope는 google.oauth.scopes 기반으로
             # IncrementalScopeAuthorizationRequestResolver가 scope_groups 파라미터로 동적 주입
             scope: email, profile
