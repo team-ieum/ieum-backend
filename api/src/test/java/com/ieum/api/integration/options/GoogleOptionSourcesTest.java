@@ -25,6 +25,8 @@ import com.ieum.auth.service.GoogleTokenService;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import java.net.SocketTimeoutException;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -42,10 +44,12 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.test.web.client.RequestMatcher;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
 
 /**
- * 드롭다운 공급원 2종의 Google 호출 모양과 오류 매핑을 고정한다 (IEUM-BE-71).
+ * 드롭다운 공급원 6종의 Google 호출 모양과 오류 매핑을 고정한다 (IEUM-BE-71·72).
  *
  * <p>요청 없이 끝나야 하는 케이스(권한 없음·형식 오류)는 기대 요청을 등록하지 않는다 —
  * 요청이 나가면 {@code MockRestServiceServer}가 AssertionError를 던져 테스트가 깨진다.
@@ -69,6 +73,8 @@ class GoogleOptionSourcesTest {
     private final GoogleWorksheetsOptionSource worksheets = new GoogleWorksheetsOptionSource(reader);
     private final GoogleCalendarsOptionSource calendars = new GoogleCalendarsOptionSource(reader);
     private final GoogleEventsOptionSource events = new GoogleEventsOptionSource(reader);
+    private final GoogleFilesOptionSource files = new GoogleFilesOptionSource(reader);
+    private final GoogleFoldersOptionSource folders = new GoogleFoldersOptionSource(reader);
     private final UUID userId = UUID.randomUUID();
 
     @AfterEach
@@ -100,6 +106,12 @@ class GoogleOptionSourcesTest {
         Map<String, String> inputs = new HashMap<>();
         inputs.put("calendar_id", calendarId);
         return inputs;
+    }
+
+    private static RequestMatcher driveQuery(String expected) {
+        return request -> assertThat(URLDecoder.decode(
+            UriComponentsBuilder.fromUri(request.getURI()).build(true).getQueryParams().getFirst("q"),
+            StandardCharsets.UTF_8)).isEqualTo(expected);
     }
 
     @Test
@@ -382,5 +394,62 @@ class GoogleOptionSourcesTest {
             .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
 
         events.fetch(userId, Map.of(), "a&q=x");
+    }
+
+    @Test
+    @DisplayName("파일 목록 — agent google_drive_read가 읽는 형식만, Drive 공용 조회 옵션 그대로")
+    void filesListsReadableFiles() {
+        connected(DRIVE);
+        server.expect(requestTo(startsWith("https://www.googleapis.com/drive/v3/files?")))
+            .andExpect(driveQuery("trashed=false and ("
+                + "mimeType='application/vnd.google-apps.document'"
+                + " or mimeType='application/vnd.google-apps.spreadsheet'"
+                + " or mimeType contains 'text/'"
+                + " or mimeType='application/json'"
+                + " or mimeType='application/xml'"
+                + " or mimeType='application/javascript'"
+                + " or mimeType='application/x-yaml')"))
+            .andExpect(requestTo(containsString("orderBy=modifiedTime%20desc")))
+            .andExpect(requestTo(containsString("supportsAllDrives=true")))
+            .andRespond(withSuccess("{\"nextPageToken\":\"f-2\",\"files\":[{\"id\":\"f1\",\"name\":\"회의록\"}]}",
+                MediaType.APPLICATION_JSON));
+
+        OptionPage page = files.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(new OptionItem("f1", "회의록"));
+        assertThat(page.nextCursor()).isEqualTo("f-2");
+    }
+
+    @Test
+    @DisplayName("폴더 목록 — 폴더만, 휴지통 제외, cursor는 pageToken으로")
+    void foldersListsFolders() {
+        connected(DRIVE);
+        server.expect(requestTo(startsWith("https://www.googleapis.com/drive/v3/files?")))
+            .andExpect(driveQuery("mimeType='application/vnd.google-apps.folder' and trashed=false"))
+            .andExpect(requestTo(containsString("pageToken=f-2")))
+            .andRespond(withSuccess("{\"files\":[{\"id\":\"d1\",\"name\":\"보고서\"}]}", MediaType.APPLICATION_JSON));
+
+        OptionPage page = folders.fetch(userId, Map.of(), "f-2");
+
+        assertThat(page.items()).containsExactly(new OptionItem("d1", "보고서"));
+        assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("spreadsheets scope만 있으면 파일·폴더는 GOOGLE_SCOPE_REQUIRED — drive가 필요하다")
+    void filesRequireDriveScope() {
+        connected("openid " + SHEETS);
+
+        assertErrorCode(() -> files.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
+        assertErrorCode(() -> folders.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
+    }
+
+    @Test
+    @DisplayName("공급원 키는 agent FIELD_META의 optionsSource와 1:1 계약")
+    void keysMatchAgentOptionsSource() {
+        assertThat(List.of(spreadsheets.key(), worksheets.key(), calendars.key(), events.key(),
+                files.key(), folders.key()))
+            .containsExactly("google.spreadsheets", "google.worksheets", "google.calendars", "google.events",
+                "google.files", "google.folders");
     }
 }
