@@ -96,6 +96,56 @@ class AuthServiceTest {
         then(userRepository).should(never()).save(any());
     }
 
+    // ===== resetPassword =====
+
+    @Test
+    void resetPassword_success_updatesPasswordAndDeletesRefreshToken() {
+        User user = buildUser();
+        given(userRepository.findByEmail("user@example.com")).willReturn(Optional.of(user));
+        given(passwordEncoder.encode("NewPassword1!")).willReturn("new-encoded");
+
+        authService.resetPassword("user@example.com", "NewPassword1!");
+
+        then(emailVerificationService).should()
+                .consumeVerification("user@example.com", VerificationPurpose.PASSWORD_RESET);
+        assertThat(user.getPasswordHash()).isEqualTo("new-encoded");
+        then(refreshTokenRepository).should().deleteById(user.getId().toString());
+    }
+
+    @Test
+    void resetPassword_notVerified_throwsEmailNotVerified() {
+        willThrow(new CustomException(ErrorCode.EMAIL_NOT_VERIFIED))
+                .given(emailVerificationService)
+                .consumeVerification("user@example.com", VerificationPurpose.PASSWORD_RESET);
+
+        assertThatThrownBy(() -> authService.resetPassword("user@example.com", "NewPassword1!"))
+                .isInstanceOf(CustomException.class)
+                .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.EMAIL_NOT_VERIFIED));
+
+        then(userRepository).should(never()).findByEmail(anyString());
+        then(refreshTokenRepository).should(never()).deleteById(anyString());
+    }
+
+    @Test
+    void resetPassword_socialAccount_throwsNotFound() {
+        User googleUser = User.builder()
+                .id(UUID.randomUUID())
+                .email("user@example.com")
+                .name("홍길동")
+                .provider(AuthProvider.GOOGLE)
+                .role(UserRole.ROLE_USER)
+                .build();
+        given(userRepository.findByEmail("user@example.com")).willReturn(Optional.of(googleUser));
+
+        assertThatThrownBy(() -> authService.resetPassword("user@example.com", "NewPassword1!"))
+                .isInstanceOf(CustomException.class)
+                .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.NOT_FOUND));
+
+        assertThat(googleUser.getPasswordHash()).isNull();
+    }
+
     // ===== login =====
 
     @Test
