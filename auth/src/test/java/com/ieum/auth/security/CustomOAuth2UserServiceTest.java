@@ -1,7 +1,6 @@
 package com.ieum.auth.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.verify;
@@ -17,6 +16,7 @@ import com.ieum.auth.repository.OAuthLinkTokenRepository;
 import com.ieum.auth.repository.UserRepository;
 import com.ieum.common.util.AesEncryptor;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -83,9 +83,13 @@ class CustomOAuth2UserServiceTest {
         return new OAuth2UserRequest(google, accessToken, additionalParameters);
     }
 
+    private static final LocalDateTime OLD_EXPIRES_AT = LocalDateTime.now().plusMinutes(30);
+
     private ConnectedAccount existingAccount(String refreshToken) {
         return ConnectedAccount.builder().userId(USER_ID).provider(AuthProvider.GOOGLE)
-            .providerAccountId("g-sub").accessToken("enc:old").refreshToken(refreshToken).scopes("email").build();
+            .providerAccountId("g-sub").accessToken("enc:old").refreshToken(refreshToken)
+            .tokenExpiresAt(OLD_EXPIRES_AT).refreshTokenExpiresAt(LocalDateTime.now().minusDays(1))
+            .scopes("email https://www.googleapis.com/auth/gmail.modify").build();
     }
 
     @Test
@@ -103,8 +107,8 @@ class CustomOAuth2UserServiceTest {
     }
 
     @Test
-    @DisplayName("기존 계정 — 새 refresh_token으로 교체한다")
-    void replacesRefreshTokenOnExistingAccount() {
+    @DisplayName("기존 계정 — 동의 흐름(새 refresh_token)이면 토큰을 교체하고 refresh 만료 시각을 비운다")
+    void replacesTokensOnExistingAccount() {
         ConnectedAccount account = existingAccount("enc:old-rt");
         given(connectedAccountRepository.findByUserIdAndProvider(USER_ID, AuthProvider.GOOGLE))
             .willReturn(Optional.of(account));
@@ -113,11 +117,12 @@ class CustomOAuth2UserServiceTest {
 
         assertThat(account.getRefreshToken()).isEqualTo("enc:rt");
         assertThat(account.getAccessToken()).isEqualTo("enc:at");
+        assertThat(account.getRefreshTokenExpiresAt()).isNull();
     }
 
     @Test
-    @DisplayName("기존 계정 — 새 refresh_token이 없으면(기본 로그인) 기존 값을 유지한다")
-    void keepsRefreshTokenWhenNoneIssued() {
+    @DisplayName("기존 계정 — 기본 로그인(refresh_token 없음)은 email·profile 토큰이라 연동 토큰을 덮지 않는다")
+    void keepsTokensOnBaselineLogin() {
         ConnectedAccount account = existingAccount("enc:old-rt");
         given(connectedAccountRepository.findByUserIdAndProvider(USER_ID, AuthProvider.GOOGLE))
             .willReturn(Optional.of(account));
@@ -125,6 +130,8 @@ class CustomOAuth2UserServiceTest {
         service.loadUser(request(Map.of()));
 
         assertThat(account.getRefreshToken()).isEqualTo("enc:old-rt");
-        assertThat(account.getAccessToken()).isEqualTo("enc:at");
+        assertThat(account.getAccessToken()).isEqualTo("enc:old");
+        assertThat(account.getTokenExpiresAt()).isEqualTo(OLD_EXPIRES_AT);
+        assertThat(account.getScopes()).isEqualTo("email https://www.googleapis.com/auth/gmail.modify");
     }
 }
