@@ -23,6 +23,14 @@ public enum ErrorCode {
     TOKEN_EXPIRED(HttpStatus.UNAUTHORIZED, "만료된 토큰입니다."),
     TOKEN_INVALID(HttpStatus.UNAUTHORIZED, "유효하지 않은 토큰입니다."),
 
+    // 이메일 인증
+    EMAIL_NOT_VERIFIED(HttpStatus.BAD_REQUEST, "이메일 인증이 완료되지 않았습니다."),
+    VERIFICATION_CODE_INVALID(HttpStatus.BAD_REQUEST, "인증코드가 일치하지 않습니다."),
+    VERIFICATION_CODE_EXPIRED(HttpStatus.BAD_REQUEST, "인증코드가 만료되었거나 발송되지 않았습니다. 인증코드를 다시 요청해주세요."),
+    VERIFICATION_ATTEMPTS_EXCEEDED(HttpStatus.BAD_REQUEST, "인증코드 입력 횟수를 초과했습니다. 인증코드를 다시 요청해주세요."),
+    VERIFICATION_RESEND_TOO_SOON(HttpStatus.TOO_MANY_REQUESTS, "잠시 후 다시 요청해주세요."),
+    MAIL_SEND_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "메일 발송에 실패했습니다. 잠시 후 다시 시도해주세요."),
+
     // 크레덴셜 (BYOK)
     INVALID_API_KEY(HttpStatus.BAD_REQUEST, "프로바이더 API 키 검증에 실패했습니다."),
     INVALID_API_KEY_FORMAT(HttpStatus.BAD_REQUEST, "API 키 형식이 올바르지 않습니다. 프로바이더별 키 형식을 확인해주세요."),
