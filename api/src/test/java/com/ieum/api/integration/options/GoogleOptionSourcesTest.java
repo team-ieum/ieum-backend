@@ -306,7 +306,7 @@ class GoogleOptionSourcesTest {
 
         assertThat(page.items()).containsExactly(
             new OptionItem("me@example.com", "내 일정"),
-            new OptionItem("ko.south_korea#holiday@group.v.calendar.google.com", "대한민국의 휴일"));
+            new OptionItem("ko.south_korea#holiday@group.v.calendar.google.com", "대한민국의 휴일 (읽기 전용)"));
         assertThat(page.nextCursor()).isEqualTo("c-2");
     }
 

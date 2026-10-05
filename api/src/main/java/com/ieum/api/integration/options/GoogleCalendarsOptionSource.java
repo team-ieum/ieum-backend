@@ -14,7 +14,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 /**
  * 사용자 캘린더 목록 — 읽기 전용(공휴일·구독)도 포함한다. 같은 {@code calendar_id} 필드를 일정 생성·조회·수정
  * 도구가 함께 쓰는데, 조회로 공휴일을 읽는 건 정당한 용도라서다. free/busy만 공유된 캘린더는 일정을 읽을 수 없어
- * {@code minAccessRole=reader}로 뺀다.
+ * {@code minAccessRole=reader}로 뺀다. 읽기 전용은 이름 뒤에 표시해 생성·수정 노드에서 고르지 않게 한다(고르면 Google 403).
  */
 @Component
 @RequiredArgsConstructor
@@ -47,6 +47,9 @@ public class GoogleCalendarsOptionSource implements OptionSource {
         body.path("items").forEach(calendar -> {
             String override = calendar.path("summaryOverride").asText("");
             String name = override.isBlank() ? calendar.path("summary").asText() : override;
+            if ("reader".equals(calendar.path("accessRole").asText())) {
+                name += " (읽기 전용)";
+            }
             items.add(new OptionItem(calendar.path("id").asText(), name));
         });
         return new OptionPage(items, body.path("nextPageToken").asText(null));
