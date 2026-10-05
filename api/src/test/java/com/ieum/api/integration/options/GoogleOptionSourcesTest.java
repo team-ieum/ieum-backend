@@ -292,7 +292,7 @@ class GoogleOptionSourcesTest {
     @DisplayName("캘린더 목록 — calendarList 250개씩, summaryOverride가 있으면 그 이름, 읽기 전용 캘린더도 포함")
     void calendarsListsCalendarList() {
         connected(CALENDAR);
-        server.expect(requestTo(CALENDAR_LIST_URL + "?maxResults=250"))
+        server.expect(requestTo(CALENDAR_LIST_URL + "?maxResults=250&minAccessRole=reader"))
             .andExpect(method(HttpMethod.GET))
             .andExpect(header("Authorization", "Bearer g-token"))
             .andRespond(withSuccess("""
@@ -314,7 +314,7 @@ class GoogleOptionSourcesTest {
     @DisplayName("캘린더 목록 — cursor는 pageToken으로, 마지막 페이지면 nextCursor null")
     void calendarsPassesCursor() {
         connected(CALENDAR);
-        server.expect(requestTo(CALENDAR_LIST_URL + "?maxResults=250&pageToken=c-2"))
+        server.expect(requestTo(CALENDAR_LIST_URL + "?maxResults=250&minAccessRole=reader&pageToken=c-2"))
             .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
 
         assertThat(calendars.fetch(userId, Map.of(), "c-2").nextCursor()).isNull();
