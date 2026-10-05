@@ -104,6 +104,8 @@ class NotionApiReader {
         return switch (status) {
             // 기본 문구가 Google 재연동이라 덮어쓴다
             case 401 -> new CustomException(ErrorCode.AUTHENTICATION_REQUIRED, "Notion 계정을 다시 연동해주세요.");
+            // restricted_resource — 연동 때 준 권한(capability·공유 범위)이 부족하다. 사용자가 고칠 길은 재연동이다
+            case 403 -> new CustomException(ErrorCode.INVALID_INPUT, "Notion 연동 권한이 부족합니다. Notion을 다시 연동해 주세요.");
             case 429 -> new CustomException(ErrorCode.NOTION_API_UNAVAILABLE);
             // 조작·만료된 start_cursor, 권한 없는 리소스 등 — 요청 값 문제다
             default -> new CustomException(ErrorCode.INVALID_INPUT, "Notion이 요청을 거부했습니다 (HTTP " + status + ").");

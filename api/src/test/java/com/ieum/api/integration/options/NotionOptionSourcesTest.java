@@ -145,6 +145,16 @@ class NotionOptionSourcesTest {
     }
 
     @Test
+    @DisplayName("403(연동 권한 부족)은 재연동을 안내한다")
+    void forbiddenSuggestsReconnect() {
+        connected();
+        server.expect(requestTo(SEARCH_URL)).andRespond(withStatus(HttpStatus.FORBIDDEN));
+
+        assertThatThrownBy(() -> reader.search(userId, "page", null))
+            .hasMessage("Notion 연동 권한이 부족합니다. Notion을 다시 연동해 주세요.");
+    }
+
+    @Test
     @DisplayName("Notion 타임아웃은 NOTION_API_UNAVAILABLE")
     void timeoutMapsToUnavailable() {
         connected();
