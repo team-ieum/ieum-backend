@@ -337,7 +337,10 @@ class GoogleOptionSourcesTest {
         server.expect(requestTo(startsWith(EVENTS_PREFIX + "primary/events?")))
             .andExpect(method(HttpMethod.GET))
             .andExpect(header("Authorization", "Bearer g-token"))
-            .andExpect(requestTo(containsString("timeMin=20")))
+            // 소수 초 없이 — JDK·OS에 따라 Instant.toString()이 마이크로·나노초까지 찍는다
+            .andExpect(request -> assertThat(URLDecoder.decode(
+                UriComponentsBuilder.fromUri(request.getURI()).build(true).getQueryParams().getFirst("timeMin"),
+                StandardCharsets.UTF_8)).matches("\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ"))
             .andExpect(requestTo(containsString("singleEvents=true")))
             .andExpect(requestTo(containsString("orderBy=startTime")))
             .andExpect(requestTo(containsString("maxResults=50")))
@@ -374,15 +377,26 @@ class GoogleOptionSourcesTest {
     @CsvSource({
         "'ko.south_korea#holiday@group.v.calendar.google.com', 'ko.south_korea%23holiday%40group.v.calendar.google.com'",
         "'a/b', 'a%2Fb'",
-        "'x?y=1', 'x%3Fy%3D1'"
+        "'x?y=1', 'x%3Fy%3D1'",
+        "'ko.south_korea%23holiday%40group.v.calendar.google.com', 'ko.south_korea%23holiday%40group.v.calendar.google.com'",
+        "'  a@b.com  ', 'a%40b.com'"
     })
-    @DisplayName("calendar_id는 경로 한 세그먼트로 엄격 인코딩된다 — #가 fragment로, /·?가 경로·쿼리로 새지 않는다")
+    @DisplayName("calendar_id는 strip·한 번 디코드 후 경로 한 세그먼트로 엄격 인코딩된다 — 이중 인코딩 없음, #·/·?가 새지 않는다")
     void eventsEncodeCalendarIdStrictly(String calendarId, String encoded) {
         connected(CALENDAR);
         server.expect(requestTo(startsWith(EVENTS_PREFIX + encoded + "/events?")))
             .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
 
         events.fetch(userId, calendarInput(calendarId), null);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"{{nodes.x.output.y}}", "100%", "%zz"})
+    @DisplayName("calendar_id가 변수 참조식이거나 %시퀀스가 깨졌으면 계정·토큰·Google 조회 없이 INVALID_INPUT")
+    void eventsRejectUnresolvableCalendarId(String calendarId) {
+        assertErrorCode(() -> events.fetch(userId, calendarInput(calendarId), null), ErrorCode.INVALID_INPUT);
+        verify(accounts, never()).findByUserIdAndProvider(any(), any());
+        verify(tokenService, never()).getValidAccessToken(any());
     }
 
     @Test

@@ -73,7 +73,9 @@ class GoogleApiReader {
     }
 
     /**
-     * Drive {@code files.list} 한 페이지 — 최근 수정순 50개, 공유 드라이브 포함. scope는 {@code drive}.
+     * Drive {@code files.list} 한 페이지 — 최근 수정순 50개. scope는 {@code drive}.
+     * {@code corpora}가 기본값(user)이라 사용자가 만들었거나 열었거나 직접 공유받은 항목만 나온다 —
+     * 공유 드라이브 항목도 이 조건을 만족할 때만 포함된다.
      *
      * @param q Drive 검색식. URI 변수로 넣어 엄격 인코딩한다
      */
