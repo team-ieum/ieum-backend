@@ -25,6 +25,8 @@ import com.ieum.auth.service.GoogleTokenService;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import java.net.SocketTimeoutException;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -42,10 +44,12 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.test.web.client.RequestMatcher;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
 
 /**
- * 드롭다운 공급원 2종의 Google 호출 모양과 오류 매핑을 고정한다 (IEUM-BE-71).
+ * 드롭다운 공급원 6종의 Google 호출 모양과 오류 매핑을 고정한다 (IEUM-BE-71·72).
  *
  * <p>요청 없이 끝나야 하는 케이스(권한 없음·형식 오류)는 기대 요청을 등록하지 않는다 —
  * 요청이 나가면 {@code MockRestServiceServer}가 AssertionError를 던져 테스트가 깨진다.
@@ -56,6 +60,9 @@ class GoogleOptionSourcesTest {
     private static final String SHEETS = "https://www.googleapis.com/auth/spreadsheets";
     private static final String WORKSHEETS_URL =
         "https://sheets.googleapis.com/v4/spreadsheets/1Bxi_-9?fields=sheets.properties.title";
+    private static final String CALENDAR = "https://www.googleapis.com/auth/calendar";
+    private static final String CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
+    private static final String EVENTS_PREFIX = "https://www.googleapis.com/calendar/v3/calendars/";
 
     private final RestTemplate restTemplate = new RestTemplate();
     private final MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
@@ -64,6 +71,10 @@ class GoogleOptionSourcesTest {
     private final GoogleApiReader reader = new GoogleApiReader(tokenService, accounts, restTemplate);
     private final GoogleSpreadsheetsOptionSource spreadsheets = new GoogleSpreadsheetsOptionSource(reader);
     private final GoogleWorksheetsOptionSource worksheets = new GoogleWorksheetsOptionSource(reader);
+    private final GoogleCalendarsOptionSource calendars = new GoogleCalendarsOptionSource(reader);
+    private final GoogleEventsOptionSource events = new GoogleEventsOptionSource(reader);
+    private final GoogleFilesOptionSource files = new GoogleFilesOptionSource(reader);
+    private final GoogleFoldersOptionSource folders = new GoogleFoldersOptionSource(reader);
     private final UUID userId = UUID.randomUUID();
 
     @AfterEach
@@ -89,6 +100,18 @@ class GoogleOptionSourcesTest {
         Map<String, String> inputs = new HashMap<>();
         inputs.put("spreadsheet_id", spreadsheetId);
         return inputs;
+    }
+
+    private Map<String, String> calendarInput(String calendarId) {
+        Map<String, String> inputs = new HashMap<>();
+        inputs.put("calendar_id", calendarId);
+        return inputs;
+    }
+
+    private static RequestMatcher driveQuery(String expected) {
+        return request -> assertThat(URLDecoder.decode(
+            UriComponentsBuilder.fromUri(request.getURI()).build(true).getQueryParams().getFirst("q"),
+            StandardCharsets.UTF_8)).isEqualTo(expected);
     }
 
     @Test
@@ -263,5 +286,184 @@ class GoogleOptionSourcesTest {
         server.expect(requestTo(WORKSHEETS_URL)).andRespond(withException(new SocketTimeoutException("read timed out")));
 
         assertErrorCode(() -> worksheets.fetch(userId, sheetInput("1Bxi_-9"), null), ErrorCode.GOOGLE_API_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("캘린더 목록 — calendarList 250개씩, summaryOverride가 있으면 그 이름, 읽기 전용 캘린더도 포함")
+    void calendarsListsCalendarList() {
+        connected(CALENDAR);
+        server.expect(requestTo(CALENDAR_LIST_URL + "?maxResults=250&minAccessRole=reader"))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Authorization", "Bearer g-token"))
+            .andRespond(withSuccess("""
+                {"nextPageToken":"c-2","items":[
+                  {"id":"me@example.com","summary":"me@example.com","summaryOverride":"내 일정","accessRole":"owner"},
+                  {"id":"ko.south_korea#holiday@group.v.calendar.google.com","summary":"대한민국의 휴일",
+                   "summaryOverride":"","accessRole":"reader"}]}
+                """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = calendars.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(
+            new OptionItem("me@example.com", "내 일정"),
+            new OptionItem("ko.south_korea#holiday@group.v.calendar.google.com", "대한민국의 휴일 (읽기 전용)"));
+        assertThat(page.nextCursor()).isEqualTo("c-2");
+    }
+
+    @Test
+    @DisplayName("캘린더 목록 — cursor는 pageToken으로, 마지막 페이지면 nextCursor null")
+    void calendarsPassesCursor() {
+        connected(CALENDAR);
+        server.expect(requestTo(CALENDAR_LIST_URL + "?maxResults=250&minAccessRole=reader&pageToken=c-2"))
+            .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
+
+        assertThat(calendars.fetch(userId, Map.of(), "c-2").nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("calendar scope가 없으면 캘린더·일정 둘 다 토큰·Google 호출 없이 GOOGLE_SCOPE_REQUIRED")
+    void calendarSourcesRequireCalendarScope() {
+        connected("openid " + SHEETS + " " + DRIVE);
+
+        assertErrorCode(() -> calendars.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
+        assertErrorCode(() -> events.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
+        verify(tokenService, never()).getValidAccessToken(any());
+    }
+
+    @Test
+    @DisplayName("일정 목록 — 지금 이후·회차별·시작순 50개, 표시명은 제목 · 시작(시각/종일/제목 없음)")
+    void eventsListsUpcomingWithDisplayNames() {
+        connected(CALENDAR);
+        server.expect(requestTo(startsWith(EVENTS_PREFIX + "primary/events?")))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Authorization", "Bearer g-token"))
+            // 소수 초 없이 — JDK·OS에 따라 Instant.toString()이 마이크로·나노초까지 찍는다
+            .andExpect(request -> assertThat(URLDecoder.decode(
+                UriComponentsBuilder.fromUri(request.getURI()).build(true).getQueryParams().getFirst("timeMin"),
+                StandardCharsets.UTF_8)).matches("\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ"))
+            .andExpect(requestTo(containsString("singleEvents=true")))
+            .andExpect(requestTo(containsString("orderBy=startTime")))
+            .andExpect(requestTo(containsString("maxResults=50")))
+            .andExpect(requestTo(not(containsString("pageToken"))))
+            .andRespond(withSuccess("""
+                {"nextPageToken":"e-2","items":[
+                  {"id":"evt1","summary":"주간 회의","start":{"dateTime":"2026-10-07T14:00:00+09:00"}},
+                  {"id":"evt2","summary":"창립기념일","start":{"date":"2026-10-08"}},
+                  {"id":"evt3","summary":"  ","start":{"dateTime":"2026-10-09T09:30:00Z"}}]}
+                """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = events.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(
+            new OptionItem("evt1", "주간 회의 · 2026-10-07 14:00"),
+            new OptionItem("evt2", "창립기념일 · 2026-10-08"),
+            new OptionItem("evt3", "(제목 없음) · 2026-10-09 09:30"));
+        assertThat(page.nextCursor()).isEqualTo("e-2");
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"   "})
+    @DisplayName("일정 목록 — calendar_id가 없거나 공백이면 primary(도구 기본값과 같은 의미)")
+    void eventsDefaultToPrimary(String calendarId) {
+        connected(CALENDAR);
+        server.expect(requestTo(startsWith(EVENTS_PREFIX + "primary/events?")))
+            .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
+
+        events.fetch(userId, calendarInput(calendarId), null);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "'ko.south_korea#holiday@group.v.calendar.google.com', 'ko.south_korea%23holiday%40group.v.calendar.google.com'",
+        "'a/b', 'a%2Fb'",
+        "'x?y=1', 'x%3Fy%3D1'",
+        "'ko.south_korea%23holiday%40group.v.calendar.google.com', 'ko.south_korea%23holiday%40group.v.calendar.google.com'",
+        "'  a@b.com  ', 'a%40b.com'"
+    })
+    @DisplayName("calendar_id는 strip·한 번 디코드 후 경로 한 세그먼트로 엄격 인코딩된다 — 이중 인코딩 없음, #·/·?가 새지 않는다")
+    void eventsEncodeCalendarIdStrictly(String calendarId, String encoded) {
+        connected(CALENDAR);
+        server.expect(requestTo(startsWith(EVENTS_PREFIX + encoded + "/events?")))
+            .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
+
+        events.fetch(userId, calendarInput(calendarId), null);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"{{nodes.x.output.y}}", "100%", "%zz"})
+    @DisplayName("calendar_id가 변수 참조식이거나 %시퀀스가 깨졌으면 계정·토큰·Google 조회 없이 INVALID_INPUT")
+    void eventsRejectUnresolvableCalendarId(String calendarId) {
+        assertErrorCode(() -> events.fetch(userId, calendarInput(calendarId), null), ErrorCode.INVALID_INPUT);
+        verify(accounts, never()).findByUserIdAndProvider(any(), any());
+        verify(tokenService, never()).getValidAccessToken(any());
+    }
+
+    @Test
+    @DisplayName("일정 cursor에 &·=가 섞여도 쿼리 파라미터로 새지 않는다")
+    void eventsCursorIsStrictlyEncoded() {
+        connected(CALENDAR);
+        server.expect(requestTo(containsString("pageToken=a%26q%3Dx")))
+            .andExpect(requestTo(not(containsString("&q=x"))))
+            .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
+
+        events.fetch(userId, Map.of(), "a&q=x");
+    }
+
+    @Test
+    @DisplayName("파일 목록 — agent google_drive_read가 읽는 형식만, Drive 공용 조회 옵션 그대로")
+    void filesListsReadableFiles() {
+        connected(DRIVE);
+        server.expect(requestTo(startsWith("https://www.googleapis.com/drive/v3/files?")))
+            .andExpect(driveQuery("trashed=false and ("
+                + "mimeType='application/vnd.google-apps.document'"
+                + " or mimeType='application/vnd.google-apps.spreadsheet'"
+                + " or mimeType contains 'text/'"
+                + " or mimeType='application/json'"
+                + " or mimeType='application/xml'"
+                + " or mimeType='application/javascript'"
+                + " or mimeType='application/x-yaml')"))
+            .andExpect(requestTo(containsString("orderBy=modifiedTime%20desc")))
+            .andExpect(requestTo(containsString("supportsAllDrives=true")))
+            .andRespond(withSuccess("{\"nextPageToken\":\"f-2\",\"files\":[{\"id\":\"f1\",\"name\":\"회의록\"}]}",
+                MediaType.APPLICATION_JSON));
+
+        OptionPage page = files.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(new OptionItem("f1", "회의록"));
+        assertThat(page.nextCursor()).isEqualTo("f-2");
+    }
+
+    @Test
+    @DisplayName("폴더 목록 — 폴더만, 휴지통 제외, cursor는 pageToken으로")
+    void foldersListsFolders() {
+        connected(DRIVE);
+        server.expect(requestTo(startsWith("https://www.googleapis.com/drive/v3/files?")))
+            .andExpect(driveQuery("mimeType='application/vnd.google-apps.folder' and trashed=false"))
+            .andExpect(requestTo(containsString("pageToken=f-2")))
+            .andRespond(withSuccess("{\"files\":[{\"id\":\"d1\",\"name\":\"보고서\"}]}", MediaType.APPLICATION_JSON));
+
+        OptionPage page = folders.fetch(userId, Map.of(), "f-2");
+
+        assertThat(page.items()).containsExactly(new OptionItem("d1", "보고서"));
+        assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("spreadsheets scope만 있으면 파일·폴더는 GOOGLE_SCOPE_REQUIRED — drive가 필요하다")
+    void filesRequireDriveScope() {
+        connected("openid " + SHEETS);
+
+        assertErrorCode(() -> files.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
+        assertErrorCode(() -> folders.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
+    }
+
+    @Test
+    @DisplayName("공급원 키는 agent FIELD_META의 optionsSource와 1:1 계약")
+    void keysMatchAgentOptionsSource() {
+        assertThat(List.of(spreadsheets.key(), worksheets.key(), calendars.key(), events.key(),
+                files.key(), folders.key()))
+            .containsExactly("google.spreadsheets", "google.worksheets", "google.calendars", "google.events",
+                "google.files", "google.folders");
     }
 }

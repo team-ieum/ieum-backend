@@ -2,6 +2,7 @@ package com.ieum.api.integration.options;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.ieum.api.integration.options.OptionPage.OptionItem;
 import com.ieum.auth.domain.AuthProvider;
 import com.ieum.auth.domain.ConnectedAccount;
 import com.ieum.auth.repository.ConnectedAccountRepository;
@@ -9,8 +10,11 @@ import com.ieum.auth.service.GoogleTokenService;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,6 +25,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
 
 /**
  * Google 공급원들이 공유하는 GET 호출 — 권한 사전 검사, 토큰, 오류 매핑을 한 곳에 둔다.
@@ -35,6 +40,8 @@ class GoogleApiReader {
 
     static final String DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
     static final String SPREADSHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
+    static final String CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar";
+    private static final String DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files";
 
     private final GoogleTokenService googleTokenService;
     private final ConnectedAccountRepository connectedAccountRepository;
@@ -63,6 +70,36 @@ class GoogleApiReader {
             log.warn("[GoogleApiReader] Google 호출 실패 — host: {}, {}", uri.getHost(), e.getClass().getSimpleName());
             throw new CustomException(ErrorCode.GOOGLE_API_UNAVAILABLE);
         }
+    }
+
+    /**
+     * Drive {@code files.list} 한 페이지 — 최근 수정순 50개. scope는 {@code drive}.
+     * {@code corpora}가 기본값(user)이라 사용자가 만들었거나 열었거나 직접 공유받은 항목만 나온다 —
+     * 공유 드라이브 항목도 이 조건을 만족할 때만 포함된다.
+     *
+     * @param q Drive 검색식. URI 변수로 넣어 엄격 인코딩한다
+     */
+    OptionPage listDriveFiles(UUID userId, String q, String cursor) {
+        // 값은 URI 변수로 넣어 엄격 인코딩한다 — cursor에 &·=가 섞여도 파라미터로 새지 않는다.
+        UriComponentsBuilder uri = UriComponentsBuilder.fromUriString(DRIVE_FILES_URL)
+            .queryParam("q", "{q}")
+            .queryParam("orderBy", "modifiedTime desc")
+            .queryParam("pageSize", 50)
+            .queryParam("fields", "nextPageToken,files(id,name)")
+            .queryParam("supportsAllDrives", true)
+            .queryParam("includeItemsFromAllDrives", true);
+        Map<String, Object> vars = new HashMap<>(Map.of("q", q));
+        if (cursor != null) {
+            uri.queryParam("pageToken", "{cursor}");
+            vars.put("cursor", cursor);
+        }
+
+        JsonNode body = get(userId, uri.encode().buildAndExpand(vars).toUri(), DRIVE_SCOPE);
+
+        List<OptionItem> items = new ArrayList<>();
+        body.path("files").forEach(file ->
+            items.add(new OptionItem(file.path("id").asText(), file.path("name").asText())));
+        return new OptionPage(items, body.path("nextPageToken").asText(null));
     }
 
     /** scope는 토큰 단위 정확 일치 — 부분 문자열로 보면 {@code drive.file}이 {@code drive}를 통과한다. */

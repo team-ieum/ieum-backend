@@ -97,7 +97,7 @@ class IntegrationOptionControllerTest {
     @Test
     @DisplayName("알 수 없는 {app}/{resource}는 404 NOT_FOUND, 공급원을 부르지 않는다")
     void unknownSourceIsNotFound() throws Exception {
-        mockMvc.perform(get("/api/v1/integrations/google/options/calendars"))
+        mockMvc.perform(get("/api/v1/integrations/google/options/unknown"))
             .andExpect(status().isNotFound())
             .andExpect(jsonPath("$.code").value("NOT_FOUND"));
 
