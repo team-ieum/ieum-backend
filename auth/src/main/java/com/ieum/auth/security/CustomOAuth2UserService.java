@@ -18,15 +18,18 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService;
 import org.springframework.security.oauth2.client.userinfo.OAuth2UserRequest;
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
+import org.springframework.security.oauth2.core.endpoint.OAuth2ParameterNames;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class CustomOAuth2UserService extends DefaultOAuth2UserService {
@@ -51,6 +54,11 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
             ? linkToExistingUser(linkUserId, providerId)
             : loginOrRegister(email, name, providerId);
 
+        // 연동은 항상 scope_groups 흐름(offline·consent)이라 refresh_token이 와야 한다 — 없으면 전달 배선이 끊긴 것
+        if (linkUserId != null
+            && !userRequest.getAdditionalParameters().containsKey(OAuth2ParameterNames.REFRESH_TOKEN)) {
+            log.warn("[CustomOAuth2UserService] userId={} Google 연동인데 refresh_token 없음 — 1시간 뒤 재인증 필요", linkUserId);
+        }
         saveOrUpdateConnectedAccount(user, providerId, userRequest);
 
         return new CustomOAuth2User(oAuth2User, user);
@@ -141,6 +149,10 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
         );
         Set<String> grantedScopes = userRequest.getAccessToken().getScopes();
 
+        // RefreshTokenForwardingTokenResponseClient가 실어 보낸 값. 기본 로그인(access_type=offline 아님)이면 없다
+        Object refreshToken = userRequest.getAdditionalParameters().get(OAuth2ParameterNames.REFRESH_TOKEN);
+        String encryptedRefreshToken = refreshToken != null ? aesEncryptor.encrypt(refreshToken.toString()) : null;
+
         Instant expiresAtInstant = userRequest.getAccessToken().getExpiresAt();
         LocalDateTime tokenExpiresAt = expiresAtInstant != null
             ? LocalDateTime.ofInstant(expiresAtInstant, ZoneId.systemDefault())
@@ -148,15 +160,18 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
 
         connectedAccountRepository.findByUserIdAndProvider(user.getId(), AuthProvider.GOOGLE)
             .ifPresentOrElse(
-                // baseline 로그인 토큰은 기존 grant를 포함하지 않으므로 병합해 scope 축소 방지
                 account -> {
-                    account.updateTokensAndScopes(
-                        encryptedToken,
-                        account.getRefreshToken(),
-                        tokenExpiresAt,
-                        account.getRefreshTokenExpiresAt(),
-                        mergeScopes(account.getScopes(), grantedScopes)
-                    );
+                    // 토큰은 동의 흐름(scope_groups — offline·include_granted_scopes)에서만 교체한다.
+                    // 기본 로그인 토큰(email·profile)으로 덮으면 만료 전까지 Google 기능이 권한 부족으로 실패한다
+                    if (encryptedRefreshToken != null) {
+                        account.updateTokensAndScopes(
+                            encryptedToken,
+                            encryptedRefreshToken,
+                            tokenExpiresAt,
+                            null,  // GoogleTokenService rotation과 같게 — Google은 refresh 만료 시각을 주지 않는다
+                            mergeScopes(account.getScopes(), grantedScopes)
+                        );
+                    }
                     account.assignProviderAccountId(providerId);  // 기존 행 백필
                 },
                 () -> connectedAccountRepository.save(
@@ -165,6 +180,7 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
                         .provider(AuthProvider.GOOGLE)
                         .providerAccountId(providerId)
                         .accessToken(encryptedToken)
+                        .refreshToken(encryptedRefreshToken)
                         .tokenExpiresAt(tokenExpiresAt)
                         .scopes(String.join(" ", grantedScopes))
                         .build()
@@ -175,8 +191,8 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
     /**
      * 기존 저장 scope와 신규 grant scope를 병합한다 (합집합).
      *
-     * <p>일반 로그인은 baseline scope만 발급받으므로, 병합 없이 덮어쓰면 이전에 승인한
-     * scope 기록이 사라져 증분 승인이 불필요한 재동의를 유발한다.
+     * <p>응답 scope가 이전 grant를 빠뜨려도 기록이 줄지 않게 한다 — 줄면 증분 승인이
+     * 불필요한 재동의를 유발한다. 일반 로그인은 이 경로를 타지 않는다(토큰 미교체).
      */
     private String mergeScopes(String existingScopes, Set<String> grantedScopes) {
         Set<String> merged = new LinkedHashSet<>();

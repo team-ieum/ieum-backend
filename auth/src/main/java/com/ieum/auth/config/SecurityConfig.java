@@ -8,6 +8,7 @@ import com.ieum.auth.security.HttpCookieOAuth2AuthorizationRequestRepository;
 import com.ieum.auth.security.IncrementalScopeAuthorizationRequestResolver;
 import com.ieum.auth.security.OAuth2AuthenticationFailureHandler;
 import com.ieum.auth.security.OAuth2AuthenticationSuccessHandler;
+import com.ieum.auth.security.RefreshTokenForwardingTokenResponseClient;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -21,6 +22,7 @@ import org.springframework.security.config.annotation.web.configurers.AbstractHt
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.client.endpoint.RestClientAuthorizationCodeTokenResponseClient;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestResolver;
 import org.springframework.security.web.SecurityFilterChain;
@@ -115,6 +117,9 @@ public class SecurityConfig {
                     .authorizationRequestRepository(cookieAuthorizationRequestRepository))
                 .redirectionEndpoint(redirect -> redirect
                     .baseUri("/api/v1/oauth2/callback/*"))
+                .tokenEndpoint(token -> token
+                    .accessTokenResponseClient(new RefreshTokenForwardingTokenResponseClient(
+                        new RestClientAuthorizationCodeTokenResponseClient())))
                 .userInfoEndpoint(userInfo -> userInfo
                     .userService(customOAuth2UserService))
                 .successHandler(oAuth2AuthenticationSuccessHandler)
