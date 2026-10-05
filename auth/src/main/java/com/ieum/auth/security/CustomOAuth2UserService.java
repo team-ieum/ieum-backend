@@ -23,6 +23,7 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService;
 import org.springframework.security.oauth2.client.userinfo.OAuth2UserRequest;
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
+import org.springframework.security.oauth2.core.endpoint.OAuth2ParameterNames;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -141,6 +142,10 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
         );
         Set<String> grantedScopes = userRequest.getAccessToken().getScopes();
 
+        // RefreshTokenForwardingTokenResponseClient가 실어 보낸 값. 기본 로그인(access_type=offline 아님)이면 없다
+        Object refreshToken = userRequest.getAdditionalParameters().get(OAuth2ParameterNames.REFRESH_TOKEN);
+        String encryptedRefreshToken = refreshToken != null ? aesEncryptor.encrypt(refreshToken.toString()) : null;
+
         Instant expiresAtInstant = userRequest.getAccessToken().getExpiresAt();
         LocalDateTime tokenExpiresAt = expiresAtInstant != null
             ? LocalDateTime.ofInstant(expiresAtInstant, ZoneId.systemDefault())
@@ -152,7 +157,7 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
                 account -> {
                     account.updateTokensAndScopes(
                         encryptedToken,
-                        account.getRefreshToken(),
+                        encryptedRefreshToken != null ? encryptedRefreshToken : account.getRefreshToken(),
                         tokenExpiresAt,
                         account.getRefreshTokenExpiresAt(),
                         mergeScopes(account.getScopes(), grantedScopes)
@@ -165,6 +170,7 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
                         .provider(AuthProvider.GOOGLE)
                         .providerAccountId(providerId)
                         .accessToken(encryptedToken)
+                        .refreshToken(encryptedRefreshToken)
                         .tokenExpiresAt(tokenExpiresAt)
                         .scopes(String.join(" ", grantedScopes))
                         .build()
