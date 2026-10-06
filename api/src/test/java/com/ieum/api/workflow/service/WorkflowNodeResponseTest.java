@@ -181,6 +181,17 @@ class WorkflowNodeResponseTest {
         assertThat(view.config()).containsEntry("message", "보내도 될까요?");
     }
 
+    @Test
+    @DisplayName("ACTION 노드는 조회 응답에서 null로 버려지지 않고 enum으로 매핑된다")
+    void actionType_mapsToEnum() throws Exception {
+        NodeView view = viewOf("""
+            { "id": "act-1", "type": "ACTION", "label": "이슈 목록",
+              "config": { "tools": [ { "name": "builtin:github_list_issues", "config": { "owner": "ieum" } } ] } }""");
+
+        assertThat(view.type()).isEqualTo(NodeType.ACTION);
+        assertThat(view.config()).containsKey("tools");
+    }
+
     private JsonNode tree(Object value) throws Exception {
         return jsonMapper.readTree(jsonMapper.writeValueAsString(value));
     }

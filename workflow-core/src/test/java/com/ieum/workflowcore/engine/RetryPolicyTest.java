@@ -56,6 +56,16 @@ class RetryPolicyTest {
         }
 
         @Test
+        @DisplayName("ACTION 노드는 쓰기 도구를 실행하므로 멱등성 헤더가 기본이고, 재시도는 선언해야 켜진다")
+        void actionNodeDefaultsToHeaderWithoutRetry() {
+            RetryPolicy policy = RetryPolicy.from(null, NodeType.ACTION, defaults);
+
+            assertThat(policy.idempotency()).isEqualTo(IdempotencyMode.HEADER);
+            assertThat(policy.isDisabled()).isTrue();
+            assertThat(policy.maxAttempts()).isEqualTo(1);
+        }
+
+        @Test
         @DisplayName("AI 노드는 기본 재시도와 헤더 멱등이 함께 켜져 실제로 헤더가 붙는다")
         void aiNodeDefaultsCombineRetryAndHeader() {
             RetryPolicy policy = RetryPolicy.from(null, NodeType.AI, defaults);

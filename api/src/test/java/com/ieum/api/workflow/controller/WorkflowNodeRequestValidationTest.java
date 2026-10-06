@@ -160,6 +160,17 @@ class WorkflowNodeRequestValidationTest {
     }
 
     @Test
+    @DisplayName("ACTION 노드 type은 저장 요청에서 허용된다 — tools[0] 모양 config도 그대로 통과")
+    void actionNodeType_returns201() throws Exception {
+        String node = """
+            { "id": "node-action", "type": "ACTION", "label": "이슈 만들기",
+              "config": { "tools": [ { "name": "builtin:github_create_issue",
+                "config": { "owner": "ieum", "repo": "demo", "title": "{{nodes.node-list.output.issues.0.title}}" } } ],
+                "brand": "github", "serviceType": "GITHUB" } }""";
+        expectStatus(body(node, ""), 201);
+    }
+
+    @Test
     @DisplayName("엣지 source가 비어 있으면 400")
     void blankEdgeSource_returns400() throws Exception {
         String edge = """
