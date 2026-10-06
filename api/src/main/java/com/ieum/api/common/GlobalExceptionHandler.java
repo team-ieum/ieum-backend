@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -73,6 +74,13 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleException(Exception e, HttpServletRequest request) {
+        // 없는 경로(404)·지원하지 않는 메서드(405) 같은 Spring MVC 요청 오류는 ErrorResponse가 상태를 들고 온다.
+        // 여기서 500으로 덮으면 클라이언트 실수가 서버 오류로 보인다.
+        if (e instanceof ErrorResponse er && er.getStatusCode().is4xxClientError()) {
+            ErrorCode code = er.getStatusCode().value() == 404 ? ErrorCode.NOT_FOUND : ErrorCode.INVALID_INPUT;
+            log.warn("[{}] {} {} — {}", code.name(), request.getMethod(), request.getRequestURI(), e.getMessage());
+            return ResponseEntity.status(er.getStatusCode()).headers(er.getHeaders()).body(ApiResponse.error(code));
+        }
         log.error("[UNHANDLED] {} {}", request.getMethod(), request.getRequestURI(), e);
         return ResponseEntity.internalServerError()
                 .body(ApiResponse.error(ErrorCode.INTERNAL_SERVER_ERROR));

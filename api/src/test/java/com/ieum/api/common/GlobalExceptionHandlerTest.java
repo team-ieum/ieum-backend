@@ -1,17 +1,24 @@
 package com.ieum.api.common;
 
+import com.ieum.common.dto.ApiResponse;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.validation.beanvalidation.LocalValidatorFactoryBean;
 import org.springframework.web.bind.annotation.*;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -76,6 +83,34 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.code").value(ErrorCode.INTERNAL_SERVER_ERROR.name()))
                 .andExpect(jsonPath("$.message").value(ErrorCode.INTERNAL_SERVER_ERROR.getMessage()));
+    }
+
+    @Test
+    void unknownPath_returns404NotFound() throws Exception {
+        mockMvc.perform(get("/test/no-such-path"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value(ErrorCode.NOT_FOUND.name()))
+                .andExpect(jsonPath("$.message").value(ErrorCode.NOT_FOUND.getMessage()));
+    }
+
+    // standalone MockMvc는 NoHandlerFoundException을 던지지만 실제 앱은 정적 리소스 핸들러가 NoResourceFoundException을 던진다.
+    @Test
+    void noResourceFoundException_returns404NotFound() {
+        ResponseEntity<ApiResponse<Void>> response = new GlobalExceptionHandler()
+                .handleException(new NoResourceFoundException(HttpMethod.GET, "api/v1/x"), new MockHttpServletRequest());
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody().getCode()).isEqualTo(ErrorCode.NOT_FOUND.name());
+    }
+
+    @Test
+    void unsupportedMethod_returns405WithInvalidInputCode() throws Exception {
+        mockMvc.perform(delete("/test/unhandled"))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(header().string("Allow", "GET"))
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value(ErrorCode.INVALID_INPUT.name()));
     }
 
     @RestController
