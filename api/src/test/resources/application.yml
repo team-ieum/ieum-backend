@@ -22,6 +22,10 @@ spring:
   flyway:
     enabled: false
 
+  # JavaMailSender 빈 생성용. 빈 생성 시점엔 SMTP에 접속하지 않는다.
+  mail:
+    host: localhost
+
   data:
     redis:
       host: localhost

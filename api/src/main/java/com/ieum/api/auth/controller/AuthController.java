@@ -5,10 +5,14 @@ import com.ieum.api.auth.dto.OAuthTokenExchangeRequest;
 import com.ieum.api.auth.dto.RefreshRequest;
 import com.ieum.api.auth.dto.RegisterRequest;
 import com.ieum.api.auth.dto.RegisterResponse;
+import com.ieum.api.auth.dto.ResetPasswordRequest;
+import com.ieum.api.auth.dto.SendVerificationCodeRequest;
 import com.ieum.api.auth.dto.TokenResponse;
+import com.ieum.api.auth.dto.VerifyCodeRequest;
 import com.ieum.auth.domain.User;
 import com.ieum.auth.dto.TokenInfo;
 import com.ieum.auth.service.AuthService;
+import com.ieum.auth.service.EmailVerificationService;
 import com.ieum.common.dto.ApiResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +28,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController implements AuthControllerDocs {
 
     private final AuthService authService;
+    private final EmailVerificationService emailVerificationService;
 
     @PostMapping("/register")
     public ResponseEntity<ApiResponse<RegisterResponse>> register(
@@ -64,6 +69,30 @@ public class AuthController implements AuthControllerDocs {
 
         TokenInfo tokenInfo = authService.exchangeOAuthCode(request.getCode());
         return ResponseEntity.ok(ApiResponse.ok(toTokenResponse(tokenInfo)));
+    }
+
+    @PostMapping("/email/send-code")
+    public ResponseEntity<ApiResponse<Void>> sendVerificationCode(
+        @RequestBody @Valid SendVerificationCodeRequest request) {
+
+        emailVerificationService.sendCode(request.getEmail(), request.getPurpose());
+        return ResponseEntity.ok(ApiResponse.ok());
+    }
+
+    @PostMapping("/email/verify-code")
+    public ResponseEntity<ApiResponse<Void>> verifyCode(
+        @RequestBody @Valid VerifyCodeRequest request) {
+
+        emailVerificationService.verifyCode(request.getEmail(), request.getCode(), request.getPurpose());
+        return ResponseEntity.ok(ApiResponse.ok());
+    }
+
+    @PostMapping("/password/reset")
+    public ResponseEntity<ApiResponse<Void>> resetPassword(
+        @RequestBody @Valid ResetPasswordRequest request) {
+
+        authService.resetPassword(request.getEmail(), request.getNewPassword());
+        return ResponseEntity.ok(ApiResponse.ok());
     }
 
     private TokenResponse toTokenResponse(TokenInfo tokenInfo) {
