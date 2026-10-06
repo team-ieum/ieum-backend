@@ -29,7 +29,7 @@
 | `mcp` | McpServerCatalogController | MCP 서버 카탈로그 |
 | `prompt` | PromptTemplateController | 프롬프트 템플릿 CRUD·테스트 실행 |
 | `beta` | BetaUsageController | 베타 플랫폼 키 사용량(%) 조회 |
-| `tool` | ToolSchemaController | 노드 도구 설정 폼 스키마(`GET /api/v1/tools/schema`) — agent `GET /v1/tools/schema`를 `AgentClient`로 그대로 전달, 캐시 없음 |
+| `node` | NodeCatalogController | 노드 카탈로그(`GET /api/v1/nodes/catalog`, IEUM-BE-75) — agent `GET /v1/nodes/catalog`를 `AgentClient`로 그대로 전달, 캐시 없음. 옛 도구 스키마 API(BE-71)를 대체 |
 
 ## 실행 트리거
 `workflow/WorkflowExecutionRunner` — 실행 진입점. Redis Stream 잡 큐(`ieum:exec:jobs`)에 executionId만 발행하고, 같은 프로세스의 워커가 꺼내 `SyncExecutionRuntime`을 돌린다. 큐 발행이 실패하면(Redis 장애) 기존 `@Async` 직접 실행으로 폴백한다. 실행 레코드 생성 자체는 workflow-core `WorkflowExecutionService.prepareExecution()`.

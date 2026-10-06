@@ -1,4 +1,4 @@
-package com.ieum.api.tool;
+package com.ieum.api.node.controller;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.ieum.api.chat.service.AgentClient;
@@ -10,15 +10,15 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/v1/tools")
+@RequestMapping("/api/v1/nodes")
 @RequiredArgsConstructor
-public class ToolSchemaController implements ToolSchemaControllerDocs {
+public class NodeCatalogController implements NodeCatalogControllerDocs {
 
     private final AgentClient agentClient;
 
     @Override
-    @GetMapping("/schema")
-    public ResponseEntity<ApiResponse<JsonNode>> getToolSchema() {
-        return ResponseEntity.ok(ApiResponse.ok(agentClient.getToolSchema()));
+    @GetMapping("/catalog")
+    public ResponseEntity<ApiResponse<JsonNode>> getNodeCatalog() {
+        return ResponseEntity.ok(ApiResponse.ok(agentClient.getNodeCatalog()));
     }
 }

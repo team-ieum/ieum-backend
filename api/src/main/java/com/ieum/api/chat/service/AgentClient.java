@@ -25,7 +25,7 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import reactor.core.publisher.Flux;
 
 /**
- * ieum-agent 클라이언트 — {@code POST /v1/chat}(+stream), {@code GET /v1/tools/schema}.
+ * ieum-agent 클라이언트 — {@code POST /v1/chat}(+stream), {@code GET /v1/nodes/catalog}.
  *
  * <h3>요청 헤더</h3>
  * <ul>
@@ -51,8 +51,8 @@ import reactor.core.publisher.Flux;
 @Component
 public class AgentClient {
 
-    /** LLM을 거치지 않는 스키마 GET이라 chat timeout(기본 60초)을 쓰지 않는다 — 폼 열 때 agent가 멈추면 서블릿 스레드를 오래 잡는다. */
-    private static final Duration TOOL_SCHEMA_TIMEOUT = Duration.ofSeconds(10);
+    /** LLM을 거치지 않는 카탈로그 GET이라 chat timeout(기본 60초)을 쓰지 않는다 — 폼 열 때 agent가 멈추면 서블릿 스레드를 오래 잡는다. */
+    private static final Duration NODE_CATALOG_TIMEOUT = Duration.ofSeconds(10);
 
     private final WebClient webClient;
     private final int timeoutSeconds;
@@ -119,18 +119,18 @@ public class AgentClient {
     }
 
     /**
-     * ieum-agent {@code GET /v1/tools/schema} — 노드 도구 설정 폼 스키마를 그대로 받아 온다 (IEUM-BE-71).
+     * ieum-agent {@code GET /v1/nodes/catalog} — 노드 종류별 입력·출력 필드 정의를 그대로 받아 온다 (IEUM-BE-75).
      * agent 쪽은 무인증 엔드포인트라 크레덴셜 헤더를 싣지 않는다(사용자 인증은 BE 컨트롤러가 한다).
      */
-    public JsonNode getToolSchema() {
+    public JsonNode getNodeCatalog() {
         try {
-            JsonNode body = webClient.get().uri("/v1/tools/schema")
+            JsonNode body = webClient.get().uri("/v1/nodes/catalog")
                 .retrieve()
                 .bodyToMono(JsonNode.class)
-                .timeout(TOOL_SCHEMA_TIMEOUT)
+                .timeout(NODE_CATALOG_TIMEOUT)
                 .block();
             if (body == null) {
-                log.error("[AgentClient] 도구 스키마 응답이 null");
+                log.error("[AgentClient] 노드 카탈로그 응답이 null");
                 throw new CustomException(ErrorCode.PROVIDER_ERROR);
             }
             return body;
@@ -141,7 +141,7 @@ public class AgentClient {
         }
     }
 
-    /** agent 호출 실패를 ErrorCode로 옮긴다. {@code chat()}과 {@code getToolSchema()}가 공유한다. */
+    /** agent 호출 실패를 ErrorCode로 옮긴다. {@code chat()}과 {@code getNodeCatalog()}가 공유한다. */
     private CustomException toAgentError(Exception e) {
         if (e instanceof WebClientResponseException we) {
             log.error("[AgentClient] 에이전트 HTTP 오류 — status: {}, body: {}",

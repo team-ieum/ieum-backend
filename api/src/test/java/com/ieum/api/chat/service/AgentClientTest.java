@@ -109,42 +109,69 @@ class AgentClientTest {
     }
 
     @Test
-    @DisplayName("getToolSchema — agent GET /v1/tools/schema 응답 JSON을 그대로 돌려준다")
-    void getToolSchema_returnsAgentBodyAsIs() throws InterruptedException {
+    @DisplayName("getNodeCatalog — agent GET /v1/nodes/catalog 응답 JSON을 그대로, 크레덴셜 헤더 없이")
+    void getNodeCatalog_returnsAgentBodyAsIs() throws InterruptedException {
         mockWebServer.enqueue(new MockResponse()
             .setResponseCode(200)
             .setHeader("Content-Type", "application/json")
-            .setBody("{\"tools\":[{\"name\":\"builtin:google_sheets_append\",\"fields\":"
-                + "[{\"name\":\"spreadsheet_id\",\"optionsSource\":\"google.spreadsheets\"}]}]}"));
+            .setBody("{\"entries\":[{\"id\":\"action.google_sheets_write\",\"inputFields\":"
+                + "[{\"key\":\"spreadsheet_id\",\"optionsSource\":\"google.spreadsheets\"}]}]}"));
 
-        JsonNode schema = agentClient.getToolSchema();
+        JsonNode catalog = agentClient.getNodeCatalog();
 
-        assertThat(schema.path("tools").get(0).path("fields").get(0).path("optionsSource").asText())
+        assertThat(catalog.path("entries").get(0).path("inputFields").get(0).path("optionsSource").asText())
             .isEqualTo("google.spreadsheets");
         RecordedRequest recorded = mockWebServer.takeRequest();
         assertThat(recorded.getMethod()).isEqualTo("GET");
-        assertThat(recorded.getPath()).endsWith("/v1/tools/schema");
+        assertThat(recorded.getPath()).endsWith("/v1/nodes/catalog");
+        assertThat(recorded.getHeader("X-LLM-Api-Key")).isNull();
+        assertThat(recorded.getHeader("X-LLM-Provider")).isNull();
+        assertThat(recorded.getHeader("X-User-Id")).isNull();
     }
 
     @Test
-    @DisplayName("getToolSchema — agent 5xx는 기존 chat과 같은 매핑(PROVIDER_ERROR)")
-    void getToolSchema_agentErrorMapsLikeChat() {
+    @DisplayName("getNodeCatalog — agent 5xx는 기존 chat과 같은 매핑(PROVIDER_ERROR)")
+    void getNodeCatalog_agentErrorMapsLikeChat() {
         mockWebServer.enqueue(new MockResponse().setResponseCode(500));
 
-        assertThatThrownBy(() -> agentClient.getToolSchema())
+        assertThatThrownBy(() -> agentClient.getNodeCatalog())
             .isInstanceOf(CustomException.class)
             .extracting(e -> ((CustomException) e).getErrorCode())
             .isEqualTo(ErrorCode.PROVIDER_ERROR);
     }
 
     @Test
-    @DisplayName("getToolSchema — agent 429는 PROVIDER_RATE_LIMITED (chat과 공유하는 매핑)")
-    void getToolSchema_agent429MapsToRateLimited() {
+    @DisplayName("getNodeCatalog — agent가 아직 경로를 모르면(404, AI-65 배포 전) PROVIDER_ERROR")
+    void getNodeCatalog_agent404MapsToProviderError() {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(404));
+
+        assertThatThrownBy(() -> agentClient.getNodeCatalog())
+            .isInstanceOf(CustomException.class)
+            .extracting(e -> ((CustomException) e).getErrorCode())
+            .isEqualTo(ErrorCode.PROVIDER_ERROR);
+    }
+
+    @Test
+    @DisplayName("getNodeCatalog — agent 429는 PROVIDER_RATE_LIMITED (chat과 공유하는 매핑)")
+    void getNodeCatalog_agent429MapsToRateLimited() {
         mockWebServer.enqueue(new MockResponse().setResponseCode(429));
 
-        assertThatThrownBy(() -> agentClient.getToolSchema())
+        assertThatThrownBy(() -> agentClient.getNodeCatalog())
             .isInstanceOf(CustomException.class)
             .extracting(e -> ((CustomException) e).getErrorCode())
             .isEqualTo(ErrorCode.PROVIDER_RATE_LIMITED);
+    }
+
+    @Test
+    @DisplayName("getNodeCatalog — 200 빈 본문은 PROVIDER_ERROR")
+    void getNodeCatalog_emptyBodyIsProviderError() {
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json"));
+
+        assertThatThrownBy(() -> agentClient.getNodeCatalog())
+            .isInstanceOf(CustomException.class)
+            .extracting(e -> ((CustomException) e).getErrorCode())
+            .isEqualTo(ErrorCode.PROVIDER_ERROR);
     }
 }
