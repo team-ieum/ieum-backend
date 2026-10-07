@@ -373,4 +373,26 @@ class HttpNodeExecutorTest {
         assertThat(sent.get("retries").asInt()).isEqualTo(3);
         assertThat(sent.get("dryRun").asBoolean()).isFalse();
     }
+
+    @Test
+    @DisplayName("body에 Map 참조가 있어도 body는 유효한 JSON이고 값은 JSON 문자열로 실린다")
+    void body_mapReference_staysValidJson() throws Exception {
+        stubPostOk();
+        ExecutionCursor cursor = cursor();
+        Map<String, Object> metadata = new java.util.LinkedHashMap<>();
+        metadata.put("model", "gemini");
+        metadata.put("tokens", 150);
+        cursor.getContext().setNodeOutput("ai", Map.of("metadata", metadata));
+        Map<String, Object> body = new HashMap<>();
+        body.put("summary", "{{nodes.ai.output.metadata}}");
+        body.put("static", "그대로");
+
+        ExecutorResult result = executor.execute(postNode(body), Collections.emptyMap(), cursor);
+
+        assertThat(result.isSuccess()).isTrue();
+        JsonNode sent = new ObjectMapper().readTree(sentPostBody());
+        assertThat(sent.get("static").asText()).isEqualTo("그대로");
+        assertThat(new ObjectMapper().readTree(sent.get("summary").asText()))
+            .isEqualTo(new ObjectMapper().valueToTree(metadata));
+    }
 }

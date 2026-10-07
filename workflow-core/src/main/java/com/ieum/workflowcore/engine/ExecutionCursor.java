@@ -1,5 +1,7 @@
 package com.ieum.workflowcore.engine;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -29,6 +31,9 @@ public class ExecutionCursor {
 
     /** 무한 치환 루프 방지를 위한 최대 치환 반복 횟수 */
     private static final int MAX_RENDER_DEPTH = 5;
+
+    /** 참조 대상이 Map·List일 때 JSON 문자열로 바꾸는 데 쓴다. 스레드 안전하다. */
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private ExecutionContext context;
     private List<Node> allNodes;
@@ -154,6 +159,9 @@ public class ExecutionCursor {
     /**
      * 컨텍스트에서 nodeId의 output 중 fieldPath에 해당하는 값을 반환한다.
      * fieldPath가 "a.b.c"인 경우 output["a"]["b"]["c"]를 탐색한다.
+     *
+     * <p>값이 List면 숫자 세그먼트는 인덱스다 — {@code issues.0.title}은 {@code output["issues"][0]["title"]}.
+     * 범위 밖이면 없는 값과 같이 빈 문자열이다. 최종 값이 Map·List면 JSON 문자열로, 그 외는 {@code String.valueOf}다.
      */
     @SuppressWarnings("unchecked")
     private String resolveField(String nodeId, String fieldPath) {
@@ -169,10 +177,12 @@ public class ExecutionCursor {
         for (String key : keys) {
             if (current instanceof Map) {
                 current = ((Map<String, Object>) current).get(key);
+            } else if (current instanceof List<?> list && isIndex(key)) {
+                current = elementAt(list, key);
             } else {
                 if (current != null) {
                     log.debug("[Cursor] 노드 '{}' fieldPath '{}' 탐색 중 이미 최종 값에 도달하여 탐색을 조기 종료합니다.", nodeId, fieldPath);
-                    return String.valueOf(current);
+                    return stringify(current);
                 }
                 log.warn("[Cursor] 노드 '{}' fieldPath '{}' 탐색 중 Map이 아닌 값 만남: {}",
                     nodeId, fieldPath, current);
@@ -184,7 +194,33 @@ public class ExecutionCursor {
             }
         }
 
-        return String.valueOf(current);
+        return stringify(current);
+    }
+
+    private static boolean isIndex(String key) {
+        return !key.isEmpty() && key.chars().allMatch(c -> c >= '0' && c <= '9');
+    }
+
+    /** 범위 밖이거나 int 범위를 넘는 인덱스는 null — 호출부가 "값 없음"으로 처리한다. */
+    private static Object elementAt(List<?> list, String key) {
+        try {
+            int index = Integer.parseInt(key);
+            return index < list.size() ? list.get(index) : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** Map·List는 JSON으로(직렬화가 안 되면 toString), 그 외는 {@code String.valueOf}. */
+    private static String stringify(Object value) {
+        if (value instanceof Map || value instanceof List) {
+            try {
+                return JSON.writeValueAsString(value);
+            } catch (JsonProcessingException e) {
+                return String.valueOf(value);
+            }
+        }
+        return String.valueOf(value);
     }
 
     // ──────────────────────────────────────────────────────────────────────
