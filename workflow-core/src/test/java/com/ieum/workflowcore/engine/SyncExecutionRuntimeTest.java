@@ -1592,4 +1592,80 @@ class SyncExecutionRuntimeTest {
             verify(alertNotifier, never()).notifyExecutionFailed(any());
         }
     }
+
+    @Nested
+    @DisplayName("node_runs.error_message 길이 (VARCHAR 255)")
+    class ErrorMessageLength {
+
+        /** 주어진 메시지로 실패하는 AI executor — 외부 API 오류 본문처럼 긴 메시지를 재현한다. */
+        private NodeExecutor failingAi(String message) {
+            return new NodeExecutor() {
+                @Override
+                public NodeType getNodeType() {
+                    return NodeType.AI;
+                }
+
+                @Override
+                public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor) {
+                    return ExecutorResult.failure(message, 1);
+                }
+            };
+        }
+
+        /** 노드 a가 message로 실패하도록 돌리고, 저장된 a의 node_runs 행을 돌려준다. */
+        private WorkflowExecutionLog savedFailedLog(String message) throws Exception {
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI")),
+                List.of(edge("t", "a", null)));
+            SyncExecutionRuntime runtime = new SyncExecutionRuntime(
+                objectMapper, logRepository, executionRepository, crudService, eventPublisher,
+                List.of(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults),
+                    failingAi(message)),
+                new RetryProperties(), idempotencyStore, alertNotifier);
+            runtime.initExecutorMap();
+            ReflectionTestUtils.setField(runtime, "parallelism", 4);
+
+            runtime.execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+            ArgumentCaptor<WorkflowExecutionLog> captor = ArgumentCaptor.forClass(WorkflowExecutionLog.class);
+            verify(logRepository, atLeastOnce()).save(captor.capture());
+            return captor.getAllValues().stream()
+                .filter(l -> "a".equals(l.getNodeId())).findFirst().orElseThrow();
+        }
+
+        @Test
+        @DisplayName("255자를 넘는 오류 메시지는 255자로 잘려 FAILED 행이 남는다 — INSERT 실패로 이력이 유실되지 않는다")
+        void longErrorMessage_isTruncatedTo255() throws Exception {
+            String message = "GitHub API 오류 (422): " + "x".repeat(300);
+
+            WorkflowExecutionLog saved = savedFailedLog(message);
+
+            assertThat(saved.getStatus()).isEqualTo(ExecutionLogStatus.FAILED);
+            assertThat(saved.getErrorMessage()).hasSize(255).isEqualTo(message.substring(0, 255));
+        }
+
+        @Test
+        @DisplayName("255자 이하는 그대로 저장된다 — 경계값 255는 자르지 않는다")
+        void errorMessageWithinLimit_isKept() throws Exception {
+            String exact = "가".repeat(255);
+
+            assertThat(savedFailedLog(exact).getErrorMessage()).isEqualTo(exact);
+        }
+
+        @Test
+        @DisplayName("255번째 자리가 서로게이트 쌍의 앞 절반이면 쌍을 쪼개지 않고 한 글자 앞에서 자른다")
+        void truncationDoesNotSplitSurrogatePair() throws Exception {
+            String message = "가".repeat(254) + "\uD83D\uDE00" + "나"; // 254자 + 이모지(2 UTF-16 단위) + 1자
+
+            String saved = savedFailedLog(message).getErrorMessage();
+
+            assertThat(saved).isEqualTo("가".repeat(254));
+        }
+
+        @Test
+        @DisplayName("오류 메시지가 null이어도 예외 없이 저장된다")
+        void nullErrorMessage_isKept() throws Exception {
+            assertThat(savedFailedLog(null).getErrorMessage()).isNull();
+        }
+    }
 }

@@ -69,6 +69,9 @@ public class SyncExecutionRuntime {
     private final IdempotencyStore idempotencyStore;
     private final AlertNotifier alertNotifier;
 
+    /** {@code node_runs.error_message} 컬럼 길이(VARCHAR 255). */
+    private static final int ERROR_MESSAGE_MAX_LENGTH = 255;
+
     /** 노드 타입 → 실행 전략. @PostConstruct에서 nodeExecutors로부터 구성된다. */
     private final Map<NodeType, NodeExecutor> executorMap = new EnumMap<>(NodeType.class);
 
@@ -679,7 +682,7 @@ public class SyncExecutionRuntime {
                     : result.isSuccess() ? ExecutionLogStatus.SUCCESS : ExecutionLogStatus.FAILED)
                 .inputJson(inputJson)
                 .outputJson(outputJson)
-                .errorMessage(result.getErrorMessage())
+                .errorMessage(truncateErrorMessage(result.getErrorMessage()))
                 .durationMs(durationMs)
                 .traceId(execution.getTraceId())
                 .promptTokens(usage != null ? usage.promptTokens() : null)
@@ -693,6 +696,23 @@ public class SyncExecutionRuntime {
             // 로그 저장 실패가 실행 전체를 중단시키지 않도록 경고만 기록
             log.warn("[Runtime] 실행 로그 저장 실패 — nodeId: {}", node.getId(), e);
         }
+    }
+
+    /**
+     * {@code node_runs.error_message}는 VARCHAR(255)이고 {@code ddl-auto: update}는 컬럼 타입을 바꾸지 않는다.
+     * 255자를 넘는 메시지(외부 API 오류 본문을 그대로 싣는 ACTION 노드에서 상시 발생)로 INSERT가 실패하면
+     * 위 try/catch가 경고로 삼켜 FAILED 이력이 통째로 사라진다 — 공통 경로라 AI 노드도 함께 막는다.
+     * 서로게이트 쌍의 앞 절반에서 잘리면 깨진 문자가 되므로 한 글자 앞에서 끊는다.
+     */
+    private static String truncateErrorMessage(String message) {
+        if (message == null || message.length() <= ERROR_MESSAGE_MAX_LENGTH) {
+            return message;
+        }
+        int end = ERROR_MESSAGE_MAX_LENGTH;
+        if (Character.isHighSurrogate(message.charAt(end - 1))) {
+            end--;
+        }
+        return message.substring(0, end);
     }
 
     /**
