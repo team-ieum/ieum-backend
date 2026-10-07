@@ -9,6 +9,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.workflowcore.config.RetryProperties;
 import com.ieum.workflowcore.domain.enums.NodeType;
@@ -312,5 +313,64 @@ class HttpNodeExecutorTest {
         assertThat(result.isSuccess()).isFalse();
         assertThat(result.getFailureKind()).isEqualTo(FailureKind.CLIENT_ERROR);
         assertThat(result.getErrorMessage()).doesNotContain("super-secret-token");
+    }
+
+    // ── body 치환 순서: 치환한 뒤 직렬화 ─────────────────────────────────────
+
+    private Node postNode(Object body) {
+        Map<String, Object> config = new HashMap<>();
+        config.put("method", "POST");
+        config.put("url", URL);
+        config.put("headers", new HashMap<>());
+        config.put("body", body);
+        return new Node("node-1", NodeType.HTTP, "HTTP 노드", config);
+    }
+
+    /** POST로 나간 body 문자열. */
+    private String sentPostBody() {
+        ArgumentCaptor<HttpEntity> captor = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(eq(URL), eq(HttpMethod.POST), captor.capture(), eq(String.class));
+        return (String) captor.getValue().getBody();
+    }
+
+    private void stubPostOk() {
+        when(restTemplate.exchange(eq(URL), eq(HttpMethod.POST), any(HttpEntity.class), eq(String.class)))
+            .thenReturn(new ResponseEntity<>("{}", HttpStatus.OK));
+    }
+
+    @Test
+    @DisplayName("참조 값에 따옴표·개행·백슬래시·$가 있어도 body JSON이 깨지지 않고 값이 그대로 전달된다")
+    void body_stringReferenceWithSpecialChars_staysValidJson() throws Exception {
+        stubPostOk();
+        String text = "그가 말했다 \"안녕\"\n다음 줄 \\ 경로 $1";
+        ExecutionCursor cursor = cursor();
+        cursor.getContext().setNodeOutput("t", Map.of("text", text));
+        Map<String, Object> body = new HashMap<>();
+        body.put("message", "{{nodes.t.output.text}}");
+
+        executor.execute(postNode(body), Collections.emptyMap(), cursor);
+
+        JsonNode sent = new ObjectMapper().readTree(sentPostBody());
+        assertThat(sent.get("message").asText()).isEqualTo(text);
+    }
+
+    @Test
+    @DisplayName("중첩 body(Map 안의 List 안의 문자열)도 치환되고, 문자열이 아닌 값은 그대로 직렬화된다")
+    void body_nestedValuesRenderedAndScalarsKept() throws Exception {
+        stubPostOk();
+        ExecutionCursor cursor = cursor();
+        cursor.getContext().setNodeOutput("t", Map.of("name", "이음"));
+        Map<String, Object> body = new HashMap<>();
+        body.put("tags", List.of("{{nodes.t.output.name}}", "고정"));
+        body.put("retries", 3);
+        body.put("dryRun", false);
+
+        executor.execute(postNode(body), Collections.emptyMap(), cursor);
+
+        JsonNode sent = new ObjectMapper().readTree(sentPostBody());
+        assertThat(sent.get("tags").get(0).asText()).isEqualTo("이음");
+        assertThat(sent.get("tags").get(1).asText()).isEqualTo("고정");
+        assertThat(sent.get("retries").asInt()).isEqualTo(3);
+        assertThat(sent.get("dryRun").asBoolean()).isFalse();
     }
 }

@@ -141,11 +141,12 @@ public class HttpNodeExecutor implements NodeExecutor {
                 }
             }
 
-            // body 변수 치환
+            // body 변수 치환 — 치환한 뒤 직렬화한다. 직렬화한 JSON 문자열에 치환하면 값에 든 따옴표·개행·
+            // 백슬래시가 이스케이프 없이 문자열 리터럴 안에 박혀 body가 깨진다(Map·List 참조는 JSON 문자열로 들어온다).
+            // renderDeep은 Map 키를 치환하지 않는다 — 키에 참조식을 쓰는 body는 지원하지 않는다.
             String bodyJson = null;
             if (bodyObj != null) {
-                String rawBody = objectMapper.writeValueAsString(bodyObj);
-                bodyJson = cursor.renderVariables(rawBody);
+                bodyJson = objectMapper.writeValueAsString(cursor.renderDeep(bodyObj));
             }
 
             ResponseEntity<String> response = sendRequest(method, url, httpHeaders, bodyJson);
