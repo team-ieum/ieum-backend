@@ -48,9 +48,36 @@ final class NodeDefinitionMerger {
             // 얕은 복사본을 베이스로 둬야 원본 정의가 바뀌지 않는다.
             Map<String, Object> base = new LinkedHashMap<>(previous);
             base.putAll(requested);
+            keepBrand(previous, requested, base);
             merged.add(base);
         }
         return merged;
+    }
+
+    /**
+     * 요청 config에 {@code brand} 키가 없으면 이전 config의 brand를 이어 붙인다.
+     *
+     * <p>config는 통째로 교체되는데({@code base.putAll}), 카탈로그·agent가 넣은 brand는 FE 목록 아이콘과
+     * 연동 서비스별 워크플로우 조회({@code nodes.config.brand})의 유일한 근거라, FE 폼 저장이 모르는 키 하나 때문에
+     * 노드가 연동 목록에서 사라진다. 요청이 brand를 명시했으면 null·빈 문자열이어도 지우려는 의도로 존중한다.
+     * 이전 config가 Map이 아니거나 brand가 문자열이 아니면 이어 붙일 것이 없다(예외를 던지지 않는다).
+     */
+    private static void keepBrand(Map<String, Object> previous, Map<String, Object> requested,
+        Map<String, Object> base) {
+
+        if (!(requested.get("config") instanceof Map<?, ?> requestedConfig)
+                || requestedConfig.containsKey("brand")) {
+            return;
+        }
+        if (!(previous.get("config") instanceof Map<?, ?> previousConfig)
+                || !(previousConfig.get("brand") instanceof String brand)) {
+            return;
+        }
+        // 요청 config를 건드리지 않고 복사본에 얹는다 — 결과 Map은 이전 정의와도 요청과도 공유하지 않는다.
+        Map<String, Object> config = new LinkedHashMap<>();
+        requestedConfig.forEach((key, value) -> config.put(String.valueOf(key), value));
+        config.put("brand", brand);
+        base.put("config", config);
     }
 
     private static Map<String, Map<String, Object>> indexById(
