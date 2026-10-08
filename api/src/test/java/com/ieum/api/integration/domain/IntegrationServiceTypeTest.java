@@ -38,6 +38,16 @@ class IntegrationServiceTypeTest {
         assertThat(IntegrationServiceType.GOOGLE.getBrand()).isEqualTo("google");
     }
 
+    @Test
+    @DisplayName("조회 brand 목록 — GOOGLE만 gmail·sheets를 함께 매칭하고 나머지는 대표 brand 하나다")
+    void brandsForLookup() {
+        assertThat(IntegrationServiceType.GOOGLE.getBrands()).containsExactly("google", "gmail", "sheets");
+        assertThat(IntegrationServiceType.NOTION.getBrands()).containsExactly("notion");
+        assertThat(IntegrationServiceType.GITHUB.getBrands()).containsExactly("github");
+        assertThat(IntegrationServiceType.SLACK.getBrands()).containsExactly("slack");
+        assertThat(IntegrationServiceType.DISCORD.getBrands()).containsExactly("discord");
+    }
+
     @ParameterizedTest
     @DisplayName("지원하지 않는 값은 UNSUPPORTED_SERVICE_TYPE 예외를 던진다")
     @ValueSource(strings = {"twitter", "openai", "webhook", "unknown"})

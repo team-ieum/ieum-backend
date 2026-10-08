@@ -2,9 +2,10 @@ package com.ieum.api.integration.domain;
 
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import java.util.List;
 import java.util.Locale;
+import java.util.stream.Stream;
 import lombok.Getter;
-import lombok.RequiredArgsConstructor;
 
 /**
  * "연결된 서비스 관리" 탭에 노출되는 연동 서비스 타입.
@@ -17,17 +18,25 @@ import lombok.RequiredArgsConstructor;
  * 아닌 brand 값은 의도적으로 제외한다.
  */
 @Getter
-@RequiredArgsConstructor
 public enum IntegrationServiceType {
 
-    GOOGLE("google"),
+    /** agent는 Google 도구 노드에 brand {@code google} 외에 {@code gmail}·{@code sheets}도 넣는다 */
+    GOOGLE("google", "gmail", "sheets"),
     NOTION("notion"),
     GITHUB("github"),
     SLACK("slack"),
     DISCORD("discord");
 
-    /** 노드 config.brand에 저장되는 식별자 */
+    /** 노드 config.brand에 저장되는 대표 식별자 */
     private final String brand;
+
+    /** 이 서비스로 조회할 때 매칭하는 모든 brand — 대표 brand가 첫 번째다 */
+    private final List<String> brands;
+
+    IntegrationServiceType(String brand, String... aliases) {
+        this.brand = brand;
+        this.brands = Stream.concat(Stream.of(brand), Stream.of(aliases)).toList();
+    }
 
     /**
      * path 변수 문자열을 enum으로 변환한다. 대소문자를 무시하며, 지원하지 않는 값이면
