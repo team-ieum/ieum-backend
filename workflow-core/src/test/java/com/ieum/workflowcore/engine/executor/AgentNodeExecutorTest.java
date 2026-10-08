@@ -57,15 +57,21 @@ class AgentNodeExecutorTest {
         executor = new AgentNodeExecutor(
             mockWebServer.url("/").toString(),
             credentialProvider,
-            googleTokenProvider,
-            new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
+            preparer(new StubWebhookCredentialProvider()),
             new StubMcpCatalogProvider(),
-            new StubWebhookCredentialProvider(),
             uid -> null,
             betaPlatformProvider,
             idempotencyStore,
             30
         );
+    }
+
+    /** AI 실행기가 쓰는 도구 전처리 — 웹훅 자격증명 공급원만 테스트마다 바꾼다. */
+    private ToolCallPreparer preparer(WebhookCredentialProvider webhookProvider) {
+        return new ToolCallPreparer(
+            googleTokenProvider,
+            new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
+            webhookProvider);
     }
 
     /** HEADER/MARKER 테스트용 재시도 정책. maxAttempts=3, 백오프 없음. */
@@ -558,10 +564,8 @@ class AgentNodeExecutorTest {
         AgentNodeExecutor exec = new AgentNodeExecutor(
             mockWebServer.url("/").toString(),
             credentialProvider,
-            googleTokenProvider,
-            new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
+            preparer(webhookProvider),
             new StubMcpCatalogProvider(),
-            webhookProvider,
             uid -> null,
             betaPlatformProvider,
             idempotencyStore,
@@ -654,10 +658,8 @@ class AgentNodeExecutorTest {
         return new AgentNodeExecutor(
             mockWebServer.url("/").toString(),
             credentialProvider,
-            googleTokenProvider,
-            new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
+            preparer(new StubWebhookCredentialProvider()),
             new StubMcpCatalogProvider(),
-            new StubWebhookCredentialProvider(),
             roleProvider,
             betaProvider,
             idempotencyStore,
@@ -865,10 +867,8 @@ class AgentNodeExecutorTest {
         AgentNodeExecutor exec = new AgentNodeExecutor(
             "http://127.0.0.1:1", // 아무도 리스닝하지 않는 포트 — 즉시 연결 거부(WebClientRequestException)
             credentialProvider,
-            googleTokenProvider,
-            new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
+            preparer(new StubWebhookCredentialProvider()),
             new StubMcpCatalogProvider(),
-            new StubWebhookCredentialProvider(),
             uid -> null,
             betaProvider,
             idempotencyStore,
