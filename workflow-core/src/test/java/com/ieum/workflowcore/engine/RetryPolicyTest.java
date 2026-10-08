@@ -230,6 +230,36 @@ class RetryPolicyTest {
         }
 
         @Test
+        @DisplayName("ACTION 도구 오류(ACTION_TOOL_FAILED)는 같은 입력이면 같은 결과라 재시도하지 않는다")
+        void actionToolFailureIsClientError() {
+            FailureKind kind = FailureClassifier.fromAgentErrorCode("ACTION_TOOL_FAILED");
+
+            assertThat(kind).isEqualTo(FailureKind.CLIENT_ERROR);
+            assertThat(kind.isRetryable()).isFalse();
+            // ACTION 가드 거부·도구 예외·타임아웃은 기존 매핑 그대로다
+            assertThat(FailureClassifier.fromAgentErrorCode("AGENT_EXECUTION_FAILED"))
+                .isEqualTo(FailureKind.UNKNOWN);
+            assertThat(FailureClassifier.fromAgentErrorCode("AGENT_TIMEOUT"))
+                .isEqualTo(FailureKind.TIMEOUT);
+        }
+
+        @Test
+        @DisplayName("agent 서비스가 본문 없이 HTTP 오류만 준 경우 상태로 errorCode를 합성한다")
+        void agentServiceErrorCodeIsSynthesizedFromStatus() {
+            assertThat(FailureClassifier.agentServiceErrorCode(429)).isEqualTo("RATE_LIMITED");
+            assertThat(FailureClassifier.agentServiceErrorCode(408)).isEqualTo("AGENT_TIMEOUT");
+            assertThat(FailureClassifier.agentServiceErrorCode(503)).isEqualTo("AGENT_SERVICE_ERROR");
+            assertThat(FailureClassifier.agentServiceErrorCode(400)).isEqualTo("AGENT_BAD_REQUEST");
+            assertThat(FailureClassifier.agentServiceErrorCode(404)).isEqualTo("AGENT_BAD_REQUEST");
+            assertThat(FailureClassifier.agentServiceErrorCode(302)).isNull();
+            // 합성한 코드는 다시 같은 분류로 돌아온다
+            assertThat(FailureClassifier.fromAgentErrorCode(FailureClassifier.agentServiceErrorCode(400)))
+                .isEqualTo(FailureKind.CLIENT_ERROR);
+            assertThat(FailureClassifier.fromAgentErrorCode(FailureClassifier.agentServiceErrorCode(503)))
+                .isEqualTo(FailureKind.SERVER_ERROR);
+        }
+
+        @Test
         @DisplayName("agent가 errorCode를 안 내려주면 UNKNOWN이라 재시도하지 않는다")
         void missingAgentErrorCodeIsUnknown() {
             assertThat(FailureClassifier.fromAgentErrorCode(null)).isEqualTo(FailureKind.UNKNOWN);

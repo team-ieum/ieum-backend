@@ -32,9 +32,12 @@ public final class FailureClassifier {
         // LLM 호출 자체가 실패했으나 원인이 특정되지 않음 — 반복해도 같을 가능성이 높다
         "AGENT_EXECUTION_FAILED", FailureKind.UNKNOWN,
         // 아래 둘은 agent 어휘가 아니라, agent 서비스가 본문 없이 HTTP 오류만 준 경우
-        // BE가 상태 코드로부터 합성하는 코드다(AgentNodeExecutor.agentServiceErrorCode).
+        // BE가 상태 코드로부터 합성하는 코드다(agentServiceErrorCode).
         "AGENT_SERVICE_ERROR", FailureKind.SERVER_ERROR,
-        "AGENT_BAD_REQUEST", FailureKind.CLIENT_ERROR
+        "AGENT_BAD_REQUEST", FailureKind.CLIENT_ERROR,
+        // ACTION 노드의 도구 자체 오류(GitHub 422 등) — 같은 입력이면 같은 결과라 재시도하지 않는다.
+        // 쓰기 도구는 재시도가 중복 부수효과로 이어질 수 있어 UNKNOWN과 구분해 둔다.
+        "ACTION_TOOL_FAILED", FailureKind.CLIENT_ERROR
     );
 
     public static FailureKind fromAgentErrorCode(String errorCode) {
@@ -43,6 +46,21 @@ public final class FailureClassifier {
         }
         return AGENT_ERROR_CODES.getOrDefault(
             errorCode.trim().toUpperCase(Locale.ROOT), FailureKind.UNKNOWN);
+    }
+
+    /**
+     * agent 서비스 자체가 비정상 응답을 준 경우의 errorCode를 합성한다. agent가 본문으로 내려주는
+     * errorCode가 없는 상황이므로 HTTP 상태로 대신 분류한다 — AI·ACTION 실행기가 함께 쓴다.
+     * 분류할 근거가 없는 상태(3xx 등)는 null이다.
+     */
+    public static String agentServiceErrorCode(int status) {
+        return switch (fromHttpStatus(status)) {
+            case RATE_LIMIT -> "RATE_LIMITED";
+            case TIMEOUT -> "AGENT_TIMEOUT";
+            case SERVER_ERROR -> "AGENT_SERVICE_ERROR";
+            case CLIENT_ERROR -> "AGENT_BAD_REQUEST";
+            default -> null;
+        };
     }
 
     /** HTTP 상태 코드 → 실패 분류. 429는 재시도 가치가 있고 나머지 4xx는 반복해도 같은 결과다. */
