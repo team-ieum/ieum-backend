@@ -131,6 +131,18 @@ class ActionNodeExecutorTest {
     // ── 성공: 출력 모양과 요청 계약 ──────────────────────────────────────────
 
     @Test
+    @DisplayName("256KB를 넘는 성공 응답도 디코딩돼 그대로 노드 출력이 된다 — 기본 codec 한도에 묶이지 않는다")
+    void success_largeResponseOver256KbIsDecoded() {
+        String content = "a".repeat(300 * 1024);
+        enqueue(200, "{\"success\":true,\"output\":{\"content\":\"" + content + "\"}}");
+
+        ExecutorResult result = executor.execute(githubNode(), NO_INPUT, cursor(userId));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).containsExactly(Map.entry("content", content));
+    }
+
+    @Test
     @DisplayName("노드 출력은 agent output dict 그대로다 — AI 노드의 {output, metadata} 래퍼도 usage도 없다")
     void success_outputIsAgentOutputDictAsIs() throws Exception {
         enqueue(200, "{\"success\":true,\"output\":{\"issues\":[{\"number\":1,\"title\":\"첫 이슈\"}],\"count\":1}}");

@@ -40,6 +40,9 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 public class ActionNodeExecutor implements NodeExecutor {
 
     private static final String ACTIONS_PATH = "/v1/actions/execute";
+    // 정적 WebClient.builder()는 Boot codec 설정을 받지 않아 기본 256KB에 묶인다.
+    // agent 읽기 도구는 본문을 최대 1MB까지 돌려주므로(google_drive_read) JSON 이스케이프 여유를 둬 4MB.
+    private static final int MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
     private final WebClient webClient;
     private final ToolCallPreparer toolCallPreparer;
@@ -56,6 +59,7 @@ public class ActionNodeExecutor implements NodeExecutor {
     ) {
         this.webClient = WebClient.builder()
             .baseUrl(agentBaseUrl)
+            .codecs(c -> c.defaultCodecs().maxInMemorySize(MAX_RESPONSE_BYTES))
             .build();
         this.toolCallPreparer = toolCallPreparer;
         this.userRoleProvider = userRoleProvider;
