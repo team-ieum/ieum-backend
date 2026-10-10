@@ -83,10 +83,25 @@ public class NodeTestRunner {
      * @throws CustomException            APPROVAL이거나 실행기가 없는 타입일 때(INVALID_INPUT)
      */
     public NodeTestResult run(Workflow workflow, Node node, Map<String, Object> input) {
+        if (node.getType() == NodeType.TRIGGER) {
+            return runTrigger(workflow, node, input);
+        }
         NodeExecutor executor = executorFor(node);
         ExecutionCursor cursor = newCursor(workflow, node);
         loadReferencedSamples(workflow, node, cursor.getContext());
         return saveSample(workflow, node.getId(), execute(executor, node, renderedConfig(node, cursor), cursor));
+    }
+
+    /**
+     * webhook listen 중 받은 실제 요청 1건으로 트리거 샘플을 만든다. 노드 정의는 저장된 최신 버전에서 읽고,
+     * 거기 없거나 TRIGGER가 아니면(저장 전 노드) 최소 WEBHOOK 트리거로 대신한다.
+     */
+    public NodeTestResult recordWebhookSample(Workflow workflow, String nodeId, Map<String, Object> payload) {
+        Node node = findSavedNode(workflow.getId(), nodeId)
+            .filter(n -> n.getType() == NodeType.TRIGGER)
+            .orElseGet(() -> new Node(nodeId, NodeType.TRIGGER, "Webhook",
+                new HashMap<>(Map.of("triggerType", "WEBHOOK"))));
+        return runTrigger(workflow, node, payload);
     }
 
     /** 저장된 최신 샘플. 없으면 empty. */
@@ -165,6 +180,21 @@ public class NodeTestRunner {
                 idempotencyStore.clearInFlight(key);
             }
         }
+    }
+
+    /**
+     * 런타임 순서를 그대로 따른다({@code SyncExecutionRuntime}의 트리거 출력 선주입
+     * ({@code setNodeOutput(triggerNode…)}) → {@code prepareNodeInput} 치환 → 실행): 페이로드를
+     * 트리거 노드 출력으로 먼저 심은 뒤 config를 치환하고, 그 결과를 {@code TriggerNodeExecutor}가 출력으로
+     * 돌려준다. 그래서 샘플은 원 페이로드가 아니라 <b>치환된 트리거 config</b>이고, 페이로드 필드는 config가
+     * {@code {{nodes.<id>.output.X}}}로 자기 참조할 때만 남는다. 앞 노드 샘플은 요구하지 않는다.
+     */
+    private NodeTestResult runTrigger(Workflow workflow, Node node, Map<String, Object> payload) {
+        NodeExecutor executor = executorFor(node);
+        ExecutionCursor cursor = newCursor(workflow, node);
+        cursor.getContext().setNodeOutput(node.getId(),
+            payload != null ? new HashMap<>(payload) : new HashMap<>());
+        return saveSample(workflow, node.getId(), execute(executor, node, renderedConfig(node, cursor), cursor));
     }
 
     // ──────────────────────────── 샘플 저장 ────────────────────────────

@@ -472,4 +472,119 @@ class NodeTestRunnerTest {
 
         assertThat(runner.findSavedNode(workflow.getId(), "a")).isEmpty();
     }
+
+    // ──────────────────────────── 트리거 (spec §5.4) ────────────────────────────
+
+    private Node trigger(Map<String, Object> config) {
+        return new Node("t", NodeType.TRIGGER, "트리거", new HashMap<>(config));
+    }
+
+    @Test
+    @DisplayName("manual — 샘플은 원 페이로드가 아니라 치환된 트리거 config다: 자기 참조 없으면 페이로드 필드가 안 남는다(런타임과 같다)")
+    void manualSampleIsRenderedConfigNotRawPayload() {
+        NodeTestResult result = runner.run(workflow, trigger(Map.of("triggerType", "MANUAL")),
+            Map.of("score", 5));
+
+        assertThat(result.status()).isEqualTo(SampleStatus.SUCCESS);
+        assertThat(result.output()).isEqualTo(Map.of("triggerType", "MANUAL"));
+    }
+
+    @Test
+    @DisplayName("manual — config가 {{nodes.t.output.X}}로 자기 참조하면 페이로드 필드가 문자열로 남고, 민감 키는 마스킹된다")
+    void manualSelfReferenceBringsPayloadFields() {
+        NodeTestResult result = runner.run(workflow, trigger(Map.of(
+            "triggerType", "MANUAL",
+            "score", "{{nodes.t.output.score}}",
+            "token", "{{nodes.t.output.token}}")),
+            Map.of("score", 85, "token", "sk-raw"));
+
+        assertThat(result.output()).containsEntry("triggerType", "MANUAL")
+            .containsEntry("score", "85").containsEntry("token", "***");
+        assertThat(stored("t").getOutputJson()).doesNotContain("sk-raw");
+    }
+
+    @Test
+    @DisplayName("input이 null이어도 빈 페이로드로 성공한다")
+    void nullInputIsEmptyPayload() {
+        NodeTestResult result = runner.run(workflow, trigger(Map.of("triggerType", "MANUAL")), null);
+
+        assertThat(result.status()).isEqualTo(SampleStatus.SUCCESS);
+    }
+
+    @Test
+    @DisplayName("schedule — {triggeredAt, cron}을 내고 요청 input은 무시한다")
+    void scheduleEmitsTriggeredAtAndCron() {
+        NodeTestResult result = runner.run(workflow,
+            trigger(Map.of("triggerType", "SCHEDULE", "cron", "0 0 9 * * ?")), Map.of("x", 1));
+
+        assertThat(result.output()).containsKeys("triggeredAt", "cron").doesNotContainKey("x");
+        assertThat(result.output()).containsEntry("cron", "0 0 9 * * ?");
+    }
+
+    @Test
+    @DisplayName("schedule에 cron이 없으면 500이 아니라 FAILED 샘플")
+    void scheduleWithoutCronIsFailedSample() {
+        NodeTestResult result = runner.run(workflow, trigger(Map.of("triggerType", "SCHEDULE")), Map.of());
+
+        assertThat(result.status()).isEqualTo(SampleStatus.FAILED);
+        assertThat(result.error()).contains("cron");
+        assertThat(stored("t").getStatus()).isEqualTo(SampleStatus.FAILED);
+    }
+
+    @Test
+    @DisplayName("트리거는 앞 노드 샘플을 요구하지 않는다 — 다른 노드 참조는 런타임처럼 빈 문자열")
+    void triggerDoesNotRequireOtherSamples() {
+        NodeTestResult result = runner.run(workflow, trigger(Map.of(
+            "triggerType", "MANUAL", "x", "{{nodes.other.output.x}}")), Map.of());
+
+        assertThat(result.status()).isEqualTo(SampleStatus.SUCCESS);
+        assertThat(result.output()).containsEntry("x", "");
+    }
+
+    // ──────────────────────────── webhook 수신 샘플 ────────────────────────────
+
+    private void saveVersionWithNodes(List<Map<String, Object>> nodes) {
+        WorkflowVersion version = mock(WorkflowVersion.class);
+        given(crudService.findLatestVersion(workflow.getId())).willReturn(Optional.of(version));
+        given(crudService.loadDefinition(version)).willReturn(
+            WorkflowDefinitionDocument.builder().nodes(nodes).edges(List.of()).build());
+    }
+
+    @Test
+    @DisplayName("webhook 수신 — 저장된 트리거 config를 쓰고 페이로드는 자기 참조로만 남는다")
+    void webhookSampleUsesSavedTriggerConfig() {
+        saveVersionWithNodes(List.of(Map.of("id", "t", "type", "TRIGGER", "label", "수신", "config",
+            Map.of("triggerType", "WEBHOOK", "orderId", "{{nodes.t.output.orderId}}"))));
+
+        NodeTestResult result = runner.recordWebhookSample(workflow, "t", Map.of("orderId", "ORD-1", "memo", "x"));
+
+        assertThat(result.status()).isEqualTo(SampleStatus.SUCCESS);
+        assertThat(result.output()).isEqualTo(Map.of("triggerType", "WEBHOOK", "orderId", "ORD-1"));
+        assertThat(stored("t").getOutputJson()).contains("ORD-1");
+    }
+
+    @Test
+    @DisplayName("저장 전 노드(버전 없음·버전에 노드 없음·TRIGGER 아님)면 최소 WEBHOOK 트리거로 샘플을 만든다")
+    void webhookSampleFallsBackToMinimalTrigger() {
+        given(crudService.findLatestVersion(workflow.getId())).willReturn(Optional.empty());
+        assertThat(runner.recordWebhookSample(workflow, "t", Map.of("a", 1)).output())
+            .isEqualTo(Map.of("triggerType", "WEBHOOK"));
+
+        saveVersionWithNodes(List.of(
+            Map.of("id", "other", "type", "TRIGGER", "label", "x", "config", Map.of()),
+            Map.of("id", "t", "type", "HTTP", "label", "충돌", "config", Map.of("method", "GET"))));
+        assertThat(runner.recordWebhookSample(workflow, "t", Map.of()).output())
+            .isEqualTo(Map.of("triggerType", "WEBHOOK"));
+    }
+
+    @Test
+    @DisplayName("webhook 샘플의 민감 페이로드는 저장 전에 마스킹된다")
+    void webhookSampleIsMasked() {
+        saveVersionWithNodes(List.of(Map.of("id", "t", "type", "TRIGGER", "label", "수신", "config",
+            Map.of("triggerType", "WEBHOOK", "password", "{{nodes.t.output.password}}"))));
+
+        runner.recordWebhookSample(workflow, "t", Map.of("password", "pw-raw"));
+
+        assertThat(stored("t").getOutputJson()).doesNotContain("pw-raw");
+    }
 }
