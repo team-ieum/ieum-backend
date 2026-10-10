@@ -44,6 +44,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  *
  * <p>SCHEDULE 트리거 워크플로우는 CRUD/활성화/비활성화 시 {@link WorkflowScheduler}를 통해
  * Quartz Job을 자동으로 동기화한다.
+ *
+ * <p>앱 트리거(GMAIL_NEW_EMAIL·GITHUB_NEW_ISSUE)는 같은 지점에서 {@link AppTriggerSubscriptionService#sync}로 구독 행을 맞춘다 — Quartz와 달리 트랜잭션 안이다.
  */
 @Slf4j
 @Service
@@ -59,6 +61,7 @@ public class WorkflowCrudService {
     private final WorkflowScheduler workflowScheduler;
     private final WorkflowDefinitionRepository definitionRepository;
     private final ObjectMapper objectMapper;
+    private final AppTriggerSubscriptionService appTriggerSubscriptionService;
 
     // ------------------------------------------------------------------ WRITE
 
@@ -77,8 +80,11 @@ public class WorkflowCrudService {
             .cronExpression(cron)
             .build();
         workflowRepository.save(workflow);
+        List<Map<String, Object>> nodes = readNodes(nodesJson);
+        // 앱 트리거 구독은 같은 트랜잭션에서 맞춘다 — 접근 검증 거부(400)가 Mongo 저장 전에 나야 고아 문서가 안 남는다.
+        appTriggerSubscriptionService.sync(workflow, nodes);
 
-        WorkflowVersion version = saveVersionWithCompensation(workflow, 1, nodesJson, edgesJson);
+        WorkflowVersion version = saveVersionWithCompensation(workflow, 1, nodes, edgesJson);
 
         // DB 커밋 후 Quartz Job 등록 — 트랜잭션 롤백 시 Job이 고아로 남는 것을 방지
         if (triggerType == TriggerType.SCHEDULE) {
@@ -98,9 +104,11 @@ public class WorkflowCrudService {
         Workflow workflow = getWorkflowByOwner(userId, workflowId);
         workflow.update(name, description);
         applySchedule(workflow, triggerType, cronExpression);
+        List<Map<String, Object>> nodes = readNodes(nodesJson);
+        appTriggerSubscriptionService.sync(workflow, nodes);
 
         int nextVersion = workflowVersionRepository.findMaxVersionByWorkflowId(workflowId) + 1;
-        WorkflowVersion version = saveVersionWithCompensation(workflow, nextVersion, nodesJson, edgesJson);
+        WorkflowVersion version = saveVersionWithCompensation(workflow, nextVersion, nodes, edgesJson);
 
         log.info("[WorkflowCrudService] 워크플로우 업데이트 — workflowId: {}, version: {}, triggerType: {}",
             workflowId, nextVersion, triggerType);
@@ -120,9 +128,12 @@ public class WorkflowCrudService {
         if (triggerType != null) {
             applySchedule(workflow, triggerType, cronExpression);
         }
+        // 트리거 노드가 없으면 앱 트리거 없음으로 판정돼 구독 행이 지워진다.
+        List<Map<String, Object>> nodes = readNodes(nodesJson);
+        appTriggerSubscriptionService.sync(workflow, nodes);
 
         int nextVersion = workflowVersionRepository.findMaxVersionByWorkflowId(workflowId) + 1;
-        WorkflowVersion version = saveVersionWithCompensation(workflow, nextVersion, nodesJson, edgesJson);
+        WorkflowVersion version = saveVersionWithCompensation(workflow, nextVersion, nodes, edgesJson);
 
         log.info("[WorkflowCrudService] AI 생성 버전 저장 — workflowId: {}, version: {}",
             workflowId, nextVersion);
@@ -168,6 +179,9 @@ public class WorkflowCrudService {
     public Workflow activateWorkflow(UUID userId, UUID workflowId) {
         Workflow workflow = getWorkflowByOwner(userId, workflowId);
         workflow.activate();
+        // 앱 트리거일 때만 정의를 읽는다 — Mongo 문서가 없는 기존 MANUAL/SCHEDULE 워크플로우의 활성화를 깨지 않게.
+        appTriggerSubscriptionService.sync(workflow,
+            workflow.getTriggerType().isAppTrigger() ? latestNodes(workflowId) : List.of());
         final Workflow activatedWorkflow = workflow;
         afterCommit(() -> syncScheduleJob(activatedWorkflow));
         log.info("[WorkflowCrudService] 워크플로우 활성화 — workflowId: {}", workflowId);
@@ -178,6 +192,7 @@ public class WorkflowCrudService {
     public Workflow deactivateWorkflow(UUID userId, UUID workflowId) {
         Workflow workflow = getWorkflowByOwner(userId, workflowId);
         workflow.deactivate();
+        appTriggerSubscriptionService.sync(workflow, List.of());
         final Workflow deactivatedWorkflow = workflow;
         afterCommit(() -> syncScheduleJob(deactivatedWorkflow));
         log.info("[WorkflowCrudService] 워크플로우 비활성화 — workflowId: {}", workflowId);
@@ -285,6 +300,7 @@ public class WorkflowCrudService {
         // 노드 테스트 샘플은 workflow_id FK를 가진다 — DB cascade가 없어 워크플로우 행보다 먼저 지운다.
         // 사용자 삭제와 스케줄러 자동 정리가 모두 이 메서드를 지나므로 여기 한 곳이면 된다.
         nodeTestSampleRepository.deleteByWorkflow(workflow);
+        appTriggerSubscriptionService.deleteByWorkflowId(workflowId);
         workflowRepository.delete(workflow);
 
         afterCommit(() -> {
@@ -304,9 +320,9 @@ public class WorkflowCrudService {
      * with a compensating transaction: if the PG save fails, the MongoDB document is deleted.
      */
     private WorkflowVersion saveVersionWithCompensation(
-            Workflow workflow, int versionNumber, String nodesJson, String edgesJson) {
+            Workflow workflow, int versionNumber, List<Map<String, Object>> nodes, String edgesJson) {
         WorkflowDefinitionDocument savedDoc = definitionRepository.save(
-            buildDefinitionDocument(UUID.randomUUID().toString(), nodesJson, edgesJson));
+            buildDefinitionDocument(UUID.randomUUID().toString(), nodes, edgesJson));
 
         try {
             WorkflowVersion version = WorkflowVersion.builder()
@@ -327,22 +343,31 @@ public class WorkflowCrudService {
     }
 
     private WorkflowDefinitionDocument buildDefinitionDocument(
-            String workflowVersionId, String nodesJson, String edgesJson) {
+            String workflowVersionId, List<Map<String, Object>> nodes, String edgesJson) {
+        return WorkflowDefinitionDocument.builder()
+            .workflowVersionId(workflowVersionId)
+            .nodes(nodes)
+            .edges(readNodes(edgesJson))
+            .createdAt(LocalDateTime.now())
+            .build();
+    }
+
+    /** 노드(·엣지) JSON → Map 목록. 형식 오류는 400(INVALID_WORKFLOW). */
+    private List<Map<String, Object>> readNodes(String json) {
         try {
-            List<Map<String, Object>> nodes =
-                objectMapper.readValue(nodesJson, new TypeReference<>() {});
-            List<Map<String, Object>> edges =
-                objectMapper.readValue(edgesJson, new TypeReference<>() {});
-            return WorkflowDefinitionDocument.builder()
-                .workflowVersionId(workflowVersionId)
-                .nodes(nodes)
-                .edges(edges)
-                .createdAt(LocalDateTime.now())
-                .build();
+            return objectMapper.readValue(json, new TypeReference<>() {});
         } catch (Exception e) {
             throw new CustomException(ErrorCode.INVALID_WORKFLOW,
                 "워크플로우 JSON 파싱 실패: " + e.getMessage());
         }
+    }
+
+    /** 활성화 시점의 정의 — 저장된 최신 버전 노드. 버전이 없으면 빈 목록(앱 트리거 없음). */
+    private List<Map<String, Object>> latestNodes(UUID workflowId) {
+        return findLatestVersion(workflowId)
+            .map(this::loadDefinition)
+            .map(WorkflowDefinitionDocument::getNodes)
+            .orElse(List.of());
     }
 
     /**
