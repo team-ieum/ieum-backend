@@ -157,4 +157,25 @@ class ExecutionCursorTest {
 
         assertThat(rendered).isEqualTo("제목 {{nodes.other.output.secret}} / SECRET-VALUE");
     }
+
+    @Test
+    @DisplayName("referencedNodeIds — 중첩 Map·List의 문자열에서 직접 참조한 노드 id를 등장 순서·중복 없이 모은다(Map 키는 제외)")
+    void referencedNodeIds_collectsDirectReferencesInOrder() {
+        Map<String, Object> config = new java.util.LinkedHashMap<>();
+        config.put("url", "https://x/{{nodes.a.output.id}}/{{nodes.b.output.name}}");
+        config.put("headers", Map.of("X-Id", "{{nodes.a.output.id}}"));
+        config.put("tools", List.of(
+            Map.of("name", "t", "config", Map.of("title", "{{nodes.c-1.output.issues.0.title}}")), 7));
+        config.put("{{nodes.keyref.output.x}}", "키는 치환 대상이 아니다");
+        config.put("note", "{{ nodes.spaced.output.x }} 와 {{nodes.x.out.y}} 는 치환기가 안 읽는 모양");
+
+        assertThat(ExecutionCursor.referencedNodeIds(config)).containsExactly("a", "b", "c-1");
+    }
+
+    @Test
+    @DisplayName("referencedNodeIds — null·참조 없는 값은 빈 집합")
+    void referencedNodeIds_emptyWhenNothingReferenced() {
+        assertThat(ExecutionCursor.referencedNodeIds(null)).isEmpty();
+        assertThat(ExecutionCursor.referencedNodeIds(Map.of("a", "plain", "b", 3))).isEmpty();
+    }
 }
