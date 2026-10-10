@@ -137,7 +137,7 @@ public class ToolCallPreparer {
         }
 
         for (Map<String, Object> tool : tools) {
-            if (!WEBHOOK_TOOL_NAMES.contains(tool.get("name"))) {
+            if (!(tool.get("name") instanceof String name) || !WEBHOOK_TOOL_NAMES.contains(name)) {
                 continue;
             }
             Object cfg = tool.get("config");

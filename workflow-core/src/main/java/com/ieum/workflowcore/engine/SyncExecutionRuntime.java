@@ -256,15 +256,17 @@ public class SyncExecutionRuntime {
 
                         // 5-2. 실패 시 전체 중단(신규 디스패치 멈춤 → finally에서 in-flight 드레인)
                         if (!result.isSuccess()) {
+                            // 외부 API 오류 본문에 웹훅 URL이 실려 올 수 있다 — 로그·SSE·실패 알림 전부 가린 값만 쓴다
+                            String errorMessage = SensitiveDataMasker.maskWebhookUrl(result.getErrorMessage());
                             log.error("[Runtime] 노드 실패로 워크플로우 중단 — nodeId: {}, error: {}",
-                                node.getId(), result.getErrorMessage());
+                                node.getId(), errorMessage);
                             eventPublisher.publish(executionId, ExecutionEvent.nodeFailed(
                                 executionId, workflowId, node.getId(), node.getType(),
-                                result.getErrorMessage(), durMs));
+                                errorMessage, durMs));
                             failed = true;
                             failedNodeRetryExhausted = outcome.retryExhausted();
                             failedNodeId = node.getId();
-                            failedNodeError = result.getErrorMessage();
+                            failedNodeError = errorMessage;
                             break;
                         }
 
@@ -682,7 +684,7 @@ public class SyncExecutionRuntime {
                     : result.isSuccess() ? ExecutionLogStatus.SUCCESS : ExecutionLogStatus.FAILED)
                 .inputJson(inputJson)
                 .outputJson(outputJson)
-                .errorMessage(truncateErrorMessage(result.getErrorMessage()))
+                .errorMessage(truncateErrorMessage(SensitiveDataMasker.maskWebhookUrl(result.getErrorMessage())))
                 .durationMs(durationMs)
                 .traceId(execution.getTraceId())
                 .promptTokens(usage != null ? usage.promptTokens() : null)

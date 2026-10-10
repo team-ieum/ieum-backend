@@ -29,9 +29,6 @@ public class ExecutionCursor {
     private static final Pattern VARIABLE_PATTERN =
         Pattern.compile("\\{\\{nodes\\.([a-zA-Z0-9-]+)\\.output\\.([a-zA-Z0-9_.]+)\\}\\}");
 
-    /** 무한 치환 루프 방지를 위한 최대 치환 반복 횟수 */
-    private static final int MAX_RENDER_DEPTH = 5;
-
     /** 참조 대상이 Map·List일 때 JSON 문자열로 바꾸는 데 쓴다. 스레드 안전하다. */
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -92,7 +89,8 @@ public class ExecutionCursor {
      * 입력 문자열에서 {@code {{nodes.<nodeId>.output.<fieldPath>}}} 패턴을 찾아
      * 실행 컨텍스트의 실제 값으로 치환한다.
      *
-     * <p>중첩 치환(치환 결과에 다시 패턴이 포함된 경우)을 최대 {@value MAX_RENDER_DEPTH}회 반복한다.
+     * <p>단일 패스다 — 치환 결과(이슈 제목·메일 본문 같은 외부 데이터)에 든 참조식 리터럴은 다시 치환하지 않는다.
+     * 재치환하면 외부 텍스트가 같은 실행의 다른 노드 출력을 끌어와 밖으로 내보낼 수 있다.
      *
      * <p>fieldPath는 점(.)으로 구분된 중첩 키를 지원한다.
      * 예: {@code data.name} → output["data"]["name"]
@@ -104,17 +102,7 @@ public class ExecutionCursor {
         if (input == null || !input.contains("{{")) {
             return input;
         }
-
-        String result = input;
-        for (int depth = 0; depth < MAX_RENDER_DEPTH; depth++) {
-            String rendered = doRender(result);
-            if (rendered.equals(result)) {
-                break; // 더 이상 치환할 패턴 없음
-            }
-            result = rendered;
-            log.debug("[Cursor] 변수 치환 depth={} 결과: {}", depth + 1, result);
-        }
-        return result;
+        return doRender(input);
     }
 
     /**

@@ -146,4 +146,15 @@ class ExecutionCursorTest {
 
         assertThat(c.renderVariables("{{nodes.n.output.m}}")).isEqualTo("{\"t\":\"a$1\\\\b\"}");
     }
+
+    @Test
+    @DisplayName("치환 결과에 든 참조식 리터럴은 다시 치환하지 않는다 — 외부 데이터로 다른 노드 출력이 새지 않는다")
+    void renderVariables_singlePassDoesNotExpandReferencesInsideValues() {
+        ExecutionCursor c = cursorWithOutput("issue", Map.of("title", "제목 {{nodes.other.output.secret}}"));
+        c.getContext().setNodeOutput("other", Map.of("secret", "SECRET-VALUE"));
+
+        String rendered = c.renderVariables("{{nodes.issue.output.title}} / {{nodes.other.output.secret}}");
+
+        assertThat(rendered).isEqualTo("제목 {{nodes.other.output.secret}} / SECRET-VALUE");
+    }
 }

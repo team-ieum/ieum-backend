@@ -370,7 +370,9 @@ class HttpNodeExecutorTest {
         JsonNode sent = new ObjectMapper().readTree(sentPostBody());
         assertThat(sent.get("tags").get(0).asText()).isEqualTo("이음");
         assertThat(sent.get("tags").get(1).asText()).isEqualTo("고정");
+        assertThat(sent.get("retries").isInt()).isTrue();
         assertThat(sent.get("retries").asInt()).isEqualTo(3);
+        assertThat(sent.get("dryRun").isBoolean()).isTrue();
         assertThat(sent.get("dryRun").asBoolean()).isFalse();
     }
 

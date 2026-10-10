@@ -21,7 +21,7 @@
 - `RetryPolicy` — 노드 config의 `retry` 객체를 파싱한 record(정책 파싱·백오프 계산·회차별 모델 선택). 사용자 편집값이라 `maxAttempts` ≤ 10, 단일 백오프 ≤ 10분으로 상·하한 강제
 - `FailureKind` — 실패 원인 enum이 **재시도 가능 여부를 스스로 보유**한다(`isRetryable()`). TIMEOUT·RATE_LIMIT·SERVER_ERROR·NETWORK만 재시도 대상, CLIENT_ERROR·UNKNOWN은 아님
 - `FailureClassifier` — agent errorCode / HTTP status / 예외 cause 체인 → `FailureKind`. 문자열 추론이 아니라 Executor가 실패를 반환할 때 명시적으로 채운다
-- **`retry.timeoutMs`는 호출 타임아웃이 아니다** — MARKER in-flight 마커 TTL(`timeoutMs`+30초, 미선언 5분) 산정 전용(`NodeExecutor.markerTtl()`). 실제 호출 타임아웃은 AI 노드=agent 호출(`ieum.agent.timeout-seconds`, api yml 180초), HTTP 노드=공유 RestTemplate read 30초(`ieum.http.read-timeout-seconds`)이고 노드별로 못 바꾼다. 의도적으로 배선하지 않았다(BE-55) — BE가 먼저 끊어도 agent는 도구를 계속 실행해 실패 기록 뒤에 부수효과가 남고, 같은 키 재시도는 `DUPLICATE_REQUEST`를 받는다
+- **`retry.timeoutMs`는 호출 타임아웃이 아니다** — MARKER in-flight 마커 TTL(`timeoutMs`+30초, 미선언 5분) 산정 전용(`NodeExecutor.markerTtl()`). 실제 호출 타임아웃은 AI·ACTION 노드=agent 호출(`ieum.agent.timeout-seconds`, api yml 180초), HTTP 노드=공유 RestTemplate read 30초(`ieum.http.read-timeout-seconds`)이고 노드별로 못 바꾼다. 의도적으로 배선하지 않았다(BE-55) — BE가 먼저 끊어도 agent는 도구를 계속 실행해 실패 기록 뒤에 부수효과가 남고, 같은 키 재시도는 `DUPLICATE_REQUEST`를 받는다
 - `RetryProperties`(`workflow.execution.retry.*`) — 기본값. **AI 노드만 기본 재시도(3회)**, 그 외는 1회(= 명시 선언 없으면 재시도 없음) — HTTP는 멱등성을 보장할 수 없어 기본 재시도가 위험하다
 - 백오프는 지수 + **full jitter**(`[0, computed]` 균등 난수). 지터 난수는 `ThreadLocalRandom`이다 — 워커 스레드가 공유하는 필드이므로 `RandomGenerator.getDefault()`로 바꾸지 말 것(스레드 안전하지 않다)
 - **대기는 워커 스레드의 `Thread.sleep`이다.** 메인 스레드 JPA 독점 구조를 유지하려 그렇게 뒀고, 그 대가로 재시도 대기가 워커 슬롯을 점유한다(fan-out이 넓으면 슬롯 고갈)
@@ -83,7 +83,7 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 
 ### 변수 참조 시스템
 - 문법: `{{nodes.<node_uuid>.output.<field>}}`
-- `ExecutionCursor.renderVariables()`가 실행 시점에 치환. 치환 결과에 참조식이 또 있으면 최대 5회까지 반복 확장한다(`MAX_RENDER_DEPTH`) — 상류 데이터에 든 `{{nodes…}}` 문자열도 같은 실행 안의 다른 노드 출력으로 바뀐다. 실행기는 `input`이 아니라 `node.getConfig()`를 직접 치환한다(`input`은 실행 로그용). AI 노드는 `prompt`와 `tools[]` 전체 문자열 값을 치환하며, `tools`는 `ExecutionCursor.renderDeep()`(재귀, 가변 복사본 — 런타임의 `input` 생성도 같은 함수)으로 치환해 노드 원본을 건드리지 않는다 — `ToolCallPreparer`가 웹훅 URL 원문을 넣는 자리라서. 미해결 참조는 `""`. **경로의 숫자 세그먼트는 List 인덱스다**(`issues.0.title`, 범위 밖·int 초과는 `""`) — 최종 값이 Map·List면 `{a=b}`가 아니라 JSON 문자열이고, 문자열·숫자·불리언은 `String.valueOf`다(결과는 항상 String). **HTTP 노드 body는 치환한 뒤 직렬화한다**(`objectMapper.writeValueAsString(cursor.renderDeep(body))`) — 직렬화 뒤에 치환하면 JSON 참조·따옴표가 body를 깨뜨린다. `renderDeep`은 Map **키**를 치환하지 않는다
+- `ExecutionCursor.renderVariables()`가 실행 시점에 치환. **단일 패스다** — 치환 결과(상류 데이터)에 든 `{{nodes…}}` 리터럴은 다시 치환하지 않고 그대로 둔다. 재치환하면 외부 텍스트(이슈 제목·메일 본문)가 같은 실행의 다른 노드 출력을 끌어와 이슈·메시지로 내보낸다(ACTION은 LLM 없이 그대로 넘긴다). 실행기는 `input`이 아니라 `node.getConfig()`를 직접 치환한다(`input`은 실행 로그용). AI 노드는 `prompt`와 `tools[]` 전체 문자열 값을 치환하며, `tools`는 `ExecutionCursor.renderDeep()`(재귀, 가변 복사본 — 런타임의 `input` 생성도 같은 함수)으로 치환해 노드 원본을 건드리지 않는다 — `ToolCallPreparer`가 웹훅 URL 원문을 넣는 자리라서. 미해결 참조는 `""`. **경로의 숫자 세그먼트는 List 인덱스다**(`issues.0.title`, 범위 밖·int 초과는 `""`) — 최종 값이 Map·List면 `{a=b}`가 아니라 JSON 문자열이고, 문자열·숫자·불리언은 `String.valueOf`다(결과는 항상 String). **HTTP 노드 body는 치환한 뒤 직렬화한다**(`objectMapper.writeValueAsString(cursor.renderDeep(body))`) — 직렬화 뒤에 치환하면 JSON 참조·따옴표가 body를 깨뜨린다. `renderDeep`은 Map **키**를 치환하지 않는다
 
 ### 실행 이벤트 (engine/event/)
 `ExecutionEventPublisher` — executionId 키의 in-memory `Sinks.Many` 멀티캐스트 허브. SSE 구독(HTTP 스레드)과 실행 스레드를 **같은 JVM 안에서** 연결한다 — 그래서 api의 잡 큐 워커를 별도 프로세스로 뺄 수 없다.
@@ -155,6 +155,7 @@ Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `Sche
 
 ## 주의사항
 - `node_runs`의 input/output에 자격증명 원문 저장 금지 — `SensitiveDataMasker.mask()`(util/)가 `apiKey/api_key/token/secret/password/Authorization` 키를 `***`로 마스킹한다. 키 이름과 별개로 `auth` 키 바로 아래 Map 중 `type`이 `secret`·`plain`인 것의 `value`도 가린다(`tools[].auth` 비밀 원문 — IEUM-BE-71). `auth` 밖의 같은 모양은 건드리지 않는다 — 노드 출력이 가려지면 재처리(`loadReusableNodeOutputs`)가 `***`를 하류에 넘긴다. 새 민감 키는 `SENSITIVE_KEYS`에 추가. **중첩 Map·List 내부까지 재귀 적용된다** (IEUM-BE-62에서 확장 — 그 전에는 최상위 키만 검사했다). `workflow_runs.trigger_data`는 마스킹이 아니라 AES-256 암호화다 — `mask()`의 호출부는 `SyncExecutionRuntime` 하나뿐이다. 같은 클래스의 `containsWebhookUrl()`은 api `RawWebhookUrlGuard`(REST 저장 `WorkflowService` + agent 저장 `ChatService` 공용)가 노드 `config.url` 원문 웹훅 저장을 거부할 때, `isSlackWebhookUrl()`/`isDiscordWebhookUrl()`은 api `WebhookCredentialService.create()`가 등록 URL이 provider의 웹훅 호스트인지 볼 때 쓴다(전체 일치 + https 전용). **웹훅 도메인 조각은 `SLACK_WEBHOOK_PREFIX`·`DISCORD_WEBHOOK_PREFIX` 두 곳뿐이어야 한다** — 마스킹·저장 거부·등록 검증이 전부 이 조각을 조립해 쓰므로 도메인이 늘면 여기만 고친다
+- `node_runs.error_message`·SSE `nodeFailed`·실패 알림의 오류 메시지는 `SensitiveDataMasker.maskWebhookUrl(String)`로 웹훅 URL 비밀 구간을 가린다(외부 API 오류 본문에 URL이 실려 올 수 있다)
 - 실행 로그 저장 실패는 실행 전체를 중단시키지 않음(warn만) — 이력 누락 가능성이 설계상 허용됨. **그래서 INSERT가 실패하지 않게 막는 게 중요하다** — `node_runs.error_message`는 VARCHAR(255)라 `saveExecutionLog`가 255자로 자른다(ACTION은 외부 API 오류 본문을 그대로 싣는다. 자르지 않으면 FAILED 행이 조용히 사라진다)
 - 워크플로우당 트리거 노드 1개만 허용
 - 노드 config에 실제 토큰/키 저장 금지 — credential_id 참조만

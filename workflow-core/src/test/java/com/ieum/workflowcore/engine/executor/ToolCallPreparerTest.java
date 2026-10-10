@@ -158,4 +158,16 @@ class ToolCallPreparerTest {
 
         verify(webhookCredentialProvider, never()).resolveWebhookUrl(any(), any());
     }
+
+    @Test
+    @DisplayName("name이 없는 도구는 웹훅 주입 대상이 아니다 — NPE 없이 그대로 둔다")
+    void webhookUrl_toolWithoutName_isSkipped() {
+        Map<String, Object> nameless = new HashMap<>();
+        nameless.put("config", new HashMap<>(Map.of("webhookCredentialId", UUID.randomUUID().toString())));
+
+        ToolCallPreparer.PreparedTools prepared = preparer.prepare(List.of(nameless), cursor(userId));
+
+        assertThat(prepared.tools()).hasSize(1);
+        verify(webhookCredentialProvider, never()).resolveWebhookUrl(any(), any());
+    }
 }

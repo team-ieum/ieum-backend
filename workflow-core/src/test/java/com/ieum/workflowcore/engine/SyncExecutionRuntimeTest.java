@@ -1663,6 +1663,20 @@ class SyncExecutionRuntimeTest {
         }
 
         @Test
+        @DisplayName("오류 메시지에 웹훅 URL이 있으면 node_runs·SSE nodeFailed에 원문 비밀 구간이 남지 않는다")
+        void webhookUrlInErrorMessage_isMasked() throws Exception {
+            String message = "Slack 발송 실패: https://hooks.slack.com/services/T000/B000/SECRETTOKEN 404";
+
+            String saved = savedFailedLog(message).getErrorMessage();
+
+            assertThat(saved).doesNotContain("SECRETTOKEN").contains("hooks.slack.com/services/");
+            verify(eventPublisher).publish(eq(executionId), org.mockito.ArgumentMatchers.argThat(
+                event -> event.type() == ExecutionEventType.NODE_FAILED
+                    && event.errorMessage() != null
+                    && !event.errorMessage().contains("SECRETTOKEN")));
+        }
+
+        @Test
         @DisplayName("오류 메시지가 null이어도 예외 없이 저장된다")
         void nullErrorMessage_isKept() throws Exception {
             assertThat(savedFailedLog(null).getErrorMessage()).isNull();
