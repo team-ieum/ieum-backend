@@ -85,14 +85,18 @@ public class WorkflowService {
         // 엣지 맵 변환은 수정 경로와 같은 것을 쓴다 — 이전 정의가 없으면 요청 엣지가 그대로 나온다.
         List<Map<String, Object>> edges =
             withEdgeIds(EdgeDefinitionMerger.merge(null, request.getEdges()), request.getEdges());
+        // TRIGGER 노드가 triggerType을 선언하면 노드가 진실원이다 — triggerType·cron 둘 다 노드 값이 최상위 요청 값을
+        // 덮는다(노드에 cron이 없으면 null). 선언이 없을 때만 요청 최상위 값을 쓴다(하위호환).
+        TriggerNodeSchedule fromNode = TriggerNodeSchedule
+            .find(NodeDefinitionMerger.merge(null, request.getNodes(), objectMapper)).orElse(null);
         WorkflowVersion version = workflowCrudService.createWorkflow(
             userId,
             request.getName(),
             request.getDescription(),
             toJson(request.getNodes()),
             toJson(edges),
-            request.getTriggerType(),
-            request.getCronExpression()
+            fromNode != null ? fromNode.triggerType() : request.getTriggerType(),
+            fromNode != null ? fromNode.cron() : request.getCronExpression()
         );
         return toResponse(version.getWorkflow(), version, ownedWebhookNames(userId));
     }
@@ -153,8 +157,13 @@ public class WorkflowService {
         // 워크플로우 레벨 optional 필드도 노드와 같은 규칙이다 — 요청의 null은 "변경 없음"이라
         // 저장된 값을 그대로 넘긴다. 그대로 넘기면 triggerType이 MANUAL로 강등되고 cron이 지워져
         // Quartz Job까지 삭제된다(200만 돌아와 다음 실행이 없을 때까지 아무도 모른다).
-        TriggerType triggerType = request.getTriggerType() != null
-            ? request.getTriggerType() : current.getTriggerType();
+        // 단 TRIGGER 노드가 triggerType을 선언했으면 노드가 진실원이다 — 병합 결과(요청이 config를 생략하면 이전 config가
+        // 되살아난다) 기준으로 triggerType·cron 둘 다 노드 값을 쓴다. 노드에 cron이 없으면 저장된 값으로도 채우지 않는다.
+        TriggerNodeSchedule fromNode = TriggerNodeSchedule.find(mergedNodes).orElse(null);
+        TriggerType triggerType = fromNode != null ? fromNode.triggerType()
+            : request.getTriggerType() != null ? request.getTriggerType() : current.getTriggerType();
+        String cronExpression = fromNode != null ? fromNode.cron()
+            : resolveCronExpression(request.getCronExpression(), triggerType, current);
         WorkflowVersion version = workflowCrudService.updateWorkflow(
             userId,
             workflowId,
@@ -163,7 +172,7 @@ public class WorkflowService {
             toJson(mergedNodes),
             toJson(mergedEdges),
             triggerType,
-            resolveCronExpression(request.getCronExpression(), triggerType, current)
+            cronExpression
         );
         return toResponse(version.getWorkflow(), version, ownedWebhookNames(userId));
     }

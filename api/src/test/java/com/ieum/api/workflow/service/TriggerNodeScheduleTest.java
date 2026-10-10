@@ -57,6 +57,15 @@ class TriggerNodeScheduleTest {
     }
 
     @Test
+    @DisplayName("triggerType을 선언한 TRIGGER 노드가 여럿이면 마지막 것을 쓴다")
+    void multipleTriggers_lastWins() {
+        assertThat(TriggerNodeSchedule.find(List.of(
+            trigger(Map.of("triggerType", "WEBHOOK")),
+            trigger(Map.of("triggerType", "SCHEDULE", "cron", "0 9 * * *")))))
+            .contains(new TriggerNodeSchedule(TriggerType.SCHEDULE, "0 9 * * *"));
+    }
+
+    @Test
     @DisplayName("TRIGGER가 아닌 노드의 config.triggerType은 무시한다")
     void nonTriggerNodes_areIgnored() {
         assertThat(TriggerNodeSchedule.find(List.of(
