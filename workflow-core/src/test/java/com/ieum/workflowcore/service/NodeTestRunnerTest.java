@@ -406,14 +406,18 @@ class NodeTestRunnerTest {
     }
 
     @Test
-    @DisplayName("APPROVAL은 테스트할 수 없다 — 400 INVALID_INPUT, 샘플 없음")
-    void approvalIsRejected() {
+    @DisplayName("APPROVAL은 실행 없이 런타임 승인 출력 모양의 SUCCESS 샘플을 남기고, 하류가 그 출력을 참조해 테스트된다")
+    void approvalSampleFeedsDownstream() {
         Node gate = new Node("gate", NodeType.APPROVAL, "승인", new HashMap<>());
 
-        assertThatThrownBy(() -> runner.run(workflow, gate, Map.of()))
-            .isInstanceOfSatisfying(CustomException.class,
-                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_INPUT));
-        assertThat(samples).isEmpty();
+        NodeTestResult gateResult = runner.run(workflow, gate, Map.of());
+
+        assertThat(gateResult.status()).isEqualTo(SampleStatus.SUCCESS);
+        assertThat(gateResult.output()).containsEntry("approved", true)
+            .containsEntry("approvedBy", userId.toString()).containsKey("approvedAt");
+        NodeTestResult downstream =
+            runner.run(workflow, transform("node-2", "승인자 {{nodes.gate.output.approvedBy}}"), Map.of());
+        assertThat(downstream.output()).isEqualTo(Map.of("v", "승인자 " + userId));
     }
 
     @Test

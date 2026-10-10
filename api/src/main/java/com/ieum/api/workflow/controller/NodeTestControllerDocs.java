@@ -30,8 +30,10 @@ public interface NodeTestControllerDocs {
             + "webhook 트리거는 실행하지 않고 LISTENING(webhookUrl 경로, expiresAt)을 돌려준다 — 5분 안에 그 경로로 "
             + "온 첫 요청 1건이 샘플이 되며, FE는 GET .../sample을 폴링해 testedAt이 시작 시각 이후인지 본다. "
             + "수신 시 트리거 정의는 저장된 최신 버전에서 읽으므로 webhook 테스트 전에 저장해야 한다. "
+            + "approval 게이트는 실행 없이 런타임 승인 출력 모양({approved: true, approvedBy: 소유자 ID, approvedAt})을 "
+            + "SUCCESS 샘플로 남긴다 — 하류의 `{{nodes.<gate>.output.approvedBy}}` 참조를 테스트하기 위해서다. "
             + "오류 code: WORKFLOW_NOT_FOUND(404, 남의 워크플로우 포함), NOT_FOUND(404, 저장된 노드 없음), "
-            + "INVALID_INPUT(400, node.id 불일치·APPROVAL 등 테스트 불가 타입), INVALID_WORKFLOW(400, 남의 크레덴셜·웹훅 URL 원문·"
+            + "INVALID_INPUT(400, node.id 불일치·실행기가 없는 타입), INVALID_WORKFLOW(400, 남의 크레덴셜·웹훅 URL 원문·"
             + "API 키 원문), TEST_SAMPLE_MISSING(400)")
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<NodeTestResponse>> test(

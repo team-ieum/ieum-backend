@@ -21,6 +21,7 @@ import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.repository.NodeTestSampleRepository;
 import com.ieum.workflowcore.util.SensitiveDataMasker;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -80,11 +81,18 @@ public class NodeTestRunner {
      * @param node     테스트할 노드(편집 중 정의 또는 저장된 노드)
      * @param input    MANUAL 트리거의 페이로드. 그 외 노드는 쓰지 않는다
      * @throws TestSampleMissingException 직접 참조한 노드 중 SUCCESS 샘플이 없는 것이 있을 때
-     * @throws CustomException            APPROVAL이거나 실행기가 없는 타입일 때(INVALID_INPUT)
+     * @throws CustomException            실행기가 없는 타입일 때(INVALID_INPUT). APPROVAL은 실행 없이 승인 출력 샘플을 남긴다
      */
     public NodeTestResult run(Workflow workflow, Node node, Map<String, Object> input) {
         if (node.getType() == NodeType.TRIGGER) {
             return runTrigger(workflow, node, input);
+        }
+        if (node.getType() == NodeType.APPROVAL) {
+            // 실행기 없이 런타임 승인 출력(ExecutionApprovalService.approve)과 같은 모양을 샘플로 남긴다 —
+            // 하류의 {{nodes.<gate>.output.approvedBy}} 참조를 테스트할 수 있게. 승인은 소유자만 하므로 값도 같다.
+            return saveSample(workflow, node.getId(), ExecutorResult.success(Map.of(
+                "approved", true, "approvedBy", workflow.getUserId().toString(),
+                "approvedAt", Instant.now().toString()), 0));
         }
         NodeExecutor executor = executorFor(node);
         ExecutionCursor cursor = newCursor(workflow, node);
@@ -121,7 +129,7 @@ public class NodeTestRunner {
     // ──────────────────────────── 실행 ────────────────────────────
 
     private NodeExecutor executorFor(Node node) {
-        NodeExecutor executor = node.getType() == NodeType.APPROVAL ? null : executors.get(node.getType());
+        NodeExecutor executor = executors.get(node.getType());
         if (executor == null) {
             throw new CustomException(ErrorCode.INVALID_INPUT, "테스트할 수 없는 노드 타입입니다: " + node.getType());
         }
