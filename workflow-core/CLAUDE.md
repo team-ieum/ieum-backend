@@ -51,7 +51,7 @@
 - `WAITING_APPROVAL`은 런타임·워커 입장에서 종료 상태다: `startIfNotTerminal`·`finishIfNotTerminal`·`ExecutionJobWorker`·`loadEventSnapshot`이 전부 종료로 취급한다. 2-인자 `markAsFailed`(고립 sweeper·워커·러너)도 `PENDING`·`RUNNING`만 끝내고 대기는 건드리지 않는다 — **대기를 끝내는 건 승인·거부·만료뿐이다**
 
 ### 노드 단일 테스트 (NodeTestRunner, service/)
-노드 하나를 `SyncExecutionRuntime` 밖에서 실행하고 `node_test_samples`에 최신 1건으로 upsert한다 — 워크플로우 JSON·`workflow_runs`·`node_runs`엔 쓰지 않는다. APPROVAL 제외 전 타입.
+노드 하나를 `SyncExecutionRuntime` 밖에서 실행하고 `node_test_samples`에 최신 1건으로 upsert한다 — 워크플로우 JSON·`workflow_runs`·`node_runs`엔 쓰지 않는다. 전 타입 — APPROVAL은 실행기 없이 런타임 승인 출력 모양(`{approved: true, approvedBy: 소유자 ID, approvedAt}`)의 SUCCESS 샘플만 저장한다(하류 참조 테스트용).
 - 실행기는 `List<NodeExecutor>`에서 타입으로 골라 직접 부른다. 실행기가 읽는 커서 상태는 userId·traceId·nodeOutputs와 치환 메서드뿐이라 테스트용 `ExecutionContext`·`ExecutionCursor(allNodes=[노드], allEdges=[])`로 충분하다. AI 쿼터 예약·토큰 차감은 실행기 안에 있어 그대로 적용되고 **쓰기 액션은 실제로 실행된다**
 - **단일 시도** — 재시도·모델 fallback 없음. `NodeAttempt(1, "test-<uuid>:<nodeId>", RetryPolicy.from(...))`, MARKER 모드면 러너가 `clearInFlight`
 - config가 **직접 참조한** 노드의 SUCCESS 샘플만 `nodeOutputs`에 넣는다(`ExecutionCursor.referencedNodeIds`). 하나라도 없으면 `TestSampleMissingException`(400, `missingNodeIds`). 실패(FAILED) 샘플은 참조 해석에 쓰지 않고, **실패한 재테스트는 이전 SUCCESS 샘플을 덮어쓴다**

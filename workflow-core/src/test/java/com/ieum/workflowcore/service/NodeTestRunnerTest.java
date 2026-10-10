@@ -344,12 +344,12 @@ class NodeTestRunnerTest {
     @DisplayName("[Review Focus 4] 동시 첫 테스트로 UNIQUE에 지면 이긴 행을 갱신으로 다시 쓴다 — 예외 없이 최신 1건")
     void concurrentFirstTestsResolveAsUpdate() {
         AtomicInteger writes = new AtomicInteger();
+        NodeTestSample winner = NodeTestSample.create(workflow, "node-1");
+        winner.record(SampleStatus.SUCCESS, "{\"winner\":true}", null, LocalDateTime.now());
         willAnswer(i -> {
             NodeTestSample mine = i.getArgument(0);
             if (writes.getAndIncrement() == 0) {
                 // 다른 요청이 먼저 같은 (workflow, node) 행을 넣었다
-                NodeTestSample winner = NodeTestSample.create(workflow, "node-1");
-                winner.record(SampleStatus.SUCCESS, "{\"winner\":true}", null, LocalDateTime.now());
                 samples.put(workflow.getId() + ":node-1", winner);
                 throw new DataIntegrityViolationException("duplicate key");
             }
@@ -363,6 +363,7 @@ class NodeTestRunnerTest {
         assertThat(result.status()).isEqualTo(SampleStatus.SUCCESS);
         assertThat(writes).hasValue(2);
         assertThat(samples).hasSize(1);
+        assertThat(stored("node-1")).isSameAs(winner);
         assertThat(stored("node-1").getOutputJson()).isEqualTo("{\"mine\":true}");
     }
 

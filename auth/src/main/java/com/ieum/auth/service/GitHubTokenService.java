@@ -83,7 +83,7 @@ public class GitHubTokenService {
             || account.isRefreshTokenExpired();
         if (refreshTokenExpired) {
             log.warn("[GitHubTokenService] userId={} refresh_token expired — re-auth required", userId);
-            throw new CustomException(ErrorCode.AUTHENTICATION_REQUIRED);
+            throw new CustomException(ErrorCode.AUTHENTICATION_REQUIRED, "GitHub 계정을 다시 연동해주세요.");
         }
 
         String accessToken = aesEncryptor.decrypt(account.getAccessToken());
@@ -138,7 +138,7 @@ public class GitHubTokenService {
             if (response.containsKey("error")) {
                 log.warn("[GitHubTokenService] userId={} refresh 거절 — {}: {}",
                     userId, response.get("error"), response.get("error_description"));
-                throw new CustomException(ErrorCode.AUTHENTICATION_REQUIRED);
+                throw new CustomException(ErrorCode.AUTHENTICATION_REQUIRED, "GitHub 계정을 다시 연동해주세요.");
             }
             return response;
 

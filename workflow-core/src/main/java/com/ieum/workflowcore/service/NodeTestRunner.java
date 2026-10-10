@@ -209,6 +209,9 @@ public class NodeTestRunner {
 
     private NodeTestResult saveSample(Workflow workflow, String nodeId, ExecutorResult result) {
         SampleStatus status = result.isSuccess() ? SampleStatus.SUCCESS : SampleStatus.FAILED;
+        // 쓰기 액션을 실제로 실행하는 테스트의 추적용 — 출력·오류 본문은 싣지 않는다
+        log.info("[NodeTestRunner] 노드 테스트 — workflowId: {}, nodeId: {}, status: {}",
+            workflow.getId(), nodeId, status);
         Map<String, Object> output = null;
         String error = null;
         if (result.isSuccess()) {
