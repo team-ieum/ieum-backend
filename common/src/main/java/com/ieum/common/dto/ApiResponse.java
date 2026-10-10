@@ -61,6 +61,16 @@ public class ApiResponse<T> {
                 .build();
     }
 
+    /** 에러이면서 구조화된 부가 정보를 싣는다(예: TEST_SAMPLE_MISSING의 missingNodeIds). */
+    public static <T> ApiResponse<T> error(ErrorCode code, String message, T data) {
+        return ApiResponse.<T>builder()
+                .success(false)
+                .data(data)
+                .message(message)
+                .code(code.name())
+                .build();
+    }
+
     public static <T> ApiResponse<T> error(String message) {
         return ApiResponse.<T>builder()
                 .success(false)

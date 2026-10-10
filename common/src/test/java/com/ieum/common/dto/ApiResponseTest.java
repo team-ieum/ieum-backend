@@ -65,4 +65,22 @@ class ApiResponseTest {
         assertThat(response.getMessage()).isEqualTo("알 수 없는 오류");
         assertThat(response.getCode()).isNull();
     }
+
+    @Test
+    void error_withData_carriesDataCodeAndMessage() {
+        ApiResponse<java.util.Map<String, java.util.List<String>>> response = ApiResponse.error(
+            ErrorCode.TEST_SAMPLE_MISSING, "먼저 테스트할 노드가 있습니다.",
+            java.util.Map.of("missingNodeIds", java.util.List.of("a", "b")));
+
+        assertThat(response.isSuccess()).isFalse();
+        assertThat(response.getData()).containsEntry("missingNodeIds", java.util.List.of("a", "b"));
+        assertThat(response.getMessage()).isEqualTo("먼저 테스트할 노드가 있습니다.");
+        assertThat(response.getCode()).isEqualTo(ErrorCode.TEST_SAMPLE_MISSING.name());
+    }
+
+    @Test
+    void testSampleErrorCodes_haveContractStatuses() {
+        assertThat(ErrorCode.TEST_SAMPLE_MISSING.getStatus().value()).isEqualTo(400);
+        assertThat(ErrorCode.TEST_SAMPLE_NOT_FOUND.getStatus().value()).isEqualTo(404);
+    }
 }

@@ -68,6 +68,10 @@ public enum ErrorCode {
     EXECUTION_NOT_WAITING_APPROVAL(HttpStatus.CONFLICT, "승인 대기 중인 실행이 아닙니다."),
     INVALID_CURSOR(HttpStatus.BAD_REQUEST, "유효하지 않은 커서 값입니다."),
 
+    // 노드 테스트
+    TEST_SAMPLE_MISSING(HttpStatus.BAD_REQUEST, "이 노드가 참조하는 앞 노드를 먼저 테스트해 주세요."),
+    TEST_SAMPLE_NOT_FOUND(HttpStatus.NOT_FOUND, "테스트 샘플이 없습니다. 노드를 먼저 테스트해 주세요."),
+
     // AI 에이전트
     INVALID_MODEL(HttpStatus.BAD_REQUEST, "프로바이더에서 지원하지 않는 모델입니다."),
     INVALID_TOOL_NAME(HttpStatus.BAD_REQUEST, "존재하지 않는 도구입니다."),
