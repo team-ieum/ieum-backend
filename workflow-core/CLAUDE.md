@@ -4,7 +4,7 @@
 워크플로우 엔진의 핵심 비즈니스 로직. 워크플로우 CRUD·버전 관리·실행 엔진·스케줄러·실행 이력을 담당한다.
 
 ## 현재 상태
-구현 완료 (main 79개 클래스). 실행 엔진·이력 영속·SSE 이벤트·Quartz 스케줄러 동작 중.
+구현 완료 (main 88개 클래스). 실행 엔진·이력 영속·SSE 이벤트·Quartz 스케줄러 동작 중.
 노드 재시도·멱등 가드·모델 fallback·실패 실행 재처리(IEUM-BE-46)까지 포함.
 
 ## 실행 엔진 (engine/)
@@ -27,9 +27,9 @@
 - **대기는 워커 스레드의 `Thread.sleep`이다.** 메인 스레드 JPA 독점 구조를 유지하려 그렇게 뒀고, 그 대가로 재시도 대기가 워커 슬롯을 점유한다(fan-out이 넓으면 슬롯 고갈)
 
 ### 멱등성 (재시도 중복 호출 가드)
-- `IdempotencyMode` = NONE / HEADER / MARKER / BOTH. 노드 config `retry.idempotency`로 선언. **부수효과가 있는 HTTP·AI 노드가 HEADER 기본**, 나머지는 NONE. AI 노드는 기본 재시도가 3회인데 도구를 쓰므로 NONE이면 회차마다 부수효과가 중복된다(MARKER는 재시도와 양립 불가라 HEADER가 유일한 선택지). agent가 `X-Idempotency-Key`를 소비하며(IEUM-AI-52) 소비하지 않는 배포에선 no-op이라 배포 순서 무관
+- `IdempotencyMode` = NONE / HEADER / MARKER / BOTH. 노드 config `retry.idempotency`로 선언. **부수효과가 있는 HTTP·AI·ACTION 노드가 HEADER 기본**, 나머지는 NONE. AI 노드는 기본 재시도가 3회인데 도구를 쓰므로 NONE이면 회차마다 부수효과가 중복된다(MARKER는 재시도와 양립 불가라 HEADER가 유일한 선택지). agent가 `X-Idempotency-Key`를 소비하며(IEUM-AI-52) 소비하지 않는 배포에선 no-op이라 배포 순서 무관
 - `IdempotencyKeys.generate(executionId, nodeId)` — sha256 앞 32자 hex. **attempt 번호를 절대 섞지 않는다**(섞으면 중복 차단이 성립하지 않음)
-- HEADER: HTTP 노드는 `Idempotency-Key`, AI 노드는 agent에 `X-Idempotency-Key`. `policy.isDisabled()`(재시도 없음)면 붙이지 않는다
+- HEADER: HTTP 노드는 `Idempotency-Key`, AI·ACTION 노드는 agent에 `X-Idempotency-Key`. `policy.isDisabled()`(재시도 없음)면 붙이지 않는다
 - MARKER: `IdempotencyStore` 포트로 in-flight 마커를 세우고, 마커가 있으면 **재시도를 포기**한다. 마커 해제는 재시도 루프 전체가 끝난 뒤 1회만 — attempt별 finally에서 해제하면 모드가 무력화된다. **같은 실행 안의 재시도만 막는다** — 프로세스 크래시 후 큐 회수 재배달(같은 executionId → 같은 키)은 마커 TTL(5분)과 `reclaim-min-idle`(10분) 타이밍에 달려 막지 못할 수 있다(BE-53). 기본 TTL은 일부러 안 올렸다 — 재실행이 그 노드에 닿는 시점에 상한이 없어 올려도 보장이 안 된다
 - 런타임은 MARKER 모드 노드를 attempt 1 이후 곧바로 멈춘다 — 2회차를 시작하면 원 실패 원인이 마커 차단(CLIENT_ERROR)으로 덮여써져 `node_runs` 진단과 `retryExhausted` 신호가 왜곡된다
 
@@ -51,12 +51,15 @@
 - `WAITING_APPROVAL`은 런타임·워커 입장에서 종료 상태다: `startIfNotTerminal`·`finishIfNotTerminal`·`ExecutionJobWorker`·`loadEventSnapshot`이 전부 종료로 취급한다. 2-인자 `markAsFailed`(고립 sweeper·워커·러너)도 `PENDING`·`RUNNING`만 끝내고 대기는 건드리지 않는다 — **대기를 끝내는 건 승인·거부·만료뿐이다**
 
 ### 노드 타입 (NodeType)
-`TRIGGER`, `AI`, `CONDITION`, `HTTP`, `TRANSFORM`, `APPROVAL` — 6종. 외부 서비스(Gmail·Notion 등) 연동은 별도 노드 타입이 아니라 AI 노드의 도구/HTTP 노드로 처리한다. `APPROVAL`은 NodeExecutor가 없다(위 "승인 게이트").
+`TRIGGER`, `AI`, `CONDITION`, `HTTP`, `TRANSFORM`, `APPROVAL`, `ACTION` — 7종. `ACTION`은 앱 도구 하나를 LLM 없이 실행하는 결정론적 노드다(config 모양은 AI 노드 `tools[0]`과 같다 — `{"tools":[{"name":"<tool_key>","config":{…}}],"brand":…,"serviceType":…}`). 그 외 외부 서비스(Gmail·Notion 등) 연동은 AI 노드의 도구/HTTP 노드로 처리한다. `APPROVAL`은 NodeExecutor가 없다(위 "승인 게이트").
 
 ### NodeExecutor
-`NodeExecutor` 인터페이스 + 타입별 구현체(`AgentNodeExecutor`, `ConditionNodeExecutor`, `HttpNodeExecutor`, `TransformNodeExecutor`, `TriggerNodeExecutor`). 결과는 `ExecutorResult`.
+`NodeExecutor` 인터페이스 + 타입별 구현체(`AgentNodeExecutor`, `ActionNodeExecutor`, `ConditionNodeExecutor`, `HttpNodeExecutor`, `TransformNodeExecutor`, `TriggerNodeExecutor`). 결과는 `ExecutorResult`.
 
-3-인자 `execute(node, input, cursor)`가 기본이고, 외부 호출이 멱등 가드를 적용해야 하는 Executor(HTTP·AI)만 4-인자 오버로드 `execute(node, input, cursor, NodeAttempt)`를 override한다. `NodeAttempt(attempt, idempotencyKey, policy)`가 회차·멱등성 키·재시도 정책을 실어 온다 — **`ExecutionCursor`/`ExecutionContext`에 attempt 정보를 넣지 말 것**(워커 스레드 간 공유 객체다).
+**`ActionNodeExecutor`**(`ACTION`) — `tools[0]`만 ieum-agent `POST ${ieum.agent.url}/v1/actions/execute`에 위임한다(body `{nodeId, toolKey, config}` = `ActionNodeRequest`, 응답 `ActionExecutionResult{success, output(dict), errorMessage, errorCode}`). 노드 출력은 agent `output` dict 그대로(AI 노드의 `{output, metadata}` 래퍼 없음). LLM 헤더(`X-LLM-*`·`X-Key-Mode`)·쿼터·토큰 차감·모델 fallback이 **없다**(과금 0). 헤더는 `X-User-Id`·`X-User-Role`·`X-Node-Id`·`X-Trace-Id`·`X-Idempotency-Key`(HEADER이고 재시도가 켜졌을 때)·`X-Google-Access-Token`·도구 인증 헤더. 실패 분류: `ACTION_TOOL_FAILED`→CLIENT_ERROR(재시도 안 함), 알 수 없는 toolKey(HTTP 400)→`AGENT_BAD_REQUEST`→CLIENT_ERROR, 5xx·429·타임아웃은 재시도 대상. 쓸 수 없는 정의(tools 없음·name 없음)는 agent 호출 없이 CLIENT_ERROR.
+**`ToolCallPreparer`**(AI·ACTION 공유) — `tools` 참조식 치환(`renderDeep` 복사본)·Google 토큰·`ToolAuthResolver` 인증 헤더·slack/discord 웹훅 URL 주입. 웹훅 URL 원문은 이 복사본에만 있고 노드 원본·`node_runs` 입력에 남지 않는다. MCP 서버 해석은 AI 노드 전용이라 `AgentNodeExecutor`에 남아 있다. HTTP 상태→errorCode 합성은 `FailureClassifier.agentServiceErrorCode`.
+
+3-인자 `execute(node, input, cursor)`가 기본이고, 외부 호출이 멱등 가드를 적용해야 하는 Executor(HTTP·AI·ACTION)만 4-인자 오버로드 `execute(node, input, cursor, NodeAttempt)`를 override한다. `NodeAttempt(attempt, idempotencyKey, policy)`가 회차·멱등성 키·재시도 정책을 실어 온다 — **`ExecutionCursor`/`ExecutionContext`에 attempt 정보를 넣지 말 것**(워커 스레드 간 공유 객체다).
 
 ### Provider 포트 + Stub 패턴
 workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능은 **포트 인터페이스**로 선언하고 api 모듈이 구현체를 제공한다. 포트마다 `@ConditionalOnMissingBean` Stub이 있어 workflow-core 단독 테스트가 가능하다 (현재 11개).
@@ -80,7 +83,7 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 
 ### 변수 참조 시스템
 - 문법: `{{nodes.<node_uuid>.output.<field>}}`
-- `ExecutionCursor.renderVariables()`가 실행 시점에 치환. 치환 결과에 참조식이 또 있으면 최대 5회까지 반복 확장한다(`MAX_RENDER_DEPTH`) — 상류 데이터에 든 `{{nodes…}}` 문자열도 같은 실행 안의 다른 노드 출력으로 바뀐다. 실행기는 `input`이 아니라 `node.getConfig()`를 직접 치환한다(`input`은 실행 로그용). AI 노드는 `prompt`와 `tools[]` 전체 문자열 값을 치환하며, `tools`는 `ExecutionCursor.renderDeep()`(재귀, 가변 복사본 — 런타임의 `input` 생성도 같은 함수)으로 치환해 노드 원본을 건드리지 않는다 — `injectWebhookUrls`가 웹훅 URL 원문을 넣는 자리라서. 미해결 참조는 `""`
+- `ExecutionCursor.renderVariables()`가 실행 시점에 치환. 치환 결과에 참조식이 또 있으면 최대 5회까지 반복 확장한다(`MAX_RENDER_DEPTH`) — 상류 데이터에 든 `{{nodes…}}` 문자열도 같은 실행 안의 다른 노드 출력으로 바뀐다. 실행기는 `input`이 아니라 `node.getConfig()`를 직접 치환한다(`input`은 실행 로그용). AI 노드는 `prompt`와 `tools[]` 전체 문자열 값을 치환하며, `tools`는 `ExecutionCursor.renderDeep()`(재귀, 가변 복사본 — 런타임의 `input` 생성도 같은 함수)으로 치환해 노드 원본을 건드리지 않는다 — `ToolCallPreparer`가 웹훅 URL 원문을 넣는 자리라서. 미해결 참조는 `""`. **경로의 숫자 세그먼트는 List 인덱스다**(`issues.0.title`, 범위 밖·int 초과는 `""`) — 최종 값이 Map·List면 `{a=b}`가 아니라 JSON 문자열이고, 문자열·숫자·불리언은 `String.valueOf`다(결과는 항상 String). **HTTP 노드 body는 치환한 뒤 직렬화한다**(`objectMapper.writeValueAsString(cursor.renderDeep(body))`) — 직렬화 뒤에 치환하면 JSON 참조·따옴표가 body를 깨뜨린다. `renderDeep`은 Map **키**를 치환하지 않는다
 
 ### 실행 이벤트 (engine/event/)
 `ExecutionEventPublisher` — executionId 키의 in-memory `Sinks.Many` 멀티캐스트 허브. SSE 구독(HTTP 스레드)과 실행 스레드를 **같은 JVM 안에서** 연결한다 — 그래서 api의 잡 큐 워커를 별도 프로세스로 뺄 수 없다.
@@ -123,7 +126,7 @@ enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROV
 
 **DDL은 Flyway가 아니라 `ddl-auto: update`** — 마이그레이션 파일 없음. 컬럼 추가는 엔티티 필드만 넣으면 된다.
 단, **`nullable = false` 컬럼을 기존 행이 있는 테이블에 추가할 때는 `@ColumnDefault`가 반드시 필요하다.** 없으면 PostgreSQL이 DDL을 거부하는데 `ddl-auto: update`는 그 오류를 경고로만 남기고 부팅을 계속해 **컬럼 없이 앱이 뜬다.** 테스트는 `ddl-auto: create-drop`(빈 스키마)이라 이 사고를 잡지 못한다 — 이번에 `retry_exhausted`·`alert_target`이 걸릴 뻔했다.
-**enum 값을 추가하면 DB CHECK 제약도 손으로 고쳐야 한다.** Hibernate 6는 `@Enumerated(STRING)` 컬럼을 `CHECK (col IN (...))`와 함께 만드는데 `ddl-auto: update`는 이 제약을 갱신하지 않는다 — 새 값을 쓰는 순간 제약 위반이다. 테스트(`create-drop`)는 새 스키마라 못 잡는다. `docs/schema/V7`(connected_accounts.provider)·`V8`(workflow_runs.status·node_runs.node_type, IEUM-BE-45)이 그 수동 DDL이다 — 배포 전에 대상 DB에 적용할 것.
+**enum 값을 추가하면 DB CHECK 제약도 손으로 고쳐야 한다.** Hibernate 6는 `@Enumerated(STRING)` 컬럼을 `CHECK (col IN (...))`와 함께 만드는데 `ddl-auto: update`는 이 제약을 갱신하지 않는다 — 새 값을 쓰는 순간 제약 위반이다. 테스트(`create-drop`)는 새 스키마라 못 잡는다. `docs/schema/V7`(connected_accounts.provider)·`V8`(workflow_runs.status·node_runs.node_type, IEUM-BE-45)·`V9`(node_runs.node_type에 `ACTION`)가 그 수동 DDL이다 — 배포 전에 대상 DB에 적용할 것.
 
 ## 스케줄러 (scheduler/, config/)
 Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `ScheduleJobRestorer`(부팅 시 복원), `WorkflowCleanupScheduler`, `JobKeyGenerator`.
@@ -152,7 +155,7 @@ Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `Sche
 
 ## 주의사항
 - `node_runs`의 input/output에 자격증명 원문 저장 금지 — `SensitiveDataMasker.mask()`(util/)가 `apiKey/api_key/token/secret/password/Authorization` 키를 `***`로 마스킹한다. 키 이름과 별개로 `auth` 키 바로 아래 Map 중 `type`이 `secret`·`plain`인 것의 `value`도 가린다(`tools[].auth` 비밀 원문 — IEUM-BE-71). `auth` 밖의 같은 모양은 건드리지 않는다 — 노드 출력이 가려지면 재처리(`loadReusableNodeOutputs`)가 `***`를 하류에 넘긴다. 새 민감 키는 `SENSITIVE_KEYS`에 추가. **중첩 Map·List 내부까지 재귀 적용된다** (IEUM-BE-62에서 확장 — 그 전에는 최상위 키만 검사했다). `workflow_runs.trigger_data`는 마스킹이 아니라 AES-256 암호화다 — `mask()`의 호출부는 `SyncExecutionRuntime` 하나뿐이다. 같은 클래스의 `containsWebhookUrl()`은 api `RawWebhookUrlGuard`(REST 저장 `WorkflowService` + agent 저장 `ChatService` 공용)가 노드 `config.url` 원문 웹훅 저장을 거부할 때, `isSlackWebhookUrl()`/`isDiscordWebhookUrl()`은 api `WebhookCredentialService.create()`가 등록 URL이 provider의 웹훅 호스트인지 볼 때 쓴다(전체 일치 + https 전용). **웹훅 도메인 조각은 `SLACK_WEBHOOK_PREFIX`·`DISCORD_WEBHOOK_PREFIX` 두 곳뿐이어야 한다** — 마스킹·저장 거부·등록 검증이 전부 이 조각을 조립해 쓰므로 도메인이 늘면 여기만 고친다
-- 실행 로그 저장 실패는 실행 전체를 중단시키지 않음(warn만) — 이력 누락 가능성이 설계상 허용됨
+- 실행 로그 저장 실패는 실행 전체를 중단시키지 않음(warn만) — 이력 누락 가능성이 설계상 허용됨. **그래서 INSERT가 실패하지 않게 막는 게 중요하다** — `node_runs.error_message`는 VARCHAR(255)라 `saveExecutionLog`가 255자로 자른다(ACTION은 외부 API 오류 본문을 그대로 싣는다. 자르지 않으면 FAILED 행이 조용히 사라진다)
 - 워크플로우당 트리거 노드 1개만 허용
 - 노드 config에 실제 토큰/키 저장 금지 — credential_id 참조만
 - `workflowVersionId`는 Mongo 조인에 쓰지 말 것(죽은 필드). Mongo `_id` ↔ PG `mongoDefinitionId`가 조인 키

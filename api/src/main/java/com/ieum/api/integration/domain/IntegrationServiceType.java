@@ -11,7 +11,7 @@ import lombok.Getter;
  * "연결된 서비스 관리" 탭에 노출되는 연동 서비스 타입.
  *
  * <p>워크플로우 노드 정의(MongoDB {@code workflow_definitions})의 {@code nodes[].config.brand}
- * 값과 1:1로 매핑된다. 이 enum은 외부 입력(path 변수)을 허용 brand로 제한하는 화이트리스트
+ * 값 중 대표 brand 하나와 대응한다(GOOGLE은 gmail·sheets도 함께 매칭). 이 enum은 외부 입력(path 변수)을 허용 brand로 제한하는 화이트리스트
  * 역할도 겸한다 — 임의 brand 값으로 조회하는 것을 차단한다.
  *
  * <p>{@code openai}(LLM/web_search), {@code webhook}(트리거 종류) 등 연동 서비스 관리 대상이
