@@ -56,7 +56,7 @@ Quartz 스케줄 실행(`WorkflowScheduleJob`)은 workflow-core 포트 `Executio
 ## 노드 단일 테스트 (workflow/service/NodeTestService, controller/NodeTestController)
 `POST /api/v1/workflows/{workflowId}/nodes/{nodeId}/test`(body `{node?, input?}`) / `GET .../sample`. 실행·샘플 저장은 workflow-core `NodeTestRunner`, 여기는 소유자 검사(`getWorkflowByOwner`, 항상 먼저)·body 노드 가드·webhook 분기만. `WorkflowController`에 붙이지 않은 이유: 그 생성자를 여러 테스트가 직접 호출한다.
 - body `node`는 저장 경로와 같은 세 가드(`NodeCredentialGuard.rejectForeignCredentialId`·`rejectInlineSecret`, `RawWebhookUrlGuard`)를 거친다 — 저장 없이 곧바로 실행되기 때문. `node.id ≠ nodeId`면 400. body가 없으면 저장된 최신 버전의 노드
-- 트리거가 webhook(`config.triggerType`, 비면 워크플로우 최상위 triggerType)이면 실행하지 않고 `WebhookListenStore.start` → `{status: LISTENING, webhookUrl, expiresAt}`. `webhookUrl`은 **경로**(`/webhooks/{workflowId}`)다 — BE에 공개 base URL 설정이 없어 FE가 API origin을 붙인다
+- 트리거가 webhook(`config.triggerType`, 비면 워크플로우 최상위 triggerType)이면 실행하지 않고 `WebhookListenStore.start` → `{status: LISTENING, webhookUrl, expiresAt}`. `webhookUrl`은 **경로**(`/api/v1/webhooks/{workflowId}`)다 — BE에 공개 base URL 설정이 없어 FE가 API origin을 붙인다
 - 실패한 테스트는 HTTP 200 + `status: FAILED`. 샘플 누락은 400 `TEST_SAMPLE_MISSING` + `data.missingNodeIds`(`TestSampleMissingException` 전용 핸들러). `@Transactional` 금지(외부 호출을 한 트랜잭션에 묶지 않기 위해 — 저장소 호출은 각자 트랜잭션. OSIV 기본 on이라 커넥션은 요청 끝까지 유지됨)
 
 ## config/ — Provider 포트 실구현

@@ -108,7 +108,7 @@ public interface WorkflowControllerDocs {
             ),
             @ExampleObject(
                 name = "WEBHOOK 트리거",
-                summary = "외부 시스템이 POST /webhooks/{id} 로 호출 — 인증 불필요",
+                summary = "외부 시스템이 POST /api/v1/webhooks/{id} 로 호출 — 인증 불필요",
                 value = """
                     {
                       "name": "WEBHOOK 주문 알림 워크플로우",

@@ -30,7 +30,7 @@ public class NodeTestResponse {
     @Schema(description = "테스트 시각. webhook 대기 후 샘플 폴링에서 이전 샘플과 구별하는 기준으로 쓴다.")
     private final LocalDateTime testedAt;
 
-    @Schema(description = "LISTENING일 때 외부 시스템이 POST할 경로(/webhooks/{workflowId}). 호스트는 클라이언트가 붙인다.")
+    @Schema(description = "LISTENING일 때 외부 시스템이 POST할 경로(/api/v1/webhooks/{workflowId}). 호스트는 클라이언트가 붙인다.")
     private final String webhookUrl;
 
     @Schema(description = "LISTENING 만료 시각(시작 후 5분)")
@@ -48,7 +48,7 @@ public class NodeTestResponse {
     public static NodeTestResponse listening(UUID workflowId, LocalDateTime expiresAt) {
         return NodeTestResponse.builder()
             .status("LISTENING")
-            .webhookUrl("/webhooks/" + workflowId)
+            .webhookUrl("/api/v1/webhooks/" + workflowId)
             .expiresAt(expiresAt)
             .build();
     }
