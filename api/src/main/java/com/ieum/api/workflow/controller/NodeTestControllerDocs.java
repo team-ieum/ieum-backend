@@ -27,7 +27,7 @@ public interface NodeTestControllerDocs {
             + "이전 SUCCESS 샘플을 덮어쓴다. output의 민감 키(token·apiKey 등)는 마스킹된다. "
             + "manual 트리거는 input을 페이로드로 쓴다(샘플은 치환된 트리거 config — 페이로드 필드는 config가 "
             + "`{{nodes.<triggerId>.output.<key>}}`로 자기 참조할 때만 남는다). "
-            + "webhook 트리거는 실행하지 않고 LISTENING(webhookUrl 경로, expiresAt)을 돌려준다 — 5분 안에 그 경로로 "
+            + "webhook 트리거는 실행하지 않고 LISTENING(webhookUrl 경로 /api/v1/webhooks/{workflowId}, expiresAt)을 돌려준다 — 5분 안에 그 경로로 "
             + "온 첫 요청 1건이 샘플이 되며, FE는 GET .../sample을 폴링해 testedAt이 시작 시각 이후인지 본다. "
             + "수신 시 트리거 정의는 저장된 최신 버전에서 읽으므로 webhook 테스트 전에 저장해야 한다. "
             + "approval 게이트는 실행 없이 런타임 승인 출력 모양({approved: true, approvedBy: 소유자 ID, approvedAt})을 "

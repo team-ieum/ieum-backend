@@ -65,7 +65,7 @@ class WebhookControllerTest {
         given(webhookService.trigger(eq(workflowId), any(WebhookTriggerRequest.class)))
             .willReturn(response);
 
-        mockMvc.perform(post("/webhooks/{workflowId}", workflowId)
+        mockMvc.perform(post("/api/v1/webhooks/{workflowId}", workflowId)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(
                     Map.of("payload", Map.of("orderId", "ORD-001", "amount", 75000)))))
@@ -88,7 +88,7 @@ class WebhookControllerTest {
 
         given(webhookService.trigger(eq(workflowId), any())).willReturn(response);
 
-        mockMvc.perform(post("/webhooks/{workflowId}", workflowId)
+        mockMvc.perform(post("/api/v1/webhooks/{workflowId}", workflowId)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{}"))
             .andExpect(status().isAccepted());
@@ -101,7 +101,7 @@ class WebhookControllerTest {
         willThrow(new CustomException(ErrorCode.WEBHOOK_TRIGGER_MISMATCH))
             .given(webhookService).trigger(eq(workflowId), any());
 
-        mockMvc.perform(post("/webhooks/{workflowId}", workflowId)
+        mockMvc.perform(post("/api/v1/webhooks/{workflowId}", workflowId)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{}"))
             .andExpect(status().isBadRequest())
@@ -115,7 +115,7 @@ class WebhookControllerTest {
         willThrow(new CustomException(ErrorCode.WORKFLOW_NOT_ACTIVE))
             .given(webhookService).trigger(eq(workflowId), any());
 
-        mockMvc.perform(post("/webhooks/{workflowId}", workflowId)
+        mockMvc.perform(post("/api/v1/webhooks/{workflowId}", workflowId)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{}"))
             .andExpect(status().isBadRequest())
@@ -129,7 +129,7 @@ class WebhookControllerTest {
         willThrow(new CustomException(ErrorCode.WORKFLOW_NOT_FOUND))
             .given(webhookService).trigger(eq(workflowId), any());
 
-        mockMvc.perform(post("/webhooks/{workflowId}", workflowId)
+        mockMvc.perform(post("/api/v1/webhooks/{workflowId}", workflowId)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{}"))
             .andExpect(status().isNotFound())
@@ -142,7 +142,7 @@ class WebhookControllerTest {
         UUID workflowId = UUID.randomUUID();
         given(webhookService.trigger(eq(workflowId), any())).willReturn(null);
 
-        mockMvc.perform(post("/webhooks/{workflowId}", workflowId)
+        mockMvc.perform(post("/api/v1/webhooks/{workflowId}", workflowId)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{}"))
             .andExpect(status().isAccepted())

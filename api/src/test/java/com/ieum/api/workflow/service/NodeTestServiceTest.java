@@ -213,7 +213,7 @@ class NodeTestServiceTest {
                 + "\"config\":{\"triggerType\":\"WEBHOOK\"}}}"));
 
         assertThat(response.getStatus()).isEqualTo("LISTENING");
-        assertThat(response.getWebhookUrl()).isEqualTo("/webhooks/" + workflowId);
+        assertThat(response.getWebhookUrl()).isEqualTo("/api/v1/webhooks/" + workflowId);
         assertThat(response.getExpiresAt()).isEqualTo(expiresAt);
         assertThat(response.getOutput()).isNull();
         verify(runner, never()).run(any(), any(), any());

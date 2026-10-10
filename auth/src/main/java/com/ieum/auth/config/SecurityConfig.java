@@ -101,7 +101,7 @@ public class SecurityConfig {
                     "/api/v1/providers",
                     "/swagger-ui/**",
                     "/v3/api-docs/**",
-                    "/webhooks/**",
+                    "/api/v1/webhooks/**",
                     "/actuator/**",
                     "/ws/**"          // WebSocket 핸드쉐이크 (STOMP 인증은 ChannelInterceptor 담당)
                 ).permitAll()

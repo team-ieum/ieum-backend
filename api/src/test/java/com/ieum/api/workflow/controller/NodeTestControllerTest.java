@@ -137,7 +137,7 @@ class NodeTestControllerTest {
                 .contentType(MediaType.APPLICATION_JSON).content("{}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.data.status").value("LISTENING"))
-            .andExpect(jsonPath("$.data.webhookUrl").value("/webhooks/" + workflowId))
+            .andExpect(jsonPath("$.data.webhookUrl").value("/api/v1/webhooks/" + workflowId))
             .andExpect(jsonPath("$.data.expiresAt").exists())
             .andExpect(jsonPath("$.data.output").doesNotExist())
             .andExpect(jsonPath("$.data.testedAt").doesNotExist());
