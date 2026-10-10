@@ -5,8 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import lombok.Getter;
@@ -125,6 +127,30 @@ public class ExecutionCursor {
             return copy;
         }
         return value;
+    }
+
+    /**
+     * 값 안의 문자열들이 <b>직접</b> 참조하는 노드 id를 등장 순서·중복 없이 모은다 — 노드 단일 테스트가
+     * 어떤 앞 노드의 샘플을 컨텍스트에 넣어야 하는지 정하는 근거다. 치환은 단일 패스라 치환 결과 안의
+     * 참조식은 보지 않는다. Map 키는 {@link #renderDeep}과 같이 훑지 않는다.
+     */
+    public static Set<String> referencedNodeIds(Object value) {
+        Set<String> ids = new LinkedHashSet<>();
+        collectReferencedNodeIds(value, ids);
+        return ids;
+    }
+
+    private static void collectReferencedNodeIds(Object value, Set<String> ids) {
+        if (value instanceof String s) {
+            Matcher matcher = VARIABLE_PATTERN.matcher(s);
+            while (matcher.find()) {
+                ids.add(matcher.group(1));
+            }
+        } else if (value instanceof Map<?, ?> map) {
+            map.values().forEach(v -> collectReferencedNodeIds(v, ids));
+        } else if (value instanceof List<?> list) {
+            list.forEach(v -> collectReferencedNodeIds(v, ids));
+        }
     }
 
     private String doRender(String input) {

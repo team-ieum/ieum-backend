@@ -1,5 +1,7 @@
 package com.ieum.workflowcore.engine.executor;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.ExecutionContext;
 import com.ieum.workflowcore.engine.ExecutionCursor;
@@ -642,6 +644,35 @@ class AgentNodeExecutorTest {
 
         String body = mockWebServer.takeRequest().getBody().readUtf8();
         assertThat(body).contains("\"spreadsheet_id\":\"\"");
+    }
+
+    @Test
+    @DisplayName("workflowContext는 agent workflow_context 도구 모양으로 간다 — nodes.<id>.{output,status,type}와 TRIGGER 노드 출력인 trigger")
+    void execute_sendsWorkflowContextInAgentToolShape() throws Exception {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody(SUCCESS_RESPONSE));
+        Node node = buildAgentNode("요약해줘", "CLAUDE", "cred-id");
+        ExecutionCursor cursor = buildCursor();
+        cursor.setAllNodes(List.of(
+            new Node("trig", NodeType.TRIGGER, "트리거", Map.of()),
+            new Node("http-1", NodeType.HTTP, "HTTP", Map.of()),
+            node));
+        cursor.getContext().setNodeOutput("trig", Map.of("message", "안녕"));
+        cursor.getContext().setNodeOutput("http-1", Map.of("statusCode", 200));
+        cursor.getContext().setNodeOutput("up", Map.of("x", 1));   // 노드 테스트처럼 그래프에 없는 노드
+
+        executor.execute(node, Collections.emptyMap(), cursor);
+
+        JsonNode ctx = new ObjectMapper()
+            .readTree(mockWebServer.takeRequest().getBody().readUtf8()).get("workflowContext");
+        assertThat(ctx.at("/nodes/http-1/output/statusCode").asInt()).isEqualTo(200);
+        assertThat(ctx.at("/nodes/http-1/status").asText()).isEqualTo("COMPLETED");
+        assertThat(ctx.at("/nodes/http-1/type").asText()).isEqualTo("HTTP");
+        assertThat(ctx.at("/nodes/trig/type").asText()).isEqualTo("TRIGGER");
+        assertThat(ctx.at("/trigger/message").asText()).isEqualTo("안녕");
+        assertThat(ctx.at("/nodes/up/status").asText()).isEqualTo("COMPLETED");
+        assertThat(ctx.at("/nodes/up/type").isTextual()).isFalse();   // null(직렬화 설정에 따라 누락)
+        assertThat(ctx.has("http-1")).isFalse();                      // 예전 평평한 모양이 아니다
     }
 
     // ── 베타 플랫폼 키 케이스 ─────────────────────────────────────────────────

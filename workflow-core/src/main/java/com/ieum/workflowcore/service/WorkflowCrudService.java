@@ -12,6 +12,7 @@ import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
+import com.ieum.workflowcore.repository.NodeTestSampleRepository;
 import com.ieum.workflowcore.repository.WorkflowRepository;
 import com.ieum.workflowcore.repository.WorkflowVersionRepository;
 import com.ieum.workflowcore.scheduler.CronConverter;
@@ -54,6 +55,7 @@ public class WorkflowCrudService {
     private final WorkflowVersionRepository workflowVersionRepository;
     private final WorkflowExecutionRepository workflowExecutionRepository;
     private final WorkflowExecutionLogRepository workflowExecutionLogRepository;
+    private final NodeTestSampleRepository nodeTestSampleRepository;
     private final WorkflowScheduler workflowScheduler;
     private final WorkflowDefinitionRepository definitionRepository;
     private final ObjectMapper objectMapper;
@@ -280,6 +282,9 @@ public class WorkflowCrudService {
             .toList();
 
         workflowVersionRepository.deleteByWorkflow(workflow);
+        // 노드 테스트 샘플은 workflow_id FK를 가진다 — DB cascade가 없어 워크플로우 행보다 먼저 지운다.
+        // 사용자 삭제와 스케줄러 자동 정리가 모두 이 메서드를 지나므로 여기 한 곳이면 된다.
+        nodeTestSampleRepository.deleteByWorkflow(workflow);
         workflowRepository.delete(workflow);
 
         afterCommit(() -> {

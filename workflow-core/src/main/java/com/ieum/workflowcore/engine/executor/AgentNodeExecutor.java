@@ -150,7 +150,7 @@ public class AgentNodeExecutor implements NodeExecutor {
                 .model(resolvedModel)
                 .agentType(agentType)
                 .tools(tools)
-                .workflowContext(cursor.getContext().getNodeOutputs())
+                .workflowContext(toWorkflowContext(cursor))
                 .mcpServers(mcpServers.isEmpty() ? null : mcpServers)
                 .build();
 
@@ -353,5 +353,30 @@ public class AgentNodeExecutor implements NodeExecutor {
                     + e.getResponseBodyAsString(), null,
                 FailureClassifier.agentServiceErrorCode(e.getStatusCode().value()));
         }
+    }
+
+    /**
+     * 실행 컨텍스트를 agent {@code workflow_context} 도구가 읽는 모양으로 감싼다 —
+     * {@code {nodes:{<id>:{output, status, type}}, trigger:<TRIGGER 노드 출력>}}.
+     * 컨텍스트엔 성공(재처리 재사용 포함) 노드만 있어 status는 전부 COMPLETED다.
+     * 노드 테스트 커서는 자기 노드만 알아 다른 노드의 type은 null이고 trigger는 빠진다.
+     */
+    private static Map<String, Object> toWorkflowContext(ExecutionCursor cursor) {
+        Map<String, Object> nodes = new HashMap<>();
+        Map<String, Object> context = new HashMap<>();
+        cursor.getContext().getNodeOutputs().forEach((id, output) -> {
+            Node n = cursor.findNode(id);
+            NodeType type = n != null ? n.getType() : null;
+            Map<String, Object> entry = new HashMap<>();   // type null 허용 — Map.of 금지
+            entry.put("output", output);
+            entry.put("status", "COMPLETED");
+            entry.put("type", type != null ? type.name() : null);
+            nodes.put(id, entry);
+            if (type == NodeType.TRIGGER) {
+                context.put("trigger", output);
+            }
+        });
+        context.put("nodes", nodes);
+        return context;
     }
 }

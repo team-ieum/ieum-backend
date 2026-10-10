@@ -68,6 +68,10 @@ public enum ErrorCode {
     EXECUTION_NOT_WAITING_APPROVAL(HttpStatus.CONFLICT, "승인 대기 중인 실행이 아닙니다."),
     INVALID_CURSOR(HttpStatus.BAD_REQUEST, "유효하지 않은 커서 값입니다."),
 
+    // 노드 테스트
+    TEST_SAMPLE_MISSING(HttpStatus.BAD_REQUEST, "이 노드가 참조하는 앞 노드를 먼저 테스트해 주세요."),
+    TEST_SAMPLE_NOT_FOUND(HttpStatus.NOT_FOUND, "테스트 샘플이 없습니다. 노드를 먼저 테스트해 주세요."),
+
     // AI 에이전트
     INVALID_MODEL(HttpStatus.BAD_REQUEST, "프로바이더에서 지원하지 않는 모델입니다."),
     INVALID_TOOL_NAME(HttpStatus.BAD_REQUEST, "존재하지 않는 도구입니다."),
@@ -93,6 +97,7 @@ public enum ErrorCode {
     GOOGLE_RESOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "Google 리소스를 찾을 수 없거나 접근 권한이 없습니다."),
     GOOGLE_API_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "Google 서비스에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도해주세요."),
     NOTION_API_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "Notion 서비스에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도해주세요."),
+    GITHUB_API_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "GitHub 서비스에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도해주세요."),
 
     // 채팅
     CHAT_SESSION_NOT_FOUND(HttpStatus.NOT_FOUND, "채팅 세션을 찾을 수 없습니다."),

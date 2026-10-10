@@ -5,6 +5,8 @@ import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import com.ieum.workflowcore.service.TestSampleMissingException;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
@@ -113,6 +115,16 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.code").value(ErrorCode.INVALID_INPUT.name()));
     }
 
+    @Test
+    void handleTestSampleMissing_returns400WithMissingNodeIdsInData() throws Exception {
+        mockMvc.perform(get("/test/sample-missing"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value(ErrorCode.TEST_SAMPLE_MISSING.name()))
+                .andExpect(jsonPath("$.data.missingNodeIds[0]").value("node-a"))
+                .andExpect(jsonPath("$.data.missingNodeIds[1]").value("node-b"));
+    }
+
     @RestController
     @RequestMapping("/test")
     static class TestController {
@@ -138,6 +150,11 @@ class GlobalExceptionHandlerTest {
         @GetMapping("/unhandled")
         public void unhandled() {
             throw new RuntimeException("예상치 못한 오류");
+        }
+
+        @GetMapping("/sample-missing")
+        public void sampleMissing() {
+            throw new TestSampleMissingException(List.of("node-a", "node-b"));
         }
 
         static class TestRequest {

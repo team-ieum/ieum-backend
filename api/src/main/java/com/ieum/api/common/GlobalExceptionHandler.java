@@ -3,6 +3,7 @@ package com.ieum.api.common;
 import com.ieum.common.dto.ApiResponse;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.service.TestSampleMissingException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
@@ -16,6 +17,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
+import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -28,6 +31,16 @@ public class GlobalExceptionHandler {
         log.warn("[{}] {}", code.name(), e.getMessage(), e);
         return ResponseEntity.status(code.getStatus())
                 .body(ApiResponse.error(code, e.getMessage()));
+    }
+
+    @ExceptionHandler(TestSampleMissingException.class)
+    public ResponseEntity<ApiResponse<Map<String, List<String>>>> handleTestSampleMissing(
+            TestSampleMissingException e) {
+        ErrorCode code = e.getErrorCode();
+        log.warn("[{}] missingNodeIds={}", code.name(), e.getMissingNodeIds());
+        return ResponseEntity.status(code.getStatus())
+                .body(ApiResponse.error(code, e.getMessage(),
+                        Map.of("missingNodeIds", e.getMissingNodeIds())));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

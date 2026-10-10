@@ -135,4 +135,18 @@ class WebhookControllerTest {
             .andExpect(status().isNotFound())
             .andExpect(jsonPath("$.success").value(false));
     }
+
+    @Test
+    @DisplayName("listen 중 수신(샘플만 저장) — 202, data 없음")
+    void trigger_샘플만_저장_202_data_없음() throws Exception {
+        UUID workflowId = UUID.randomUUID();
+        given(webhookService.trigger(eq(workflowId), any())).willReturn(null);
+
+        mockMvc.perform(post("/webhooks/{workflowId}", workflowId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+            .andExpect(status().isAccepted())
+            .andExpect(jsonPath("$.success").value(true))
+            .andExpect(jsonPath("$.data").doesNotExist());
+    }
 }

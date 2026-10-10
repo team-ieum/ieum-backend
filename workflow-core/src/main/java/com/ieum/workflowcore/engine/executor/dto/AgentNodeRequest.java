@@ -27,8 +27,8 @@ public class AgentNodeRequest {
     /** 에이전트 실행 타입 (simple / react) (nullable, 기본값: simple) */
     private String agentType;
     private List<Map<String, Object>> tools;
-    /** 이전 노드들의 output 전체 — Python ieum-agent의 workflow_context 툴에 전달 (nullable) */
-    private Map<String, Map<String, Object>> workflowContext;
+    /** agent workflow_context 도구 입력 — {nodes:{<id>:{output,status,type}}, trigger} (nullable) */
+    private Map<String, Object> workflowContext;
     /** 커스텀 MCP 서버 목록 — ieum-agent의 mcp_servers로 전달 (nullable) */
     @JsonProperty("mcp_servers")
     private List<McpServerRef> mcpServers;

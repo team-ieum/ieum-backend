@@ -23,9 +23,9 @@
 | `provider` | ProviderController | 지원 프로바이더 목록 |
 | `workflow` | WorkflowController, WorkflowDashboardController | 워크플로우 CRUD·실행·실행 이력 조회·SSE 진행 스트림, 실패 실행 재처리(`POST /api/v1/workflows/executions/{executionId}/retry`, 202), 대시보드 요약/최근실행/에러, 승인 대기 실행 승인·거부(`POST /api/v1/workflows/executions/{executionId}/approve` 202 새 실행 / `.../reject` 200) |
 | `chat` | ChatController | 워크플로우 채팅 (+ `AgentClient`가 ieum-agent 호출, WebSocket 핸들러) |
-| `webhook` / `webhookcredential` | WebhookController, WebhookCredentialController | 웹훅 트리거 수신·웹훅 크레덴셜, 실패 알림 대상 지정(`PUT /api/v1/webhook-credentials/{id}/alert-target`) |
+| `webhook` / `webhookcredential` | WebhookController, WebhookCredentialController | 웹훅 트리거 수신(노드 테스트가 listen 중이면 첫 1건을 샘플로 가로챔 — Redis `webhook:listen:{workflowId}`, `WebhookListenStore`가 GETDEL로 소비. 비활성·triggerType 불일치면 샘플만 저장하고 data 없는 202)·웹훅 크레덴셜, 실패 알림 대상 지정(`PUT /api/v1/webhook-credentials/{id}/alert-target`) |
 | `alert` | (Controller 없음) | 실패 알림 발신 — `AlertCooldownStore`, `DiscordWebhookSender` |
-| `integration` | IntegrationWorkflowController, IntegrationOptionController | 연동 서비스별 워크플로우 조회, 노드 설정 드롭다운 선택지(`GET /api/v1/integrations/{app}/options/{resource}` — 공급원 빈 `OptionSource`를 key `{app}.{resource}`로 고름. `@Transactional` 금지: 토큰 갱신 저장이 readOnly에 합류해 유실). IEUM 내부 리소스 공급원(IEUM-BE-76): `ai.models`·`ieum.credentials`(입력 llmProvider)·`ieum.webhooks`/`slack.webhooks`/`discord.webhooks`(`WebhookOptionSourceConfig`가 한 구현으로 3빈)·`ieum.mcp_servers` |
+| `integration` | IntegrationWorkflowController, IntegrationOptionController | 연동 서비스별 워크플로우 조회, 노드 설정 드롭다운 선택지(`GET /api/v1/integrations/{app}/options/{resource}` — 공급원 빈 `OptionSource`를 key `{app}.{resource}`로 고름. `@Transactional` 금지: 토큰 갱신 저장이 readOnly에 합류해 유실). IEUM 내부 리소스 공급원(IEUM-BE-76): `ai.models`·`ieum.credentials`(입력 llmProvider)·`ieum.webhooks`/`slack.webhooks`/`discord.webhooks`(`WebhookOptionSourceConfig`가 한 구현으로 3빈)·`ieum.mcp_servers`. GitHub 공급원(노드 카탈로그 ② BE-b): `github.owners`(본인 login + 소속 org — org 조회가 4xx면 본인만)·`github.repos`(입력 `owner`, cursor=페이지 번호, 본인이면 `/user/repos?affiliation=owner`·아니면 `/orgs/{owner}/repos`). **목록은 GitHub App 설치 범위로 한정**, `GitHubApiReader`가 토큰·헤더·오류 매핑(`GITHUB_API_UNAVAILABLE` 503) 공유 |
 | `mcp` | McpServerCatalogController | MCP 서버 카탈로그 |
 | `prompt` | PromptTemplateController | 프롬프트 템플릿 CRUD·테스트 실행 |
 | `beta` | BetaUsageController | 베타 플랫폼 키 사용량(%) 조회 |
@@ -52,6 +52,12 @@ Quartz 스케줄 실행(`WorkflowScheduleJob`)은 workflow-core 포트 `Executio
 - **brand 유지**(`NodeDefinitionMerger`) — REST 수정은 노드 config를 통째로 교체하지만, 요청 config에 `brand` 키가 없으면 이전 `config.brand`를 이어받는다(FE 아이콘·연동 목록의 유일한 근거). 요청이 명시한 값은 `null`·빈 문자열도 존중한다.
 - **연동 서비스별 목록**(`IntegrationServiceType`) — `GOOGLE`만 brand 셋(`google`·`gmail`·`sheets`)으로 Mongo `$in` 조회한다. agent가 Google 도구 노드에 세 값을 섞어 넣는다. 나머지 서비스는 brand 하나. (집계 파이프라인의 실 Mongo 동작은 단위 테스트로 못 본다 — 바인딩만 `WorkflowDefinitionRepositoryPipelineTest`가 고정.)
 - **cron은 TRIGGER 노드가 진실원**(`TriggerNodeSchedule`) — 노드 `config.triggerType`이 있으면 REST 생성·수정과 AI 저장 모두 `triggerType`과 `cron`을 **둘 다 노드에서** 가져와 최상위 값을 덮는다(노드에 cron이 없으면 null — 최상위·저장된 값으로 채우지 않는다). 수정은 `NodeDefinitionMerger` 병합 결과 기준이다. 노드에 `triggerType`이 없을 때만 기존 최상위 값·`resolveCronExpression` 폴백을 쓴다. 알 수 없는 `triggerType`은 400(`INVALID_WORKFLOW`).
+
+## 노드 단일 테스트 (workflow/service/NodeTestService, controller/NodeTestController)
+`POST /api/v1/workflows/{workflowId}/nodes/{nodeId}/test`(body `{node?, input?}`) / `GET .../sample`. 실행·샘플 저장은 workflow-core `NodeTestRunner`, 여기는 소유자 검사(`getWorkflowByOwner`, 항상 먼저)·body 노드 가드·webhook 분기만. `WorkflowController`에 붙이지 않은 이유: 그 생성자를 여러 테스트가 직접 호출한다.
+- body `node`는 저장 경로와 같은 세 가드(`NodeCredentialGuard.rejectForeignCredentialId`·`rejectInlineSecret`, `RawWebhookUrlGuard`)를 거친다 — 저장 없이 곧바로 실행되기 때문. `node.id ≠ nodeId`면 400. body가 없으면 저장된 최신 버전의 노드
+- 트리거가 webhook(`config.triggerType`, 비면 워크플로우 최상위 triggerType)이면 실행하지 않고 `WebhookListenStore.start` → `{status: LISTENING, webhookUrl, expiresAt}`. `webhookUrl`은 **경로**(`/webhooks/{workflowId}`)다 — BE에 공개 base URL 설정이 없어 FE가 API origin을 붙인다
+- 실패한 테스트는 HTTP 200 + `status: FAILED`. 샘플 누락은 400 `TEST_SAMPLE_MISSING` + `data.missingNodeIds`(`TestSampleMissingException` 전용 핸들러). `@Transactional` 금지(외부 호출을 한 트랜잭션에 묶지 않기 위해 — 저장소 호출은 각자 트랜잭션. OSIV 기본 on이라 커넥션은 요청 끝까지 유지됨)
 
 ## config/ — Provider 포트 실구현
 workflow-core가 선언한 포트 11개를 여기서 `Default*`로 구현해 Stub을 대체한다 (`@Primary`).
