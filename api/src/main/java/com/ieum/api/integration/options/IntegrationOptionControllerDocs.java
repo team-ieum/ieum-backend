@@ -23,13 +23,14 @@ public interface IntegrationOptionControllerDocs {
             + "ai/models·ieum/credentials(llmProvider 필수 — CLAUDE·OPENAI·GEMINI), "
             + "ieum/webhooks(전체, HTTP 노드용)·slack/webhooks·discord/webhooks, ieum/mcp_servers"
             + "(웹훅·MCP는 활성 항목만, 모두 요청자 소유만). "
+            + "github/owners(본인 login + 소속 org), github/repos(owner 필수 — owners의 값. 목록은 GitHub App 설치 범위 안만), "
             + "nextCursor가 있으면 cursor로 다음 페이지를 조회하고, null이면 마지막 페이지입니다. "
             + "오류 code: GOOGLE_SCOPE_REQUIRED(403, Google 권한 증분 동의 필요 — scope_groups는 "
             + "spreadsheets·worksheets=sheets, files·folders=drive, calendars·events=calendar. "
             + "sheets 그룹은 drive를 포함해 파일·폴더도 충족), "
             + "ACCOUNT_NOT_CONNECTED(400), "
             + "AUTHENTICATION_REQUIRED(401, 재연동 필요), GOOGLE_RESOURCE_NOT_FOUND(404), "
-            + "GOOGLE_API_UNAVAILABLE(503), NOTION_API_UNAVAILABLE(503), INVALID_INPUT(400), NOT_FOUND(404, 알 수 없는 목록)")
+            + "GOOGLE_API_UNAVAILABLE(503), NOTION_API_UNAVAILABLE(503), GITHUB_API_UNAVAILABLE(503), INVALID_INPUT(400), NOT_FOUND(404, 알 수 없는 목록)")
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<OptionPage>> getOptions(
         CustomUserDetails userDetails,
