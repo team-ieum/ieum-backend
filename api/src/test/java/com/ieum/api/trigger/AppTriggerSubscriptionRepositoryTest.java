@@ -8,6 +8,7 @@ import com.ieum.workflowcore.repository.AppTriggerSubscriptionRepository;
 import com.ieum.workflowcore.service.AppTriggerSubscriptionService;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -63,7 +64,7 @@ class AppTriggerSubscriptionRepositoryTest {
     @DisplayName("JSON 칼럼 왕복 — config·cursor가 Map으로 돌아온다")
     void jsonRoundTrip() {
         AppTriggerSubscription saved = gmail(LocalDateTime.now());
-        service.recordPoll(saved.getId(), Map.of("afterSec", 1_790_000_000L, "seenIds", List.of("m1")),
+        service.recordPoll(saved.getId(), saved.getConfig(), Map.of("afterSec", 1_790_000_000L, "seenIds", List.of("m1")),
             null, LocalDateTime.now().plusMinutes(5));
 
         AppTriggerSubscription read = repository.findById(saved.getId()).orElseThrow();
@@ -72,6 +73,28 @@ class AppTriggerSubscriptionRepositoryTest {
         assertThat(((Number) read.getCursor().get("afterSec")).longValue()).isEqualTo(1_790_000_000L);
         assertThat(read.getCursor().get("seenIds")).isEqualTo(List.of("m1"));
         assertThat(read.getLastPolledAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("recordPoll — 클레임 뒤 query가 바뀌었으면(리셋) 옛 커서로 덮지 않고 다음 폴링·오류만 기록")
+    void recordPollSkipsCursorWhenReconfiguredMeanwhile() {
+        // H2 timestamp는 마이크로초로 반올림 저장한다(Linux JDK now()는 나노초) — 왕복 후 정확 비교하려면 잘라 둔다
+        LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MICROS);
+        gmail(now.minusMinutes(10));
+        AppTriggerSubscription claimed =
+            service.claimDue(TriggerType.GMAIL_NEW_EMAIL, now, 50, Duration.ofMinutes(5)).get(0);
+        transactionTemplate.executeWithoutResult(tx -> repository.findById(claimed.getId()).orElseThrow()
+            .reconfigure(TriggerType.GMAIL_NEW_EMAIL, claimed.getUserId(), null, Map.of("query", "from:y"), now));
+        Map<String, Object> reset = repository.findById(claimed.getId()).orElseThrow().getCursor();
+        LocalDateTime next = now.plusMinutes(5);
+
+        service.recordPoll(claimed.getId(), claimed.getConfig(),
+            Map.of("afterSec", 1_790_000_000L, "seenIds", List.of("old")), "ERR", next);
+
+        AppTriggerSubscription read = repository.findById(claimed.getId()).orElseThrow();
+        assertThat(read.getCursor()).isEqualTo(reset);
+        assertThat(read.getLastError()).isEqualTo("ERR");
+        assertThat(read.getNextPollAt()).isEqualTo(next);
     }
 
     @Test

@@ -54,6 +54,10 @@ aes:
 ieum:
   agent:
     url: http://localhost:8000
+  trigger:
+    gmail:
+      # 캐시된 컨텍스트가 테스트 내내 살아 있다 — 스윕이 공유 H2의 다른 테스트 행을 리스하지 않게 사실상 끈다.
+      sweep-initial-delay: P1D
 
 notion:
   oauth:

@@ -83,10 +83,17 @@ public class AppTriggerSubscriptionService {
         return due;
     }
 
-    /** 폴링 결과 기록. 그 사이 행이 지워졌으면(비활성화·삭제) 아무것도 하지 않는다. */
+    /**
+     * 폴링 결과 기록. 그 사이 행이 지워졌으면(비활성화·삭제) 아무것도 하지 않는다. 그 사이 config가 바뀌었으면(query 변경 —
+     * sync가 커서를 리셋했을 수 있다) 커서는 덮지 않는다 — 옛 query 기준 커서가 바뀐 query로 과거 메일을 발화시킨다.
+     *
+     * @param claimedConfig 클레임 시점 행의 config
+     */
     @Transactional
-    public void recordPoll(UUID id, Map<String, Object> cursor, String error, LocalDateTime nextPollAt) {
-        repository.findById(id).ifPresent(s -> s.recordPoll(cursor, error, LocalDateTime.now(), nextPollAt));
+    public void recordPoll(UUID id, Map<String, Object> claimedConfig, Map<String, Object> cursor, String error,
+                           LocalDateTime nextPollAt) {
+        repository.findById(id).ifPresent(s -> s.recordPoll(
+            Objects.equals(s.getConfig(), claimedConfig) ? cursor : s.getCursor(), error, LocalDateTime.now(), nextPollAt));
     }
 
     /** BE-81 webhook 라우팅 — {@code (GITHUB_NEW_ISSUE, repoId)}의 활성 구독. */
