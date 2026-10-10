@@ -70,7 +70,7 @@ class GitHubApiReader {
         } catch (HttpClientErrorException e) {
             // 응답 본문엔 사용자 정보가 섞일 수 있어 상태 코드만 남긴다
             log.warn("[GitHubApiReader] GitHub 요청 거부 — status: {}", e.getStatusCode().value());
-            throw clientError(e.getStatusCode().value());
+            throw clientError(e.getStatusCode().value(), e.getResponseHeaders());
         } catch (RestClientException e) {
             // 5xx·타임아웃·연결 실패 — 사용자가 고칠 수 없는 일시 장애
             log.warn("[GitHubApiReader] GitHub 호출 실패 — {}", e.getClass().getSimpleName());
@@ -78,7 +78,12 @@ class GitHubApiReader {
         }
     }
 
-    private static CustomException clientError(int status) {
+    private static CustomException clientError(int status, HttpHeaders headers) {
+        // GitHub 1차(x-ratelimit-remaining: 0)·2차(retry-after) rate limit은 403으로 온다 — 일시 장애로 본다
+        if (status == 403 && headers != null
+            && ("0".equals(headers.getFirst("x-ratelimit-remaining")) || headers.containsKey(HttpHeaders.RETRY_AFTER))) {
+            return new CustomException(ErrorCode.GITHUB_API_UNAVAILABLE);
+        }
         return switch (status) {
             // 기본 문구가 Google 재연동이라 덮어쓴다
             case 401 -> new CustomException(ErrorCode.AUTHENTICATION_REQUIRED, "GitHub 계정을 다시 연동해주세요.");

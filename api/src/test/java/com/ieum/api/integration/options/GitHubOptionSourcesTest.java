@@ -218,6 +218,20 @@ class GitHubOptionSourcesTest {
         assertErrorCode(() -> owners.fetch(userId, Map.of(), null), expected);
     }
 
+    @ParameterizedTest
+    @CsvSource({
+        "x-ratelimit-remaining, 0",
+        "retry-after, 60"
+    })
+    @DisplayName("403이라도 rate limit 헤더(1차 x-ratelimit-remaining:0 / 2차 retry-after)가 있으면 GITHUB_API_UNAVAILABLE")
+    void rateLimited403IsUnavailable(String headerName, String headerValue) {
+        connected();
+        server.expect(requestTo(BASE + "/user"))
+            .andRespond(withStatus(HttpStatus.FORBIDDEN).header(headerName, headerValue));
+
+        assertErrorCode(() -> owners.fetch(userId, Map.of(), null), ErrorCode.GITHUB_API_UNAVAILABLE);
+    }
+
     @Test
     @DisplayName("401은 Google·Notion이 아니라 GitHub 재연동 문구로 나간다")
     void unauthorizedSaysGitHub() {

@@ -58,7 +58,7 @@
 - 샘플 출력은 저장 직전 마스킹 — 하류가 `token`·`apiKey` 같은 필드를 참조하면 `***`가 들어간다(재처리 `loadReusableNodeOutputs`와 같은 트레이드오프)
 - 트리거: 페이로드를 트리거 출력으로 먼저 심고 `renderDeep(config)`를 `TriggerNodeExecutor`에 넘긴 출력이 샘플이다(런타임과 같은 모양 — 페이로드 필드는 config 자기 참조로만 남는다). webhook 수신은 `recordWebhookSample`(저장 최신 버전의 노드, 없으면 최소 WEBHOOK 트리거)
 - upsert는 find → record → saveAndFlush, UNIQUE 경합(`DataIntegrityViolationException`)이면 한 번 더 갱신으로 쓴다
-- 트랜잭션을 걸지 않는다(외부 호출 동안 커넥션 점유 방지)
+- 트랜잭션을 걸지 않는다(외부 호출을 한 트랜잭션에 묶지 않기 위해, 저장소 호출은 각자 트랜잭션. OSIV 기본 on이라 커넥션은 요청 끝까지 유지됨)
 
 ### 노드 타입 (NodeType)
 `TRIGGER`, `AI`, `CONDITION`, `HTTP`, `TRANSFORM`, `APPROVAL`, `ACTION` — 7종. `ACTION`은 앱 도구 하나를 LLM 없이 실행하는 결정론적 노드다(config 모양은 AI 노드 `tools[0]`과 같다 — `{"tools":[{"name":"<tool_key>","config":{…}}],"brand":…,"serviceType":…}`). 그 외 외부 서비스(Gmail·Notion 등) 연동은 AI 노드의 도구/HTTP 노드로 처리한다. `APPROVAL`은 NodeExecutor가 없다(위 "승인 게이트").
