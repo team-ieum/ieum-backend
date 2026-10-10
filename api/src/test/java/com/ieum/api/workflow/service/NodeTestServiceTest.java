@@ -13,6 +13,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.credential.domain.Credential;
 import com.ieum.api.credential.service.CredentialService;
+import com.ieum.api.trigger.AppTriggerSampleFetcher;
 import com.ieum.api.webhook.service.WebhookListenStore;
 import com.ieum.api.workflow.dto.NodeTestRequest;
 import com.ieum.api.workflow.dto.NodeTestResponse;
@@ -42,8 +43,12 @@ class NodeTestServiceTest {
     private final NodeTestRunner runner = mock(NodeTestRunner.class);
     private final CredentialService credentialService = mock(CredentialService.class);
     private final WebhookListenStore listenStore = mock(WebhookListenStore.class);
+    private final AppTriggerSampleFetcher gmailFetcher = mock(AppTriggerSampleFetcher.class);
+    {
+        given(gmailFetcher.triggerType()).willReturn(TriggerType.GMAIL_NEW_EMAIL);
+    }
     private final NodeTestService service =
-        new NodeTestService(crudService, runner, credentialService, listenStore);
+        new NodeTestService(crudService, runner, credentialService, listenStore, List.of(gmailFetcher));
     private final ObjectMapper json = new ObjectMapper();
 
     private final UUID userId = UUID.randomUUID();
@@ -255,5 +260,80 @@ class NodeTestServiceTest {
         assertThat(found.getTestedAt()).isEqualTo(testedAt);
         assertThatThrownBy(() -> service.getSample(userId, workflowId, "none"))
             .satisfies(t -> assertErrorCode(t, ErrorCode.TEST_SAMPLE_NOT_FOUND));
+    }
+
+    // ──────────────────── 앱 트리거(즉시 샘플) ────────────────────
+
+    private NodeTestRequest gmailNodeRequest(String query) throws Exception {
+        return request("""
+            {"node":{"id":"t1","type":"TRIGGER","label":"Gmail",
+              "config":{"triggerType":"GMAIL_NEW_EMAIL","serviceType":"GOOGLE","query":"%s"}}}""".formatted(query));
+    }
+
+    @Test
+    @DisplayName("Gmail 트리거 — listen 없이 최근 1건을 러너 페이로드로 넘겨 샘플 저장")
+    @SuppressWarnings("unchecked")
+    void gmailTriggerSamplesLatestImmediately() throws Exception {
+        Workflow workflow = workflow(TriggerType.GMAIL_NEW_EMAIL);
+        owns(workflow);
+        Map<String, Object> latest = Map.of("messageId", "m1", "subject", "s");
+        given(gmailFetcher.fetchLatest(eq(userId), any())).willReturn(Optional.of(latest));
+        given(runner.run(eq(workflow), any(Node.class), eq(latest)))
+            .willReturn(new NodeTestResult(SampleStatus.SUCCESS, latest, null, LocalDateTime.now()));
+
+        NodeTestResponse response = service.test(userId, workflowId, "t1", gmailNodeRequest("from:x"));
+
+        assertThat(response.getStatus()).isEqualTo("SUCCESS");
+        ArgumentCaptor<Map<String, Object>> config = ArgumentCaptor.forClass(Map.class);
+        verify(gmailFetcher).fetchLatest(eq(userId), config.capture());
+        assertThat(config.getValue()).containsEntry("query", "from:x");
+        verify(listenStore, never()).start(any(), any());
+    }
+
+    @Test
+    @DisplayName("Gmail 트리거 — 0건이면 FAILED '최근 항목이 없습니다'")
+    void gmailTriggerNoItemsFails() throws Exception {
+        Workflow workflow = workflow(TriggerType.GMAIL_NEW_EMAIL);
+        owns(workflow);
+        given(gmailFetcher.fetchLatest(eq(userId), any())).willReturn(Optional.empty());
+        given(runner.recordFailure(any(), any(), any()))
+            .willReturn(new NodeTestResult(SampleStatus.FAILED, null, "x", LocalDateTime.now()));
+
+        service.test(userId, workflowId, "t1", gmailNodeRequest(""));
+
+        verify(runner).recordFailure(workflow, "t1", "최근 항목이 없습니다");
+        verify(runner, never()).run(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("Gmail 트리거 — 미연동·권한 부족은 HTTP 200 + FAILED(사유 = ErrorCode 메시지)")
+    void gmailTriggerFetchErrorBecomesFailedSample() throws Exception {
+        Workflow workflow = workflow(TriggerType.GMAIL_NEW_EMAIL);
+        owns(workflow);
+        given(gmailFetcher.fetchLatest(eq(userId), any()))
+            .willThrow(new CustomException(ErrorCode.GOOGLE_SCOPE_REQUIRED));
+        given(runner.recordFailure(any(), any(), any()))
+            .willReturn(new NodeTestResult(SampleStatus.FAILED, null, "x", LocalDateTime.now()));
+
+        service.test(userId, workflowId, "t1", gmailNodeRequest(""));
+
+        verify(runner).recordFailure(workflow, "t1", ErrorCode.GOOGLE_SCOPE_REQUIRED.getMessage());
+        verify(runner, never()).run(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("공급원이 없는 앱 트리거(GitHub, BE-b 전) — FAILED 안내, 외부 호출 없음")
+    void appTriggerWithoutFetcherFails() throws Exception {
+        Workflow workflow = workflow(TriggerType.GITHUB_NEW_ISSUE);
+        owns(workflow);
+        given(runner.recordFailure(any(), any(), any()))
+            .willReturn(new NodeTestResult(SampleStatus.FAILED, null, "x", LocalDateTime.now()));
+
+        service.test(userId, workflowId, "t1", request("""
+            {"node":{"id":"t1","type":"TRIGGER","config":{"triggerType":"GITHUB_NEW_ISSUE","repoId":1}}}"""));
+
+        verify(runner).recordFailure(workflow, "t1", "이 트리거는 아직 테스트할 수 없습니다");
+        verify(gmailFetcher, never()).fetchLatest(any(), any());
+        verify(runner, never()).run(any(), any(), any());
     }
 }

@@ -112,6 +112,14 @@ public class NodeTestRunner {
         return runTrigger(workflow, node, payload);
     }
 
+    /**
+     * 실행 없이 실패 샘플을 남긴다 — 앱 트리거 테스트에서 최근 항목이 없거나 조회가 거부됐을 때. 이전 SUCCESS 샘플을 덮어쓴다
+     * (실패한 재테스트와 같은 규칙).
+     */
+    public NodeTestResult recordFailure(Workflow workflow, String nodeId, String message) {
+        return saveSample(workflow, nodeId, ExecutorResult.failure(message, 0));
+    }
+
     /** 저장된 최신 샘플. 없으면 empty. */
     public Optional<NodeTestResult> findSample(UUID workflowId, String nodeId) {
         return sampleRepository.findByWorkflowIdAndNodeId(workflowId, nodeId).map(this::toResult);
@@ -195,7 +203,8 @@ public class NodeTestRunner {
      * ({@code setNodeOutput(triggerNode…)}) → {@code prepareNodeInput} 치환 → 실행): 페이로드를
      * 트리거 노드 출력으로 먼저 심은 뒤 config를 치환하고, 그 결과를 {@code TriggerNodeExecutor}가 출력으로
      * 돌려준다. 그래서 샘플은 원 페이로드가 아니라 <b>치환된 트리거 config</b>이고, 페이로드 필드는 config가
-     * {@code {{nodes.<id>.output.X}}}로 자기 참조할 때만 남는다. 앞 노드 샘플은 요구하지 않는다.
+     * {@code {{nodes.<id>.output.X}}}로 자기 참조할 때만 남는다. 단 앱 트리거(Gmail 등)는 예외로, 실행기가 심어 둔
+     * 정규화 페이로드를 그대로 출력하므로 샘플 = 페이로드다(config 키는 섞이지 않는다). 앞 노드 샘플은 요구하지 않는다.
      */
     private NodeTestResult runTrigger(Workflow workflow, Node node, Map<String, Object> payload) {
         NodeExecutor executor = executorFor(node);
