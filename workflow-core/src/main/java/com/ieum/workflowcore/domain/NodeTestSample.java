@@ -58,6 +58,7 @@ public class NodeTestSample extends BaseEntity {
     @Column(name = "output_json", columnDefinition = "TEXT")
     private String outputJson;
 
+    /** 웹훅 URL 마스킹 후의 오류 메시지. SUCCESS면 null */
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 
