@@ -47,6 +47,12 @@ Quartz 스케줄 실행(`WorkflowScheduleJob`)은 workflow-core 포트 `Executio
 
 `workflow/service/ExecutionApprovalService` — 승인 게이트(IEUM-BE-45)에서 멈춘 `WAITING_APPROVAL` 실행의 승인·거부. 원 실행 행 잠금(`lockExecutionWithVersion`) → 소유자 검증(ADMIN 우회 없음) → 대기 상태가 아니면 409 `EXECUTION_NOT_WAITING_APPROVAL`. 승인은 원 실행을 되살리지 않고 **재처리와 같은 `ExecutionRetryService.startContinuation()`**(같은 버전·트리거 입력으로 새 실행 + `retriedBy` 링크 + `afterCommit` 큐 투입)으로 이어진 실행을 만들고 원 실행은 SUCCESS. 응답은 새 실행이라 프론트는 그 ID로 SSE를 다시 구독한다. 거부는 FAILED + 사유이고, 사용자 결정이라 `markAsFailed`(알림)를 타지 않는다. 거부 사유 `@Size(max=200)` — `node_runs.error_message`가 VARCHAR(255)다. `startContinuation`을 별도 빈으로 빼지 말 것 — `ExecutionRetryServiceTest`의 `@InjectMocks`가 깨진다.
 
+## 워크플로우 저장 규칙 (ACTION·brand·cron)
+- `ACTION` 노드는 REST 저장을 허용한다(`NodeType` enum만으로 통한다). config는 AI 노드 `tools[0]` 모양이라 `NodeCredentialGuard`·`WorkflowServiceType`이 변경 없이 적용된다. `RawWebhookUrlGuard`는 최상위 `config.url`만 본다 — `tools[].config.webhook_url` 원문은 막지 않는다(AI 노드와 동일한 기존 한계).
+- **brand 유지**(`NodeDefinitionMerger`) — REST 수정은 노드 config를 통째로 교체하지만, 요청 config에 `brand` 키가 없으면 이전 `config.brand`를 이어받는다(FE 아이콘·연동 목록의 유일한 근거). 요청이 명시한 값은 `null`·빈 문자열도 존중한다.
+- **연동 서비스별 목록**(`IntegrationServiceType`) — `GOOGLE`만 brand 셋(`google`·`gmail`·`sheets`)으로 Mongo `$in` 조회한다. agent가 Google 도구 노드에 세 값을 섞어 넣는다. 나머지 서비스는 brand 하나. (집계 파이프라인의 실 Mongo 동작은 단위 테스트로 못 본다 — 바인딩만 `WorkflowDefinitionRepositoryPipelineTest`가 고정.)
+- **cron은 TRIGGER 노드가 진실원**(`TriggerNodeSchedule`) — 노드 `config.triggerType`이 있으면 REST 생성·수정과 AI 저장 모두 `triggerType`과 `cron`을 **둘 다 노드에서** 가져와 최상위 값을 덮는다(노드에 cron이 없으면 null — 최상위·저장된 값으로 채우지 않는다). 수정은 `NodeDefinitionMerger` 병합 결과 기준이다. 노드에 `triggerType`이 없을 때만 기존 최상위 값·`resolveCronExpression` 폴백을 쓴다. 알 수 없는 `triggerType`은 400(`INVALID_WORKFLOW`).
+
 ## config/ — Provider 포트 실구현
 workflow-core가 선언한 포트 11개를 여기서 `Default*`로 구현해 Stub을 대체한다 (`@Primary`).
 `DefaultCredentialProvider`, `DefaultGoogleTokenProvider`, `DefaultNotionTokenProvider`, `DefaultGitHubTokenProvider`, `DefaultWebhookCredentialProvider`, `DefaultMcpCatalogProvider`, `DefaultUserRoleProvider`, `DefaultBetaPlatformProvider`, `DefaultIdempotencyStore`, `DefaultAlertNotifier`, `DefaultExecutionJobEnqueuer`.
@@ -80,6 +86,7 @@ workflow-core가 선언한 포트 11개를 여기서 `Default*`로 구현해 Stu
 
 ## 크로스레포 계약 (ieum-agent 위임)
 - 크레덴셜 헤더: `X-LLM-Provider`, `X-LLM-Api-Key`
-- 멱등성 헤더: 부수효과가 있는 HTTP·AI 노드는 `retry.idempotency` 선언이 없어도 HEADER가 기본이라, 재시도가 켜져 있으면 agent에 `X-Idempotency-Key`를 보낸다(IEUM-BE-54. HTTP 노드는 외부 API에 표준 `Idempotency-Key`). agent가 이 헤더를 소비하며(IEUM-AI-52) 같은 키의 재요청은 도구를 다시 돌리지 않는다 — 소비하지 않는 배포에선 무시될 뿐이라 배포 순서 무관
+- 멱등성 헤더: 부수효과가 있는 HTTP·AI·ACTION 노드는 `retry.idempotency` 선언이 없어도 HEADER가 기본이라, 재시도가 켜져 있으면 agent에 `X-Idempotency-Key`를 보낸다(IEUM-BE-54. HTTP 노드는 외부 API에 표준 `Idempotency-Key`). agent가 이 헤더를 소비하며(IEUM-AI-52) 같은 키의 재요청은 도구를 다시 돌리지 않는다 — 소비하지 않는 배포에선 무시될 뿐이라 배포 순서 무관
 - 베타 플랫폼 키 모드: `X-Key-Mode: platform` (소문자, ADMIN·TESTER에겐 미전송)
 - agent `/v1/execute`·`/v1/chat` 응답 모두 usage 있음(IEUM-AI-48) → chat도 일일 호출 캡 + 토큰 예산 둘 다 적용. 차감 기준은 `usage.totalTokens`(입출력 합산 아님)
+- ACTION 노드: agent `POST /v1/actions/execute`(workflow-core `ActionNodeExecutor`가 유일한 호출자 — api `AgentClient`는 쓰지 않는다). 요청 `{nodeId, toolKey, config}`, 응답 `{success, output(dict), errorMessage, errorCode}`. `X-LLM-*`·`X-Key-Mode`는 **보내지 않는다**(LLM을 쓰지 않는다). `X-User-Id`·`X-User-Role`·`X-Node-Id`·`X-Trace-Id`·`X-Idempotency-Key`·`X-Google-Access-Token`·`X-Notion-Token`·`X-GitHub-Token`은 보낸다. 배포 순서는 **agent 먼저**(없으면 404 → `AGENT_BAD_REQUEST` 실패)

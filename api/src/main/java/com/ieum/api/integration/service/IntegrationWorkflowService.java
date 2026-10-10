@@ -31,7 +31,7 @@ public class IntegrationWorkflowService {
 
         int page = parseCursor(cursor);
         BrandWorkflowPage result =
-            integrationWorkflowQueryService.findByBrand(userId, serviceType.getBrand(), page, size);
+            integrationWorkflowQueryService.findByBrand(userId, serviceType.getBrands(), page, size);
 
         List<WorkflowSummaryResponse> content = result.items().stream()
             .map(sw -> WorkflowSummaryResponse.from(sw.workflow(), sw.usedNodeCount()))

@@ -150,6 +150,84 @@ class NodeDefinitionMergerTest {
             .containsEntry("id", "n1");
     }
 
+    @Test
+    @DisplayName("요청 config에 brand가 없으면 이전 config의 brand를 이어받고 나머지는 요청 값으로 교체된다")
+    void 요청_config에_brand가_없으면_이전_brand를_유지한다() {
+        List<Map<String, Object>> previous = List.of(previousNode("n1", Map.of("config", Map.of(
+            "brand", "github", "serviceType", "GITHUB", "tools", List.of(Map.of("name", "old"))))));
+
+        List<Map<String, Object>> merged = NodeDefinitionMerger.merge(previous,
+            List.of(node("""
+                {"id":"n1","type":"ACTION","label":"이슈","config":{"tools":[{"name":"builtin:github_create_issue"}]}}
+                """)), objectMapper);
+
+        Map<?, ?> config = (Map<?, ?>) merged.get(0).get("config");
+        assertThat(config.get("brand")).isEqualTo("github");
+        assertThat(config.get("tools")).isEqualTo(List.of(Map.of("name", "builtin:github_create_issue")));
+        // config 통째 교체 규칙은 그대로다 — 요청이 보내지 않은 serviceType까지 되살리지 않는다
+        assertThat(config.containsKey("serviceType")).isFalse();
+    }
+
+    @Test
+    @DisplayName("요청이 brand를 명시하면 이전 값을 덮는다 — 빈 문자열·null도 지우려는 의도로 존중한다")
+    void 명시한_brand는_이전_값을_덮는다() {
+        List<Map<String, Object>> previous = List.of(previousNode("n1", Map.of("config", Map.of("brand", "github"))));
+
+        assertThat(brandOf(NodeDefinitionMerger.merge(previous, List.of(node("""
+            {"id":"n1","type":"ACTION","label":"l","config":{"brand":"slack"}}""")), objectMapper)))
+            .isEqualTo("slack");
+        assertThat(brandOf(NodeDefinitionMerger.merge(previous, List.of(node("""
+            {"id":"n1","type":"ACTION","label":"l","config":{"brand":""}}""")), objectMapper)))
+            .isEqualTo("");
+        assertThat(brandOf(NodeDefinitionMerger.merge(previous, List.of(node("""
+            {"id":"n1","type":"ACTION","label":"l","config":{"brand":null}}""")), objectMapper)))
+            .isNull();
+    }
+
+    @Test
+    @DisplayName("요청이 config를 생략하면 이전 config가 brand째 그대로 남는다")
+    void config를_생략하면_이전_config가_그대로다() {
+        List<Map<String, Object>> previous = List.of(previousNode("n1", Map.of("config", Map.of("brand", "notion"))));
+
+        List<Map<String, Object>> merged = NodeDefinitionMerger.merge(previous,
+            List.of(node("""
+                {"id":"n1","type":"ACTION","label":"l"}
+                """)), objectMapper);
+
+        assertThat(brandOf(merged)).isEqualTo("notion");
+    }
+
+    @Test
+    @DisplayName("이전 config가 Map이 아니거나 brand가 문자열이 아니거나 이전 노드가 없어도 예외 없이 요청 config만 쓴다")
+    void 깨진_이전_config는_brand를_이어주지_않는다() {
+        String request = """
+            {"id":"n1","type":"ACTION","label":"l","config":{"prompt":"p"}}""";
+        List<Map<String, Object>> configIsString = List.of(previousNode("n1", Map.of("config", "문자열")));
+        List<Map<String, Object>> brandIsNumber = List.of(previousNode("n1", Map.of("config", Map.of("brand", 7))));
+
+        assertThat(brandOf(NodeDefinitionMerger.merge(configIsString, List.of(node(request)), objectMapper))).isNull();
+        assertThat(brandOf(NodeDefinitionMerger.merge(brandIsNumber, List.of(node(request)), objectMapper))).isNull();
+        assertThat(brandOf(NodeDefinitionMerger.merge(null, List.of(node(request)), objectMapper))).isNull();
+    }
+
+    @Test
+    @DisplayName("brand를 이어받아도 이전 정의 원본은 바뀌지 않는다")
+    void brand를_이어받아도_이전_정의는_불변이다() {
+        Map<String, Object> previousConfig = new LinkedHashMap<>(Map.of("brand", "github"));
+        List<Map<String, Object>> previous = List.of(previousNode("n1", Map.of("config", previousConfig)));
+
+        NodeDefinitionMerger.merge(previous, List.of(node("""
+            {"id":"n1","type":"ACTION","label":"l","config":{"prompt":"p"}}""")), objectMapper)
+            .get(0).put("config", Map.of());
+
+        assertThat(previousConfig).isEqualTo(Map.of("brand", "github"));
+    }
+
+    private static Object brandOf(List<Map<String, Object>> merged) {
+        Object config = merged.get(0).get("config");
+        return config instanceof Map<?, ?> map ? map.get("brand") : null;
+    }
+
     private Map<String, Object> previousNode(String id, Map<String, Object> fields) {
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("id", id);

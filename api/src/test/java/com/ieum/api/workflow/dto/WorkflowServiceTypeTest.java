@@ -34,6 +34,14 @@ class WorkflowServiceTypeTest {
     }
 
     @Test
+    void ACTION_노드의_tools에서도_서비스를_추출한다() {
+        assertThat(WorkflowServiceType.extract(TriggerType.MANUAL, List.of(
+            node("ACTION", Map.of("tools", List.of(Map.of("name", "builtin:github_create_issue")))),
+            node("ACTION", Map.of("tools", List.of(Map.of("name", "slack")))))))
+            .containsExactly(GITHUB, SLACK);
+    }
+
+    @Test
     void ieum_agent_구글_도구명을_매핑한다() {
         assertThat(WorkflowServiceType.extract(TriggerType.MANUAL, List.of(
             node("AI", Map.of("tools", List.of("gmail", "builtin:google_sheets_write", "builtin:google_drive_upload"))))))

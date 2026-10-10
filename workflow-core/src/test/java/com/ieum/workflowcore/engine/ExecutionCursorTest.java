@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.ieum.workflowcore.domain.enums.NodeType;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
@@ -78,5 +79,82 @@ class ExecutionCursorTest {
         renderedConfig.put("webhook_url", "x");
         assertThat(original).hasSize(2);
         assertThat(config).isEqualTo(Map.of("spreadsheet_id", "{{nodes.node-0.output.sheetId}}"));
+    }
+
+    private ExecutionCursor cursorWithOutput(String nodeId, Map<String, Object> output) {
+        ExecutionCursor c = cursor(List.of(), List.of());
+        c.getContext().setNodeOutput(nodeId, output);
+        return c;
+    }
+
+    @Test
+    @DisplayName("경로의 숫자 세그먼트는 List 인덱스로 읽는다 — issues.0.title")
+    void renderVariables_numericSegmentIsListIndex() {
+        ExecutionCursor c = cursorWithOutput("list", Map.of("issues", List.of(
+            Map.of("title", "첫 이슈"), Map.of("title", "둘째 이슈"))));
+
+        assertThat(c.renderVariables("{{nodes.list.output.issues.0.title}}")).isEqualTo("첫 이슈");
+        assertThat(c.renderVariables("{{nodes.list.output.issues.1.title}}")).isEqualTo("둘째 이슈");
+    }
+
+    @Test
+    @DisplayName("범위 밖·int 범위를 넘는 인덱스·없는 키는 예외 없이 빈 문자열이고, 문자열 값에 붙은 숫자 세그먼트는 그 값에서 멈춘다")
+    void renderVariables_badIndexIsEmptyNotException() {
+        Map<String, Object> output = new HashMap<>();
+        output.put("issues", List.of(Map.of("title", "첫 이슈")));
+        output.put("empty", List.of());
+        output.put("title", "문자열");
+        ExecutionCursor c = cursorWithOutput("list", output);
+
+        assertThat(c.renderVariables("{{nodes.list.output.issues.5.title}}")).isEmpty();
+        assertThat(c.renderVariables("{{nodes.list.output.empty.0}}")).isEmpty();
+        assertThat(c.renderVariables("{{nodes.list.output.issues.99999999999.title}}")).isEmpty();
+        assertThat(c.renderVariables("{{nodes.list.output.issues.0.missing}}")).isEmpty();
+        // 기존 규칙 유지 — 최종 값에 이미 도달했으면 남은 세그먼트를 무시하고 그 값을 쓴다
+        assertThat(c.renderVariables("{{nodes.list.output.title.0}}")).isEqualTo("문자열");
+    }
+
+    @Test
+    @DisplayName("최종 값이 Map·List면 JSON 문자열로 치환하고, 문자열·숫자·불리언은 기존과 같다")
+    void renderVariables_mapAndListBecomeJson() {
+        Map<String, Object> issue = new LinkedHashMap<>();
+        issue.put("number", 7);
+        issue.put("title", "t");
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("issue", issue);
+        output.put("labels", List.of("a", "b"));
+        output.put("count", 7);
+        output.put("flag", true);
+        output.put("text", "text");
+        ExecutionCursor c = cursorWithOutput("n", output);
+
+        assertThat(c.renderVariables("{{nodes.n.output.issue}}")).isEqualTo("{\"number\":7,\"title\":\"t\"}");
+        assertThat(c.renderVariables("{{nodes.n.output.labels}}")).isEqualTo("[\"a\",\"b\"]");
+        // List에 숫자가 아닌 키를 붙이면 List 전체가 최종 값이다(예전엔 List.toString)
+        assertThat(c.renderVariables("{{nodes.n.output.labels.first}}")).isEqualTo("[\"a\",\"b\"]");
+        assertThat(c.renderVariables("{{nodes.n.output.count}}")).isEqualTo("7");
+        assertThat(c.renderVariables("{{nodes.n.output.flag}}")).isEqualTo("true");
+        assertThat(c.renderVariables("{{nodes.n.output.text}}")).isEqualTo("text");
+    }
+
+    @Test
+    @DisplayName("JSON 안의 $·\\는 치환 때 해석되지 않고 그대로 들어간다")
+    void renderVariables_jsonWithDollarAndBackslashSurvives() {
+        Map<String, Object> inner = new LinkedHashMap<>();
+        inner.put("t", "a$1\\b");
+        ExecutionCursor c = cursorWithOutput("n", Map.of("m", inner));
+
+        assertThat(c.renderVariables("{{nodes.n.output.m}}")).isEqualTo("{\"t\":\"a$1\\\\b\"}");
+    }
+
+    @Test
+    @DisplayName("치환 결과에 든 참조식 리터럴은 다시 치환하지 않는다 — 외부 데이터로 다른 노드 출력이 새지 않는다")
+    void renderVariables_singlePassDoesNotExpandReferencesInsideValues() {
+        ExecutionCursor c = cursorWithOutput("issue", Map.of("title", "제목 {{nodes.other.output.secret}}"));
+        c.getContext().setNodeOutput("other", Map.of("secret", "SECRET-VALUE"));
+
+        String rendered = c.renderVariables("{{nodes.issue.output.title}} / {{nodes.other.output.secret}}");
+
+        assertThat(rendered).isEqualTo("제목 {{nodes.other.output.secret}} / SECRET-VALUE");
     }
 }

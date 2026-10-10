@@ -57,15 +57,21 @@ class AgentNodeExecutorTest {
         executor = new AgentNodeExecutor(
             mockWebServer.url("/").toString(),
             credentialProvider,
-            googleTokenProvider,
-            new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
+            preparer(new StubWebhookCredentialProvider()),
             new StubMcpCatalogProvider(),
-            new StubWebhookCredentialProvider(),
             uid -> null,
             betaPlatformProvider,
             idempotencyStore,
             30
         );
+    }
+
+    /** AI 실행기가 쓰는 도구 전처리 — 웹훅 자격증명 공급원만 테스트마다 바꾼다. */
+    private ToolCallPreparer preparer(WebhookCredentialProvider webhookProvider) {
+        return new ToolCallPreparer(
+            googleTokenProvider,
+            new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
+            webhookProvider);
     }
 
     /** HEADER/MARKER 테스트용 재시도 정책. maxAttempts=3, 백오프 없음. */
@@ -329,6 +335,22 @@ class AgentNodeExecutorTest {
         assertThat(result.getErrorMessage()).isNotBlank();
     }
 
+    @Test
+    @DisplayName("agent가 HTTP 오류만 돌려주면 상태로 합성한 errorCode로 실패를 분류한다")
+    void execute_httpStatusErrors_areClassifiedByStatus() {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(400).setBody("{\"detail\":\"bad\"}"));
+        mockWebServer.enqueue(new MockResponse().setResponseCode(503).setBody("{}"));
+        mockWebServer.enqueue(new MockResponse().setResponseCode(429).setBody("{}"));
+        Node node = buildAgentNode("테스트 프롬프트", "OPENAI", "cred-id-2");
+
+        assertThat(executor.execute(node, Collections.emptyMap(), buildCursor()).getFailureKind())
+            .isEqualTo(FailureKind.CLIENT_ERROR);
+        assertThat(executor.execute(node, Collections.emptyMap(), buildCursor()).getFailureKind())
+            .isEqualTo(FailureKind.SERVER_ERROR);
+        assertThat(executor.execute(node, Collections.emptyMap(), buildCursor()).getFailureKind())
+            .isEqualTo(FailureKind.RATE_LIMIT);
+    }
+
     // ── Google 빌트인 도구 케이스 ─────────────────────────────────────────────
 
     @Test
@@ -542,10 +564,8 @@ class AgentNodeExecutorTest {
         AgentNodeExecutor exec = new AgentNodeExecutor(
             mockWebServer.url("/").toString(),
             credentialProvider,
-            googleTokenProvider,
-            new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
+            preparer(webhookProvider),
             new StubMcpCatalogProvider(),
-            webhookProvider,
             uid -> null,
             betaPlatformProvider,
             idempotencyStore,
@@ -638,10 +658,8 @@ class AgentNodeExecutorTest {
         return new AgentNodeExecutor(
             mockWebServer.url("/").toString(),
             credentialProvider,
-            googleTokenProvider,
-            new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
+            preparer(new StubWebhookCredentialProvider()),
             new StubMcpCatalogProvider(),
-            new StubWebhookCredentialProvider(),
             roleProvider,
             betaProvider,
             idempotencyStore,
@@ -849,10 +867,8 @@ class AgentNodeExecutorTest {
         AgentNodeExecutor exec = new AgentNodeExecutor(
             "http://127.0.0.1:1", // 아무도 리스닝하지 않는 포트 — 즉시 연결 거부(WebClientRequestException)
             credentialProvider,
-            googleTokenProvider,
-            new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider),
+            preparer(new StubWebhookCredentialProvider()),
             new StubMcpCatalogProvider(),
-            new StubWebhookCredentialProvider(),
             uid -> null,
             betaProvider,
             idempotencyStore,

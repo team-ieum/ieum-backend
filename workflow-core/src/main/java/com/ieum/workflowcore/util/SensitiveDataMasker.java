@@ -170,7 +170,14 @@ public final class SensitiveDataMasker {
     }
 
     /** 웹훅 URL이 아니면 원본 문자열을 그대로 돌려준다. 문자열 중간에 섞인 URL도 가린다. */
-    private static String maskWebhookUrl(String value) {
+    /**
+     * 문자열 안의 Slack·Discord 웹훅 URL 비밀 구간을 가린다. null이면 null.
+     * 노드 오류 메시지({@code node_runs.error_message}·SSE)처럼 Map이 아닌 자유 텍스트에 쓴다.
+     */
+    public static String maskWebhookUrl(String value) {
+        if (value == null) {
+            return null;
+        }
         return WEBHOOK_URL_PATTERN.matcher(value).replaceAll("$1" + MASK);
     }
 }

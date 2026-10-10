@@ -3,7 +3,7 @@ package com.ieum.workflowcore.document;
 /**
  * 특정 brand를 사용하는 워크플로우 정의의 집계 결과 projection.
  *
- * @see WorkflowDefinitionRepository#aggregateVersionCountsByBrand(java.util.List, String)
+ * @see WorkflowDefinitionRepository#aggregateVersionCountsByBrand(java.util.List, java.util.List)
  */
 public interface BrandVersionCount {
 

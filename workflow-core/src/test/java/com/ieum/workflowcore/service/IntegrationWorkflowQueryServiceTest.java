@@ -47,7 +47,7 @@ class IntegrationWorkflowQueryServiceTest {
     void findByBrand_noOwnedWorkflow_skipsMongo() {
         // given — findOwnedLatestMongoDefinitionIds 미스텁 = 빈 목록
         // when
-        BrandWorkflowPage result = service.findByBrand(userId, "discord", 0, 20);
+        BrandWorkflowPage result = service.findByBrand(userId, List.of("discord"), 0, 20);
 
         // then
         assertThat(result.items()).isEmpty();
@@ -65,11 +65,11 @@ class IntegrationWorkflowQueryServiceTest {
             .willReturn(List.of(mongoId, "not-an-object-id", otherId));
 
         // when
-        service.findByBrand(userId, "discord", 0, 20);
+        service.findByBrand(userId, List.of("discord"), 0, 20);
 
         // then
         ArgumentCaptor<List<ObjectId>> captor = ArgumentCaptor.forClass(List.class);
-        verify(definitionRepository).aggregateVersionCountsByBrand(captor.capture(), eq("discord"));
+        verify(definitionRepository).aggregateVersionCountsByBrand(captor.capture(), eq(List.of("discord")));
         // 제네릭 소거로 List<String>이 들어와도 컴파일되므로 런타임 원소 타입을 직접 확인한다
         List<?> captured = captor.getValue();
         assertThat(captured).hasOnlyElementsOfType(ObjectId.class);
@@ -81,11 +81,11 @@ class IntegrationWorkflowQueryServiceTest {
     void findByBrand_noMatch_returnsEmpty() {
         // given
         given(workflowQueryRepository.findOwnedLatestMongoDefinitionIds(userId)).willReturn(List.of(mongoId));
-        given(definitionRepository.aggregateVersionCountsByBrand(List.of(new ObjectId(mongoId)), "discord"))
+        given(definitionRepository.aggregateVersionCountsByBrand(List.of(new ObjectId(mongoId)), List.of("discord")))
             .willReturn(List.of());
 
         // when
-        BrandWorkflowPage result = service.findByBrand(userId, "discord", 0, 20);
+        BrandWorkflowPage result = service.findByBrand(userId, List.of("discord"), 0, 20);
 
         // then
         assertThat(result.items()).isEmpty();
@@ -121,7 +121,7 @@ class IntegrationWorkflowQueryServiceTest {
             .willReturn(List.of(tuple));
 
         // when
-        BrandWorkflowPage result = service.findByBrand(userId, "discord", 0, 20);
+        BrandWorkflowPage result = service.findByBrand(userId, List.of("discord"), 0, 20);
 
         // then
         assertThat(result.items()).hasSize(1);
@@ -148,11 +148,40 @@ class IntegrationWorkflowQueryServiceTest {
             .willReturn(List.of(firstRow, overflowRow));
 
         // when
-        BrandWorkflowPage result = service.findByBrand(userId, "slack", 0, 1);
+        BrandWorkflowPage result = service.findByBrand(userId, List.of("slack"), 0, 1);
 
         // then
         assertThat(result.hasNext()).isTrue();
         assertThat(result.items()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("brand 여러 개는 한 번의 집계로 넘기고, 사용 노드 수는 목록 중 하나라도 쓰는 노드의 합으로 온다")
+    void findByBrand_multipleBrands_singleAggregation() {
+        // given — GOOGLE 서비스: google·gmail·sheets
+        List<String> googleBrands = List.of("google", "gmail", "sheets");
+        given(workflowQueryRepository.findOwnedLatestMongoDefinitionIds(userId)).willReturn(List.of(mongoId));
+        BrandVersionCount count = mock(BrandVersionCount.class);
+        given(count.getMongoDefinitionId()).willReturn(mongoId);
+        given(count.getUsedNodeCount()).willReturn(3);
+        given(definitionRepository.aggregateVersionCountsByBrand(List.of(new ObjectId(mongoId)), googleBrands))
+            .willReturn(List.of(count));
+        Workflow workflow = Workflow.builder().userId(userId).name("구글 워크플로우").isActive(true).build();
+        WorkflowVersion version = WorkflowVersion.builder().id(UUID.randomUUID()).version(1)
+            .mongoDefinitionId(mongoId).build();
+        Tuple tuple = mock(Tuple.class);
+        given(tuple.get(0, Workflow.class)).willReturn(workflow);
+        given(tuple.get(1, WorkflowVersion.class)).willReturn(version);
+        given(workflowQueryRepository.findOwnedLatestVersions(userId, List.of(mongoId), 0, 20))
+            .willReturn(List.of(tuple));
+
+        // when
+        BrandWorkflowPage result = service.findByBrand(userId, googleBrands, 0, 20);
+
+        // then
+        assertThat(result.items()).hasSize(1);
+        assertThat(result.items().get(0).usedNodeCount()).isEqualTo(3);
+        verify(definitionRepository).aggregateVersionCountsByBrand(List.of(new ObjectId(mongoId)), googleBrands);
     }
 
     private void givenBrandMatch(String brand, int usedNodeCount) {
@@ -160,7 +189,7 @@ class IntegrationWorkflowQueryServiceTest {
         BrandVersionCount count = mock(BrandVersionCount.class);
         given(count.getMongoDefinitionId()).willReturn(mongoId);
         given(count.getUsedNodeCount()).willReturn(usedNodeCount);
-        given(definitionRepository.aggregateVersionCountsByBrand(List.of(new ObjectId(mongoId)), brand))
+        given(definitionRepository.aggregateVersionCountsByBrand(List.of(new ObjectId(mongoId)), List.of(brand)))
             .willReturn(List.of(count));
     }
 }

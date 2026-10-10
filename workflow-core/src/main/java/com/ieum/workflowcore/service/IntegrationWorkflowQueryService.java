@@ -37,7 +37,11 @@ public class IntegrationWorkflowQueryService {
     private final WorkflowDefinitionRepository definitionRepository;
     private final WorkflowQueryRepository workflowQueryRepository;
 
-    public BrandWorkflowPage findByBrand(UUID userId, String brand, int page, int size) {
+    /**
+     * @param brands 노드 {@code config.brand} 후보. 서비스 하나가 brand 여러 개로 저장될 수 있다
+     *               (GOOGLE = google·gmail·sheets) — 하나라도 쓰는 노드가 있으면 매칭된다
+     */
+    public BrandWorkflowPage findByBrand(UUID userId, List<String> brands, int page, int size) {
         // 1단계 — PostgreSQL: 요청자 소유 최신 버전의 정의 id. _id가 ObjectId라 변환해서 넘긴다
         List<ObjectId> ownedDefinitionIds = toObjectIds(
             workflowQueryRepository.findOwnedLatestMongoDefinitionIds(userId));
@@ -46,7 +50,7 @@ public class IntegrationWorkflowQueryService {
         }
 
         // 2단계 — MongoDB: 그중 brand 사용 정의의 mongoDefinitionId(_id) + usedNodeCount
-        List<BrandVersionCount> counts = definitionRepository.aggregateVersionCountsByBrand(ownedDefinitionIds, brand);
+        List<BrandVersionCount> counts = definitionRepository.aggregateVersionCountsByBrand(ownedDefinitionIds, brands);
         if (counts.isEmpty()) {
             return new BrandWorkflowPage(List.of(), false);
         }
@@ -74,7 +78,7 @@ public class IntegrationWorkflowQueryService {
             })
             .toList();
 
-        log.debug("[IntegrationWorkflowQueryService] brand: {}, 결과: {}건", brand, items.size());
+        log.debug("[IntegrationWorkflowQueryService] brands: {}, 결과: {}건", brands, items.size());
         return new BrandWorkflowPage(items, hasNext);
     }
 

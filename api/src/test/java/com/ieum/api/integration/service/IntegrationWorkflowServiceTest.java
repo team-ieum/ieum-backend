@@ -38,7 +38,7 @@ class IntegrationWorkflowServiceTest {
     void getWorkflowsByService_defaultCursor() {
         // given
         Workflow workflow = Workflow.builder().userId(userId).name("디스코드 봇").isActive(true).build();
-        given(integrationWorkflowQueryService.findByBrand(userId, "discord", 0, 20))
+        given(integrationWorkflowQueryService.findByBrand(userId, List.of("discord"), 0, 20))
             .willReturn(new BrandWorkflowPage(List.of(new ServiceWorkflow(workflow, 2)), false));
 
         // when
@@ -54,11 +54,27 @@ class IntegrationWorkflowServiceTest {
     }
 
     @Test
+    @DisplayName("GOOGLE은 google·gmail·sheets 세 brand로 조회하고, 다른 서비스는 자기 brand 하나만 쓴다")
+    void getWorkflowsByService_googleQueriesAllBrands() {
+        // given
+        given(integrationWorkflowQueryService.findByBrand(userId, List.of("google", "gmail", "sheets"), 0, 20))
+            .willReturn(new BrandWorkflowPage(List.of(), false));
+        given(integrationWorkflowQueryService.findByBrand(userId, List.of("github"), 0, 20))
+            .willReturn(new BrandWorkflowPage(List.of(), false));
+
+        // when / then — 스텁이 없는 brand 목록으로 불렸다면 null을 돌려받아 NPE로 실패한다
+        assertThat(service.getWorkflowsByService(userId, IntegrationServiceType.GOOGLE, null, 20).getContent())
+            .isEmpty();
+        assertThat(service.getWorkflowsByService(userId, IntegrationServiceType.GITHUB, null, 20).getContent())
+            .isEmpty();
+    }
+
+    @Test
     @DisplayName("hasNext가 true이면 nextCursor는 다음 page 번호다")
     void getWorkflowsByService_hasNextCursor() {
         // given
         Workflow workflow = Workflow.builder().userId(userId).name("w").isActive(true).build();
-        given(integrationWorkflowQueryService.findByBrand(userId, "discord", 0, 20))
+        given(integrationWorkflowQueryService.findByBrand(userId, List.of("discord"), 0, 20))
             .willReturn(new BrandWorkflowPage(List.of(new ServiceWorkflow(workflow, 1)), true));
 
         // when
@@ -84,7 +100,7 @@ class IntegrationWorkflowServiceTest {
     @DisplayName("빈 문자열 cursor는 첫 페이지(0)로 처리한다")
     void getWorkflowsByService_blankCursor() {
         // given
-        given(integrationWorkflowQueryService.findByBrand(userId, "discord", 0, 20))
+        given(integrationWorkflowQueryService.findByBrand(userId, List.of("discord"), 0, 20))
             .willReturn(new BrandWorkflowPage(List.of(), false));
 
         // when

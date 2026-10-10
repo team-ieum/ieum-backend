@@ -140,7 +140,7 @@ public record RetryPolicy(
      */
     private static IdempotencyMode defaultIdempotency(NodeType nodeType) {
         return switch (nodeType) {
-            case HTTP, AI -> IdempotencyMode.HEADER;
+            case HTTP, AI, ACTION -> IdempotencyMode.HEADER;
             default -> IdempotencyMode.NONE;
         };
     }
