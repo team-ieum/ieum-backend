@@ -15,7 +15,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 /**
- * 앱 트리거 이벤트 1건 → 실행 1건. Gmail 스윕러와 GitHub webhook(BE-b)이 공유한다. 사용자 컨텍스트 없이 돈다 —
+ * 앱 트리거 이벤트 1건 → 실행 1건. Gmail 스윕러와 GitHub webhook(BE-81)이 공유한다. 사용자 컨텍스트 없이 돈다 —
  * {@code WorkflowScheduleJob}과 같은 순서(활성 재확인 → 최신 버전 → prepareExecution → 큐).
  *
  * <p>트랜잭션을 걸지 않는다 — prepareExecution이 자체 트랜잭션으로 커밋된 뒤 러너가 큐에 넣어야 워커가 행을 읽는다.

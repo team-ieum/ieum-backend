@@ -79,7 +79,7 @@ public class NodeTestRunner {
      *
      * @param workflow 소유자 검사가 끝난 워크플로우(컨텍스트 userId는 그 소유자)
      * @param node     테스트할 노드(편집 중 정의 또는 저장된 노드)
-     * @param input    MANUAL 트리거의 페이로드. 그 외 노드는 쓰지 않는다
+     * @param input    MANUAL 트리거의 페이로드 또는 앱 트리거 정규화 페이로드. 그 외 노드는 쓰지 않는다
      * @throws TestSampleMissingException 직접 참조한 노드 중 SUCCESS 샘플이 없는 것이 있을 때
      * @throws CustomException            실행기가 없는 타입일 때(INVALID_INPUT). APPROVAL은 실행 없이 승인 출력 샘플을 남긴다
      */

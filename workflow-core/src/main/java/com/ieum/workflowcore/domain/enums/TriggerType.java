@@ -16,8 +16,9 @@ public enum TriggerType {
      * 외부 앱 이벤트로 발화하는 트리거인가. 이 값들은 출력이 트리거 config가 아니라 정규화된 이벤트 페이로드이고,
      * 활성 상태가 {@code app_trigger_subscriptions} 행으로 관리된다.
      *
-     * <p>값을 추가하면 PG CHECK 제약({@code workflows}·{@code workflow_runs}의 trigger_type)을 수동 DDL로 고쳐야 한다
-     * ({@code docs/schema/V10}). ddl-auto update는 제약을 갱신하지 않는다.
+     * <p>값을 추가하면 PG CHECK 제약({@code workflows}·{@code workflow_runs}의 trigger_type — {@code docs/schema/V10}, 그리고
+     * Hibernate가 ddl-auto로 만든 {@code app_trigger_subscriptions.trigger_type})을 수동 DDL로 고쳐야 한다.
+     * ddl-auto update는 제약을 갱신하지 않는다.
      */
     public boolean isAppTrigger() {
         return this == GMAIL_NEW_EMAIL || this == GITHUB_NEW_ISSUE;

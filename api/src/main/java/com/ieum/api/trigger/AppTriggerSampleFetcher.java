@@ -7,7 +7,7 @@ import java.util.UUID;
 
 /**
  * 앱 트리거 노드 테스트용 "최근 항목 1건" 조회. 반환 모양은 런타임 트리거 출력과 같아야 한다 — 같은 정규화 함수를 거칠 것.
- * 구현 빈을 추가하면 {@code NodeTestService}가 triggerType으로 골라 쓴다(Gmail: BE-a, GitHub: BE-b).
+ * 구현 빈을 추가하면 {@code NodeTestService}가 triggerType으로 골라 쓴다(Gmail: BE-80, GitHub: BE-81).
  */
 public interface AppTriggerSampleFetcher {
 

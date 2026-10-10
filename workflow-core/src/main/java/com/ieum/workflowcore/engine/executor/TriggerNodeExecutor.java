@@ -16,7 +16,8 @@ import org.springframework.stereotype.Component;
  * TRIGGER 노드 Executor.
  *
  * <p>워크플로우의 진입점으로, {@link com.ieum.workflowcore.engine.SyncExecutionRuntime}이
- * triggerData를 컨텍스트에 주입한 뒤 이 Executor를 호출하지 않는다.
+ * triggerData를 트리거 노드 출력 자리에 심은 뒤 이 Executor를 호출한다 — 재처리 때도 TRIGGER 노드는 스킵하지 않고
+ * 다시 실행한다(node_runs의 마스킹된 출력 대신 복호된 triggerData로 같은 출력을 만든다).
  * TRIGGER 노드는 루프에서 첫 번째로 만나는 노드이므로 input을 그대로 output으로 전달하는 역할만 한다.
  * 앱 트리거(GMAIL_NEW_EMAIL·GITHUB_NEW_ISSUE)는 심어 둔 페이로드를 그대로 출력한다.
  */

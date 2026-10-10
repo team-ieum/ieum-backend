@@ -27,8 +27,8 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
 /**
- * 노드 단일 테스트의 API 계층 — 소유자 검사, body 노드 가드, webhook 대기 분기를 맡고 실행·샘플 저장은
- * workflow-core {@link NodeTestRunner}에 위임한다.
+ * 노드 단일 테스트의 API 계층 — 소유자 검사, body 노드 가드, webhook 대기 분기, 앱 트리거 즉시 샘플 분기
+ * ({@link AppTriggerSampleFetcher}로 최근 항목 1건 조회)를 맡고 실행·샘플 저장은 workflow-core {@link NodeTestRunner}에 위임한다.
  *
  * <p>{@code @Transactional}을 달지 않는다 — 에이전트·외부 API 호출을 하나의 트랜잭션에 묶지 않기 위해서다
  * (저장소 호출은 각자 트랜잭션). OSIV(기본 on)라 DB 커넥션 자체는 요청 끝까지 유지된다.

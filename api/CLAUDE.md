@@ -47,6 +47,8 @@ Quartz 스케줄 실행(`WorkflowScheduleJob`)은 workflow-core 포트 `Executio
 
 `workflow/service/ExecutionApprovalService` — 승인 게이트(IEUM-BE-45)에서 멈춘 `WAITING_APPROVAL` 실행의 승인·거부. 원 실행 행 잠금(`lockExecutionWithVersion`) → 소유자 검증(ADMIN 우회 없음) → 대기 상태가 아니면 409 `EXECUTION_NOT_WAITING_APPROVAL`. 승인은 원 실행을 되살리지 않고 **재처리와 같은 `ExecutionRetryService.startContinuation()`**(같은 버전·트리거 입력으로 새 실행 + `retriedBy` 링크 + `afterCommit` 큐 투입)으로 이어진 실행을 만들고 원 실행은 SUCCESS. 응답은 새 실행이라 프론트는 그 ID로 SSE를 다시 구독한다. 거부는 FAILED + 사유이고, 사용자 결정이라 `markAsFailed`(알림)를 타지 않는다. 거부 사유 `@Size(max=200)` — `node_runs.error_message`가 VARCHAR(255)다. `startContinuation`을 별도 빈으로 빼지 말 것 — `ExecutionRetryServiceTest`의 `@InjectMocks`가 깨진다.
 
+`trigger/` — 앱 트리거(노드 카탈로그 2.5). `AppTriggerFirer.fire(workflowId, type, output)`이 활성 재확인 → 최신 버전 → prepareExecution → 러너(스윕러·GitHub webhook(BE-81) 공유). `trigger/gmail/GmailTriggerSweeper` — `@Scheduled` 1분(초기 지연 `ieum.trigger.gmail.sweep-initial-delay`, 기본 `PT1M` — 테스트는 `P1D`로 꺼 둔다), `claimDue`(SKIP LOCKED + `poll-interval` 리스, 50행) → 행마다 `(query) after:(afterSec-1)` → 미발화 메일 오래된 순 최대 20건 → `recordPoll(id, claimedConfig, cursor, error, nextPollAt)`(실패해도 발화 지점까지 커서, `last_error`. 그 사이 config가 바뀌었으면 커서는 덮지 않는다). 메일 조회 403·404(`GOOGLE_RESOURCE_NOT_FOUND`)는 건너뛰지 않고 그 배치를 중단한다 — rate limit도 403이라 건너뛰면 커서가 넘어가 영영 발화하지 않는다. at-least-once. 정규화는 `GmailMessageNormalizer` 하나(노드 테스트 공유, bodyText 10,000자). 노드 테스트는 `AppTriggerSampleFetcher` 빈을 triggerType으로 골라 즉시 샘플(0건·조회 거부·공급원 없음 = FAILED). `GoogleApiReader`는 public(앱 트리거가 재사용). `@Scheduled`는 WebSocket 브로커의 `messageBrokerTaskScheduler`(스레드명 `MessageBroker-N`) 위에서 돈다 — 그 `TaskScheduler` 빈이 있어 Boot 자동 스케줄러가 물러나므로 yml의 `spring.task.scheduling.pool.size: 2`는 **현재 효력이 없다**(2026-10-11 로컬 부팅 확인). 브로커 스케줄러가 다중 스레드라 스윕이 잡 큐 회수를 막지는 않는다.
+
 ## 워크플로우 저장 규칙 (ACTION·brand·cron)
 - `ACTION` 노드는 REST 저장을 허용한다(`NodeType` enum만으로 통한다). config는 AI 노드 `tools[0]` 모양이라 `NodeCredentialGuard`·`WorkflowServiceType`이 변경 없이 적용된다. `RawWebhookUrlGuard`는 최상위 `config.url`만 본다 — `tools[].config.webhook_url` 원문은 막지 않는다(AI 노드와 동일한 기존 한계).
 - **brand 유지**(`NodeDefinitionMerger`) — REST 수정은 노드 config를 통째로 교체하지만, 요청 config에 `brand` 키가 없으면 이전 `config.brand`를 이어받는다(FE 아이콘·연동 목록의 유일한 근거). 요청이 명시한 값은 `null`·빈 문자열도 존중한다.
@@ -82,6 +84,7 @@ workflow-core가 선언한 포트 11개를 여기서 `Default*`로 구현해 Stu
 | `ieum.workflow.queue.reclaim-interval` | `PT1M` | 고아 잡 회수 주기 |
 | `ieum.workflow.queue.poll-error-backoff` | `PT5S` | 폴링 실패 시 대기(스핀·로그 폭주 방지) |
 | `ieum.beta.platform-key.allowed-models` | `gemini-3.7-flash` | platform 모드에서 재시도 모델 fallback이 시도할 수 있는 모델. platform 키는 Gemini 한 장이라 비-Gemini를 넣지 말 것 |
+| `ieum.trigger.gmail.poll-interval` | `PT5M` | Gmail 트리거 폴링 주기(env `GMAIL_TRIGGER_POLL_INTERVAL`). 체감 지연 = 주기 + 스윕 1분 |
 | `DISCORD_OPS_WEBHOOK_URL` | (빈 문자열) | 운영자 실패 알림 채널. `@Value`로 직접 읽는 환경변수 — 비어 있으면 발신 안 함 |
 
 큐 관련 세 키는 yml에 선언돼 있지 않고 `ExecutionJobQueueBootstrap` 생성자의 `@Value` 기본값이다. `allowed-models`는 `application.yml`(`BETA_ALLOWED_MODELS`) + `BetaPlatformKeyProperties`.
