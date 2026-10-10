@@ -23,7 +23,7 @@
 | `provider` | ProviderController | 지원 프로바이더 목록 |
 | `workflow` | WorkflowController, WorkflowDashboardController | 워크플로우 CRUD·실행·실행 이력 조회·SSE 진행 스트림, 실패 실행 재처리(`POST /api/v1/workflows/executions/{executionId}/retry`, 202), 대시보드 요약/최근실행/에러, 승인 대기 실행 승인·거부(`POST /api/v1/workflows/executions/{executionId}/approve` 202 새 실행 / `.../reject` 200) |
 | `chat` | ChatController | 워크플로우 채팅 (+ `AgentClient`가 ieum-agent 호출, WebSocket 핸들러) |
-| `webhook` / `webhookcredential` | WebhookController, WebhookCredentialController | 웹훅 트리거 수신·웹훅 크레덴셜, 실패 알림 대상 지정(`PUT /api/v1/webhook-credentials/{id}/alert-target`) |
+| `webhook` / `webhookcredential` | WebhookController, WebhookCredentialController | 웹훅 트리거 수신(노드 테스트가 listen 중이면 첫 1건을 샘플로 가로챔 — Redis `webhook:listen:{workflowId}`, `WebhookListenStore`가 GETDEL로 소비. 비활성·triggerType 불일치면 샘플만 저장하고 data 없는 202)·웹훅 크레덴셜, 실패 알림 대상 지정(`PUT /api/v1/webhook-credentials/{id}/alert-target`) |
 | `alert` | (Controller 없음) | 실패 알림 발신 — `AlertCooldownStore`, `DiscordWebhookSender` |
 | `integration` | IntegrationWorkflowController, IntegrationOptionController | 연동 서비스별 워크플로우 조회, 노드 설정 드롭다운 선택지(`GET /api/v1/integrations/{app}/options/{resource}` — 공급원 빈 `OptionSource`를 key `{app}.{resource}`로 고름. `@Transactional` 금지: 토큰 갱신 저장이 readOnly에 합류해 유실). IEUM 내부 리소스 공급원(IEUM-BE-76): `ai.models`·`ieum.credentials`(입력 llmProvider)·`ieum.webhooks`/`slack.webhooks`/`discord.webhooks`(`WebhookOptionSourceConfig`가 한 구현으로 3빈)·`ieum.mcp_servers` |
 | `mcp` | McpServerCatalogController | MCP 서버 카탈로그 |

@@ -24,6 +24,8 @@ public interface WebhookControllerDocs {
             - 워크플로우가 `WEBHOOK` 트리거 타입이고 활성 상태여야 실행됨
             - payload는 선택 사항이며, 노드에서 변수로 참조 가능
             - 실행은 비동기로 처리되며 응답은 즉시 반환됨 (202 Accepted)
+            - 노드 테스트(POST /api/v1/workflows/{id}/nodes/{nodeId}/test)가 이 워크플로우의 수신을 기다리는 중이면 첫 1건은 테스트 샘플로 저장된다
+            - 그때 워크플로우가 비활성이거나 WEBHOOK 트리거가 아니면 샘플만 저장하고 실행 없이 202(data 없음)를 반환한다 — 활성 WEBHOOK면 샘플 저장 + 정상 실행
             """
     )
     @RequestBody(content = @Content(
