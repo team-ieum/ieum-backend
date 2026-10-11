@@ -1,5 +1,7 @@
 package com.ieum.workflowcore.service;
 
+import com.ieum.common.exception.CustomException;
+import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.AppTriggerSubscription;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.enums.TriggerType;
@@ -41,6 +43,12 @@ public class AppTriggerSubscriptionService {
     @Transactional
     public void sync(Workflow workflow, List<Map<String, Object>> nodes) {
         AppTrigger trigger = workflow.isActive() ? findAppTrigger(nodes) : null;
+        // 최상위 triggerType만 앱 트리거고 노드 선언이 없으면 활성인데 구독 행이 없어 영영 발화하지 않는다.
+        // 구독 config(query·repoId)는 노드에만 있으니 거부한다 — SCHEDULE이 cron 없으면 400인 것과 같은 기준.
+        if (trigger == null && workflow.isActive() && workflow.getTriggerType().isAppTrigger()) {
+            throw new CustomException(ErrorCode.INVALID_WORKFLOW,
+                "앱 트리거는 TRIGGER 노드의 config.triggerType으로 선언해야 합니다.");
+        }
         AppTriggerSubscription keep = null;
         for (AppTriggerSubscription row : repository.findByWorkflowId(workflow.getId())) {
             if (trigger != null && row.getNodeId().equals(trigger.nodeId())) {

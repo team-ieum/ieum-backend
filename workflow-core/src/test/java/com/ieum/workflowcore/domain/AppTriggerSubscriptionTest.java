@@ -25,7 +25,7 @@ class AppTriggerSubscriptionTest {
     @DisplayName("Gmail 신규 행 — 커서는 생성 시각(초), 즉시 폴링 대상")
     void gmailStartsAtNow() {
         AppTriggerSubscription s = gmail("from:x");
-        assertThat(s.getCursor()).containsEntry("afterSec", t0Sec).containsEntry("seenIds", List.of());
+        assertThat(s.getCursor()).containsExactly(java.util.Map.entry("afterSec", t0Sec));
         assertThat(s.getNextPollAt()).isEqualTo(t0);
     }
 
@@ -61,7 +61,7 @@ class AppTriggerSubscriptionTest {
 
         s.reconfigure(TriggerType.GMAIL_NEW_EMAIL, s.getUserId(), null, Map.of("query", "from:y"), t1);
 
-        assertThat(s.getCursor()).containsEntry("afterSec", t0Sec + 3600).containsEntry("seenIds", List.of());
+        assertThat(s.getCursor()).containsExactly(java.util.Map.entry("afterSec", t0Sec + 3600));
         assertThat(s.getNextPollAt()).isEqualTo(t1);
         assertThat(s.getLastError()).isNull();
     }

@@ -153,6 +153,19 @@ class AppTriggerSubscriptionServiceTest {
     }
 
     @Test
+    @DisplayName("활성 + 최상위만 앱 트리거, 노드 선언 없음 → 400(활성인데 구독 행 없어 미발화 방지), 행을 건드리지 않는다")
+    void appTriggerWithoutNodeDeclarationIsRejected() {
+        Workflow w = workflow(true);
+        ReflectionTestUtils.setField(w, "triggerType", TriggerType.GMAIL_NEW_EMAIL);
+
+        assertThatThrownBy(() -> service.sync(w, List.of(trigger("t1", new HashMap<>()))))
+            .isInstanceOf(CustomException.class)
+            .extracting(e -> ((CustomException) e).getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW);
+        verify(repository, never()).findByWorkflowId(any());
+        verify(repository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("비활성 워크플로우 → 기존 행 삭제, 검증 안 함")
     void inactiveDeletes() {
         AppTriggerSubscription existing = AppTriggerSubscription.create(workflowId, "t1", userId,

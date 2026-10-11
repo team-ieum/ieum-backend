@@ -20,6 +20,7 @@ import com.ieum.workflowcore.domain.AppTriggerSubscription;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.service.AppTriggerSubscriptionService;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -48,7 +49,11 @@ class GmailTriggerSweeperTest {
         AppTriggerSubscription s = AppTriggerSubscription.create(workflowId, "t1", userId,
             TriggerType.GMAIL_NEW_EMAIL, null, Map.of("query", "from:x"), LocalDateTime.now());
         ReflectionTestUtils.setField(s, "id", UUID.randomUUID());
-        ReflectionTestUtils.setField(s, "cursor", Map.of("afterSec", (int) AFTER, "seenIds", seenIds)); // JSON은 Integer로 돌아온다
+        Map<String, Object> seen = new java.util.LinkedHashMap<>();
+        seenIds.forEach(id -> seen.put(id, (int) AFTER));
+        // JSON은 Integer로 돌아온다. okSec는 방금 성공한 것으로(24시간 상한에 안 걸리게)
+        ReflectionTestUtils.setField(s, "cursor", Map.of("afterSec", (int) AFTER, "seen", seen,
+            "okSec", Instant.now().getEpochSecond()));
         given(subscriptions.claimDue(eq(TriggerType.GMAIL_NEW_EMAIL), any(), eq(50), eq(Duration.ofMinutes(5))))
             .willReturn(List.of(s));
         return s;
@@ -74,7 +79,7 @@ class GmailTriggerSweeperTest {
     }
 
     @Test
-    @DisplayName("새 메일을 오래된 순으로 발화, 커서 = 마지막 초 + 그 초의 id들")
+    @DisplayName("새 메일을 오래된 순으로 발화, 커서 = 마지막 초 + lookback 창 안의 발화 id")
     void firesOldestFirstAndAdvances() {
         AppTriggerSubscription s = subscription(List.of());
         listed(new java.util.LinkedHashMap<>() {{
@@ -89,11 +94,11 @@ class GmailTriggerSweeperTest {
         assertThat(outputs.getAllValues()).extracting(o -> o.get("messageId")).containsExactly("a", "b", "c");
         Map<String, Object> cursor = recordedCursor(s, null);
         assertThat(cursor).containsEntry("afterSec", AFTER + 5);
-        assertThat((List<String>) cursor.get("seenIds")).containsExactlyInAnyOrder("b", "c");
+        assertThat((Map<String, Long>) cursor.get("seen")).containsOnlyKeys("a", "b", "c");
     }
 
     @Test
-    @DisplayName("seenIds에 있는 id·커서 이전 초(after:-1 여유분)는 발화하지 않는다")
+    @DisplayName("seen에 있는 id·창 이전 초(after:-1 여유분)는 발화하지 않는다")
     void boundarySecondBeforeCursorIsSkipped() {
         AppTriggerSubscription s = subscription(List.of("seen"));
         listed(new java.util.LinkedHashMap<>() {{
@@ -109,7 +114,7 @@ class GmailTriggerSweeperTest {
         verify(gmail, never()).getMessage(userId, "seen");
         Map<String, Object> cursor = recordedCursor(s, null);
         assertThat(cursor).containsEntry("afterSec", AFTER);
-        assertThat((List<String>) cursor.get("seenIds")).containsExactlyInAnyOrder("seen", "new");
+        assertThat((Map<String, Long>) cursor.get("seen")).containsOnlyKeys("seen", "new");
     }
 
     @Test
@@ -141,7 +146,7 @@ class GmailTriggerSweeperTest {
 
         Map<String, Object> cursor = recordedCursor(s, "INVALID_WORKFLOW: 비활성화된 워크플로우입니다.");
         assertThat(cursor).containsEntry("afterSec", AFTER + 1);
-        assertThat((List<String>) cursor.get("seenIds")).containsExactly("a");
+        assertThat((Map<String, Long>) cursor.get("seen")).containsOnlyKeys("a");
     }
 
     @Test
@@ -155,7 +160,7 @@ class GmailTriggerSweeperTest {
 
         Map<String, Object> cursor = recordedCursor(s, "AUTHENTICATION_REQUIRED: " + ErrorCode.AUTHENTICATION_REQUIRED.getMessage());
         assertThat(((Number) cursor.get("afterSec")).longValue()).isEqualTo(AFTER);
-        assertThat(cursor.get("seenIds")).isEqualTo(List.of("x"));
+        assertThat((Map<String, Long>) cursor.get("seen")).containsOnlyKeys("x");
     }
 
     @Test
@@ -215,5 +220,83 @@ class GmailTriggerSweeperTest {
         sweeper.sweep();
 
         verify(subscriptions).recordPoll(eq(second.getId()), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("커서 이전 메일이 상한을 넘게 나오면(검색식이 after:를 벗어남) 발화 없이 끊고 커서 유지 + 오류 기록")
+    void staleFloodStopsPoll() {
+        AppTriggerSubscription s = subscription(List.of());
+        Map<String, Long> old = new java.util.LinkedHashMap<>();
+        IntStream.range(0, 21).forEach(i -> old.put("old" + i, AFTER - 100 + i));
+        listed(old);
+
+        sweeper.sweep();
+
+        verify(firer, never()).fire(any(), any(), any());
+        Map<String, Object> cursor = recordedCursor(s, "INVALID_INPUT: 검색식이 after: 기간 제한을 벗어납니다.");
+        assertThat(((Number) cursor.get("afterSec")).longValue()).isEqualTo(AFTER);
+    }
+
+    @Test
+    @DisplayName("lookback — 커서보다 이르게 수신됐지만 늦게 색인된 메일은 창 안이면 발화, 창 안의 발화 id는 다시 조회하지 않는다")
+    void lateIndexedMailInsideLookbackFires() {
+        AppTriggerSubscription s = subscription(List.of());
+        long floor = AFTER - 3600;
+        Map<String, Object> seen = new java.util.LinkedHashMap<>();
+        seen.put("fired", (int) AFTER);
+        ReflectionTestUtils.setField(s, "cursor", Map.of("afterSec", (int) AFTER, "floorSec", (int) floor,
+            "seen", seen, "okSec", Instant.now().getEpochSecond()));
+        long low = AFTER - GmailCursor.LOOKBACK_SEC;
+        given(gmail.listAllMessageIds(userId, "(from:x) after:" + (low - 1))).willReturn(List.of("fired", "late"));
+        given(gmail.getMessage(userId, "late")).willReturn(message("late", AFTER - 30));
+        given(firer.fire(any(), any(), any())).willReturn(true);
+
+        sweeper.sweep();
+
+        verify(gmail, never()).getMessage(userId, "fired");
+        ArgumentCaptor<Map<String, Object>> outputs = ArgumentCaptor.forClass(Map.class);
+        verify(firer).fire(eq(workflowId), eq(TriggerType.GMAIL_NEW_EMAIL), outputs.capture());
+        assertThat(outputs.getValue()).containsEntry("messageId", "late");
+        Map<String, Object> cursor = recordedCursor(s, null);
+        assertThat(cursor).containsEntry("afterSec", AFTER).containsEntry("floorSec", floor);
+        assertThat((Map<String, Long>) cursor.get("seen")).containsOnlyKeys("fired", "late");
+    }
+
+    @Test
+    @DisplayName("lookback은 구독 시각(floorSec) 아래로 내려가지 않는다 — 활성화 이전 메일은 발화하지 않는다")
+    void lookbackNeverGoesBelowFloor() {
+        subscription(List.of()); // floorSec 없음 = afterSec
+        given(gmail.listAllMessageIds(userId, "(from:x) after:" + (AFTER - 1))).willReturn(List.of());
+
+        sweeper.sweep();
+
+        verify(gmail).listAllMessageIds(userId, "(from:x) after:" + (AFTER - 1));
+    }
+
+    @Test
+    @DisplayName("24시간 넘게 폴링이 실패만 했으면 커서를 지금으로 리셋 — 재연동 때 밀린 메일이 한꺼번에 발화하지 않게")
+    void staleCursorResetsAfterLongFailure() {
+        AppTriggerSubscription s = subscription(List.of());
+        long dayAgo = Instant.now().getEpochSecond() - GmailTriggerSweeper.MAX_CATCHUP_SEC - 60;
+        ReflectionTestUtils.setField(s, "cursor", Map.of("afterSec", (int) AFTER, "okSec", dayAgo));
+        given(gmail.listAllMessageIds(any(), anyString())).willReturn(List.of());
+
+        long before = Instant.now().getEpochSecond();
+        sweeper.sweep();
+
+        Map<String, Object> cursor = recordedCursor(s, null);
+        assertThat(((Number) cursor.get("afterSec")).longValue()).isGreaterThanOrEqualTo(before);
+        assertThat(((Number) cursor.get("floorSec")).longValue()).isGreaterThanOrEqualTo(before);
+    }
+
+    @Test
+    @DisplayName("메일이 하루 넘게 안 와도(afterSec 오래됨) 폴링이 성공해 왔으면 리셋하지 않는다")
+    void quietInboxDoesNotReset() {
+        AppTriggerSubscription s = subscription(List.of()); // okSec = 지금, afterSec = AFTER(오래 전)
+        given(gmail.listAllMessageIds(userId, "(from:x) after:" + (AFTER - 1))).willReturn(List.of());
+
+        sweeper.sweep();
+
+        assertThat(recordedCursor(s, null)).containsEntry("afterSec", AFTER);
     }
 }

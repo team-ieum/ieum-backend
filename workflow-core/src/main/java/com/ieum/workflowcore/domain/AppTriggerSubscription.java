@@ -14,7 +14,6 @@ import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -75,7 +74,7 @@ public class AppTriggerSubscription extends BaseEntity {
     @Column(name = "config", nullable = false)
     private Map<String, Object> config;
 
-    /** Gmail {@code {afterSec, seenIds[]}}. GitHub null. 칼럼명은 SQL 키워드 CURSOR를 피한다 */
+    /** Gmail {@code {afterSec, floorSec, seen{id: sec}}}(api GmailCursor). GitHub null. 칼럼명은 SQL 키워드 CURSOR를 피한다 */
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "poll_cursor")
     private Map<String, Object> cursor;
@@ -135,7 +134,8 @@ public class AppTriggerSubscription extends BaseEntity {
     private void resetPolling(LocalDateTime now) {
         this.lastError = null;
         if (triggerType == TriggerType.GMAIL_NEW_EMAIL) {
-            this.cursor = Map.of("afterSec", now.atZone(ZoneId.systemDefault()).toEpochSecond(), "seenIds", List.of());
+            // 나머지 키(floorSec·seen)는 api GmailCursor가 채운다 — floorSec가 없으면 afterSec(=지금)가 하한이다
+            this.cursor = Map.of("afterSec", now.atZone(ZoneId.systemDefault()).toEpochSecond());
             this.nextPollAt = now;
         } else {
             this.cursor = null;
