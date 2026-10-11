@@ -21,23 +21,28 @@ public final class FailureClassifier {
      * <p>agent가 이 필드를 아직 안 내려주면(null) {@link FailureKind#UNKNOWN}이며 재시도하지 않는다.
      * 값은 agent {@code common/error_code.py}의 {@code ErrorCode} 이름과 1:1이다.
      */
-    private static final Map<String, FailureKind> AGENT_ERROR_CODES = Map.of(
-        "RATE_LIMITED", FailureKind.RATE_LIMIT,
-        "AGENT_TIMEOUT", FailureKind.TIMEOUT,
+    private static final Map<String, FailureKind> AGENT_ERROR_CODES = Map.ofEntries(
+        Map.entry("RATE_LIMITED", FailureKind.RATE_LIMIT),
+        Map.entry("AGENT_TIMEOUT", FailureKind.TIMEOUT),
         // 도구 미호출·프롬프트 문제 등 같은 입력이면 같은 결과가 나오는 실패
-        "AGENT_TOOL_NOT_CALLED", FailureKind.CLIENT_ERROR,
-        "MISSING_CREDENTIAL", FailureKind.CLIENT_ERROR,
+        Map.entry("AGENT_TOOL_NOT_CALLED", FailureKind.CLIENT_ERROR),
+        Map.entry("MISSING_CREDENTIAL", FailureKind.CLIENT_ERROR),
         // 같은 멱등 키의 앞선 요청이 실행 중 = 호출자 측 중복 요청이라 재시도해도 같은 결과
-        "DUPLICATE_REQUEST", FailureKind.CLIENT_ERROR,
+        Map.entry("DUPLICATE_REQUEST", FailureKind.CLIENT_ERROR),
         // LLM 호출 자체가 실패했으나 원인이 특정되지 않음 — 반복해도 같을 가능성이 높다
-        "AGENT_EXECUTION_FAILED", FailureKind.UNKNOWN,
+        Map.entry("AGENT_EXECUTION_FAILED", FailureKind.UNKNOWN),
         // 아래 둘은 agent 어휘가 아니라, agent 서비스가 본문 없이 HTTP 오류만 준 경우
         // BE가 상태 코드로부터 합성하는 코드다(agentServiceErrorCode).
-        "AGENT_SERVICE_ERROR", FailureKind.SERVER_ERROR,
-        "AGENT_BAD_REQUEST", FailureKind.CLIENT_ERROR,
+        Map.entry("AGENT_SERVICE_ERROR", FailureKind.SERVER_ERROR),
+        Map.entry("AGENT_BAD_REQUEST", FailureKind.CLIENT_ERROR),
         // ACTION 노드의 도구 자체 오류(GitHub 422 등) — 같은 입력이면 같은 결과라 재시도하지 않는다.
         // 쓰기 도구는 재시도가 중복 부수효과로 이어질 수 있어 UNKNOWN과 구분해 둔다.
-        "ACTION_TOOL_FAILED", FailureKind.CLIENT_ERROR
+        Map.entry("ACTION_TOOL_FAILED", FailureKind.CLIENT_ERROR),
+        // AI 노드 config.outputFields 규칙 위반 — 저장된 값이 그대로면 몇 번을 돌려도 같다
+        Map.entry("INVALID_OUTPUT_FIELDS", FailureKind.CLIENT_ERROR),
+        // 모델이 선언한 출력 칸 모양을 어김(agent 검증) 또는 칸 선언 노드에 문장 응답(BE 가드).
+        // "상대가 계약을 어겼다"에 가장 가까운 재시도 분류 — 같은 모델로 다시 부르면 맞출 수 있다
+        Map.entry("AI_OUTPUT_MISMATCH", FailureKind.SERVER_ERROR)
     );
 
     public static FailureKind fromAgentErrorCode(String errorCode) {

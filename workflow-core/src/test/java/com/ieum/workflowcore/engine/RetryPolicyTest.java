@@ -260,6 +260,32 @@ class RetryPolicyTest {
         }
 
         @Test
+        @DisplayName("구조화 출력 코드 — 칸 규칙 위반은 재시도하지 않고, 모델 출력 불일치는 재시도한다")
+        void structuredOutputCodes() {
+            FailureKind invalid = FailureClassifier.fromAgentErrorCode("INVALID_OUTPUT_FIELDS");
+            FailureKind mismatch = FailureClassifier.fromAgentErrorCode("AI_OUTPUT_MISMATCH");
+
+            assertThat(invalid).isEqualTo(FailureKind.CLIENT_ERROR);
+            assertThat(invalid.isRetryable()).isFalse();
+            assertThat(mismatch).isEqualTo(FailureKind.SERVER_ERROR);
+            assertThat(mismatch.isRetryable()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Map.ofEntries 전환 뒤에도 기존 9개 코드 매핑이 그대로다")
+        void existingCodesKeepTheirKinds() {
+            assertThat(FailureClassifier.fromAgentErrorCode("RATE_LIMITED")).isEqualTo(FailureKind.RATE_LIMIT);
+            assertThat(FailureClassifier.fromAgentErrorCode("AGENT_TIMEOUT")).isEqualTo(FailureKind.TIMEOUT);
+            assertThat(FailureClassifier.fromAgentErrorCode("AGENT_TOOL_NOT_CALLED")).isEqualTo(FailureKind.CLIENT_ERROR);
+            assertThat(FailureClassifier.fromAgentErrorCode("MISSING_CREDENTIAL")).isEqualTo(FailureKind.CLIENT_ERROR);
+            assertThat(FailureClassifier.fromAgentErrorCode("DUPLICATE_REQUEST")).isEqualTo(FailureKind.CLIENT_ERROR);
+            assertThat(FailureClassifier.fromAgentErrorCode("AGENT_EXECUTION_FAILED")).isEqualTo(FailureKind.UNKNOWN);
+            assertThat(FailureClassifier.fromAgentErrorCode("AGENT_SERVICE_ERROR")).isEqualTo(FailureKind.SERVER_ERROR);
+            assertThat(FailureClassifier.fromAgentErrorCode("AGENT_BAD_REQUEST")).isEqualTo(FailureKind.CLIENT_ERROR);
+            assertThat(FailureClassifier.fromAgentErrorCode("ACTION_TOOL_FAILED")).isEqualTo(FailureKind.CLIENT_ERROR);
+        }
+
+        @Test
         @DisplayName("agent가 errorCode를 안 내려주면 UNKNOWN이라 재시도하지 않는다")
         void missingAgentErrorCodeIsUnknown() {
             assertThat(FailureClassifier.fromAgentErrorCode(null)).isEqualTo(FailureKind.UNKNOWN);
