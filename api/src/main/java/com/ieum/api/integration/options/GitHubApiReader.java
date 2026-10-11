@@ -2,10 +2,12 @@ package com.ieum.api.integration.options;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.ieum.api.integration.options.OptionPage.OptionItem;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -31,7 +33,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-class GitHubApiReader {
+public class GitHubApiReader {
 
     static final String API_BASE = "https://api.github.com";
     static final int PAGE_SIZE = 50;
@@ -40,14 +42,14 @@ class GitHubApiReader {
     private final RestTemplate restTemplate;
 
     /** @param hasNext 응답 {@code Link} 헤더에 {@code rel="next"}가 있는지 */
-    record Page(JsonNode body, boolean hasNext) {
+    public record Page(JsonNode body, boolean hasNext) {
     }
 
     /**
      * @param pathSegments 경로 조각 — 각각 인코딩된다(호출부가 형식도 검증한다)
      * @param query        쿼리 파라미터(삽입 순서 유지)
      */
-    Page get(UUID userId, List<String> pathSegments, Map<String, String> query) {
+    public Page get(UUID userId, List<String> pathSegments, Map<String, String> query) {
         String token = gitHubTokenProvider.getAccessToken(userId)
             .orElseThrow(() -> new CustomException(ErrorCode.ACCOUNT_NOT_CONNECTED));
 
@@ -76,6 +78,56 @@ class GitHubApiReader {
             log.warn("[GitHubApiReader] GitHub 호출 실패 — {}", e.getClass().getSimpleName());
             throw new CustomException(ErrorCode.GITHUB_API_UNAVAILABLE);
         }
+    }
+
+    /** {@link #installedRepos} 한 번에 쓰는 GitHub 요청 상한(설치 목록·레포 목록 페이지 합, ≈ 레포 1,900개). */
+    public static final int INSTALLED_REPOS_MAX_REQUESTS = 20;
+    /** 두 엔드포인트의 per_page 최댓값. */
+    static final int INSTALLED_PAGE_SIZE = 100;
+
+    /**
+     * App 설치 범위 레포 전체 — {@code GET /user/installations} → 설치마다 {@code GET /user/installations/{id}/repositories}
+     * (user-to-server 토큰이라 "사용자가 접근 가능 ∩ App 설치 범위"). webhook은 설치된 레포에서만 오므로 GitHub 트리거의
+     * 접근 기준도 이것이다 — 공개 레포라 {@code GET /repositories/{id}}가 200이어도 설치 밖이면 이벤트가 오지 않는다.
+     * 오류 매핑은 {@link #get}과 같다(미연동 400, 4xx 400/401, 장애 503).
+     *
+     * @return {@code OptionItem(id = repo id 10진 문자열, name = full_name)}, 설치·페이지 순서 그대로
+     */
+    public List<OptionItem> installedRepos(UUID userId) {
+        int[] budget = {INSTALLED_REPOS_MAX_REQUESTS};
+        List<OptionItem> repos = new ArrayList<>();
+        for (JsonNode installation : allPages(userId, List.of("user", "installations"), "installations", budget)) {
+            long installationId = installation.path("id").asLong(0);
+            if (installationId <= 0) {
+                continue;
+            }
+            List<String> path = List.of("user", "installations", String.valueOf(installationId), "repositories");
+            for (JsonNode repo : allPages(userId, path, "repositories", budget)) {
+                long id = repo.path("id").asLong(0);
+                String fullName = repo.path("full_name").asText("");
+                if (id > 0 && !fullName.isBlank()) {
+                    repos.add(new OptionItem(String.valueOf(id), fullName));
+                }
+            }
+        }
+        return repos;
+    }
+
+    /** 응답 객체의 {@code field} 배열을 Link next 끝까지 모은다. budget(남은 요청 수)을 다 쓰면 경고 후 거기까지. */
+    // ponytail: 요청 20회 상한 + 캐시 없음 — 넘는 계정이 생기면 repoId를 찾는 즉시 멈추는 조기 종료나 짧은 캐시를 둔다
+    private List<JsonNode> allPages(UUID userId, List<String> path, String field, int[] budget) {
+        List<JsonNode> items = new ArrayList<>();
+        for (int page = 1; budget[0] > 0; page++) {
+            budget[0]--;
+            Page response = get(userId, path,
+                Map.of("per_page", String.valueOf(INSTALLED_PAGE_SIZE), "page", String.valueOf(page)));
+            response.body().path(field).forEach(items::add);
+            if (!response.hasNext()) {
+                return items;
+            }
+        }
+        log.warn("[GitHubApiReader] 설치 범위 조회 요청 상한 도달 — 상한: {}", INSTALLED_REPOS_MAX_REQUESTS);
+        return items;
     }
 
     private static CustomException clientError(int status, HttpHeaders headers) {
