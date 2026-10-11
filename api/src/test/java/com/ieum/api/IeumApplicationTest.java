@@ -14,6 +14,10 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
+import org.springframework.scheduling.config.ScheduledTaskRegistrar;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.context.TestPropertySource;
 
 @SpringBootTest
@@ -43,6 +47,9 @@ class IeumApplicationTest {
     @Autowired
     private ExecutionJobEnqueuer executionJobEnqueuer;
 
+    @Autowired
+    private ScheduledAnnotationBeanPostProcessor scheduledProcessor;
+
     @Test
     @DisplayName("스프링 부트 애플리케이션 컨텍스트가 정상적으로 로드된다")
     void contextLoads() {
@@ -58,5 +65,17 @@ class IeumApplicationTest {
     @DisplayName("ExecutionJobEnqueuer는 단일 빈이며 DefaultExecutionJobEnqueuer가 선택된다 (Stub이면 조용히 내구성을 잃는다)")
     void executionJobEnqueuer_singleBean_resolvesToDefault() {
         assertThat(executionJobEnqueuer).isInstanceOf(DefaultExecutionJobEnqueuer.class);
+    }
+
+    @Test
+    @DisplayName("@Scheduled는 WebSocket 브로커 스케줄러가 아니라 전용 scheduling- 풀(2)에서 돈다")
+    void scheduledTasks_runOnDedicatedScheduler() {
+        ScheduledTaskRegistrar registrar =
+            (ScheduledTaskRegistrar) ReflectionTestUtils.getField(scheduledProcessor, "registrar");
+
+        assertThat(registrar.getScheduler()).isInstanceOfSatisfying(ThreadPoolTaskScheduler.class, s -> {
+            assertThat(s.getThreadNamePrefix()).isEqualTo("scheduling-");
+            assertThat(s.getScheduledThreadPoolExecutor().getCorePoolSize()).isEqualTo(2);
+        });
     }
 }

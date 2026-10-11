@@ -88,7 +88,7 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 | `IdempotencyStore` | api (Redis SETNX in-flight 마커) |
 | `AlertNotifier` | api (실행 실패 Discord 알림) |
 | `ExecutionJobEnqueuer` | api (스케줄 실행을 Redis Stream 잡 큐에 투입) |
-| `AppTriggerAccessVerifier` | api (앱 트리거 저장·활성화 시 리소스 접근 검증 — GitHub App 설치 범위 검증 — BE-81. 그 전까지는 Stub이 전부 통과) |
+| `AppTriggerAccessVerifier` | api (앱 트리거 저장·활성화 시 리소스 접근 검증. GitHub App 설치 범위 검증은 BE-81, 그 전까지는 Stub이 전부 통과) |
 
 새 포트 추가 시 Stub도 같이 만들 것 — 없으면 workflow-core 테스트 컨텍스트가 깨진다.
 `IdempotencyStore`·`AlertNotifier` 구현체는 **저장소·발신 장애를 삼켜야 한다** — 실행 종료 처리를 깨는 것보다 중복 호출·알림 유실을 감수한다(의도적 트레이드오프).

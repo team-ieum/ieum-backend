@@ -52,7 +52,12 @@ public class NodeTestService {
         this.nodeTestRunner = nodeTestRunner;
         this.credentialService = credentialService;
         this.webhookListenStore = webhookListenStore;
-        sampleFetchers.forEach(f -> this.sampleFetchers.put(f.triggerType(), f));
+        // 같은 triggerType 공급원이 둘이면 부팅에서 막는다 — EnumMap.put이 한쪽을 조용히 덮는다
+        sampleFetchers.forEach(f -> {
+            if (this.sampleFetchers.put(f.triggerType(), f) != null) {
+                throw new IllegalStateException("앱 트리거 샘플 공급원 중복: " + f.triggerType());
+            }
+        });
     }
 
     public NodeTestResponse test(UUID userId, UUID workflowId, String nodeId, NodeTestRequest request) {

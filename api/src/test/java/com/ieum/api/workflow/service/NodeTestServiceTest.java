@@ -322,7 +322,7 @@ class NodeTestServiceTest {
     }
 
     @Test
-    @DisplayName("공급원이 없는 앱 트리거(GitHub, BE-b 전) — FAILED 안내, 외부 호출 없음")
+    @DisplayName("공급원이 없는 앱 트리거(GitHub, BE-81 전) — FAILED 안내, 외부 호출 없음")
     void appTriggerWithoutFetcherFails() throws Exception {
         Workflow workflow = workflow(TriggerType.GITHUB_NEW_ISSUE);
         owns(workflow);
@@ -335,5 +335,14 @@ class NodeTestServiceTest {
         verify(runner).recordFailure(workflow, "t1", "이 트리거는 아직 테스트할 수 없습니다");
         verify(gmailFetcher, never()).fetchLatest(any(), any());
         verify(runner, never()).run(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("같은 triggerType 공급원 빈이 둘이면 생성 실패(조용히 덮지 않는다)")
+    void duplicateFetcherFailsFast() {
+        assertThatThrownBy(() -> new NodeTestService(crudService, runner, credentialService, listenStore,
+            List.of(gmailFetcher, gmailFetcher)))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("GMAIL_NEW_EMAIL");
     }
 }

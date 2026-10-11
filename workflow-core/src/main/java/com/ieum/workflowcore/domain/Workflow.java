@@ -52,7 +52,7 @@ public class Workflow extends BaseEntity {
     @Column(name = "is_active", nullable = false)
     private boolean isActive = true;
 
-    /** 트리거 타입 (MANUAL / WEBHOOK / SCHEDULE) */
+    /** 트리거 타입 — 값 목록은 {@link TriggerType} */
     @Enumerated(EnumType.STRING)
     @Column(name = "trigger_type", nullable = false, length = 20,
             columnDefinition = "VARCHAR(20) DEFAULT 'MANUAL'")

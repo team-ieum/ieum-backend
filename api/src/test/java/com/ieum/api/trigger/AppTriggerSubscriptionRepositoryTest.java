@@ -8,7 +8,6 @@ import com.ieum.workflowcore.repository.AppTriggerSubscriptionRepository;
 import com.ieum.workflowcore.service.AppTriggerSubscriptionService;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -76,25 +75,26 @@ class AppTriggerSubscriptionRepositoryTest {
     }
 
     @Test
-    @DisplayName("recordPoll — 클레임 뒤 query가 바뀌었으면(리셋) 옛 커서로 덮지 않고 다음 폴링·오류만 기록")
-    void recordPollSkipsCursorWhenReconfiguredMeanwhile() {
-        // H2 timestamp는 마이크로초로 반올림 저장한다(Linux JDK now()는 나노초) — 왕복 후 정확 비교하려면 잘라 둔다
-        LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MICROS);
+    @DisplayName("recordPoll — 클레임 뒤 query가 바뀌었으면(리셋) 커서·오류·다음 폴링 어느 것도 옛 결과로 덮지 않는다")
+    void recordPollSkipsWhenReconfiguredMeanwhile() {
+        LocalDateTime now = LocalDateTime.now();
         gmail(now.minusMinutes(10));
         AppTriggerSubscription claimed =
             service.claimDue(TriggerType.GMAIL_NEW_EMAIL, now, 50, Duration.ofMinutes(5)).get(0);
         transactionTemplate.executeWithoutResult(tx -> repository.findById(claimed.getId()).orElseThrow()
             .reconfigure(TriggerType.GMAIL_NEW_EMAIL, claimed.getUserId(), null, Map.of("query", "from:y"), now));
         Map<String, Object> reset = repository.findById(claimed.getId()).orElseThrow().getCursor();
-        LocalDateTime next = now.plusMinutes(5);
 
         service.recordPoll(claimed.getId(), claimed.getConfig(),
-            Map.of("afterSec", 1_790_000_000L, "seenIds", List.of("old")), "ERR", next);
+            Map.of("afterSec", 1_790_000_000L, "seenIds", List.of("old")), "ERR", now.plusMinutes(5));
 
         AppTriggerSubscription read = repository.findById(claimed.getId()).orElseThrow();
+        assertThat(read.getConfig()).containsEntry("query", "from:y");
         assertThat(read.getCursor()).isEqualTo(reset);
-        assertThat(read.getLastError()).isEqualTo("ERR");
-        assertThat(read.getNextPollAt()).isEqualTo(next);
+        assertThat(read.getLastError()).isNull();
+        assertThat(read.getLastPolledAt()).isNull();
+        // 리셋이 둔 즉시 폴링(now)이 그대로 — 정확 비교 대신 리스·옛 다음 폴링(now+5분)보다 앞인지만
+        assertThat(read.getNextPollAt()).isBefore(now.plusMinutes(1));
     }
 
     @Test

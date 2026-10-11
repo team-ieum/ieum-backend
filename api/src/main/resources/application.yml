@@ -14,12 +14,6 @@ spring:
     exclude:
       - org.springframework.boot.autoconfigure.quartz.QuartzAutoConfiguration
 
-  task:
-    scheduling:
-      pool:
-        # @Scheduled 공용 풀(기본 1). Gmail 트리거 스윕(외부 호출)이 잡 큐 회수·정리 cron을 막지 않게.
-        size: 2
-
   datasource:
     url: ${DB_URL}
     username: ${DB_USERNAME}

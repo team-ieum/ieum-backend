@@ -84,16 +84,18 @@ public class AppTriggerSubscriptionService {
     }
 
     /**
-     * 폴링 결과 기록. 그 사이 행이 지워졌으면(비활성화·삭제) 아무것도 하지 않는다. 그 사이 config가 바뀌었으면(query 변경 —
-     * sync가 커서를 리셋했을 수 있다) 커서는 덮지 않는다 — 옛 query 기준 커서가 바뀐 query로 과거 메일을 발화시킨다.
+     * 폴링 결과 기록. 행을 잠가 읽는다 — 안 잠그면 읽기~UPDATE 사이 sync가 커밋한 query 변경을 전체 칼럼 UPDATE가 옛 config로
+     * 되돌린다. 그 사이 행이 지워졌거나(비활성화·삭제) config가 바뀌었으면(sync가 커서·오류·다음 폴링을 리셋) 아무것도 쓰지 않는다
+     * — 옛 query 기준 커서·오류가 바뀐 query에 덮인다. sync와 데드락 없음: 여기는 이 행 하나만 잠근다.
      *
      * @param claimedConfig 클레임 시점 행의 config
      */
     @Transactional
     public void recordPoll(UUID id, Map<String, Object> claimedConfig, Map<String, Object> cursor, String error,
                            LocalDateTime nextPollAt) {
-        repository.findById(id).ifPresent(s -> s.recordPoll(
-            Objects.equals(s.getConfig(), claimedConfig) ? cursor : s.getCursor(), error, LocalDateTime.now(), nextPollAt));
+        repository.findForUpdate(id)
+            .filter(s -> Objects.equals(s.getConfig(), claimedConfig))
+            .ifPresent(s -> s.recordPoll(cursor, error, LocalDateTime.now(), nextPollAt));
     }
 
     /** BE-81 webhook 라우팅 — {@code (GITHUB_NEW_ISSUE, repoId)}의 활성 구독. */
