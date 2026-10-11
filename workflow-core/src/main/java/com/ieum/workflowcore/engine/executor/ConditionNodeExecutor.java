@@ -62,8 +62,8 @@ public class ConditionNodeExecutor implements NodeExecutor {
 
     private boolean evaluate(String operator, Object left, Object right) {
         return switch (operator) {
-            case "equals" -> java.util.Objects.equals(left, right);
-            case "notEquals" -> !java.util.Objects.equals(left, right);
+            case "equals" -> sameAsString(left, right);
+            case "notEquals" -> !sameAsString(left, right);
             case "contains" -> left != null && right != null
                 && left.toString().contains(right.toString());
             case "notContains" -> left == null || right == null
@@ -87,5 +87,17 @@ public class ConditionNodeExecutor implements NodeExecutor {
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException("숫자로 변환할 수 없는 값: " + value);
         }
+    }
+
+    /**
+     * 참조식 치환 결과는 항상 문자열이라({@code true} → {@code "true"}), 우변이 JSON boolean·숫자로
+     * 저장돼도 같은 값이면 같다고 본다. 대소문자·숫자 표기({@code 4} vs {@code 4.0})는 구분한다.
+     * null은 null과만 같다.
+     */
+    private static boolean sameAsString(Object left, Object right) {
+        if (left == null || right == null) {
+            return left == right;
+        }
+        return String.valueOf(left).equals(String.valueOf(right));
     }
 }
