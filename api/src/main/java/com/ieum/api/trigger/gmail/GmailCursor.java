@@ -8,7 +8,7 @@ import java.util.Map;
  * Gmail 구독 커서 {@code {afterSec, floorSec, okSec, seen{id: sec}}}.
  *
  * <ul>
- *   <li>{@code afterSec} — 발화한 메일 중 가장 늦은 수신 초.</li>
+ *   <li>{@code afterSec} — 발화한 메일 중 가장 늦은 수신 초, 단 지금을 넘지 않는다(그래서 {@code seen}에 이보다 큰 초가 있을 수 있다).</li>
  *   <li>{@code floorSec} — 구독(또는 리셋) 시각. 그 이전 메일은 절대 발화하지 않는다. 없으면 {@code afterSec}(갓 만든 커서).</li>
  *   <li>{@code okSec} — 마지막으로 성공한 폴링 시각. 없으면 {@code afterSec}. 오래 실패만 했는지 판단하는 기준이다
  *       ({@code afterSec}은 메일이 안 오면 멈춰 있으니 쓸 수 없다).</li>
