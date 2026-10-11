@@ -60,6 +60,7 @@ class WorkflowCrudServiceScheduleTest {
     @Mock private WorkflowExecutionLogRepository workflowExecutionLogRepository;
     @Mock private WorkflowScheduler workflowScheduler;
     @Mock private WorkflowDefinitionRepository definitionRepository;
+    @Mock private AppTriggerSubscriptionService appTriggerSubscriptionService;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
     @InjectMocks private WorkflowCrudService service;
 

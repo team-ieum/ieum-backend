@@ -64,7 +64,7 @@
 `TRIGGER`, `AI`, `CONDITION`, `HTTP`, `TRANSFORM`, `APPROVAL`, `ACTION` — 7종. `ACTION`은 앱 도구 하나를 LLM 없이 실행하는 결정론적 노드다(config 모양은 AI 노드 `tools[0]`과 같다 — `{"tools":[{"name":"<tool_key>","config":{…}}],"brand":…,"serviceType":…}`). 그 외 외부 서비스(Gmail·Notion 등) 연동은 AI 노드의 도구/HTTP 노드로 처리한다. `APPROVAL`은 NodeExecutor가 없다(위 "승인 게이트").
 
 ### NodeExecutor
-`NodeExecutor` 인터페이스 + 타입별 구현체(`AgentNodeExecutor`, `ActionNodeExecutor`, `ConditionNodeExecutor`, `HttpNodeExecutor`, `TransformNodeExecutor`, `TriggerNodeExecutor`). 결과는 `ExecutorResult`.
+`NodeExecutor` 인터페이스 + 타입별 구현체(`AgentNodeExecutor`, `ActionNodeExecutor`, `ConditionNodeExecutor`, `HttpNodeExecutor`, `TransformNodeExecutor`, `TriggerNodeExecutor`). 결과는 `ExecutorResult`. 앱 트리거는 심어 둔 정규화 페이로드를 그대로 출력한다(config 에코 아님).
 
 **`AgentNodeExecutor`**(`AI`) — `/v1/execute` body `workflowContext` = `{nodes:{<id>:{output, status:"COMPLETED", type}}, trigger:<TRIGGER 노드 출력>}`(agent `tools/workflow_context.py` 계약, 평평한 `{<id>:output}` 아님). `nodeOutputs`를 감싼 것이라 성공·재사용 노드만 있고, trigger는 원 페이로드가 아니라 트리거 노드 출력이다. 노드 테스트에선 직접 참조한 샘플만 들어가 type은 null, trigger는 없다.
 **`ActionNodeExecutor`**(`ACTION`) — `tools[0]`만 ieum-agent `POST ${ieum.agent.url}/v1/actions/execute`에 위임한다(body `{nodeId, toolKey, config}` = `ActionNodeRequest`, 응답 `ActionExecutionResult{success, output(dict), errorMessage, errorCode}`). 노드 출력은 agent `output` dict 그대로(AI 노드의 `{output, metadata}` 래퍼 없음). LLM 헤더(`X-LLM-*`·`X-Key-Mode`)·쿼터·토큰 차감·모델 fallback이 **없다**(과금 0). 헤더는 `X-User-Id`·`X-User-Role`·`X-Node-Id`·`X-Trace-Id`·`X-Idempotency-Key`(HEADER이고 재시도가 켜졌을 때)·`X-Google-Access-Token`·도구 인증 헤더. 실패 분류: `ACTION_TOOL_FAILED`→CLIENT_ERROR(재시도 안 함), 알 수 없는 toolKey(HTTP 400)→`AGENT_BAD_REQUEST`→CLIENT_ERROR, 5xx·429·타임아웃은 재시도 대상. 쓸 수 없는 정의(tools 없음·name 없음)는 agent 호출 없이 CLIENT_ERROR.
@@ -73,7 +73,7 @@
 3-인자 `execute(node, input, cursor)`가 기본이고, 외부 호출이 멱등 가드를 적용해야 하는 Executor(HTTP·AI·ACTION)만 4-인자 오버로드 `execute(node, input, cursor, NodeAttempt)`를 override한다. `NodeAttempt(attempt, idempotencyKey, policy)`가 회차·멱등성 키·재시도 정책을 실어 온다 — **`ExecutionCursor`/`ExecutionContext`에 attempt 정보를 넣지 말 것**(워커 스레드 간 공유 객체다).
 
 ### Provider 포트 + Stub 패턴
-workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능은 **포트 인터페이스**로 선언하고 api 모듈이 구현체를 제공한다. 포트마다 `@ConditionalOnMissingBean` Stub이 있어 workflow-core 단독 테스트가 가능하다 (현재 11개).
+workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능은 **포트 인터페이스**로 선언하고 api 모듈이 구현체를 제공한다. 포트마다 `@ConditionalOnMissingBean` Stub이 있어 workflow-core 단독 테스트가 가능하다 (현재 12개).
 
 | 포트 | 실구현 위치 |
 |------|------------|
@@ -88,6 +88,7 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 | `IdempotencyStore` | api (Redis SETNX in-flight 마커) |
 | `AlertNotifier` | api (실행 실패 Discord 알림) |
 | `ExecutionJobEnqueuer` | api (스케줄 실행을 Redis Stream 잡 큐에 투입) |
+| `AppTriggerAccessVerifier` | api (앱 트리거 저장·활성화 시 리소스 접근 검증. GitHub App 설치 범위 검증은 BE-81, 그 전까지는 Stub이 전부 통과) |
 
 새 포트 추가 시 Stub도 같이 만들 것 — 없으면 workflow-core 테스트 컨텍스트가 깨진다.
 `IdempotencyStore`·`AlertNotifier` 구현체는 **저장소·발신 장애를 삼켜야 한다** — 실행 종료 처리를 깨는 것보다 중복 호출·알림 유실을 감수한다(의도적 트레이드오프).
@@ -119,9 +120,10 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 | `WorkflowExecutionLog` | `node_runs` | nodeId, nodeType, status, input/output JSON(TEXT), errorMessage, durationMs, traceId, prompt/completion/total tokens, `attempt_count` |
 | `ChatMessage`/`ChatSession` | chat/ 하위 | 워크플로우 채팅 |
 | `NodeTestSample` | `node_test_samples` | 노드 단일 테스트의 최신 결과 1건(UNIQUE workflow_id+node_id). 출력은 `SensitiveDataMasker` 적용 후 TEXT JSON. 삭제는 `WorkflowCrudService.deleteWorkflowInternal`이 워크플로우 행보다 먼저 |
+| `AppTriggerSubscription` | `app_trigger_subscriptions` | 활성 앱 트리거 1건(UNIQUE workflow_id+node_id, FK 없음). 행 있음 = 켜짐. `AppTriggerSubscriptionService.sync`가 `WorkflowCrudService` 생성·수정·AI 저장·활성화·비활성화에서 **트랜잭션 안**으로 맞춘다(Quartz만 afterCommit). config는 스냅샷만(Gmail `{query}`, GitHub `{repoId}` = `resource_key`). Gmail 커서 `poll_cursor` — 리셋 시 `{afterSec: now}`만 쓰고 나머지 키(`floorSec`·`okSec`·`seen`)는 api `GmailCursor`가 채운다, query·triggerType 변경 시만 리셋. `sync`는 활성 + 최상위 triggerType이 앱 트리거인데 노드 선언이 없으면 400(`INVALID_WORKFLOW`). 스윕 클레임은 `lockDue`(네이티브 `FOR UPDATE SKIP LOCKED`). 삭제는 `deleteWorkflowInternal` |
 | `WorkflowDefinitionDocument` | Mongo | nodes/edges 정의. PG `mongoDefinitionId`로 조인 |
 
-enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROVAL, `ExecutionLogStatus`=SUCCESS/FAILED/SKIPPED, `TriggerType`=MANUAL/WEBHOOK/SCHEDULE.
+enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROVAL, `ExecutionLogStatus`=SUCCESS/FAILED/SKIPPED, `TriggerType`=MANUAL/WEBHOOK/SCHEDULE/GMAIL_NEW_EMAIL/GITHUB_NEW_ISSUE(앱 트리거 — `isAppTrigger()`).
 
 새 컬럼 (IEUM-BE-46):
 - `node_runs.attempt_count` — 결과가 나오기까지의 시도 횟수. 재시도 없이 끝나면 1, **`SKIPPED`(재처리 스킵)은 0**
@@ -138,7 +140,7 @@ enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROV
 
 **DDL은 Flyway가 아니라 `ddl-auto: update`** — 마이그레이션 파일 없음. 컬럼 추가는 엔티티 필드만 넣으면 된다.
 단, **`nullable = false` 컬럼을 기존 행이 있는 테이블에 추가할 때는 `@ColumnDefault`가 반드시 필요하다.** 없으면 PostgreSQL이 DDL을 거부하는데 `ddl-auto: update`는 그 오류를 경고로만 남기고 부팅을 계속해 **컬럼 없이 앱이 뜬다.** 테스트는 `ddl-auto: create-drop`(빈 스키마)이라 이 사고를 잡지 못한다 — 이번에 `retry_exhausted`·`alert_target`이 걸릴 뻔했다.
-**enum 값을 추가하면 DB CHECK 제약도 손으로 고쳐야 한다.** Hibernate 6는 `@Enumerated(STRING)` 컬럼을 `CHECK (col IN (...))`와 함께 만드는데 `ddl-auto: update`는 이 제약을 갱신하지 않는다 — 새 값을 쓰는 순간 제약 위반이다. 테스트(`create-drop`)는 새 스키마라 못 잡는다. `docs/schema/V7`(connected_accounts.provider)·`V8`(workflow_runs.status·node_runs.node_type, IEUM-BE-45)·`V9`(node_runs.node_type에 `ACTION`)가 그 수동 DDL이다 — 배포 전에 대상 DB에 적용할 것.
+**enum 값을 추가하면 DB CHECK 제약도 손으로 고쳐야 한다.** Hibernate 6는 `@Enumerated(STRING)` 컬럼을 `CHECK (col IN (...))`와 함께 만드는데 `ddl-auto: update`는 이 제약을 갱신하지 않는다 — 새 값을 쓰는 순간 제약 위반이다. 테스트(`create-drop`)는 새 스키마라 못 잡는다. `docs/schema/V7`(connected_accounts.provider)·`V8`(workflow_runs.status·node_runs.node_type, IEUM-BE-45)·`V9`(node_runs.node_type에 `ACTION`)·`V10`(workflows·workflow_runs.trigger_type에 앱 트리거 2값)이 그 수동 DDL이다 — 배포 전에 대상 DB에 적용할 것. **`app_trigger_subscriptions.trigger_type`도 Hibernate가 CHECK를 만든다**(V10 시점 값으로 생성) — `TriggerType`에 값을 더하면 이 테이블 제약도 수동 DDL 대상이다.
 
 ## 스케줄러 (scheduler/, config/)
 Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `ScheduleJobRestorer`(부팅 시 복원), `WorkflowCleanupScheduler`, `JobKeyGenerator`.

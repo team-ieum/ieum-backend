@@ -32,11 +32,13 @@ import org.springframework.web.util.UriComponentsBuilder;
  *
  * <p>트랜잭션을 걸지 않는다. {@link GoogleTokenService#getValidAccessToken}이 자체 트랜잭션으로 갱신
  * 토큰을 저장하는데, 바깥 readOnly 트랜잭션에 합류하면 그 저장이 flush되지 않는다.
+ *
+ * <p>앱 트리거(Gmail 폴링·노드 테스트)도 {@link #get}을 쓴다.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-class GoogleApiReader {
+public class GoogleApiReader {
 
     static final String DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
     static final String SPREADSHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
@@ -51,7 +53,7 @@ class GoogleApiReader {
      * @param acceptedScopes 이 중 하나라도 승인돼 있으면 통과
      * @return 응답 본문. 비어 있으면 빈 객체 노드
      */
-    JsonNode get(UUID userId, URI uri, String... acceptedScopes) {
+    public JsonNode get(UUID userId, URI uri, String... acceptedScopes) {
         requireScope(userId, acceptedScopes);
 
         HttpHeaders headers = new HttpHeaders();

@@ -25,6 +25,7 @@
 | `chat` | ChatController | 워크플로우 채팅 (+ `AgentClient`가 ieum-agent 호출, WebSocket 핸들러) |
 | `webhook` / `webhookcredential` | WebhookController, WebhookCredentialController | 웹훅 트리거 수신(노드 테스트가 listen 중이면 첫 1건을 샘플로 가로챔 — Redis `webhook:listen:{workflowId}`, `WebhookListenStore`가 GETDEL로 소비. 비활성·triggerType 불일치면 샘플만 저장하고 data 없는 202)·웹훅 크레덴셜, 실패 알림 대상 지정(`PUT /api/v1/webhook-credentials/{id}/alert-target`) |
 | `alert` | (Controller 없음) | 실패 알림 발신 — `AlertCooldownStore`, `DiscordWebhookSender` |
+| `trigger` | (Controller 없음) | 앱 트리거 발화·폴링·노드 테스트 샘플 — `AppTriggerFirer`, `GmailTriggerSweeper`, `GmailTriggerClient`, `AppTriggerSampleFetcher` |
 | `integration` | IntegrationWorkflowController, IntegrationOptionController | 연동 서비스별 워크플로우 조회, 노드 설정 드롭다운 선택지(`GET /api/v1/integrations/{app}/options/{resource}` — 공급원 빈 `OptionSource`를 key `{app}.{resource}`로 고름. `@Transactional` 금지: 토큰 갱신 저장이 readOnly에 합류해 유실). IEUM 내부 리소스 공급원(IEUM-BE-76): `ai.models`·`ieum.credentials`(입력 llmProvider)·`ieum.webhooks`/`slack.webhooks`/`discord.webhooks`(`WebhookOptionSourceConfig`가 한 구현으로 3빈)·`ieum.mcp_servers`. GitHub 공급원(노드 카탈로그 ② BE-b): `github.owners`(본인 login + 소속 org — org 조회가 4xx면 본인만)·`github.repos`(입력 `owner`, cursor=페이지 번호, 본인이면 `/user/repos?affiliation=owner`·아니면 `/orgs/{owner}/repos`). **목록은 GitHub App 설치 범위로 한정**, `GitHubApiReader`가 토큰·헤더·오류 매핑(`GITHUB_API_UNAVAILABLE` 503) 공유 |
 | `mcp` | McpServerCatalogController | MCP 서버 카탈로그 |
 | `prompt` | PromptTemplateController | 프롬프트 템플릿 CRUD·테스트 실행 |
@@ -47,6 +48,8 @@ Quartz 스케줄 실행(`WorkflowScheduleJob`)은 workflow-core 포트 `Executio
 
 `workflow/service/ExecutionApprovalService` — 승인 게이트(IEUM-BE-45)에서 멈춘 `WAITING_APPROVAL` 실행의 승인·거부. 원 실행 행 잠금(`lockExecutionWithVersion`) → 소유자 검증(ADMIN 우회 없음) → 대기 상태가 아니면 409 `EXECUTION_NOT_WAITING_APPROVAL`. 승인은 원 실행을 되살리지 않고 **재처리와 같은 `ExecutionRetryService.startContinuation()`**(같은 버전·트리거 입력으로 새 실행 + `retriedBy` 링크 + `afterCommit` 큐 투입)으로 이어진 실행을 만들고 원 실행은 SUCCESS. 응답은 새 실행이라 프론트는 그 ID로 SSE를 다시 구독한다. 거부는 FAILED + 사유이고, 사용자 결정이라 `markAsFailed`(알림)를 타지 않는다. 거부 사유 `@Size(max=200)` — `node_runs.error_message`가 VARCHAR(255)다. `startContinuation`을 별도 빈으로 빼지 말 것 — `ExecutionRetryServiceTest`의 `@InjectMocks`가 깨진다.
 
+`trigger/` — 앱 트리거(노드 카탈로그 2.5). `AppTriggerFirer.fire(workflowId, type, output)`이 활성 재확인 → 최신 버전 → prepareExecution → 러너(스윕러·GitHub webhook(BE-81) 공유). `trigger/gmail/GmailTriggerSweeper` — `@Scheduled` 1분(초기 지연 `ieum.trigger.gmail.sweep-initial-delay`, 기본 `PT1M` — 테스트는 `P1D`로 꺼 둔다), `claimDue`(SKIP LOCKED + `poll-interval` 리스, 50행) → 행마다 `(query) after:(lowSec-1)`(검색식이 있으면 `(query) -in:sent`, 비면 `in:inbox -in:sent` — 자기 발화 루프 방지. 전 페이지 순회, 최대 10페이지) → 미발화 메일 오래된 순 최대 20건 → `recordPoll(id, claimedConfig, cursor, error, nextPollAt)`(실패해도 발화 지점까지 커서, `last_error`. 행을 `findForUpdate`로 잠가 읽고, 그 사이 config가 바뀌었거나 행이 지워졌으면 아무것도 쓰지 않는다). 메일 조회 403·404(`GOOGLE_RESOURCE_NOT_FOUND`)는 건너뛰지 않고 그 배치를 중단한다 — rate limit도 403이라 건너뛰면 커서가 넘어가 영영 발화하지 않는다. at-least-once. 커서는 `GmailCursor`(`{afterSec, floorSec, okSec, seen{id: sec}}`) — `lowSec = max(floorSec, afterSec-600)` lookback 창으로 늦게 색인된 메일을 다시 보고 `seen`으로 거른다. `afterSec`은 now를 넘지 않는다(import 메일의 미래 internalDate). `okSec`(마지막 성공 폴링)이 24시간보다 오래면 커서를 지금으로 리셋(재연동 때 적체 폭발 방지). 창 이전 메일이 20건을 넘게 나오면 검색식이 `after:`를 벗어난 것으로 보고 `INVALID_INPUT`으로 그 폴링을 끊는다. 정규화는 `GmailMessageNormalizer` 하나(노드 테스트 공유, bodyText 10,000자). 노드 테스트는 `AppTriggerSampleFetcher` 빈을 triggerType으로 골라 즉시 샘플(0건·조회 거부·공급원 없음 = FAILED). `GoogleApiReader`는 public(앱 트리거가 재사용). `@Scheduled`는 전부 `config/SchedulingConfig`의 전용 `ThreadPoolTaskScheduler`(2스레드, `scheduling-N`)에서 돈다. 이 클래스가 없으면 WebSocket 브로커의 `messageBrokerTaskScheduler`(풀 = vCPU 수, `MessageBroker-N`) 때문에 Boot 자동 스케줄러가 물러나 그 위에서 돌고, `spring.task.scheduling.pool.size`도 효력이 없다 — 1 vCPU에서 스윕의 동기 Gmail 호출이 잡 큐 회수·정리 cron·SockJS heartbeat를 붙잡는다. 전용 스케줄러를 `TaskScheduler` 빈으로 바꾸지 말 것(타입 주입 모호).
+
 ## 워크플로우 저장 규칙 (ACTION·brand·cron)
 - `ACTION` 노드는 REST 저장을 허용한다(`NodeType` enum만으로 통한다). config는 AI 노드 `tools[0]` 모양이라 `NodeCredentialGuard`·`WorkflowServiceType`이 변경 없이 적용된다. `RawWebhookUrlGuard`는 최상위 `config.url`만 본다 — `tools[].config.webhook_url` 원문은 막지 않는다(AI 노드와 동일한 기존 한계).
 - **brand 유지**(`NodeDefinitionMerger`) — REST 수정은 노드 config를 통째로 교체하지만, 요청 config에 `brand` 키가 없으면 이전 `config.brand`를 이어받는다(FE 아이콘·연동 목록의 유일한 근거). 요청이 명시한 값은 `null`·빈 문자열도 존중한다.
@@ -56,16 +59,17 @@ Quartz 스케줄 실행(`WorkflowScheduleJob`)은 workflow-core 포트 `Executio
 ## 노드 단일 테스트 (workflow/service/NodeTestService, controller/NodeTestController)
 `POST /api/v1/workflows/{workflowId}/nodes/{nodeId}/test`(body `{node?, input?}`) / `GET .../sample`. 실행·샘플 저장은 workflow-core `NodeTestRunner`, 여기는 소유자 검사(`getWorkflowByOwner`, 항상 먼저)·body 노드 가드·webhook 분기만. `WorkflowController`에 붙이지 않은 이유: 그 생성자를 여러 테스트가 직접 호출한다.
 - body `node`는 저장 경로와 같은 세 가드(`NodeCredentialGuard.rejectForeignCredentialId`·`rejectInlineSecret`, `RawWebhookUrlGuard`)를 거친다 — 저장 없이 곧바로 실행되기 때문. `node.id ≠ nodeId`면 400. body가 없으면 저장된 최신 버전의 노드
+- 노드 `config.triggerType`이 앱 트리거면 listen하지 않고 `AppTriggerSampleFetcher`로 최근 1건을 즉시 샘플로 만든다. 0건·조회 거부·공급원 없음은 HTTP 200 + `FAILED`이고, 워크플로우 최상위 triggerType으로 폴백하지 않는다
 - 트리거가 webhook(`config.triggerType`, 비면 워크플로우 최상위 triggerType)이면 실행하지 않고 `WebhookListenStore.start` → `{status: LISTENING, webhookUrl, expiresAt}`. `webhookUrl`은 **경로**(`/api/v1/webhooks/{workflowId}`)다 — BE에 공개 base URL 설정이 없어 FE가 API origin을 붙인다
 - 실패한 테스트는 HTTP 200 + `status: FAILED`. 샘플 누락은 400 `TEST_SAMPLE_MISSING` + `data.missingNodeIds`(`TestSampleMissingException` 전용 핸들러). `@Transactional` 금지(외부 호출을 한 트랜잭션에 묶지 않기 위해 — 저장소 호출은 각자 트랜잭션. OSIV 기본 on이라 커넥션은 요청 끝까지 유지됨)
 
 ## config/ — Provider 포트 실구현
-workflow-core가 선언한 포트 11개를 여기서 `Default*`로 구현해 Stub을 대체한다 (`@Primary`).
+workflow-core가 선언한 포트 12개 중 11개를 여기서 `Default*`로 구현해 Stub을 대체한다 (`@Primary`). `AppTriggerAccessVerifier`는 BE-81 전까지 Stub.
 `DefaultCredentialProvider`, `DefaultGoogleTokenProvider`, `DefaultNotionTokenProvider`, `DefaultGitHubTokenProvider`, `DefaultWebhookCredentialProvider`, `DefaultMcpCatalogProvider`, `DefaultUserRoleProvider`, `DefaultBetaPlatformProvider`, `DefaultIdempotencyStore`, `DefaultAlertNotifier`, `DefaultExecutionJobEnqueuer`.
 
 `DefaultIdempotencyStore`(Redis SETNX)·`AlertCooldownStore`는 **Redis 장애를 삼키고 진행을 허용한다** — 중복 호출·알림 도배 위험을 감수하고 가용성을 택한 의도적 트레이드오프다. 예외를 전파하도록 되돌리지 말 것.
 
-기타 설정: `JpaConfig`, `SwaggerConfig`, `RestTemplateConfig`, `WebSocketConfig`, `WebSocketAuthInterceptor`.
+기타 설정: `JpaConfig`, `SwaggerConfig`, `RestTemplateConfig`, `SchedulingConfig`, `WebSocketConfig`, `WebSocketAuthInterceptor`.
 
 ## 실패 알림 (alert/, config/DefaultAlertNotifier)
 3점 세트로 나눠 둔다 — `DefaultAlertNotifier`(대상 결정 + 문구 구성), `AlertCooldownStore`(Redis SETNX, **워크플로우당 5분 쿨다운** — 반복 실패가 채널을 도배하는 것을 막는다), `DiscordWebhookSender`(HTTP 발신만).
@@ -82,6 +86,7 @@ workflow-core가 선언한 포트 11개를 여기서 `Default*`로 구현해 Stu
 | `ieum.workflow.queue.reclaim-interval` | `PT1M` | 고아 잡 회수 주기 |
 | `ieum.workflow.queue.poll-error-backoff` | `PT5S` | 폴링 실패 시 대기(스핀·로그 폭주 방지) |
 | `ieum.beta.platform-key.allowed-models` | `gemini-3.7-flash` | platform 모드에서 재시도 모델 fallback이 시도할 수 있는 모델. platform 키는 Gemini 한 장이라 비-Gemini를 넣지 말 것 |
+| `ieum.trigger.gmail.poll-interval` | `PT5M` | Gmail 트리거 폴링 주기(env `GMAIL_TRIGGER_POLL_INTERVAL`). 체감 지연 = 주기 + 스윕 1분 |
 | `DISCORD_OPS_WEBHOOK_URL` | (빈 문자열) | 운영자 실패 알림 채널. `@Value`로 직접 읽는 환경변수 — 비어 있으면 발신 안 함 |
 
 큐 관련 세 키는 yml에 선언돼 있지 않고 `ExecutionJobQueueBootstrap` 생성자의 `@Value` 기본값이다. `allowed-models`는 `application.yml`(`BETA_ALLOWED_MODELS`) + `BetaPlatformKeyProperties`.

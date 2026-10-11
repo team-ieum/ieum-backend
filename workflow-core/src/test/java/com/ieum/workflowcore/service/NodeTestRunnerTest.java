@@ -592,4 +592,30 @@ class NodeTestRunnerTest {
 
         assertThat(stored("t").getOutputJson()).doesNotContain("pw-raw");
     }
+
+    @Test
+    @DisplayName("recordFailure — FAILED 샘플로 덮어쓰고 출력은 없다")
+    void recordFailureStoresFailedSample() {
+        seed(workflow, "t1", SampleStatus.SUCCESS, "{\"messageId\":\"old\"}");
+
+        NodeTestResult result = runner.recordFailure(workflow, "t1", "최근 항목이 없습니다");
+
+        assertThat(result.status()).isEqualTo(SampleStatus.FAILED);
+        assertThat(result.output()).isNull();
+        assertThat(result.error()).isEqualTo("최근 항목이 없습니다");
+        assertThat(stored("t1").getStatus()).isEqualTo(SampleStatus.FAILED);
+        assertThat(stored("t1").getOutputJson()).isNull();
+    }
+
+    @Test
+    @DisplayName("앱 트리거 노드에 정규화 페이로드를 주면 샘플 = 페이로드 그대로(config 키 없음)")
+    void appTriggerSampleIsPayload() {
+        Node node = new Node("t1", NodeType.TRIGGER, "Gmail",
+            new HashMap<>(Map.of("triggerType", "GMAIL_NEW_EMAIL", "query", "from:x")));
+
+        NodeTestResult result = runner.run(workflow, node, Map.of("messageId", "m1", "subject", "s"));
+
+        assertThat(result.status()).isEqualTo(SampleStatus.SUCCESS);
+        assertThat(result.output()).isEqualTo(Map.of("messageId", "m1", "subject", "s"));
+    }
 }

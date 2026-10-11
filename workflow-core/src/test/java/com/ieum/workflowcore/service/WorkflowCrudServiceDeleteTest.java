@@ -41,6 +41,7 @@ class WorkflowCrudServiceDeleteTest {
     @Mock private WorkflowScheduler workflowScheduler;
     @Mock private WorkflowDefinitionRepository definitionRepository;
     @Mock private NodeTestSampleRepository nodeTestSampleRepository;
+    @Mock private AppTriggerSubscriptionService appTriggerSubscriptionService;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
     @InjectMocks private WorkflowCrudService service;
 
