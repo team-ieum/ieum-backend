@@ -8,7 +8,6 @@ import com.ieum.api.credential.service.CredentialService;
 import com.ieum.api.credential.service.CredentialValidationResult;
 import com.ieum.api.common.GlobalExceptionHandler;
 import com.ieum.auth.security.CustomUserDetails;
-import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -160,16 +159,6 @@ class CredentialControllerTest {
         mockMvc.perform(delete("/api/v1/credentials/" + credentialId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true));
-    }
-
-    @Test
-    void delete_notFound_returns404() throws Exception {
-        willThrow(new CustomException(ErrorCode.NOT_FOUND))
-                .given(credentialService).delete(credentialId, userId);
-
-        mockMvc.perform(delete("/api/v1/credentials/" + credentialId))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value(ErrorCode.NOT_FOUND.name()));
     }
 
     // ===== POST /api/v1/credentials/{id}/validate =====

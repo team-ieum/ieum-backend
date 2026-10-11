@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import com.ieum.workflowcore.engine.ExecutionContext;
@@ -110,6 +111,7 @@ class ToolCallPreparerTest {
         assertThat(preparer.prepare(List.of(tool("slack", new HashMap<>())), cursor(userId)).googleAccessToken())
             .isNull();
         verify(googleTokenProvider).getValidAccessToken(userId); // 위 세 호출 중 첫 번째만 조회했다
+        verifyNoMoreInteractions(googleTokenProvider);
     }
 
     @Test

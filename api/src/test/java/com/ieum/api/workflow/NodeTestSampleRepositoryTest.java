@@ -3,6 +3,7 @@ package com.ieum.api.workflow;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.ieum.api.NoRedisTestConfig;
 import com.ieum.workflowcore.domain.NodeTestSample;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.enums.SampleStatus;
@@ -15,11 +16,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.redis.RedisConnectionFailureException;
-import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,21 +27,10 @@ import org.springframework.transaction.annotation.Transactional;
  * 컨텍스트 구성은 {@code IeumApplicationTest}와 같다(테스트엔 Redis가 없다).
  */
 @SpringBootTest
+@Import(NoRedisTestConfig.class)
 @TestPropertySource(properties = "aes.secret-key=ieum-test-secret-key-32bytes-ok!")
 @Transactional
 class NodeTestSampleRepositoryTest {
-
-    @TestConfiguration
-    static class NoRedisConfig {
-
-        @Bean
-        RedisConnectionFactory redisConnectionFactory() {
-            RedisConnectionFactory factory = org.mockito.Mockito.mock(RedisConnectionFactory.class);
-            org.mockito.BDDMockito.given(factory.getConnection())
-                .willThrow(new RedisConnectionFailureException("테스트 환경엔 Redis가 없다"));
-            return factory;
-        }
-    }
 
     @Autowired private NodeTestSampleRepository sampleRepository;
     @Autowired private WorkflowRepository workflowRepository;

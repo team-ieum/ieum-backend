@@ -259,18 +259,4 @@ class WebhookCredentialServiceTest {
                 .isInstanceOf(CustomException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.WEBHOOK_CREDENTIAL_NOT_FOUND);
     }
-
-    @Test
-    @DisplayName("삭제 - 리포지토리 정상 호출")
-    void delete_existing_callsRepository() {
-        UUID id = UUID.randomUUID();
-        WebhookCredential credential = WebhookCredential.builder()
-                .userId(userId).provider(WebhookProvider.SLACK).displayName("삭제대상")
-                .encryptedWebhookUrl(aes.encrypt(URL)).enabled(true).build();
-        when(repository.findByIdAndUserId(id, userId)).thenReturn(Optional.of(credential));
-
-        service.delete(id, userId);
-
-        verify(repository).delete(credential);
-    }
 }

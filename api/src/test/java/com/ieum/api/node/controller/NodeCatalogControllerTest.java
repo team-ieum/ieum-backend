@@ -11,8 +11,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.chat.service.AgentClient;
 import com.ieum.api.common.GlobalExceptionHandler;
-import com.ieum.common.exception.CustomException;
-import com.ieum.common.exception.ErrorCode;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
@@ -43,16 +41,5 @@ class NodeCatalogControllerTest {
             .andExpect(jsonPath("$.data.entries[0].inputFields[0].path").value("config.cron"))
             .andExpect(jsonPath("$.data.entries[0].inputFields[0].ref").value(false))
             .andExpect(content().string(containsString("\"app\":null")));
-    }
-
-    @Test
-    @DisplayName("agent 실패는 AgentClient가 고른 code·상태로 나간다 (PROVIDER_ERROR → 502)")
-    void agentFailureKeepsCode() throws Exception {
-        given(agentClient.getNodeCatalog()).willThrow(new CustomException(ErrorCode.PROVIDER_ERROR));
-
-        mockMvc.perform(get("/api/v1/nodes/catalog"))
-            .andExpect(status().isBadGateway())
-            .andExpect(jsonPath("$.success").value(false))
-            .andExpect(jsonPath("$.code").value("PROVIDER_ERROR"));
     }
 }

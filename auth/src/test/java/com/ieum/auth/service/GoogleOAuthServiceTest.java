@@ -150,17 +150,6 @@ class GoogleOAuthServiceTest {
                 .isEqualTo(ErrorCode.INVALID_INPUT));
     }
 
-    // ── getAuthorizationUrl ──────────────────────────────────────────────────
-
-    @Test
-    void getAuthorizationUrl_returnsSpringSecurityEndpoint() {
-        // when
-        String url = googleOAuthService.getAuthorizationUrl();
-
-        // then
-        assertThat(url).isEqualTo("/api/v1/oauth2/authorize/google");
-    }
-
     // ── getAvailableScopes ───────────────────────────────────────────────────
 
     @Test

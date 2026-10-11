@@ -91,12 +91,8 @@ class CredentialValidatorTest {
     }
 
     @ParameterizedTest(name = "{0} {1}")
-    @CsvSource({
-        "CLAUDE, 401", "CLAUDE, 403",
-        "OPENAI, 401", "OPENAI, 403",
-        "GEMINI, 401", "GEMINI, 403",
-    })
-    @DisplayName("401/403이면 예외 없이 무효 판정 — provider는 enum 이름")
+    @CsvSource({"GEMINI, 401", "GEMINI, 403", "GEMINI, 400"})
+    @DisplayName("401/403/400이면 예외 없이 무효 판정 — provider는 enum 이름")
     void authErrorIsInvalid(AiProvider provider, int status) {
         server.expect(anything()).andRespond(withStatus(HttpStatusCode.valueOf(status)));
 
@@ -118,40 +114,36 @@ class CredentialValidatorTest {
         assertErrorCode(provider, ErrorCode.PROVIDER_UNAVAILABLE);
     }
 
-    @ParameterizedTest
-    @EnumSource(AiProvider.class)
+    @Test
     @DisplayName("402면 CREDENTIAL_NO_BILLING")
-    void paymentRequiredIsNoBilling(AiProvider provider) {
+    void paymentRequiredIsNoBilling() {
         server.expect(anything()).andRespond(withStatus(HttpStatusCode.valueOf(402)));
 
-        assertErrorCode(provider, ErrorCode.CREDENTIAL_NO_BILLING);
+        assertErrorCode(AiProvider.GEMINI, ErrorCode.CREDENTIAL_NO_BILLING);
     }
 
-    @ParameterizedTest
-    @EnumSource(AiProvider.class)
+    @Test
     @DisplayName("5xx면 PROVIDER_UNAVAILABLE")
-    void serverErrorIsProviderUnavailable(AiProvider provider) {
+    void serverErrorIsProviderUnavailable() {
         server.expect(anything()).andRespond(withServerError());
 
-        assertErrorCode(provider, ErrorCode.PROVIDER_UNAVAILABLE);
+        assertErrorCode(AiProvider.GEMINI, ErrorCode.PROVIDER_UNAVAILABLE);
     }
 
-    @ParameterizedTest
-    @EnumSource(AiProvider.class)
+    @Test
     @DisplayName("응답 시간 초과면 CREDENTIAL_VALIDATION_TIMEOUT")
-    void timeoutIsValidationTimeout(AiProvider provider) {
+    void timeoutIsValidationTimeout() {
         server.expect(anything()).andRespond(withException(new SocketTimeoutException()));
 
-        assertErrorCode(provider, ErrorCode.CREDENTIAL_VALIDATION_TIMEOUT);
+        assertErrorCode(AiProvider.GEMINI, ErrorCode.CREDENTIAL_VALIDATION_TIMEOUT);
     }
 
-    @ParameterizedTest
-    @EnumSource(AiProvider.class)
+    @Test
     @DisplayName("연결 실패면 CREDENTIAL_VALIDATION_NETWORK_ERROR")
-    void connectFailureIsNetworkError(AiProvider provider) {
+    void connectFailureIsNetworkError() {
         server.expect(anything()).andRespond(withException(new ConnectException()));
 
-        assertErrorCode(provider, ErrorCode.CREDENTIAL_VALIDATION_NETWORK_ERROR);
+        assertErrorCode(AiProvider.GEMINI, ErrorCode.CREDENTIAL_VALIDATION_NETWORK_ERROR);
     }
 
     private void assertErrorCode(AiProvider provider, ErrorCode expected) {

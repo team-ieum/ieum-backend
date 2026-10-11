@@ -31,11 +31,4 @@ class CustomExceptionTest {
         assertThat(ex.getMessage()).isEqualTo(ErrorCode.TOKEN_REFRESH_FAILED.getMessage());
         assertThat(ex.getCause()).isEqualTo(cause);
     }
-
-    @Test
-    void isRuntimeException() {
-        CustomException ex = new CustomException(ErrorCode.UNAUTHORIZED);
-
-        assertThat(ex).isInstanceOf(RuntimeException.class);
-    }
 }

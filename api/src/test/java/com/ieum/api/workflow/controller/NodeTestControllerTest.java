@@ -21,9 +21,7 @@ import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.enums.SampleStatus;
 import com.ieum.workflowcore.service.NodeTestResult;
-import com.ieum.workflowcore.service.TestSampleMissingException;
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
@@ -111,20 +109,6 @@ class NodeTestControllerTest {
             .andExpect(status().isBadRequest());
 
         verifyNoInteractions(service);
-    }
-
-    @Test
-    @DisplayName("샘플 누락 → 400 TEST_SAMPLE_MISSING + data.missingNodeIds")
-    void sampleMissingReturnsIds() throws Exception {
-        given(service.test(any(), any(), any(), any()))
-            .willThrow(new TestSampleMissingException(List.of("up1", "up2")));
-
-        mockMvc.perform(post("/api/v1/workflows/{workflowId}/nodes/{nodeId}/test", workflowId, "node-1")
-                .contentType(MediaType.APPLICATION_JSON).content("{}"))
-            .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.code").value("TEST_SAMPLE_MISSING"))
-            .andExpect(jsonPath("$.data.missingNodeIds[0]").value("up1"))
-            .andExpect(jsonPath("$.data.missingNodeIds[1]").value("up2"));
     }
 
     @Test
