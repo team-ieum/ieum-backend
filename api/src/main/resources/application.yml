@@ -150,7 +150,7 @@ github:
     token-url: ${GITHUB_APP_TOKEN_URL}
     redirect-uri: ${GITHUB_APP_REDIRECT_URI}
     frontend-redirect-uri: ${GITHUB_APP_FRONTEND_REDIRECT_URI}
-    webhook-secret: ${GITHUB_APP_WEBHOOK_SECRET}
+    webhook-secret: ${GITHUB_APP_WEBHOOK_SECRET:}
 
 google:
   oauth:

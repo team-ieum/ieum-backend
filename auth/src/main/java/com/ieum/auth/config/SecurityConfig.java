@@ -102,6 +102,7 @@ public class SecurityConfig {
                     "/swagger-ui/**",
                     "/v3/api-docs/**",
                     "/api/v1/webhooks/**",
+                    "/api/v1/integrations/github/webhook",   // GitHub App webhook — HMAC 서명이 인증(GitHubWebhookService)
                     "/actuator/**",
                     "/ws/**"          // WebSocket 핸드쉐이크 (STOMP 인증은 ChannelInterceptor 담당)
                 ).permitAll()
