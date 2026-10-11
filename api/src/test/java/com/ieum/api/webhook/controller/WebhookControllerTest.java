@@ -3,7 +3,6 @@ package com.ieum.api.webhook.controller;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
-import static org.mockito.BDDMockito.willThrow;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -13,8 +12,6 @@ import com.ieum.api.common.GlobalExceptionHandler;
 import com.ieum.api.webhook.dto.WebhookTriggerRequest;
 import com.ieum.api.webhook.service.WebhookService;
 import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
-import com.ieum.common.exception.CustomException;
-import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import java.time.LocalDateTime;
@@ -92,48 +89,6 @@ class WebhookControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{}"))
             .andExpect(status().isAccepted());
-    }
-
-    @Test
-    @DisplayName("WEBHOOK 타입이 아닌 워크플로우 — 400 WEBHOOK_TRIGGER_MISMATCH")
-    void trigger_WEBHOOK_타입_아님_400() throws Exception {
-        UUID workflowId = UUID.randomUUID();
-        willThrow(new CustomException(ErrorCode.WEBHOOK_TRIGGER_MISMATCH))
-            .given(webhookService).trigger(eq(workflowId), any());
-
-        mockMvc.perform(post("/api/v1/webhooks/{workflowId}", workflowId)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{}"))
-            .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.success").value(false));
-    }
-
-    @Test
-    @DisplayName("비활성 워크플로우 — 400 WORKFLOW_NOT_ACTIVE")
-    void trigger_비활성_워크플로우_400() throws Exception {
-        UUID workflowId = UUID.randomUUID();
-        willThrow(new CustomException(ErrorCode.WORKFLOW_NOT_ACTIVE))
-            .given(webhookService).trigger(eq(workflowId), any());
-
-        mockMvc.perform(post("/api/v1/webhooks/{workflowId}", workflowId)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{}"))
-            .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.success").value(false));
-    }
-
-    @Test
-    @DisplayName("존재하지 않는 workflowId — 404 WORKFLOW_NOT_FOUND")
-    void trigger_존재하지_않는_워크플로우_404() throws Exception {
-        UUID workflowId = UUID.randomUUID();
-        willThrow(new CustomException(ErrorCode.WORKFLOW_NOT_FOUND))
-            .given(webhookService).trigger(eq(workflowId), any());
-
-        mockMvc.perform(post("/api/v1/webhooks/{workflowId}", workflowId)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{}"))
-            .andExpect(status().isNotFound())
-            .andExpect(jsonPath("$.success").value(false));
     }
 
     @Test

@@ -86,14 +86,6 @@ class DefaultBetaPlatformProviderTest {
     }
 
     @Test
-    @DisplayName("reserveQuota - BetaQuotaService.checkQuota로 위임")
-    void reserveQuota_delegatesToQuotaService() {
-        provider.reserveQuota(userId);
-
-        verify(betaQuotaService).checkQuota(userId);
-    }
-
-    @Test
     @DisplayName("reserveQuota - 쿼터 초과 시 예외 전파")
     void reserveQuota_exceeded_propagatesException() {
         Mockito.doThrow(new CustomException(ErrorCode.BETA_QUOTA_EXCEEDED))

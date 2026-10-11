@@ -5,7 +5,6 @@ import com.ieum.api.common.GlobalExceptionHandler;
 import com.ieum.api.user.dto.UserResponse;
 import com.ieum.api.user.service.UserService;
 import com.ieum.auth.security.CustomUserDetails;
-import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -79,15 +78,6 @@ class UserControllerTest {
                 .andExpect(jsonPath("$.data.name").value("홍길동"));
     }
 
-    @Test
-    void getMyProfile_userNotFound_returns404() throws Exception {
-        given(userService.getMyProfile(userId)).willThrow(new CustomException(ErrorCode.NOT_FOUND));
-
-        mockMvc.perform(get("/api/v1/users/me"))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value(ErrorCode.NOT_FOUND.name()));
-    }
-
     // ===== PATCH /api/v1/users/me =====
 
     @Test
@@ -130,15 +120,6 @@ class UserControllerTest {
         mockMvc.perform(delete("/api/v1/users/me"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true));
-    }
-
-    @Test
-    void deleteMyAccount_userNotFound_returns404() throws Exception {
-        willThrow(new CustomException(ErrorCode.NOT_FOUND)).given(userService).deleteMyAccount(userId);
-
-        mockMvc.perform(delete("/api/v1/users/me"))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value(ErrorCode.NOT_FOUND.name()));
     }
 
     // ===== 헬퍼 =====

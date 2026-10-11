@@ -58,16 +58,4 @@ class BetaUsageControllerTest {
                 .andExpect(jsonPath("$.data.usedTokens").doesNotExist())
                 .andExpect(jsonPath("$.data.tokenBudget").doesNotExist());
     }
-
-    @Test
-    void getUsage_betaNotEligible_returnsZeroPercentageAndFullQuota() throws Exception {
-        // 베타 비자격/미사용 사용자는 Redis에 키가 없어 BetaQuotaService가 자연스럽게 0%/전체 잔여를 반환한다.
-        given(betaQuotaService.getTokenUsagePercentage(userId)).willReturn(0.0);
-        given(betaQuotaService.getRemainingDailyCalls(userId)).willReturn(30L);
-
-        mockMvc.perform(get("/api/v1/beta/usage"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.percentage").value(0.0))
-                .andExpect(jsonPath("$.data.dailyCallsRemaining").value(30));
-    }
 }

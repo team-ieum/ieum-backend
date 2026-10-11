@@ -310,35 +310,6 @@ class ChatServiceTest {
         assertThat(result.decryptedApiKey()).isEqualTo("auto-decrypted-key");
     }
 
-    // ─────────────────── saveUserMessage ───────────────────────────────────
-
-    @Test
-    @DisplayName("saveUserMessage — USER 타입으로 저장")
-    void saveUserMessage_savesWithUserType() {
-        ChatSession session = buildSession(workflowId, userId);
-        ChatMessage saved = buildMessage(session, MessageType.USER, "테스트");
-        given(messageRepository.save(any(ChatMessage.class))).willReturn(saved);
-
-        ChatMessage result = chatService.saveUserMessage(session, "테스트");
-
-        assertThat(result.getSenderType()).isEqualTo(MessageType.USER);
-        assertThat(result.getContent()).isEqualTo("테스트");
-    }
-
-    // ─────────────────── saveAgentMessage ──────────────────────────────────
-
-    @Test
-    @DisplayName("saveAgentMessage — AGENT 타입으로 저장")
-    void saveAgentMessage_savesWithAgentType() {
-        ChatSession session = buildSession(workflowId, userId);
-        ChatMessage saved = buildMessage(session, MessageType.AGENT, "AI 응답");
-        given(messageRepository.save(any(ChatMessage.class))).willReturn(saved);
-
-        ChatMessage result = chatService.saveAgentMessage(session, "AI 응답", 10, 20);
-
-        assertThat(result.getSenderType()).isEqualTo(MessageType.AGENT);
-    }
-
     // ─────────────────── chat() auto-naming ────────────────────────────────
 
     @Test

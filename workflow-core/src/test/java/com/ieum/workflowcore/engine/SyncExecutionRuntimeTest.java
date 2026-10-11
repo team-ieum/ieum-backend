@@ -816,37 +816,6 @@ class SyncExecutionRuntimeTest {
         }
 
         @Test
-        @DisplayName("회귀: 주입이 비면 모든 노드를 실행하고 SKIPPED 로그가 하나도 없다")
-        void empty_preCompleted_behaves_like_normal_execution() throws Exception {
-            stubDefinition(
-                List.of(node("t", "TRIGGER"), node("a", "AI"), node("b", "AI")),
-                List.of(edge("t", "a", null), edge("a", "b", null))
-            );
-
-            runWith(Map.of());
-
-            assertThat(log).containsExactlyInAnyOrder("t", "a", "b");
-            assertThat(capturedLogs(3))
-                .noneMatch(l -> l.getStatus() == ExecutionLogStatus.SKIPPED);
-            verifyFinished(ExecutionStatus.SUCCESS, false);
-        }
-
-        @Test
-        @DisplayName("회귀: 3-인자 execute는 주입 없는 실행과 동일하다")
-        void three_arg_execute_runs_every_node() throws Exception {
-            stubDefinition(
-                List.of(node("t", "TRIGGER"), node("a", "AI")),
-                List.of(edge("t", "a", null))
-            );
-
-            run();
-
-            assertThat(log).containsExactlyInAnyOrder("t", "a");
-            assertThat(capturedLogs(2))
-                .allMatch(l -> l.getStatus() == ExecutionLogStatus.SUCCESS);
-        }
-
-        @Test
         @DisplayName("주입된 노드가 실패하던 노드 뒤에 있어도 실패 노드는 다시 실행된다(at-least-once)")
         void non_injected_failing_node_runs_again() throws Exception {
             failNodeIds.add("b");

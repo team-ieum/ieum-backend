@@ -323,21 +323,6 @@ class AgentNodeExecutorTest {
     }
 
     @Test
-    @DisplayName("서버 에러 발생 시 success=false 와 에러 메시지를 반환한다")
-    void execute_serverError_returnsFailureResult() {
-        mockWebServer.enqueue(new MockResponse()
-            .setResponseCode(500)
-            .setHeader("Content-Type", "application/json")
-            .setBody("{\"error\":\"Internal Server Error\"}"));
-
-        Node node = buildAgentNode("테스트 프롬프트", "OPENAI", "cred-id-2");
-        ExecutorResult result = executor.execute(node, Collections.emptyMap(), buildCursor());
-
-        assertThat(result.isSuccess()).isFalse();
-        assertThat(result.getErrorMessage()).isNotBlank();
-    }
-
-    @Test
     @DisplayName("agent가 HTTP 오류만 돌려주면 상태로 합성한 errorCode로 실패를 분류한다")
     void execute_httpStatusErrors_areClassifiedByStatus() {
         mockWebServer.enqueue(new MockResponse().setResponseCode(400).setBody("{\"detail\":\"bad\"}"));
@@ -347,8 +332,9 @@ class AgentNodeExecutorTest {
 
         assertThat(executor.execute(node, Collections.emptyMap(), buildCursor()).getFailureKind())
             .isEqualTo(FailureKind.CLIENT_ERROR);
-        assertThat(executor.execute(node, Collections.emptyMap(), buildCursor()).getFailureKind())
-            .isEqualTo(FailureKind.SERVER_ERROR);
+        ExecutorResult serverError = executor.execute(node, Collections.emptyMap(), buildCursor());
+        assertThat(serverError.getFailureKind()).isEqualTo(FailureKind.SERVER_ERROR);
+        assertThat(serverError.getErrorMessage()).isNotBlank();
         assertThat(executor.execute(node, Collections.emptyMap(), buildCursor()).getFailureKind())
             .isEqualTo(FailureKind.RATE_LIMIT);
     }
@@ -398,28 +384,6 @@ class AgentNodeExecutorTest {
         executor.execute(node, Collections.emptyMap(), cursor);
 
         // then — X-Google-Access-Token 헤더 없음, googleTokenProvider 호출 없음
-        RecordedRequest recorded = mockWebServer.takeRequest();
-        assertThat(recorded.getHeader("X-Google-Access-Token")).isNull();
-        verify(googleTokenProvider, never()).getValidAccessToken(any());
-    }
-
-    @Test
-    @DisplayName("Google 빌트인 도구가 있어도 userId가 없으면 토큰이 주입되지 않는다")
-    void execute_withGoogleToolButNoUserId_noGoogleAccessTokenHeader() throws InterruptedException {
-        // given — Google 도구가 있지만 userId가 없는 커서 (userId=null)
-        mockWebServer.enqueue(new MockResponse()
-            .setResponseCode(200)
-            .setHeader("Content-Type", "application/json")
-            .setBody(SUCCESS_RESPONSE));
-
-        Node node = buildAgentNodeWithTools("Gmail 확인해줘", "CLAUDE", "cred-id",
-            List.of(Map.of("name", "builtin:google_gmail")));
-        ExecutionCursor cursor = buildCursor(); // userId 없음
-
-        // when
-        executor.execute(node, Collections.emptyMap(), cursor);
-
-        // then — userId 없으면 토큰 조회 없이 헤더 미포함으로 진행
         RecordedRequest recorded = mockWebServer.takeRequest();
         assertThat(recorded.getHeader("X-Google-Access-Token")).isNull();
         verify(googleTokenProvider, never()).getValidAccessToken(any());

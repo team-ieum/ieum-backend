@@ -29,16 +29,6 @@ class IntegrationServiceTypeTest {
     }
 
     @Test
-    @DisplayName("각 서비스 타입은 노드 config.brand와 매핑되는 brand 값을 가진다")
-    void brandMapping() {
-        assertThat(IntegrationServiceType.DISCORD.getBrand()).isEqualTo("discord");
-        assertThat(IntegrationServiceType.SLACK.getBrand()).isEqualTo("slack");
-        assertThat(IntegrationServiceType.NOTION.getBrand()).isEqualTo("notion");
-        assertThat(IntegrationServiceType.GITHUB.getBrand()).isEqualTo("github");
-        assertThat(IntegrationServiceType.GOOGLE.getBrand()).isEqualTo("google");
-    }
-
-    @Test
     @DisplayName("조회 brand 목록 — GOOGLE만 gmail·sheets를 함께 매칭하고 나머지는 대표 brand 하나다")
     void brandsForLookup() {
         assertThat(IntegrationServiceType.GOOGLE.getBrands()).containsExactly("google", "gmail", "sheets");
@@ -46,6 +36,9 @@ class IntegrationServiceTypeTest {
         assertThat(IntegrationServiceType.GITHUB.getBrands()).containsExactly("github");
         assertThat(IntegrationServiceType.SLACK.getBrands()).containsExactly("slack");
         assertThat(IntegrationServiceType.DISCORD.getBrands()).containsExactly("discord");
+        for (IntegrationServiceType type : IntegrationServiceType.values()) {
+            assertThat(type.getBrand()).isEqualTo(type.getBrands().get(0));
+        }
     }
 
     @ParameterizedTest

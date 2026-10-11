@@ -2,6 +2,7 @@ package com.ieum.api.trigger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.ieum.api.NoRedisTestConfig;
 import com.ieum.workflowcore.domain.AppTriggerSubscription;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.repository.AppTriggerSubscriptionRepository;
@@ -19,10 +20,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
-import org.springframework.data.redis.RedisConnectionFailureException;
-import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -31,19 +29,9 @@ import org.springframework.transaction.support.TransactionTemplate;
  * {@code NodeTestSampleRepositoryTest}와 같다. 잠금 테스트 때문에 클래스에 @Transactional을 달지 않고 매번 비운다.
  */
 @SpringBootTest
+@Import(NoRedisTestConfig.class)
 @TestPropertySource(properties = "aes.secret-key=ieum-test-secret-key-32bytes-ok!")
 class AppTriggerSubscriptionRepositoryTest {
-
-    @TestConfiguration
-    static class NoRedisConfig {
-        @Bean
-        RedisConnectionFactory redisConnectionFactory() {
-            RedisConnectionFactory factory = org.mockito.Mockito.mock(RedisConnectionFactory.class);
-            org.mockito.BDDMockito.given(factory.getConnection())
-                .willThrow(new RedisConnectionFailureException("테스트 환경엔 Redis가 없다"));
-            return factory;
-        }
-    }
 
     @Autowired private AppTriggerSubscriptionRepository repository;
     @Autowired private AppTriggerSubscriptionService service;
