@@ -23,6 +23,16 @@ public interface GitHubOAuthControllerDocs {
         @AuthenticationPrincipal CustomUserDetails userDetails
     );
 
+    @Operation(summary = "GitHub App 설치 URL 반환",
+        description = "GitHub App 설치(레포 선택) 페이지 URL을 반환한다. 연동(authorize)만으로는 레포에 접근할 수 없고, "
+            + "App이 설치된 레포만 드롭다운·트리거·액션에 쓸 수 있다. 이미 설치했으면 같은 URL에서 레포를 추가·변경한다. "
+            + "설치 후 재연동은 필요 없다. 로그인이 필요하다.")
+    @ApiResponses({
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "설치 URL 반환 성공"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "인증 필요")
+    })
+    ResponseEntity<ApiResponse<Map<String, String>>> install();
+
     @Operation(summary = "GitHub OAuth Callback 처리",
         description = "GitHub 인가 후 callback을 처리한다. code와 state를 검증하고 access_token 및 refresh_token을 저장한다.")
     @ApiResponses({

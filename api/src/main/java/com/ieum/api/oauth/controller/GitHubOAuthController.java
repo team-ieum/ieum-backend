@@ -31,12 +31,22 @@ public class GitHubOAuthController implements GitHubOAuthControllerDocs {
     @Value("${github.app.frontend-redirect-uri}")
     private String frontendRedirectUri;
 
+    @Value("${github.app.slug}")
+    private String appSlug;
+
     @GetMapping("/authorize")
     public ResponseEntity<ApiResponse<Map<String, String>>> authorize(
         @AuthenticationPrincipal CustomUserDetails userDetails
     ) {
         String authUrl = gitHubOAuthService.generateAuthUrl(userDetails.getId());
         return ResponseEntity.ok(ApiResponse.ok(Map.of("authUrl", authUrl)));
+    }
+
+    /** 연동(토큰)과 별개로 App을 설치해야 레포에 닿는다. 설치는 사용자 단위 토큰에 바로 반영돼 재연동이 필요 없다. */
+    @GetMapping("/install")
+    public ResponseEntity<ApiResponse<Map<String, String>>> install() {
+        return ResponseEntity.ok(ApiResponse.ok(
+            Map.of("installUrl", "https://github.com/apps/" + appSlug + "/installations/new")));
     }
 
     @GetMapping("/callback")

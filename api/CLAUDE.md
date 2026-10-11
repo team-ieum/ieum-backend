@@ -18,7 +18,7 @@
 |--------|-----------|------|
 | `auth` | AuthController | 회원가입·로그인·토큰 갱신 |
 | `user` | UserController | 내 정보 조회/수정 |
-| `oauth` | Google/Notion/GitHubOAuthController, OAuthConnectionController | 소셜 연동·토큰 저장·연동 해제 |
+| `oauth` | Google/Notion/GitHubOAuthController, OAuthConnectionController | 소셜 연동·토큰 저장·연동 해제. GitHub는 연동(`/authorize`)과 App 설치(`/install` → `github.com/apps/{github.app.slug}/installations/new`)가 별개 — 설치 범위 밖 레포엔 토큰이 닿지 않고, 설치는 기존 토큰에 바로 반영돼 재연동 불필요 |
 | `credential` | CredentialController | AI API Key BYOK CRUD·검증 |
 | `provider` | ProviderController | 지원 프로바이더 목록 |
 | `workflow` | WorkflowController, WorkflowDashboardController | 워크플로우 CRUD·실행·실행 이력 조회·SSE 진행 스트림, 실패 실행 재처리(`POST /api/v1/workflows/executions/{executionId}/retry`, 202), 대시보드 요약/최근실행/에러, 승인 대기 실행 승인·거부(`POST /api/v1/workflows/executions/{executionId}/approve` 202 새 실행 / `.../reject` 200) |
