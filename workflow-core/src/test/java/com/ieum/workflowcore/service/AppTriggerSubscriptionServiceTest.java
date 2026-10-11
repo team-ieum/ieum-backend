@@ -23,6 +23,8 @@ import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -124,7 +126,7 @@ class AppTriggerSubscriptionServiceTest {
     }
 
     @Test
-    @DisplayName("repoId가 숫자 문자열이어도 같은 키, 숫자가 아니면 null(검증기가 거부할 몫)")
+    @DisplayName("[Review Focus 4] repoId 숫자 77과 문자열 \"77\"은 같은 resource_key, 양의 정수가 아니면 400(INVALID_WORKFLOW)·행 없음")
     void repoIdNormalization() {
         given(repository.findByWorkflowId(workflowId)).willReturn(List.of());
         service.sync(workflow(true), List.of(trigger("t1", new HashMap<>(Map.of(
@@ -133,10 +135,15 @@ class AppTriggerSubscriptionServiceTest {
 
         org.mockito.Mockito.clearInvocations(repository);
         service.sync(workflow(true), List.of(trigger("t1", new HashMap<>(Map.of(
-            "triggerType", "GITHUB_NEW_ISSUE", "repoId", "abc")))));
-        AppTriggerSubscription row = savedRow();
-        assertThat(row.getResourceKey()).isNull();
-        assertThat(row.getConfig()).containsEntry("repoId", null);
+            "triggerType", "GITHUB_NEW_ISSUE", "repoId", 77)))));
+        assertThat(savedRow().getResourceKey()).isEqualTo("77");
+
+        org.mockito.Mockito.clearInvocations(repository);
+        assertThatThrownBy(() -> service.sync(workflow(true), List.of(trigger("t1", new HashMap<>(Map.of(
+            "triggerType", "GITHUB_NEW_ISSUE", "repoId", "abc"))))))
+            .isInstanceOfSatisfying(CustomException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
+        verify(repository, never()).save(any());
     }
 
     @Test
@@ -259,5 +266,47 @@ class AppTriggerSubscriptionServiceTest {
 
         assertThat(existing.getCursor()).isSameAs(cursorBefore);
         assertThat(existing.getConfig().get("query")).isNull();
+    }
+
+    private static Map<String, Object> repoConfig(Object repoId) {
+        Map<String, Object> config = new HashMap<>();
+        config.put("triggerType", "GITHUB_NEW_ISSUE");
+        config.put("repoId", repoId);
+        return config;
+    }
+
+    @Test
+    @DisplayName("[Review Focus 4] 숫자 123과 문자열 \"123\"·\" 123 \"은 같은 repoId")
+    void numberAndDigitStringGiveSameKey() {
+        assertThat(AppTriggerSubscriptionService.githubRepoId(repoConfig(123))).contains(123L);
+        assertThat(AppTriggerSubscriptionService.githubRepoId(repoConfig(123L))).contains(123L);
+        assertThat(AppTriggerSubscriptionService.githubRepoId(repoConfig("123"))).contains(123L);
+        assertThat(AppTriggerSubscriptionService.githubRepoId(repoConfig(" 123 "))).contains(123L);
+    }
+
+    @Test
+    @DisplayName("repoId가 없거나 빈 문자열이면 미설정(empty) — 저장을 막지 않는다")
+    void missingIsEmpty() {
+        assertThat(AppTriggerSubscriptionService.githubRepoId(repoConfig(null))).isEmpty();
+        assertThat(AppTriggerSubscriptionService.githubRepoId(repoConfig("  "))).isEmpty();
+        assertThat(AppTriggerSubscriptionService.githubRepoId(null)).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"0", "-1", "12a", "1.5", "99999999999999999999", "owner/name"})
+    @DisplayName("양의 정수 문자열이 아니면 INVALID_WORKFLOW")
+    void malformedIsRejected(String raw) {
+        assertThatThrownBy(() -> AppTriggerSubscriptionService.githubRepoId(repoConfig(raw)))
+            .isInstanceOfSatisfying(CustomException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
+    }
+
+    @Test
+    @DisplayName("숫자형 0·음수·실수·불리언도 거부")
+    void malformedNonString() {
+        for (Object raw : new Object[] {0, -5L, 1.5d, true}) {
+            assertThatThrownBy(() -> AppTriggerSubscriptionService.githubRepoId(repoConfig(raw)))
+                .isInstanceOf(CustomException.class);
+        }
     }
 }

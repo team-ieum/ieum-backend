@@ -13,7 +13,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,6 +27,8 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class AppTriggerSubscriptionService {
+
+    private static final Pattern GITHUB_REPO_ID = Pattern.compile("[1-9][0-9]{0,18}");
 
     private final AppTriggerSubscriptionRepository repository;
     private final AppTriggerAccessVerifier accessVerifier;
@@ -145,7 +149,7 @@ public class AppTriggerSubscriptionService {
                 snapshot.put("query", query);
             }
         } else {
-            snapshot.put("repoId", repoId(config.get("repoId")));
+            snapshot.put("repoId", githubRepoId(config).orElse(null));
         }
         return snapshot;
     }
@@ -155,13 +159,27 @@ public class AppTriggerSubscriptionService {
         return config != null && config.get("query") instanceof String q && !q.isBlank() ? q.trim() : null;
     }
 
-    private static Long repoId(Object value) {
-        if (value instanceof Number n) {
-            return n.longValue();
+    /**
+     * GitHub 트리거 config의 {@code repoId} — 라우팅({@code resource_key})과 접근 검증의 키. FE 드롭다운은 문자열("123"),
+     * agent·Swagger는 숫자(123)로 저장하므로 둘 다 받는다. 스냅샷과 노드 테스트(api GitHubIssueSource.fetchLatest)가 함께 쓴다.
+     *
+     * @return 미설정(없음·blank)이면 empty. 양의 정수가 아니면 {@code INVALID_WORKFLOW}(400)
+     */
+    public static Optional<Long> githubRepoId(Map<?, ?> config) {
+        Object value = config == null ? null : config.get("repoId");
+        if (value == null || value instanceof String s && s.isBlank()) {
+            return Optional.empty();
         }
-        if (value instanceof String s && s.matches("\\d{1,18}")) {
-            return Long.parseLong(s);
+        if ((value instanceof Integer || value instanceof Long) && ((Number) value).longValue() > 0) {
+            return Optional.of(((Number) value).longValue());
         }
-        return null;
+        if (value instanceof String s && GITHUB_REPO_ID.matcher(s.strip()).matches()) {
+            try {
+                return Optional.of(Long.parseLong(s.strip()));
+            } catch (NumberFormatException ignored) {
+                // 19자리지만 Long 범위 밖 — 아래와 같은 오류
+            }
+        }
+        throw new CustomException(ErrorCode.INVALID_WORKFLOW, "GitHub 트리거의 repoId가 올바르지 않습니다.");
     }
 }
