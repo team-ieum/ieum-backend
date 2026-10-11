@@ -3,6 +3,8 @@ package com.ieum.api.trigger.gmail;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.ieum.api.integration.options.GoogleApiReader;
 import com.ieum.api.trigger.AppTriggerSampleFetcher;
+import com.ieum.common.exception.CustomException;
+import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.service.AppTriggerSubscriptionService;
 import java.net.URI;
@@ -10,7 +12,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -33,16 +34,18 @@ public class GmailTriggerClient implements AppTriggerSampleFetcher {
     static final String DEFAULT_QUERY = "in:inbox -in:sent";
     /** Gmail messages.list maxResults 상한 */
     static final int PAGE_MAX = 500;
+    static final int MAX_PAGES = 10;
 
     private final GoogleApiReader reader;
 
     /**
-     * 노드 config(또는 구독 스냅샷)의 검색식. 비면 받은편지함에서 내가 보낸 메일을 뺀 전체.
-     * 자기에게 보낸 메일은 INBOX+SENT라 "새 메일 → 나에게 메일" 워크플로우가 자기 발화로 끝없이 이어진다.
-     * blank 판정은 구독 스냅샷과 같은 규칙을 쓴다 — 어긋나면 커서 리셋 판단과 실제 검색식이 달라진다.
+     * 노드 config(또는 구독 스냅샷)의 검색식. 비면 받은편지함에서 내가 보낸 메일을 뺀 전체, 있으면 그 식에서 내가 보낸 메일을 뺀다.
+     * 보낸 메일이 검색식에 맞으면 "새 메일 → 메일 보내기" 워크플로우가 자기 발화로 끝없이 이어진다(PR #89 리뷰 결정 — 보낸 메일
+     * 트리거는 지원하지 않는다). blank 판정은 구독 스냅샷과 같은 규칙을 쓴다 — 어긋나면 커서 리셋 판단과 실제 검색식이 달라진다.
      */
     public static String baseQuery(Map<?, ?> config) {
-        return Objects.requireNonNullElse(AppTriggerSubscriptionService.gmailQuery(config), DEFAULT_QUERY);
+        String query = AppTriggerSubscriptionService.gmailQuery(config);
+        return query == null ? DEFAULT_QUERY : "(" + query + ") -in:sent";
     }
 
     /** @return 메시지 id — Gmail 목록 순서(최신순), 첫 페이지만 */
@@ -53,13 +56,19 @@ public class GmailTriggerClient implements AppTriggerSampleFetcher {
     }
 
     /**
-     * 모든 페이지의 메시지 id(최신순). 스윕러용 — 미발화 적체가 한 페이지를 넘으면 첫 페이지에 없는 오래된 메일을
-     * 커서가 지나쳐 영구 유실된다. 적체가 없으면 호출 1회다.
+     * 모든 페이지의 메시지 id(최신순), 최대 {@link #MAX_PAGES}페이지. 스윕러용 — 미발화 적체가 한 페이지를 넘으면 첫 페이지에
+     * 없는 오래된 메일을 커서가 지나쳐 영구 유실된다. 적체가 없으면 호출 1회다. 상한을 넘으면 검색식이 기간 제한을 벗어났거나
+     * 적체가 비정상인 것 — 메일함 전체를 받지 않게 INVALID_INPUT으로 끊는다(오류 기록·커서 유지, 24시간 상한이 결국 회복).
      */
     public List<String> listAllMessageIds(UUID userId, String q) {
         List<String> ids = new ArrayList<>();
         String pageToken = null;
+        int pages = 0;
         do {
+            if (++pages > MAX_PAGES) {
+                throw new CustomException(ErrorCode.INVALID_INPUT,
+                    "검색 결과가 " + PAGE_MAX * MAX_PAGES + "건을 넘습니다 — 검색식을 좁혀 주세요.");
+            }
             JsonNode page = listPage(userId, q, PAGE_MAX, pageToken);
             page.path("messages").forEach(m -> ids.add(m.path("id").asText()));
             pageToken = page.hasNonNull("nextPageToken") ? page.get("nextPageToken").asText() : null;

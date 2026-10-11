@@ -1,5 +1,6 @@
 package com.ieum.api.trigger.gmail;
 
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -69,9 +70,13 @@ final class GmailCursor {
         return seen.containsKey(messageId);
     }
 
-    /** 발화한 메일 1건 기록. lookback 창 안에서는 순서가 뒤바뀌어 들어와도 된다. */
+    /**
+     * 발화한 메일 1건 기록. lookback 창 안에서는 순서가 뒤바뀌어 들어와도 된다. afterSec은 지금을 넘기지 않는다 —
+     * import·IMAP APPEND 메일은 internalDate가 Date 헤더라 미래일 수 있고, 커서가 미래로 가면 그때까지 아무것도 안 잡힌다.
+     * seen에는 실제 초를 둔다(잘라 두면 창 밖으로 가지치기된 뒤 그 메일이 다시 발화한다).
+     */
     void advance(String messageId, long sec) {
-        afterSec = Math.max(afterSec, sec);
+        afterSec = Math.max(afterSec, Math.min(sec, Instant.now().getEpochSecond()));
         seen.put(messageId, sec);
     }
 

@@ -50,11 +50,11 @@ class GmailTriggerClientTest {
     }
 
     @Test
-    @DisplayName("baseQuery — 빈 query는 받은편지함에서 보낸 메일 제외(자기 발화 루프 방지), 값은 trim")
+    @DisplayName("baseQuery — 빈 query는 받은편지함에서 보낸 메일 제외, 값이 있으면 trim 후 보낸 메일 제외(자기 발화 루프 방지)")
     void baseQuery() {
         assertThat(GmailTriggerClient.baseQuery(Map.of())).isEqualTo("in:inbox -in:sent");
         assertThat(GmailTriggerClient.baseQuery(Map.of("query", "  "))).isEqualTo("in:inbox -in:sent");
-        assertThat(GmailTriggerClient.baseQuery(Map.of("query", " from:a "))).isEqualTo("from:a");
+        assertThat(GmailTriggerClient.baseQuery(Map.of("query", " from:a "))).isEqualTo("(from:a) -in:sent");
         assertThat(GmailTriggerClient.baseQuery(null)).isEqualTo("in:inbox -in:sent");
     }
 
@@ -87,10 +87,25 @@ class GmailTriggerClientTest {
     }
 
     @Test
+    @DisplayName("listAllMessageIds — 10페이지를 넘으면 INVALID_INPUT으로 끊는다(메일함 전체를 받지 않게)")
+    void listAllStopsAtPageCap() {
+        connected();
+        server.expect(requestTo(LIST + "?q=in%3Ainbox&maxResults=500"))
+            .andRespond(withSuccess("{\"messages\":[{\"id\":\"m\"}],\"nextPageToken\":\"p\"}", MediaType.APPLICATION_JSON));
+        server.expect(org.springframework.test.web.client.ExpectedCount.times(9),
+                requestTo(LIST + "?q=in%3Ainbox&maxResults=500&pageToken=p"))
+            .andRespond(withSuccess("{\"messages\":[{\"id\":\"m\"}],\"nextPageToken\":\"p\"}", MediaType.APPLICATION_JSON));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> client.listAllMessageIds(userId, "in:inbox"))
+            .isInstanceOf(com.ieum.common.exception.CustomException.class)
+            .hasMessageContaining("5000건");
+    }
+
+    @Test
     @DisplayName("fetchLatest — 최신 1건을 정규화, 0건이면 empty")
     void fetchLatest() {
         connected();
-        server.expect(requestTo(LIST + "?q=label%3Awork&maxResults=1"))
+        server.expect(requestTo(LIST + "?q=%28label%3Awork%29%20-in%3Asent&maxResults=1"))
             .andRespond(withSuccess("{\"messages\":[{\"id\":\"m9\"}]}", MediaType.APPLICATION_JSON));
         server.expect(requestTo(LIST + "/m9?format=full"))
             .andRespond(withSuccess("{\"id\":\"m9\",\"threadId\":\"t\",\"internalDate\":\"1000\",\"payload\":{}}",

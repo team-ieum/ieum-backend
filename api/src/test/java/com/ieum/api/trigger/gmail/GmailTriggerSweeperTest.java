@@ -67,7 +67,7 @@ class GmailTriggerSweeperTest {
     private void listed(Map<String, Long> oldestFirst) {
         List<String> newestFirst = new ArrayList<>(oldestFirst.keySet());
         java.util.Collections.reverse(newestFirst);
-        given(gmail.listAllMessageIds(userId, "(from:x) after:" + (AFTER - 1))).willReturn(newestFirst);
+        given(gmail.listAllMessageIds(userId, "((from:x) -in:sent) after:" + (AFTER - 1))).willReturn(newestFirst);
         oldestFirst.forEach((id, sec) -> given(gmail.getMessage(userId, id)).willReturn(message(id, sec)));
     }
 
@@ -247,7 +247,7 @@ class GmailTriggerSweeperTest {
         ReflectionTestUtils.setField(s, "cursor", Map.of("afterSec", (int) AFTER, "floorSec", (int) floor,
             "seen", seen, "okSec", Instant.now().getEpochSecond()));
         long low = AFTER - GmailCursor.LOOKBACK_SEC;
-        given(gmail.listAllMessageIds(userId, "(from:x) after:" + (low - 1))).willReturn(List.of("fired", "late"));
+        given(gmail.listAllMessageIds(userId, "((from:x) -in:sent) after:" + (low - 1))).willReturn(List.of("fired", "late"));
         given(gmail.getMessage(userId, "late")).willReturn(message("late", AFTER - 30));
         given(firer.fire(any(), any(), any())).willReturn(true);
 
@@ -266,11 +266,11 @@ class GmailTriggerSweeperTest {
     @DisplayName("lookback은 구독 시각(floorSec) 아래로 내려가지 않는다 — 활성화 이전 메일은 발화하지 않는다")
     void lookbackNeverGoesBelowFloor() {
         subscription(List.of()); // floorSec 없음 = afterSec
-        given(gmail.listAllMessageIds(userId, "(from:x) after:" + (AFTER - 1))).willReturn(List.of());
+        given(gmail.listAllMessageIds(userId, "((from:x) -in:sent) after:" + (AFTER - 1))).willReturn(List.of());
 
         sweeper.sweep();
 
-        verify(gmail).listAllMessageIds(userId, "(from:x) after:" + (AFTER - 1));
+        verify(gmail).listAllMessageIds(userId, "((from:x) -in:sent) after:" + (AFTER - 1));
     }
 
     @Test
@@ -293,10 +293,26 @@ class GmailTriggerSweeperTest {
     @DisplayName("메일이 하루 넘게 안 와도(afterSec 오래됨) 폴링이 성공해 왔으면 리셋하지 않는다")
     void quietInboxDoesNotReset() {
         AppTriggerSubscription s = subscription(List.of()); // okSec = 지금, afterSec = AFTER(오래 전)
-        given(gmail.listAllMessageIds(userId, "(from:x) after:" + (AFTER - 1))).willReturn(List.of());
+        given(gmail.listAllMessageIds(userId, "((from:x) -in:sent) after:" + (AFTER - 1))).willReturn(List.of());
 
         sweeper.sweep();
 
         assertThat(recordedCursor(s, null)).containsEntry("afterSec", AFTER);
+    }
+
+    @Test
+    @DisplayName("수신 시각이 미래인 메일(import)이 발화해도 afterSec은 지금을 넘지 않는다, seen엔 실제 초")
+    void futureInternalDateDoesNotPushCursorAhead() {
+        AppTriggerSubscription s = subscription(List.of());
+        long future = Instant.now().getEpochSecond() + 86_400;
+        listed(new java.util.LinkedHashMap<>() {{ put("f", future); }});
+        given(firer.fire(any(), any(), any())).willReturn(true);
+
+        long after = Instant.now().getEpochSecond();
+        sweeper.sweep();
+
+        Map<String, Object> cursor = recordedCursor(s, null);
+        assertThat(((Number) cursor.get("afterSec")).longValue()).isLessThanOrEqualTo(after + 5);
+        assertThat((Map<String, Long>) cursor.get("seen")).containsEntry("f", future);
     }
 }
