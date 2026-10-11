@@ -151,6 +151,7 @@ github:
     redirect-uri: ${GITHUB_APP_REDIRECT_URI}
     frontend-redirect-uri: ${GITHUB_APP_FRONTEND_REDIRECT_URI}
     webhook-secret: ${GITHUB_APP_WEBHOOK_SECRET:}
+    slug: ${GITHUB_APP_SLUG:ieum-service}
 
 google:
   oauth:
