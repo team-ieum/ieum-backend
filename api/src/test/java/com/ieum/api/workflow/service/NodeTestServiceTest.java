@@ -322,7 +322,7 @@ class NodeTestServiceTest {
     }
 
     @Test
-    @DisplayName("공급원이 없는 앱 트리거(GitHub, BE-81 전) — FAILED 안내, 외부 호출 없음")
+    @DisplayName("공급원이 없는 앱 트리거 — FAILED 안내, 외부 호출 없음")
     void appTriggerWithoutFetcherFails() throws Exception {
         Workflow workflow = workflow(TriggerType.GITHUB_NEW_ISSUE);
         owns(workflow);
