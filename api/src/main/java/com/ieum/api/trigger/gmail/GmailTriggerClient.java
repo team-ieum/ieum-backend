@@ -27,11 +27,16 @@ public class GmailTriggerClient implements AppTriggerSampleFetcher {
     static final String GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
     private static final String MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
 
+    static final String DEFAULT_QUERY = "in:inbox -in:sent";
+
     private final GoogleApiReader reader;
 
-    /** 노드 config(또는 구독 스냅샷)의 검색식. 비면 받은편지함 전체. */
+    /**
+     * 노드 config(또는 구독 스냅샷)의 검색식. 비면 받은편지함에서 내가 보낸 메일을 뺀 전체.
+     * 자기에게 보낸 메일은 INBOX+SENT라 "새 메일 → 나에게 메일" 워크플로우가 자기 발화로 끝없이 이어진다.
+     */
     public static String baseQuery(Map<?, ?> config) {
-        return config != null && config.get("query") instanceof String q && !q.isBlank() ? q.trim() : "in:inbox";
+        return config != null && config.get("query") instanceof String q && !q.isBlank() ? q.trim() : DEFAULT_QUERY;
     }
 
     /** @return 메시지 id — Gmail 목록 순서(최신순) */

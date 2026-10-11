@@ -50,12 +50,12 @@ class GmailTriggerClientTest {
     }
 
     @Test
-    @DisplayName("baseQuery — 빈 query는 in:inbox, 값은 trim")
+    @DisplayName("baseQuery — 빈 query는 받은편지함에서 보낸 메일 제외(자기 발화 루프 방지), 값은 trim")
     void baseQuery() {
-        assertThat(GmailTriggerClient.baseQuery(Map.of())).isEqualTo("in:inbox");
-        assertThat(GmailTriggerClient.baseQuery(Map.of("query", "  "))).isEqualTo("in:inbox");
+        assertThat(GmailTriggerClient.baseQuery(Map.of())).isEqualTo("in:inbox -in:sent");
+        assertThat(GmailTriggerClient.baseQuery(Map.of("query", "  "))).isEqualTo("in:inbox -in:sent");
         assertThat(GmailTriggerClient.baseQuery(Map.of("query", " from:a "))).isEqualTo("from:a");
-        assertThat(GmailTriggerClient.baseQuery(null)).isEqualTo("in:inbox");
+        assertThat(GmailTriggerClient.baseQuery(null)).isEqualTo("in:inbox -in:sent");
     }
 
     @Test
@@ -82,7 +82,7 @@ class GmailTriggerClientTest {
         server.expect(requestTo(LIST + "/m9?format=full"))
             .andRespond(withSuccess("{\"id\":\"m9\",\"threadId\":\"t\",\"internalDate\":\"1000\",\"payload\":{}}",
                 MediaType.APPLICATION_JSON));
-        server.expect(requestTo(LIST + "?q=in%3Ainbox&maxResults=1"))
+        server.expect(requestTo(LIST + "?q=in%3Ainbox%20-in%3Asent&maxResults=1"))
             .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
 
         assertThat(client.triggerType()).isEqualTo(TriggerType.GMAIL_NEW_EMAIL);
