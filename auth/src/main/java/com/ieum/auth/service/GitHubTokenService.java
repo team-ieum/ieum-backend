@@ -18,6 +18,7 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
 
@@ -62,7 +63,9 @@ public class GitHubTokenService {
      * @throws CustomException AUTHENTICATION_REQUIRED — refresh_token 만료 또는 갱신 거절
      * @throws CustomException TOKEN_REFRESH_FAILED — GitHub API 호출 중 예기치 않은 오류
      */
-    @Transactional
+    // 회전된 refresh token은 호출자 롤백(트리거 저장 검증 400·GitHub 503 등)과 무관하게 커밋돼야 한다 —
+    // GitHub은 한 번 쓴 refresh token을 즉시 무효화하므로, 롤백되면 DB에 죽은 토큰만 남아 재연동 전까지 전부 실패한다
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public String getValidAccessToken(UUID userId) {
         ConnectedAccount account = connectedAccountRepository
             .findByUserIdAndProvider(userId, AuthProvider.GITHUB)
