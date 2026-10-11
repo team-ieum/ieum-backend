@@ -34,8 +34,6 @@ public class GmailTriggerSweeper {
 
     static final int CLAIM_LIMIT = 50;
     static final int MAX_FIRES_PER_POLL = 20;
-    // ponytail: 목록 1페이지(최대 500)만 본다 — 한 주기에 500통 넘게 오면 오래된 초과분은 건너뛴다. 필요해지면 pageToken 순회
-    static final int LIST_MAX = 500;
 
     private final AppTriggerSubscriptionService subscriptions;
     private final GmailTriggerClient gmail;
@@ -70,13 +68,18 @@ public class GmailTriggerSweeper {
                 subscription.getId(), subscription.getWorkflowId(), error);
         }
         // 실패해도 그때까지 발화한 지점까지는 기록한다 — 커서를 통째로 되돌리면 다음 폴링이 같은 메일로 다시 발화한다.
-        subscriptions.recordPoll(subscription.getId(), subscription.getConfig(), cursor.toMap(), error,
-            LocalDateTime.now().plus(pollInterval));
+        try {
+            subscriptions.recordPoll(subscription.getId(), subscription.getConfig(), cursor.toMap(), error,
+                LocalDateTime.now().plus(pollInterval));
+        } catch (RuntimeException e) {
+            // 남은 클레임 행은 계속 폴링한다. 이 행은 리스 만료 뒤 같은 메일로 다시 발화한다(at-least-once)
+            log.error("[GmailTriggerSweeper] 폴링 기록 실패 — subscriptionId: {}", subscription.getId(), e);
+        }
     }
 
     private void poll(AppTriggerSubscription subscription, GmailCursor cursor) {
         String q = "(" + GmailTriggerClient.baseQuery(subscription.getConfig()) + ") after:" + (cursor.afterSec() - 1);
-        List<String> ids = new ArrayList<>(gmail.listMessageIds(subscription.getUserId(), q, LIST_MAX));
+        List<String> ids = new ArrayList<>(gmail.listAllMessageIds(subscription.getUserId(), q));
         Collections.reverse(ids); // 목록은 최신순 — 오래된 것부터 본다
 
         List<JsonNode> batch = new ArrayList<>();
@@ -95,7 +98,8 @@ public class GmailTriggerSweeper {
             }
             batch.add(message);
         }
-        // 목록 순서는 대체로 수신순이지만 보장되지 않는다 — 발화·커서 전진은 실제 수신 초 순으로.
+        // Gmail 목록은 internalDate 역순이라 이 정렬은 배치 안의 방어일 뿐이다. 목록 순서가 어긋나면 20건 경계 너머의
+        // 더 이른 메일은 커서에 밀린다(전 후보 날짜 조회는 적체 시 get이 최대 수백 회라 하지 않는다).
         batch.sort(Comparator.comparingLong(GmailMessageNormalizer::internalDateSec));
 
         for (JsonNode message : batch) {

@@ -31,12 +31,13 @@ public class AppTriggerFirer {
 
     /**
      * @param output 정규화 출력 — triggerData로 암호화 저장되고 트리거 노드 출력이 된다. 로그에 남기지 않는다
-     * @return 실행을 만들었으면 true. 비활성·삭제·버전 없음이면 false
+     * @return 실행을 만들었으면 true. 비활성·삭제·트리거 타입 변경·버전 없음이면 false
      * @throws com.ieum.common.exception.CustomException 그 사이 비활성화되면 prepareExecution의 INVALID_WORKFLOW
      */
     public boolean fire(UUID workflowId, TriggerType type, Map<String, Object> output) {
         Workflow workflow = workflowCrudService.findActiveById(workflowId);
-        if (workflow == null) {
+        // 폴링 도중 사용자가 다른 트리거로 바꿨으면 발화하지 않는다(WebhookService와 같은 검사)
+        if (workflow == null || workflow.getTriggerType() != type) {
             return false;
         }
         Optional<WorkflowVersion> version = workflowCrudService.findLatestVersion(workflowId);

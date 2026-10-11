@@ -74,6 +74,19 @@ class GmailTriggerClientTest {
     }
 
     @Test
+    @DisplayName("listAllMessageIds — nextPageToken을 끝까지 따라간다")
+    void listAllFollowsPages() {
+        connected();
+        server.expect(requestTo(LIST + "?q=in%3Ainbox&maxResults=500"))
+            .andRespond(withSuccess("{\"messages\":[{\"id\":\"m3\"}],\"nextPageToken\":\"p+2\"}",
+                MediaType.APPLICATION_JSON));
+        server.expect(requestTo(LIST + "?q=in%3Ainbox&maxResults=500&pageToken=p%2B2"))
+            .andRespond(withSuccess("{\"messages\":[{\"id\":\"m2\"},{\"id\":\"m1\"}]}", MediaType.APPLICATION_JSON));
+
+        assertThat(client.listAllMessageIds(userId, "in:inbox")).containsExactly("m3", "m2", "m1");
+    }
+
+    @Test
     @DisplayName("fetchLatest — 최신 1건을 정규화, 0건이면 empty")
     void fetchLatest() {
         connected();

@@ -132,13 +132,19 @@ public class AppTriggerSubscriptionService {
     private static Map<String, Object> snapshot(TriggerType type, Map<?, ?> config) {
         Map<String, Object> snapshot = new HashMap<>();
         if (type == TriggerType.GMAIL_NEW_EMAIL) {
-            if (config.get("query") instanceof String q && !q.isBlank()) {
-                snapshot.put("query", q.trim());
+            String query = gmailQuery(config);
+            if (query != null) {
+                snapshot.put("query", query);
             }
         } else {
             snapshot.put("repoId", repoId(config.get("repoId")));
         }
         return snapshot;
+    }
+
+    /** Gmail 검색식 정규화 — trim, blank는 null. 스냅샷과 실제 검색식(GmailTriggerClient.baseQuery)이 함께 쓴다 */
+    public static String gmailQuery(Map<?, ?> config) {
+        return config != null && config.get("query") instanceof String q && !q.isBlank() ? q.trim() : null;
     }
 
     private static Long repoId(Object value) {

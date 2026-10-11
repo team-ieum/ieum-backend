@@ -36,6 +36,7 @@ class AppTriggerFirerTest {
         WorkflowExecution execution = mock(WorkflowExecution.class);
         UUID executionId = UUID.randomUUID();
         Map<String, Object> output = Map.of("subject", "s");
+        given(workflow.getTriggerType()).willReturn(TriggerType.GMAIL_NEW_EMAIL);
         given(crud.findActiveById(workflowId)).willReturn(workflow);
         given(crud.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(executions.prepareExecution(workflow, version, TriggerType.GMAIL_NEW_EMAIL, output)).willReturn(execution);
@@ -57,10 +58,23 @@ class AppTriggerFirerTest {
     @Test
     @DisplayName("버전 없음 → false")
     void noVersionDoesNothing() {
-        given(crud.findActiveById(workflowId)).willReturn(mock(Workflow.class));
+        Workflow workflow = mock(Workflow.class);
+        given(workflow.getTriggerType()).willReturn(TriggerType.GMAIL_NEW_EMAIL);
+        given(crud.findActiveById(workflowId)).willReturn(workflow);
         given(crud.findLatestVersion(workflowId)).willReturn(Optional.empty());
 
         assertThat(firer.fire(workflowId, TriggerType.GMAIL_NEW_EMAIL, Map.of())).isFalse();
         verify(executions, org.mockito.Mockito.never()).prepareExecution(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("폴링 도중 다른 트리거로 바뀜 → 실행을 만들지 않고 false")
+    void triggerTypeChangedDoesNothing() {
+        Workflow workflow = mock(Workflow.class);
+        given(workflow.getTriggerType()).willReturn(TriggerType.MANUAL);
+        given(crud.findActiveById(workflowId)).willReturn(workflow);
+
+        assertThat(firer.fire(workflowId, TriggerType.GMAIL_NEW_EMAIL, Map.of())).isFalse();
+        verifyNoInteractions(executions, runner);
     }
 }

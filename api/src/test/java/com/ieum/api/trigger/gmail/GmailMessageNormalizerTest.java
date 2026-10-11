@@ -67,6 +67,17 @@ class GmailMessageNormalizerTest {
     }
 
     @Test
+    @DisplayName("깨진 base64 본문 파트는 건너뛴다 — 던지면 스윕이 그 메일에서 멈춘다")
+    void brokenBodyDataIsSkipped() throws Exception {
+        Map<String, Object> out = GmailMessageNormalizer.normalize(message("""
+            {"mimeType":"multipart/alternative","headers":%s,"parts":[
+              {"mimeType":"text/plain","body":{"data":"!!!"}},
+              {"mimeType":"text/html","body":{"data":"%s"}}]}""".formatted(HEADERS, b64("<p>대체</p>"))));
+
+        assertThat(out.get("bodyText")).isEqualTo("대체");
+    }
+
+    @Test
     @DisplayName("본문은 10,000자에서 자른다")
     void truncatesBody() throws Exception {
         Map<String, Object> out = GmailMessageNormalizer.normalize(message("""

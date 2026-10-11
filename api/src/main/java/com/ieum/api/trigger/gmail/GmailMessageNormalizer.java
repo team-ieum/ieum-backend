@@ -65,8 +65,12 @@ public final class GmailMessageNormalizer {
     private static String findPart(JsonNode part, String mimeType) {
         if (mimeType.equals(part.path("mimeType").asText()) && part.path("body").hasNonNull("data")) {
             // ponytail: charset 헤더 무시(UTF-8 가정) — 깨진 비UTF-8 메일이 보고되면 Content-Type charset 파싱 추가
-            return new String(Base64.getUrlDecoder().decode(part.path("body").path("data").asText()),
-                StandardCharsets.UTF_8);
+            try {
+                return new String(Base64.getUrlDecoder().decode(part.path("body").path("data").asText()),
+                    StandardCharsets.UTF_8);
+            } catch (IllegalArgumentException e) {
+                return null; // 깨진 본문 파트는 건너뛴다 — 던지면 스윕이 매 폴링 그 메일에서 멈춘다
+            }
         }
         for (JsonNode child : part.path("parts")) {
             String found = findPart(child, mimeType);

@@ -62,7 +62,7 @@ class GmailTriggerSweeperTest {
     private void listed(Map<String, Long> oldestFirst) {
         List<String> newestFirst = new ArrayList<>(oldestFirst.keySet());
         java.util.Collections.reverse(newestFirst);
-        given(gmail.listMessageIds(userId, "(from:x) after:" + (AFTER - 1), 500)).willReturn(newestFirst);
+        given(gmail.listAllMessageIds(userId, "(from:x) after:" + (AFTER - 1))).willReturn(newestFirst);
         oldestFirst.forEach((id, sec) -> given(gmail.getMessage(userId, id)).willReturn(message(id, sec)));
     }
 
@@ -148,7 +148,7 @@ class GmailTriggerSweeperTest {
     @DisplayName("목록 단계 실패(토큰 만료 등) — 커서 그대로, 오류 기록")
     void listFailureKeepsCursor() {
         AppTriggerSubscription s = subscription(List.of("x"));
-        given(gmail.listMessageIds(any(), anyString(), anyInt()))
+        given(gmail.listAllMessageIds(any(), anyString()))
             .willThrow(new CustomException(ErrorCode.AUTHENTICATION_REQUIRED));
 
         sweeper.sweep();
@@ -178,7 +178,7 @@ class GmailTriggerSweeperTest {
     @DisplayName("잘못된 검색식(INVALID_INPUT) — 다른 실패와 같이 커서 그대로 + 오류 기록, 다음 주기 재시도")
     void invalidQueryKeepsCursorAndRetries() {
         AppTriggerSubscription s = subscription(List.of());
-        given(gmail.listMessageIds(any(), anyString(), anyInt()))
+        given(gmail.listAllMessageIds(any(), anyString()))
             .willThrow(new CustomException(ErrorCode.INVALID_INPUT, "Google이 요청을 거부했습니다 (HTTP 400)."));
 
         sweeper.sweep();
@@ -200,5 +200,20 @@ class GmailTriggerSweeperTest {
 
         verify(firer, times(1)).fire(any(), any(), any());
         assertThat(((Number) recordedCursor(s, null).get("afterSec")).longValue()).isEqualTo(AFTER);
+    }
+
+    @Test
+    @DisplayName("recordPoll이 실패해도 남은 클레임 행은 계속 폴링한다")
+    void recordPollFailureDoesNotStopSweep() {
+        AppTriggerSubscription first = subscription(List.of());
+        AppTriggerSubscription second = subscription(List.of());
+        given(subscriptions.claimDue(any(), any(), anyInt(), any())).willReturn(List.of(first, second));
+        given(gmail.listAllMessageIds(any(), anyString())).willReturn(List.of());
+        org.mockito.BDDMockito.willThrow(new IllegalStateException("db down"))
+            .given(subscriptions).recordPoll(eq(first.getId()), any(), any(), any(), any());
+
+        sweeper.sweep();
+
+        verify(subscriptions).recordPoll(eq(second.getId()), any(), any(), any(), any());
     }
 }
