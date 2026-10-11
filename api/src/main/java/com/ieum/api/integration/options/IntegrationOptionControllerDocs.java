@@ -24,6 +24,7 @@ public interface IntegrationOptionControllerDocs {
             + "ieum/webhooks(전체, HTTP 노드용)·slack/webhooks·discord/webhooks, ieum/mcp_servers"
             + "(웹훅·MCP는 활성 항목만, 모두 요청자 소유만). "
             + "github/owners(본인 login + 소속 org), github/repos(owner 필수 — owners의 값. 목록은 GitHub App 설치 범위 안만), "
+            + "github/installed_repos(입력 없음, 값은 숫자 repo id 문자열·이름은 owner/name, 설치 범위 전체를 한 번에 — nextCursor 항상 null), "
             + "nextCursor가 있으면 cursor로 다음 페이지를 조회하고, null이면 마지막 페이지입니다. "
             + "오류 code: GOOGLE_SCOPE_REQUIRED(403, Google 권한 증분 동의 필요 — scope_groups는 "
             + "spreadsheets·worksheets=sheets, files·folders=drive, calendars·events=calendar. "
