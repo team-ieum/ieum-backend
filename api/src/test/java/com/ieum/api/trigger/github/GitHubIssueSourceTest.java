@@ -140,6 +140,20 @@ class GitHubIssueSourceTest {
     }
 
     @Test
+    @DisplayName("일시중지(suspended_at) 설치는 레포를 조회하지 않고 목록에서 뺀다 — webhook이 오지 않는다")
+    void suspendedInstallationIsSkipped() {
+        connected();
+        expectPage("/user/installations", 1,
+            "{\"installations\":[{\"id\":1,\"suspended_at\":\"2026-10-01T00:00:00Z\"},{\"id\":2,\"suspended_at\":null}]}",
+            false);
+        expectPage("/user/installations/2/repositories", 1,
+            "{\"repositories\":[{\"id\":456,\"full_name\":\"team/app\"}]}", false);
+
+        assertThat(new GitHubApiReader(tokenProvider, restTemplate).installedRepos(userId))
+            .extracting(item -> item.id()).containsExactly("456");
+    }
+
+    @Test
     @DisplayName("요청 상한(20회)에서 멈추고 못 찾으면 400 — fail closed, 21번째 요청은 없다")
     void stopsAtRequestCap() {
         connected();

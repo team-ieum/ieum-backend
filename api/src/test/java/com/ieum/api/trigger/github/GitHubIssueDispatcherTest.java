@@ -73,6 +73,21 @@ class GitHubIssueDispatcherTest {
     }
 
     @Test
+    @DisplayName("첫 구독의 발화가 예상 밖 예외(IllegalStateException)를 던져도 둘째 구독은 발화한다")
+    void unexpectedExceptionIsIsolatedPerSubscription() {
+        AppTriggerSubscription broken = subscription(UUID.randomUUID());
+        AppTriggerSubscription kept = subscription(UUID.randomUUID());
+        given(subscriptions.findByResource(TriggerType.GITHUB_NEW_ISSUE, "123")).willReturn(List.of(broken, kept));
+        UUID brokenWorkflow = broken.getWorkflowId(); // 스터빙 체인 안에서 mock을 부르면 UnfinishedStubbing
+        willThrow(new IllegalStateException("boom")).given(firer)
+            .fire(brokenWorkflow, TriggerType.GITHUB_NEW_ISSUE, issue);
+
+        dispatcher.dispatch(123L, issue);
+
+        verify(firer).fire(kept.getWorkflowId(), TriggerType.GITHUB_NEW_ISSUE, issue);
+    }
+
+    @Test
     @DisplayName("[Review Focus 6] App 설치에서 빠진 레포로 수신 — 실제 설치 범위 조회에 repoId가 없으면 실행 없음")
     void uninstalledRepoFiresNothing() {
         RestTemplate restTemplate = new RestTemplate();

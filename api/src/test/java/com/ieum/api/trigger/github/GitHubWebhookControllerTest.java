@@ -36,7 +36,7 @@ class GitHubWebhookControllerTest {
     }
 
     @Test
-    @DisplayName("헤더 3개와 raw 바이트를 그대로 서비스에 넘기고 202")
+    @DisplayName("헤더 4개와 raw 바이트를 그대로 서비스에 넘기고 202")
     void passesRawBytes() throws Exception {
         String body = "{\"action\":\"opened\"}";
         mockMvc.perform(post("/api/v1/integrations/github/webhook")
@@ -44,16 +44,17 @@ class GitHubWebhookControllerTest {
                 .header("X-Hub-Signature-256", "sha256=abc")
                 .header("X-GitHub-Event", "issues")
                 .header("X-GitHub-Delivery", "d-1")
+                .header("X-GitHub-Hook-Installation-Target-ID", "1001")
                 .content(body))
             .andExpect(status().isAccepted());
 
-        verify(service).receive("sha256=abc", "issues", "d-1", body.getBytes(StandardCharsets.UTF_8));
+        verify(service).receive("sha256=abc", "issues", "d-1", "1001", body.getBytes(StandardCharsets.UTF_8));
     }
 
     @Test
     @DisplayName("서명 불일치는 401")
     void unauthorized() throws Exception {
-        willThrow(new CustomException(ErrorCode.UNAUTHORIZED)).given(service).receive(any(), eq("issues"), any(), any());
+        willThrow(new CustomException(ErrorCode.UNAUTHORIZED)).given(service).receive(any(), eq("issues"), any(), any(), any());
         mockMvc.perform(post("/api/v1/integrations/github/webhook")
                 .contentType(MediaType.APPLICATION_JSON).header("X-GitHub-Event", "issues").content("{}"))
             .andExpect(status().isUnauthorized());

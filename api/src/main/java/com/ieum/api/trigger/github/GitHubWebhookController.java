@@ -21,8 +21,9 @@ public class GitHubWebhookController implements GitHubWebhookControllerDocs {
             @RequestHeader(value = "X-Hub-Signature-256", required = false) String signature,
             @RequestHeader(value = "X-GitHub-Event", required = false) String event,
             @RequestHeader(value = "X-GitHub-Delivery", required = false) String deliveryId,
+            @RequestHeader(value = "X-GitHub-Hook-Installation-Target-ID", required = false) String hookTargetId,
             @RequestBody(required = false) byte[] body) {
-        gitHubWebhookService.receive(signature, event, deliveryId, body);
+        gitHubWebhookService.receive(signature, event, deliveryId, hookTargetId, body);
         return ResponseEntity.accepted().build();
     }
 }

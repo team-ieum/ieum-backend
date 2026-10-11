@@ -98,7 +98,8 @@ public class GitHubApiReader {
         List<OptionItem> repos = new ArrayList<>();
         for (JsonNode installation : allPages(userId, List.of("user", "installations"), "installations", budget)) {
             long installationId = installation.path("id").asLong(0);
-            if (installationId <= 0) {
+            // 일시중지된 설치엔 webhook이 오지 않는다 — 고르게 두면 저장은 되고 발화는 영영 없다
+            if (installationId <= 0 || installation.hasNonNull("suspended_at")) {
                 continue;
             }
             List<String> path = List.of("user", "installations", String.valueOf(installationId), "repositories");
