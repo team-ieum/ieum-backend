@@ -27,6 +27,12 @@ public class AgentNodeRequest {
     /** 에이전트 실행 타입 (simple / react) (nullable, 기본값: simple) */
     private String agentType;
     private List<Map<String, Object>> tools;
+    /**
+     * AI 노드 출력 칸 선언 — 노드 {@code config.outputFields} 원값 그대로 (nullable).
+     * 캐스트·검사하지 않는다: 사용자가 목록 아닌 값을 저장해도 agent가 {@code INVALID_OUTPUT_FIELDS}로
+     * 거르게 둔다(BE에서 캐스트하면 ClassCastException → UNKNOWN으로 샌다).
+     */
+    private Object outputFields;
     /** agent workflow_context 도구 입력 — {nodes:{<id>:{output,status,type}}, trigger} (nullable) */
     private Map<String, Object> workflowContext;
     /** 커스텀 MCP 서버 목록 — ieum-agent의 mcp_servers로 전달 (nullable) */

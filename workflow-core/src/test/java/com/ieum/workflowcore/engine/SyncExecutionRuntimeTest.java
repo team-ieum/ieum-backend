@@ -1038,6 +1038,90 @@ class SyncExecutionRuntimeTest {
             return runtime;
         }
 
+        /**
+         * 회차마다 usage(10/5/15)를 싣고 AI_OUTPUT_MISMATCH로 실패하다가 succeedAt 회차에 성공하는 AI
+         * executor. succeedAt=0이면 끝까지 실패한다. agent가 불일치 실패에도 usage를 싣는 계약을 흉내 낸다.
+         */
+        private NodeExecutor mismatchWithUsage(int succeedAt, AtomicInteger calls) {
+            return new NodeExecutor() {
+                @Override
+                public NodeType getNodeType() {
+                    return NodeType.AI;
+                }
+
+                @Override
+                public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor) {
+                    int attempt = calls.incrementAndGet();
+                    ExecutorResult.TokenUsage usage = new ExecutorResult.TokenUsage(10, 5, 15);
+                    if (succeedAt > 0 && attempt >= succeedAt) {
+                        return ExecutorResult.success(Map.of("urgent", true), 1, usage);
+                    }
+                    return ExecutorResult.failure("출력 필드 'urgent' 누락", 1,
+                        FailureClassifier.fromAgentErrorCode("AI_OUTPUT_MISMATCH"), usage);
+                }
+            };
+        }
+
+        private WorkflowExecutionLog savedLog(String nodeId) {
+            ArgumentCaptor<WorkflowExecutionLog> captor = ArgumentCaptor.forClass(WorkflowExecutionLog.class);
+            verify(logRepository, atLeastOnce()).save(captor.capture());
+            return captor.getAllValues().stream()
+                .filter(l -> nodeId.equals(l.getNodeId())).findFirst().orElseThrow();
+        }
+
+        @Test
+        @DisplayName("AI_OUTPUT_MISMATCH는 기본 정책(같은 모델 3회)으로 재시도 후 소진되고, 3회분 토큰이 node_runs에 남는다")
+        void mismatch_retries_three_times_and_records_summed_tokens() throws Exception {
+            AtomicInteger calls = new AtomicInteger();
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI")),
+                List.of(edge("t", "a", null))
+            );
+            retryRuntime(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults),
+                mismatchWithUsage(0, calls))
+                .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+            assertThat(calls.get()).isEqualTo(3);
+            verifyFinished(ExecutionStatus.FAILED, true);
+            WorkflowExecutionLog aiLog = savedLog("a");
+            assertThat(aiLog.getStatus()).isEqualTo(ExecutionLogStatus.FAILED);
+            assertThat(aiLog.getAttemptCount()).isEqualTo(3);
+            assertThat(aiLog.getPromptTokens()).isEqualTo(30);
+            assertThat(aiLog.getCompletionTokens()).isEqualTo(15);
+            assertThat(aiLog.getTotalTokens()).isEqualTo(45);
+        }
+
+        @Test
+        @DisplayName("2회 불일치 후 3회차 성공 — 성공 로그에도 앞 회차 토큰이 합산된다")
+        void mismatch_succeeds_on_third_attempt_records_summed_tokens() throws Exception {
+            AtomicInteger calls = new AtomicInteger();
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("a", "AI")),
+                List.of(edge("t", "a", null))
+            );
+            retryRuntime(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults),
+                mismatchWithUsage(3, calls))
+                .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+            verifyFinished(ExecutionStatus.SUCCESS, false);
+            WorkflowExecutionLog aiLog = savedLog("a");
+            assertThat(aiLog.getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
+            assertThat(aiLog.getTotalTokens()).isEqualTo(45);
+        }
+
+        @Test
+        @DisplayName("TokenUsage.sum — 양쪽 다 null인 필드는 NPE 없이 null로 남는다")
+        void token_usage_sum_keeps_null_field_without_npe() {
+            assertThat(ExecutorResult.TokenUsage.sum(
+                new ExecutorResult.TokenUsage(null, 1, 1), new ExecutorResult.TokenUsage(null, 2, 3)))
+                .isEqualTo(new ExecutorResult.TokenUsage(null, 3, 4));
+            assertThat(ExecutorResult.TokenUsage.sum(
+                new ExecutorResult.TokenUsage(5, null, 1), new ExecutorResult.TokenUsage(null, 2, 1)))
+                .isEqualTo(new ExecutorResult.TokenUsage(5, 2, 2));
+            ExecutorResult.TokenUsage u = new ExecutorResult.TokenUsage(7, 8, 15);
+            assertThat(ExecutorResult.TokenUsage.sum(u, null)).isEqualTo(u);
+        }
+
         @Test
         @DisplayName("2회차에 성공하면 워크플로우가 계속 진행되고 후속 노드도 실행된다")
         void succeeds_on_second_attempt() throws Exception {

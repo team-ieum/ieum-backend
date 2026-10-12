@@ -30,7 +30,7 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
  * 의존 방향상 쓸 수 없다).
  *
  * <p>LLM 전용 처리가 없다 — LLM 헤더·베타 키 모드·쿼터 예약·토큰 차감·모델 fallback 모두 없고 과금은 0이다.
- * 노드 출력은 agent {@code output} dict 그대로다(AI 노드의 {@code {output, metadata}} 래퍼를 쓰지 않는다).
+ * 노드 출력은 agent {@code output} dict 그대로다(AI 노드 객체 출력과 같은 모양).
  *
  * <p>쓰기 도구를 실행하므로 멱등성 가드({@code X-Idempotency-Key}·MARKER)를 AI 노드와 같은 규칙으로 적용한다.
  * 도구 오류({@code ACTION_TOOL_FAILED})와 알 수 없는 toolKey(HTTP 400)는 {@code CLIENT_ERROR}라 재시도하지 않는다.

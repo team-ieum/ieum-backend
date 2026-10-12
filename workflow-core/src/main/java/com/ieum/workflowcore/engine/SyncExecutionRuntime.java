@@ -498,6 +498,8 @@ public class SyncExecutionRuntime {
             completion.submit(() -> {
                 long overallStart = System.currentTimeMillis();
                 ExecutorResult result;
+                // node_runs는 노드당 1행이다 — 마지막 회차가 아니라 결과까지 쓴 전 회차 토큰을 남긴다
+                ExecutorResult.TokenUsage spent = null;
                 int attempt = 1;
                 while (true) {
                     long attemptStart = System.currentTimeMillis();
@@ -508,6 +510,7 @@ public class SyncExecutionRuntime {
                         result = ExecutorResult.failure(ex.toString(),
                             System.currentTimeMillis() - attemptStart, FailureClassifier.fromException(ex));
                     }
+                    spent = ExecutorResult.TokenUsage.sum(spent, result.getUsage());
                     // MARKER는 "재시도를 포기한다"는 모드다(IdempotencyMode.MARKER 참고) — 2회차를
                     // 시작하면 attempt 1의 원 실패가 executor의 마커 차단(CLIENT_ERROR)으로 덮여써져
                     // node_runs 진단 정보와 retryExhausted 신호가 왜곡된다. 그래서 attempt 1 이후
@@ -538,6 +541,7 @@ public class SyncExecutionRuntime {
                 if (policy.idempotency().usesMarker()) {
                     idempotencyStore.clearInFlight(idempotencyKey);
                 }
+                result.setUsage(spent);
                 long durationMs = System.currentTimeMillis() - overallStart;
                 // 재시도 대상 실패로 maxAttempts까지 다 쓰고도 실패한 경우만 "소진"이다.
                 // attempt==maxAttempts를 직접 확인해야 한다 — 인터럽트로 attempt++ 이전에 break한 경우

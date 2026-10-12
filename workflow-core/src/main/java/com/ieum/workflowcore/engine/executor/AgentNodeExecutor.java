@@ -13,6 +13,7 @@ import com.ieum.workflowcore.engine.executor.dto.McpServerRef;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -37,7 +38,8 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
  *   "credentialId":     "uuid",
  *   "prompt":           "사용자 {{nodes.node-1.output.userName}}에게 이메일 발송",
  *   "promptTemplateId": "template-123",   // nullable
- *   "tools":            [...]              // nullable
+ *   "tools":            [...],             // nullable
+ *   "outputFields":     [{"key": "urgent", "type": "boolean"}]  // nullable, agent가 검사
  * }
  * }</pre>
  */
@@ -150,6 +152,7 @@ public class AgentNodeExecutor implements NodeExecutor {
                 .model(resolvedModel)
                 .agentType(agentType)
                 .tools(tools)
+                .outputFields(config.get("outputFields"))
                 .workflowContext(toWorkflowContext(cursor))
                 .mcpServers(mcpServers.isEmpty() ? null : mcpServers)
                 .build();
@@ -173,13 +176,46 @@ public class AgentNodeExecutor implements NodeExecutor {
                 userId, userRole, toolAuthHeaders, useBetaPlatformKey,
                 cursor.getContext().getTraceId(), idempotencyHeaderKey);
 
+            ExecutorResult.TokenUsage usage = toTokenUsage(agentResult.getUsage());
+
             if (!agentResult.isSuccess()) {
                 betaPlatformProvider.releaseQuietly(betaReservationKey);
                 log.error("[AgentNodeExecutor] 에이전트 실행 실패 — nodeId: {}, error: {}",
                     node.getId(), agentResult.getErrorMessage());
+                // 실패해도 토큰은 이미 썼다(구조화 출력 불일치 등) — 런타임이 node_runs에 합산 기록한다
                 return ExecutorResult.failure(agentResult.getErrorMessage(),
                     System.currentTimeMillis() - startTime,
-                    FailureClassifier.fromAgentErrorCode(agentResult.getErrorCode()));
+                    FailureClassifier.fromAgentErrorCode(agentResult.getErrorCode()), usage);
+            }
+
+            // 노드 출력 조립. 실패 판정이 남아 있으므로 베타 토큰 차감보다 먼저 한다 —
+            // 가드 실패는 agent 실패 응답과 똑같이 일일 호출 환불·토큰 차감 없음으로 처리한다.
+            Object rawOutput = agentResult.getOutput();
+            Map<String, Object> output;
+            if (rawOutput instanceof Map<?, ?> map) {
+                output = new LinkedHashMap<>((Map<String, Object>) map);
+            } else if (rawOutput == null || rawOutput instanceof String) {
+                if (declaresOutputFields(config)) {
+                    // 옛 agent(P3 롤백)는 outputFields를 무시하고 문장(또는 null)을 준다. 그대로 감싸면 하류의
+                    // {{…output.<칸>}}이 ""로 치환돼 CONDITION이 오류 없이 엉뚱한 분기를 탄다.
+                    // 재시도 없음 — 옛 agent는 결정적이고 성공 응답을 멱등 캐시해 재시도마다 같은 응답(토큰만 중복 합산).
+                    betaPlatformProvider.releaseQuietly(betaReservationKey);
+                    log.error("[AgentNodeExecutor] 출력 칸 선언 노드에 문장 응답 — nodeId: {}", node.getId());
+                    return ExecutorResult.failure(
+                        "출력 칸이 선언된 AI 노드인데 agent가 칸 객체가 아닌 출력을 돌려줬습니다 — agent 버전을 확인하세요.",
+                        System.currentTimeMillis() - startTime,
+                        FailureKind.CLIENT_ERROR, usage);
+                }
+                output = new LinkedHashMap<>();   // null 값 허용 — Map.of 금지
+                output.put("output", rawOutput);
+            } else {
+                // 배열·숫자·불 — agent 계약 버그라 같은 응답을 재시도로 반복할 이유가 없다
+                betaPlatformProvider.releaseQuietly(betaReservationKey);
+                log.error("[AgentNodeExecutor] agent output 타입 계약 위반 — nodeId: {}, type: {}",
+                    node.getId(), rawOutput.getClass().getSimpleName());
+                return ExecutorResult.failure(
+                    "agent 응답 output이 객체·문자열이 아닙니다: " + rawOutput.getClass().getSimpleName(),
+                    System.currentTimeMillis() - startTime, FailureKind.CLIENT_ERROR, usage);
             }
 
             // 베타 플랫폼 키를 사용했다면 응답 usage.totalTokens로 사용량을 사후 차감한다.
@@ -195,13 +231,8 @@ public class AgentNodeExecutor implements NodeExecutor {
                 }
             }
 
-            Map<String, Object> output = new HashMap<>();
-            output.put("output", agentResult.getOutput());
-            output.put("metadata", agentResult.getMetadata());
-
             log.info("[AgentNodeExecutor] 에이전트 실행 성공 — nodeId: {}", node.getId());
-            return ExecutorResult.success(output, System.currentTimeMillis() - startTime,
-                toTokenUsage(agentResult.getUsage()));
+            return ExecutorResult.success(output, System.currentTimeMillis() - startTime, usage);
 
         } catch (Exception e) {
             betaPlatformProvider.releaseQuietly(betaReservationKey);
@@ -209,6 +240,11 @@ public class AgentNodeExecutor implements NodeExecutor {
             return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime,
                 FailureClassifier.fromException(e));
         }
+    }
+
+    /** {@code config.outputFields}가 비어 있지 않은 목록이면 칸 선언 노드다. 그 밖의 값은 agent가 INVALID_OUTPUT_FIELDS로 거른다. */
+    private static boolean declaresOutputFields(Map<String, Object> config) {
+        return config.get("outputFields") instanceof List<?> fields && !fields.isEmpty();
     }
 
     /**
@@ -348,7 +384,7 @@ public class AgentNodeExecutor implements NodeExecutor {
         } catch (WebClientResponseException e) {
             log.error("[AgentNodeExecutor] 에이전트 서비스 오류 — status: {}, body: {}",
                 e.getStatusCode(), e.getResponseBodyAsString());
-            return new AgentExecutionResult(false, null, null,
+            return new AgentExecutionResult(false, null,
                 "에이전트 서비스 오류 (HTTP " + e.getStatusCode().value() + "): "
                     + e.getResponseBodyAsString(), null,
                 FailureClassifier.agentServiceErrorCode(e.getStatusCode().value()));
