@@ -1,5 +1,6 @@
 package com.ieum.api.workflow;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -7,16 +8,24 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.ieum.api.workflow.queue.ExecutionJobQueue;
 import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.engine.SyncExecutionRuntime;
+import com.ieum.workflowcore.engine.validation.WorkflowValidationException;
+import com.ieum.workflowcore.engine.validation.WorkflowValidationResult;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.slf4j.LoggerFactory;
 
 class WorkflowExecutionRunnerTest {
 
@@ -90,5 +99,50 @@ class WorkflowExecutionRunnerTest {
         runner.executeNow(version, executionId, triggerData);
 
         verify(workflowExecutionService).markAsFailed(eq(executionId), any());
+    }
+
+    @Test
+    @DisplayName("검증 차단(사용자 설정 오류)은 ERROR+스택이 아니라 WARN 한 줄로 남기고 FAILED 기록은 그대로다")
+    void executeNow_validationBlocked_logsSingleWarn() throws Exception {
+        doThrow(new WorkflowValidationException(List.of(
+                new WorkflowValidationResult.ValidationError("a", "config.prompt", "REQUIRED", "프롬프트를 입력하세요."))))
+            .when(syncExecutionRuntime).execute(any(), any(), any(), any());
+        Logger runnerLogger = (Logger) LoggerFactory.getLogger(WorkflowExecutionRunner.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        runnerLogger.addAppender(appender);
+        try {
+            runner.executeNow(version, executionId, triggerData);
+        } finally {
+            runnerLogger.detachAppender(appender);
+        }
+
+        verify(workflowExecutionService).markAsFailed(eq(executionId), any());
+        assertThat(appender.list).hasSize(1);
+        ILoggingEvent event = appender.list.get(0);
+        assertThat(event.getLevel()).isEqualTo(Level.WARN);
+        assertThat(event.getThrowableProxy()).isNull();
+        assertThat(event.getFormattedMessage())
+            .contains(executionId.toString(), "검증 실패 1건: 프롬프트를 입력하세요.");
+    }
+
+    @Test
+    @DisplayName("검증 외 예외는 기존처럼 ERROR + 스택트레이스로 남는다")
+    void executeNow_otherException_logsErrorWithStack() throws Exception {
+        doThrow(new IllegalStateException("boom"))
+            .when(syncExecutionRuntime).execute(any(), any(), any(), any());
+        Logger runnerLogger = (Logger) LoggerFactory.getLogger(WorkflowExecutionRunner.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        runnerLogger.addAppender(appender);
+        try {
+            runner.executeNow(version, executionId, triggerData);
+        } finally {
+            runnerLogger.detachAppender(appender);
+        }
+
+        assertThat(appender.list).hasSize(1);
+        assertThat(appender.list.get(0).getLevel()).isEqualTo(Level.ERROR);
+        assertThat(appender.list.get(0).getThrowableProxy()).isNotNull();
     }
 }

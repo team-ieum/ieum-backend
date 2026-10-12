@@ -420,6 +420,72 @@ class WorkflowExecutionServiceTest {
         assertThat(outputs.get("node-2")).containsEntry("count", 3);
     }
 
+    @Test
+    @DisplayName("직전 실행의 재사용 행이 0건이면(1단계에서 막힌 실행) 그 이전 실행으로 거슬러 가 행을 읽는다")
+    void reusableOutputs_emptySource_walksBackToEarlierRun() {
+        UUID retryId = UUID.randomUUID();
+        WorkflowExecution blocked = mock(WorkflowExecution.class);
+        UUID blockedId = UUID.randomUUID();
+        given(blocked.getId()).willReturn(blockedId);
+        WorkflowExecution earlier = mock(WorkflowExecution.class);
+        UUID earlierId = UUID.randomUUID();
+        given(earlier.getId()).willReturn(earlierId);
+        given(workflowExecutionRepository.findByRetriedByExecutionId(retryId)).willReturn(Optional.of(blocked));
+        given(workflowExecutionRepository.findByRetriedByExecutionId(blockedId)).willReturn(Optional.of(earlier));
+        // 막힌 실행은 1단계에서 끝나 node_runs가 없다
+        given(workflowExecutionLogRepository.findByExecutionIdAndStatusIn(blockedId,
+                List.of(ExecutionLogStatus.SUCCESS, ExecutionLogStatus.SKIPPED)))
+            .willReturn(List.of());
+        List<WorkflowExecutionLog> earlierLogs = List.of(mockLogWithOutput("node-1", "{\"text\":\"안녕\"}"));
+        given(workflowExecutionLogRepository.findByExecutionIdAndStatusIn(earlierId,
+                List.of(ExecutionLogStatus.SUCCESS, ExecutionLogStatus.SKIPPED)))
+            .willReturn(earlierLogs);
+
+        assertThat(service.loadReusableNodeOutputs(retryId)).containsOnlyKeys("node-1");
+    }
+
+    @Test
+    @DisplayName("막힌 실행이 연달아 둘이어도(B 막힘 → B 재처리 C 막힘) 끝까지 거슬러 가 원 실행의 행을 읽는다")
+    void reusableOutputs_twoBlockedRuns_walksBackTwice() {
+        UUID retryId = UUID.randomUUID();
+        WorkflowExecution blocked2 = mock(WorkflowExecution.class);
+        UUID blocked2Id = UUID.randomUUID();
+        given(blocked2.getId()).willReturn(blocked2Id);
+        WorkflowExecution blocked1 = mock(WorkflowExecution.class);
+        UUID blocked1Id = UUID.randomUUID();
+        given(blocked1.getId()).willReturn(blocked1Id);
+        WorkflowExecution original = mock(WorkflowExecution.class);
+        UUID originalId = UUID.randomUUID();
+        given(original.getId()).willReturn(originalId);
+        given(workflowExecutionRepository.findByRetriedByExecutionId(retryId)).willReturn(Optional.of(blocked2));
+        given(workflowExecutionRepository.findByRetriedByExecutionId(blocked2Id)).willReturn(Optional.of(blocked1));
+        given(workflowExecutionRepository.findByRetriedByExecutionId(blocked1Id)).willReturn(Optional.of(original));
+        List<ExecutionLogStatus> reusable = List.of(ExecutionLogStatus.SUCCESS, ExecutionLogStatus.SKIPPED);
+        given(workflowExecutionLogRepository.findByExecutionIdAndStatusIn(blocked2Id, reusable)).willReturn(List.of());
+        given(workflowExecutionLogRepository.findByExecutionIdAndStatusIn(blocked1Id, reusable)).willReturn(List.of());
+        List<WorkflowExecutionLog> originalLogs = List.of(mockLogWithOutput("node-1", "{\"text\":\"안녕\"}"));
+        given(workflowExecutionLogRepository.findByExecutionIdAndStatusIn(originalId, reusable)).willReturn(originalLogs);
+
+        assertThat(service.loadReusableNodeOutputs(retryId)).containsOnlyKeys("node-1");
+    }
+
+    @Test
+    @DisplayName("거슬러 가는 링크가 순환해도 멈추고 빈 결과를 돌려준다")
+    void reusableOutputs_cyclicChain_terminatesEmpty() {
+        UUID retryId = UUID.randomUUID();
+        WorkflowExecution first = mock(WorkflowExecution.class);
+        UUID firstId = UUID.randomUUID();
+        lenient().when(first.getId()).thenReturn(firstId);
+        WorkflowExecution second = mock(WorkflowExecution.class);
+        UUID secondId = UUID.randomUUID();
+        lenient().when(second.getId()).thenReturn(secondId);
+        given(workflowExecutionRepository.findByRetriedByExecutionId(retryId)).willReturn(Optional.of(first));
+        lenient().when(workflowExecutionRepository.findByRetriedByExecutionId(firstId)).thenReturn(Optional.of(second));
+        lenient().when(workflowExecutionRepository.findByRetriedByExecutionId(secondId)).thenReturn(Optional.of(first));
+
+        assertThat(service.loadReusableNodeOutputs(retryId)).isEmpty();
+    }
+
     private WorkflowExecutionLog mockLogWithOutput(String nodeId, String outputJson) {
         WorkflowExecutionLog log = mock(WorkflowExecutionLog.class);
         given(log.getOutputJson()).willReturn(outputJson);

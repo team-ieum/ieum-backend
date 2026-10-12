@@ -179,8 +179,14 @@ public class SyncExecutionRuntime {
                     throw new WorkflowValidationException(result.errors());
                 });
         } catch (Exception e) {
-            log.error("[Runtime] 워크플로우 초기화 실패 — executionId: {}, error: {}",
-                execution.getId(), e.getMessage());
+            if (e instanceof WorkflowValidationException) {
+                // 사용자 설정 오류라 장애 로그(ERROR)로 올리지 않는다
+                log.warn("[Runtime] 정적 검증 차단 — executionId: {}, workflowId: {}, 사유: {}",
+                    executionId, workflowId, e.getMessage());
+            } else {
+                log.error("[Runtime] 워크플로우 초기화 실패 — executionId: {}, error: {}",
+                    execution.getId(), e.getMessage());
+            }
             // 이 단계 실패엔 노드 로그가 없다 — 실행 단위 사유가 유일한 원인 기록이다(finishIfNotTerminal은 상태만 쓴다).
             workflowExecutionRepository.recordErrorIfNotTerminal(executionId, e.getMessage(), LocalDateTime.now());
             finalizeFailure(execution, executionId, false, null, e.getMessage());

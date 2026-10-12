@@ -41,6 +41,7 @@
 ### 성공 노드 스킵 (실패 실행 재처리)
 `execute(version, executionId, triggerData, preCompletedOutputs)` 4-인자 오버로드. `preCompletedOutputs`에 있는 노드는 executor를 부르지 않고 주어진 출력을 성공 결과로 삼아 `SKIPPED` 로그를 남긴다. 빈 Map이면 3-인자와 완전히 동일 동작.
 **TRIGGER 노드는 스킵 대상에서 제외한다** — `node_runs`의 output은 `SensitiveDataMasker`를 거쳐 민감값이 `***`인데, `TriggerNodeExecutor`는 부작용이 없어 재실행이 공짜이고 복호된 triggerData로 같은 출력을 다시 만든다.
+**재사용 체인 거슬러 가기** — `WorkflowExecutionService.loadReusableNodeOutputs`는 직전 실행(`findByRetriedByExecutionId`)의 SUCCESS·SKIPPED 행이 0건이면(정적 검증 등 1단계에서 막힌 이어진 실행·재처리) 그 실행의 원본으로 한 단계씩 더 거슬러 가 첫 비어 있지 않은 실행의 행을 쓴다(방문 집합으로 순환 차단). 막힌 실행을 재처리해도 앞 실행의 성공 노드·승인 게이트를 다시 돌리지 않는다 — 거부 게이트 FAILED 행은 여전히 재사용 대상이 아니다.
 
 ### 승인 게이트 (HITL, IEUM-BE-45)
 `APPROVAL` 노드는 NodeExecutor가 없다 — `dispatch()`가 사전 완료 출력(`preCompleted`)이 없는 APPROVAL을 **제출하지 않고** 대기 목록에 넣고 `APPROVAL_REQUESTED`를 발행한다. 제출하지 않으니 `propagate`가 불리지 않아 하류의 남은 입력 수가 줄지 않는다 — 미승인 게이트의 하류는 이 실행에서 절대 ready가 되지 않는다. 게이트와 무관한 분기는 계속 돈다.

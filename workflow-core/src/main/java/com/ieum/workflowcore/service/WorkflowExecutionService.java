@@ -25,6 +25,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -146,6 +147,11 @@ public class WorkflowExecutionService {
      * <p>{@code SKIPPED}도 함께 읽는다. 재처리를 다시 재처리할 때 앞선 재처리에서 이미 건너뛴
      * 노드를 되살려 실행하지 않기 위함이다.
      *
+     * <p>직전 실행에 재사용 행이 하나도 없으면(정적 검증 등 1단계에서 막혀 노드를 하나도 돌리지 않은 실행)
+     * 그 실행의 {@code retriedBy} 원본으로 한 단계씩 거슬러 가 첫 비어 있지 않은 실행의 행을 쓴다 — 막힌 실행을
+     * 재처리할 때 그 앞 실행에서 이미 성공한 노드(승인 게이트 포함)를 다시 돌리지 않기 위함이다. 거부 게이트의
+     * FAILED 행은 애초에 재사용 대상이 아니라 재승인 요구는 그대로다. 방문 집합으로 순환을 끊는다.
+     *
      * <p><b>output은 {@code SensitiveDataMasker}를 거쳐 저장된 값이다</b> — 민감 키는 {@code ***}로
      * 마스킹돼 있다. 뒤 노드가 앞 노드 출력의 자격증명을 참조하는 워크플로우라면 재처리에서
      * 마스킹된 값이 흘러간다.
@@ -153,14 +159,22 @@ public class WorkflowExecutionService {
     public Map<String, Map<String, Object>> loadReusableNodeOutputs(UUID retryExecutionId) {
         Optional<WorkflowExecution> source =
             workflowExecutionRepository.findByRetriedByExecutionId(retryExecutionId);
-        if (source.isEmpty()) {
+        List<WorkflowExecutionLog> logs = List.of();
+        Set<UUID> visited = new HashSet<>(Set.of(retryExecutionId));
+        while (source.isPresent() && visited.add(source.get().getId())) {
+            logs = workflowExecutionLogRepository.findByExecutionIdAndStatusIn(source.get().getId(),
+                List.of(ExecutionLogStatus.SUCCESS, ExecutionLogStatus.SKIPPED));
+            if (!logs.isEmpty()) {
+                break;
+            }
+            source = workflowExecutionRepository.findByRetriedByExecutionId(source.get().getId());
+        }
+        if (logs.isEmpty()) {
             return Map.of();
         }
 
         Map<String, Map<String, Object>> outputs = new LinkedHashMap<>();
-        for (WorkflowExecutionLog logEntry : workflowExecutionLogRepository
-                .findByExecutionIdAndStatusIn(source.get().getId(),
-                    List.of(ExecutionLogStatus.SUCCESS, ExecutionLogStatus.SKIPPED))) {
+        for (WorkflowExecutionLog logEntry : logs) {
             if (logEntry.getOutputJson() == null) {
                 continue;
             }
