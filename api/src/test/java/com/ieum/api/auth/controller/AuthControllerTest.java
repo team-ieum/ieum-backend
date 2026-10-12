@@ -6,7 +6,9 @@ import com.ieum.auth.domain.AuthProvider;
 import com.ieum.auth.domain.User;
 import com.ieum.auth.domain.UserRole;
 import com.ieum.auth.dto.TokenInfo;
+import com.ieum.auth.domain.VerificationPurpose;
 import com.ieum.auth.service.AuthService;
+import com.ieum.auth.service.EmailVerificationService;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,6 +34,9 @@ class AuthControllerTest {
 
     @Mock
     private AuthService authService;
+
+    @Mock
+    private EmailVerificationService emailVerificationService;
 
     @InjectMocks
     private AuthController authController;
@@ -196,6 +201,125 @@ class AuthControllerTest {
     }
 
     // ===== 헬퍼 =====
+
+    // ===== POST /api/v1/auth/email/send-code =====
+
+    @Test
+    void sendCode_success_returns200() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/email/send-code")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "email", "user@example.com",
+                                "purpose", "SIGNUP"
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        then(emailVerificationService).should().sendCode("user@example.com", VerificationPurpose.SIGNUP);
+    }
+
+    @Test
+    void sendCode_unknownPurpose_returns400() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/email/send-code")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "email", "user@example.com",
+                                "purpose", "LOGIN"
+                        ))))
+                .andExpect(status().isBadRequest());
+
+        then(emailVerificationService).shouldHaveNoInteractions();
+    }
+
+    @Test
+    void sendCode_tooSoon_returns429() throws Exception {
+        willThrow(new CustomException(ErrorCode.VERIFICATION_RESEND_TOO_SOON))
+                .given(emailVerificationService).sendCode(anyString(), any());
+
+        mockMvc.perform(post("/api/v1/auth/email/send-code")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "email", "user@example.com",
+                                "purpose", "PASSWORD_RESET"
+                        ))))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.code").value(ErrorCode.VERIFICATION_RESEND_TOO_SOON.name()));
+    }
+
+    // ===== POST /api/v1/auth/email/verify-code =====
+
+    @Test
+    void verifyCode_success_returns200() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/email/verify-code")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "email", "user@example.com",
+                                "code", "123456",
+                                "purpose", "SIGNUP"
+                        ))))
+                .andExpect(status().isOk());
+
+        then(emailVerificationService).should()
+                .verifyCode("user@example.com", "123456", VerificationPurpose.SIGNUP);
+    }
+
+    @Test
+    void verifyCode_notSixDigits_returns400() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/email/verify-code")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "email", "user@example.com",
+                                "code", "12a456",
+                                "purpose", "SIGNUP"
+                        ))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.INVALID_INPUT.name()));
+
+        then(emailVerificationService).shouldHaveNoInteractions();
+    }
+
+    // ===== POST /api/v1/auth/password/reset =====
+
+    @Test
+    void resetPassword_success_returns200() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/password/reset")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "email", "user@example.com",
+                                "newPassword", "NewPassword1!"
+                        ))))
+                .andExpect(status().isOk());
+
+        then(authService).should().resetPassword("user@example.com", "NewPassword1!");
+    }
+
+    @Test
+    void resetPassword_weakPassword_returns400() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/password/reset")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "email", "user@example.com",
+                                "newPassword", "weakpass"
+                        ))))
+                .andExpect(status().isBadRequest());
+
+        then(authService).should(never()).resetPassword(anyString(), anyString());
+    }
+
+    @Test
+    void resetPassword_notVerified_returns400() throws Exception {
+        willThrow(new CustomException(ErrorCode.EMAIL_NOT_VERIFIED))
+                .given(authService).resetPassword(anyString(), anyString());
+
+        mockMvc.perform(post("/api/v1/auth/password/reset")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "email", "user@example.com",
+                                "newPassword", "NewPassword1!"
+                        ))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.EMAIL_NOT_VERIFIED.name()));
+    }
 
     private User buildUser() {
         return User.builder()

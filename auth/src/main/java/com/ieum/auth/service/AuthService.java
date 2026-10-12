@@ -5,6 +5,7 @@ import com.ieum.auth.domain.OAuthAuthorizationCode;
 import com.ieum.auth.domain.RefreshToken;
 import com.ieum.auth.domain.User;
 import com.ieum.auth.domain.UserRole;
+import com.ieum.auth.domain.VerificationPurpose;
 import com.ieum.auth.dto.TokenInfo;
 import com.ieum.auth.jwt.JwtTokenProvider;
 import com.ieum.auth.repository.OAuthAuthorizationCodeRepository;
@@ -29,6 +30,7 @@ public class AuthService {
     private final OAuthAuthorizationCodeRepository oAuthAuthorizationCodeRepository;
     private final JwtTokenProvider jwtTokenProvider;
     private final PasswordEncoder passwordEncoder;
+    private final EmailVerificationService emailVerificationService;
 
     @Value("${jwt.refresh-expiration}")
     private long refreshExpiration;
@@ -38,6 +40,8 @@ public class AuthService {
         if (userRepository.existsByEmail(email)) {
             throw new CustomException(ErrorCode.EMAIL_ALREADY_EXISTS);
         }
+        // 중복 검사 뒤에 소비한다 — 중복 이메일 요청이 인증 표시를 헛되이 지우지 않도록.
+        emailVerificationService.consumeVerification(email, VerificationPurpose.SIGNUP);
         User user = User.builder()
             .email(email)
             .passwordHash(passwordEncoder.encode(password))
@@ -46,6 +50,25 @@ public class AuthService {
             .role(UserRole.ROLE_USER)
             .build();
         return userRepository.save(user);
+    }
+
+    /**
+     * PASSWORD_RESET 인증을 마친 이메일의 비밀번호를 바꾸고 Refresh Token을 지워 기존 세션을 끊는다.
+     *
+     * <p>인증코드는 LOCAL 계정에만 발송되므로 인증 표시가 있으면 LOCAL 계정이 있다. 그 사이 계정이
+     * 사라졌거나 소셜 계정으로 바뀐 경우만 NOT_FOUND다.
+     */
+    @Transactional
+    public void resetPassword(String email, String newPassword) {
+        emailVerificationService.consumeVerification(email, VerificationPurpose.PASSWORD_RESET);
+
+        User user = userRepository.findByEmail(email)
+            .filter(found -> found.getProvider() == AuthProvider.LOCAL)
+            .orElseThrow(() -> new CustomException(ErrorCode.NOT_FOUND));
+
+        user.updatePassword(passwordEncoder.encode(newPassword));
+        // ponytail: 이미 발급된 Access Token은 만료(30분)까지 유효하다. 즉시 차단이 필요하면 토큰 블랙리스트 추가.
+        refreshTokenRepository.deleteById(user.getId().toString());
     }
 
     @Transactional
