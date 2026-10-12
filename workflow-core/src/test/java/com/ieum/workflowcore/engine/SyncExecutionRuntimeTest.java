@@ -436,6 +436,21 @@ class SyncExecutionRuntimeTest {
     }
 
     @Test
+    @DisplayName("예상 밖 1단계 예외(Mongo 장애 등)는 사용자에게 보이는 error_message에 원문 대신 고정 문구를 남긴다 — 운영 알림은 원문")
+    void unexpectedInitFailure_recordsGenericReason() {
+        when(crudService.loadDefinition(any()))
+            .thenThrow(new RuntimeException("Timed out after 30000 ms while waiting to connect. cluster: 10.10.10.3:27017"));
+
+        assertThatThrownBy(this::run).isInstanceOf(RuntimeException.class);
+
+        verify(executionRepository).recordErrorIfNotTerminal(eq(executionId), eq("워크플로우 정의를 불러오지 못했습니다."), any());
+        ArgumentCaptor<AlertNotifier.ExecutionFailureAlert> captor =
+            ArgumentCaptor.forClass(AlertNotifier.ExecutionFailureAlert.class);
+        verify(alertNotifier).notifyExecutionFailed(captor.capture());
+        assertThat(captor.getValue().errorSummary()).contains("10.10.10.3:27017");
+    }
+
+    @Test
     @DisplayName("node_runs에 실행 traceId가 함께 저장된다")
     void saveLog_includesTraceId() throws Exception {
         stubDefinition(
