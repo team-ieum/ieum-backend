@@ -6,7 +6,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.never;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -36,6 +36,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 class HookReceiveControllerTest {
 
     private static final String TOKEN = "tok_abc";
+    private static final UUID WORKFLOW_ID = UUID.randomUUID();
 
     private final WebhookService webhookService = mock(WebhookService.class);
     private MockMvc mockMvc;
@@ -46,11 +47,12 @@ class HookReceiveControllerTest {
                 new HookReceiveController(new HookPayloadReader(new ObjectMapper()), webhookService))
             .setControllerAdvice(new GlobalExceptionHandler())
             .build();
+        given(webhookService.resolveHook(TOKEN)).willReturn(WORKFLOW_ID);
     }
 
     private HookRequest receivedRequest() {
         ArgumentCaptor<HookRequest> captor = ArgumentCaptor.forClass(HookRequest.class);
-        verify(webhookService).receive(eq(TOKEN), captor.capture());
+        verify(webhookService).receive(eq(WORKFLOW_ID), captor.capture());
         return captor.getValue();
     }
 
@@ -63,7 +65,7 @@ class HookReceiveControllerTest {
     @DisplayName("감싸지 않은 JSON 객체(GitHub ping) → 그대로 payload, 200 {ok, executionId}")
     void unwrappedJsonObject() throws Exception {
         UUID executionId = UUID.randomUUID();
-        given(webhookService.receive(eq(TOKEN), any()))
+        given(webhookService.receive(eq(WORKFLOW_ID), any()))
             .willReturn(WorkflowExecutionResponse.builder().id(executionId).build());
 
         mockMvc.perform(post("/api/v1/hooks/{token}", TOKEN)
@@ -165,7 +167,7 @@ class HookReceiveControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(ErrorCode.INVALID_INPUT.name()));
         }
-        verifyNoInteractions(webhookService);
+        verify(webhookService, never()).receive(any(), any());
     }
 
     @Test
@@ -176,7 +178,7 @@ class HookReceiveControllerTest {
         mockMvc.perform(post("/api/v1/hooks/{token}", TOKEN).contentType(MediaType.TEXT_PLAIN).content(over))
             .andExpect(status().isPayloadTooLarge())
             .andExpect(jsonPath("$.code").value(ErrorCode.WEBHOOK_PAYLOAD_TOO_LARGE.name()));
-        verifyNoInteractions(webhookService);
+        verify(webhookService, never()).receive(any(), any());
 
         byte[] exact = new byte[5 * 1024 * 1024];
         java.util.Arrays.fill(exact, (byte) 'a');
@@ -185,17 +187,32 @@ class HookReceiveControllerTest {
     }
 
     @Test
-    @DisplayName("토큰이 없거나 틀리면 404 WORKFLOW_NOT_FOUND")
-    void unknownToken_404() throws Exception {
-        given(webhookService.receive(any(), any())).willThrow(new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+    @DisplayName("토큰이 없거나 틀리면 404 WORKFLOW_NOT_FOUND — 본문은 읽지 않는다(5MB 초과·깨진 JSON이어도 404)")
+    void unknownToken_404_beforeBody() throws Exception {
+        given(webhookService.resolveHook("nope")).willThrow(new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+        byte[] over = new byte[5 * 1024 * 1024 + 1];
 
-        mockMvc.perform(post("/api/v1/hooks/{token}", "nope").contentType(MediaType.APPLICATION_JSON).content("{}"))
+        mockMvc.perform(post("/api/v1/hooks/{token}", "nope").contentType(MediaType.TEXT_PLAIN).content(over))
             .andExpect(status().isNotFound())
             .andExpect(jsonPath("$.code").value(ErrorCode.WORKFLOW_NOT_FOUND.name()));
+        mockMvc.perform(post("/api/v1/hooks/{token}", "nope").contentType(MediaType.APPLICATION_JSON).content("{\"a\": "))
+            .andExpect(status().isNotFound());
+        verify(webhookService, never()).receive(any(), any());
     }
 
     @Test
-    @DisplayName("includeRaw true → method·headers·query·body·rawBody, authorization·cookie는 대소문자 무관 가림")
+    @DisplayName("분당 한도 초과 → 429 WEBHOOK_RATE_LIMITED — 본문을 읽기 전이라 깨진 JSON도 429")
+    void rateLimited_429_beforeBody() throws Exception {
+        given(webhookService.resolveHook(TOKEN)).willThrow(new CustomException(ErrorCode.WEBHOOK_RATE_LIMITED));
+
+        mockMvc.perform(post("/api/v1/hooks/{token}", TOKEN).contentType(MediaType.APPLICATION_JSON).content("{\"a\": "))
+            .andExpect(status().isTooManyRequests())
+            .andExpect(jsonPath("$.code").value(ErrorCode.WEBHOOK_RATE_LIMITED.name()));
+        verify(webhookService, never()).receive(any(), any());
+    }
+
+    @Test
+    @DisplayName("includeRaw true → method·headers·query·body·rawBody, 자격증명 헤더는 대소문자 무관 가림, 서명 헤더는 원문")
     void includeRaw_shape() throws Exception {
         String raw = "{\"event\": \"fromBody\"}";
         mockMvc.perform(post("/api/v1/hooks/{token}?event=fromQuery&source=q", TOKEN)
@@ -203,6 +220,18 @@ class HookReceiveControllerTest {
                 .header("AUTHORIZATION", "Bearer secret")
                 .header("Cookie", "sid=secret")
                 .header("X-Hub-Signature-256", "sha256=abc")
+                .header("Proxy-Authorization", "Basic secret")
+                .header("Set-Cookie", "sid=secret")
+                .header("X-API-Key", "secret")
+                .header("X-Auth-Token", "secret")
+                .header("X-Access-Token", "secret")
+                .header("X-CSRF-Token", "secret")
+                .header("X-XSRF-TOKEN", "secret")
+                .header("X-Hub-Signature", "sha1=def")
+                .header("Stripe-Signature", "t=1,v1=ghi")
+                .header("X-Slack-Signature", "v0=jkl")
+                .header("X-Gitlab-Token", "glverify")
+                .header("X-Hook-Secret", "asanaverify")
                 .content(raw))
             .andExpect(status().isOk());
 
@@ -216,9 +245,22 @@ class HookReceiveControllerTest {
         Map<String, String> headers = (Map<String, String>) out.get("headers");
         assertThat(headers).containsEntry("authorization", "***")
             .containsEntry("cookie", "***")
+            .containsEntry("proxy-authorization", "***")
+            .containsEntry("set-cookie", "***")
+            .containsEntry("x-api-key", "***")
+            .containsEntry("x-auth-token", "***")
+            .containsEntry("x-access-token", "***")
+            .containsEntry("x-csrf-token", "***")
+            .containsEntry("x-xsrf-token", "***")
+            // 서명·검증 헤더는 includeRaw의 존재 이유다 — 가리면 워크플로우가 서명을 검증할 수 없다
             .containsEntry("x-hub-signature-256", "sha256=abc")
+            .containsEntry("x-hub-signature", "sha1=def")
+            .containsEntry("stripe-signature", "t=1,v1=ghi")
+            .containsEntry("x-slack-signature", "v0=jkl")
+            .containsEntry("x-gitlab-token", "glverify")
+            .containsEntry("x-hook-secret", "asanaverify")
             .doesNotContainKeys("AUTHORIZATION", "Cookie");
-        assertThat(headers.toString()).doesNotContain("secret");
+        assertThat(headers.values().toString()).doesNotContain("secret");
     }
 
     @Test

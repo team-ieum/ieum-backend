@@ -35,7 +35,15 @@ import org.springframework.stereotype.Component;
 public class HookPayloadReader {
 
     static final int MAX_BODY_BYTES = 5 * 1024 * 1024;
-    private static final Set<String> MASKED_HEADERS = Set.of("authorization", "cookie");
+    /**
+     * includeRaw 모드에서 값을 가리는 자격증명 헤더(소문자). 서명 헤더({@code x-hub-signature-256}·{@code stripe-signature}·
+     * {@code x-slack-signature} 등)는 includeRaw의 존재 이유(서명 검증)라 넣지 않는다. workflow-core
+     * {@code SensitiveDataMasker}는 부분 일치({@code token}·{@code secret})라 {@code x-gitlab-token} 같은 검증 헤더까지
+     * 가리므로 쓰지 않는다.
+     */
+    static final Set<String> MASKED_HEADERS = Set.of(
+        "authorization", "proxy-authorization", "cookie", "set-cookie",
+        "x-api-key", "x-auth-token", "x-access-token", "x-csrf-token", "x-xsrf-token");
 
     private final ObjectMapper objectMapper;
 
@@ -49,7 +57,7 @@ public class HookPayloadReader {
         return new HookRequest(request.getMethod(), headers(request), query, result, body);
     }
 
-    /** 소문자 키, 여러 값은 {@code ", "}로 잇는다. 자격증명이 담기는 {@code authorization}·{@code cookie}는 가린다(R5). */
+    /** 소문자 키, 여러 값은 {@code ", "}로 잇는다. 자격증명 헤더({@link #MASKED_HEADERS})는 가린다(R5). */
     private static Map<String, String> headers(HttpServletRequest request) {
         Map<String, String> headers = new LinkedHashMap<>();
         for (String name : Collections.list(request.getHeaderNames())) {

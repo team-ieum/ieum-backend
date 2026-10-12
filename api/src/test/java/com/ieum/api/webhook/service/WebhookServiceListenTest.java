@@ -48,8 +48,9 @@ class WebhookServiceListenTest {
     private final WebhookListenStore listenStore = mock(WebhookListenStore.class);
     private final NodeTestRunner nodeTestRunner = mock(NodeTestRunner.class);
     private final WorkflowWebhookTokenService tokenService = mock(WorkflowWebhookTokenService.class);
-    private final WebhookService service =
-        new WebhookService(crudService, executionService, runner, listenStore, nodeTestRunner, tokenService);
+    private final WebhookRateLimiter rateLimiter = mock(WebhookRateLimiter.class);
+    private final WebhookService service = new WebhookService(
+        crudService, executionService, runner, listenStore, nodeTestRunner, tokenService, rateLimiter);
 
     private final UUID workflowId = UUID.randomUUID();
     private final WorkflowVersion version = mock(WorkflowVersion.class);
@@ -204,14 +205,40 @@ class WebhookServiceListenTest {
     // ──────────────────── 토큰 주소(/api/v1/hooks/{token}) ────────────────────
 
     @Test
-    @DisplayName("토큰 주소 — 토큰이 맞지 않으면 404, 워크플로우 조회·listen 소비 없음")
-    void receive_unknownToken_404() {
+    @DisplayName("토큰 주소 — 토큰이 맞지 않으면 404, 횟수를 세지 않고 워크플로우 조회·listen 소비 없음")
+    void resolveHook_unknownToken_404() {
         given(tokenService.findWorkflowIdByToken("bad")).willReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.receive("bad", hook))
+        assertThatThrownBy(() -> service.resolveHook("bad"))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WORKFLOW_NOT_FOUND));
+        verifyNoInteractions(rateLimiter, crudService, listenStore, runner);
+    }
+
+    @Test
+    @DisplayName("토큰 주소 — 한도 안이면 workflowId, 넘으면 429 WEBHOOK_RATE_LIMITED")
+    void resolveHook_rateLimit() {
+        given(tokenService.findWorkflowIdByToken("tok")).willReturn(Optional.of(workflowId));
+        given(rateLimiter.tryAcquire(workflowId)).willReturn(true, false);
+
+        assertThat(service.resolveHook("tok")).isEqualTo(workflowId);
+        assertThatThrownBy(() -> service.resolveHook("tok"))
+            .isInstanceOfSatisfying(CustomException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WEBHOOK_RATE_LIMITED));
         verifyNoInteractions(crudService, listenStore, runner);
+    }
+
+    @Test
+    @DisplayName("기존 주소(/api/v1/webhooks/{workflowId})엔 횟수 제한이 걸리지 않는다(R1)")
+    void trigger_notRateLimited() {
+        workflow(true, TriggerType.WEBHOOK);
+        listening(null);
+
+        for (int i = 0; i < 61; i++) {
+            service.trigger(workflowId, request);
+        }
+        verify(runner, times(61)).run(eq(version), any(), eq(payload));
+        verifyNoInteractions(rateLimiter);
     }
 
     @Test
@@ -219,9 +246,8 @@ class WebhookServiceListenTest {
     void receive_runsWithPayload() {
         workflow(true, TriggerType.WEBHOOK);
         listening(null);
-        given(tokenService.findWorkflowIdByToken("tok")).willReturn(Optional.of(workflowId));
 
-        assertThat(service.receive("tok", hook)).isNotNull();
+        assertThat(service.receive(workflowId, hook)).isNotNull();
         verify(runner).run(eq(version), any(), eq(payload));
     }
 
@@ -230,9 +256,8 @@ class WebhookServiceListenTest {
     void receive_listening_savesSample() {
         Workflow workflow = workflow(false, TriggerType.WEBHOOK);
         listening("t");
-        given(tokenService.findWorkflowIdByToken("tok")).willReturn(Optional.of(workflowId));
 
-        assertThat(service.receive("tok", hook)).isNull();
+        assertThat(service.receive(workflowId, hook)).isNull();
         verify(nodeTestRunner).recordWebhookSample(workflow, "t", payload);
         verify(runner, never()).run(any(), any(), any());
     }
@@ -240,15 +265,14 @@ class WebhookServiceListenTest {
     @Test
     @DisplayName("토큰 주소 — 비활성·불일치 거절은 기존 주소와 같다")
     void receive_rejectionsSameAsTrigger() {
-        given(tokenService.findWorkflowIdByToken("tok")).willReturn(Optional.of(workflowId));
         workflow(false, TriggerType.WEBHOOK);
         listening(null);
-        assertThatThrownBy(() -> service.receive("tok", hook))
+        assertThatThrownBy(() -> service.receive(workflowId, hook))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WORKFLOW_NOT_ACTIVE));
 
         workflow(true, TriggerType.MANUAL);
-        assertThatThrownBy(() -> service.receive("tok", hook))
+        assertThatThrownBy(() -> service.receive(workflowId, hook))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WEBHOOK_TRIGGER_MISMATCH));
     }
@@ -274,9 +298,8 @@ class WebhookServiceListenTest {
         Workflow workflow = workflow(true, TriggerType.WEBHOOK);
         listening("t");
         savedNodes(List.of(Map.of("id", "a", "type", "AI"), trigger(Map.of("includeRaw", true))));
-        given(tokenService.findWorkflowIdByToken("tok")).willReturn(Optional.of(workflowId));
 
-        service.receive("tok", hook);
+        service.receive(workflowId, hook);
 
         Map<String, Object> raw = hook.output(true);
         assertThat(raw).containsEntry("body", payload).containsEntry("rawBody", "{\"orderId\":\"ORD-1\"}")
@@ -286,9 +309,8 @@ class WebhookServiceListenTest {
     }
 
     @Test
-    @DisplayName("includeRaw false·config 없음·트리거 노드 없음·버전 없음 → R4 모양 그대로")
+    @DisplayName("includeRaw false·config 없음·문자열 \"true\"·트리거 노드 없음 → R4 모양 그대로")
     void receive_includeRawAbsent_keepsPlainShape() {
-        given(tokenService.findWorkflowIdByToken("tok")).willReturn(Optional.of(workflowId));
         List<List<Map<String, Object>>> cases = List.of(
             List.of(trigger(Map.of("includeRaw", false))),
             List.of(trigger(null)),
@@ -298,8 +320,21 @@ class WebhookServiceListenTest {
             workflow(true, TriggerType.WEBHOOK);
             listening(null);
             savedNodes(nodes);
-            service.receive("tok", hook);
+            service.receive(workflowId, hook);
         }
         verify(runner, times(cases.size())).run(eq(version), any(), eq(payload));
+    }
+
+    @Test
+    @DisplayName("버전 없음 → includeRaw false로 보고 R4 모양으로 샘플 저장(listen + 비활성이라 실행 없이 null)")
+    void receive_noVersion_plainShapeSample() {
+        Workflow workflow = workflow(false, TriggerType.WEBHOOK);
+        given(crudService.findLatestVersion(workflowId)).willReturn(Optional.empty());
+        listening("t");
+
+        assertThat(service.receive(workflowId, hook)).isNull();
+
+        verify(nodeTestRunner).recordWebhookSample(workflow, "t", payload);
+        verify(crudService, never()).loadDefinition(any());
     }
 }

@@ -1,7 +1,7 @@
 package com.ieum.api.webhook;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 
 import com.ieum.api.NoRedisTestConfig;
@@ -45,7 +45,7 @@ class HookReceiveRealServerTest {
 
         assertThat(res.statusCode()).isEqualTo(200);
         ArgumentCaptor<HookRequest> captor = ArgumentCaptor.forClass(HookRequest.class);
-        verify(webhookService).receive(eq("tok"), captor.capture());
+        verify(webhookService).receive(any(), captor.capture());
         assertThat(captor.getValue().output(false)).isEqualTo(Map.of("value", body));
         assertThat(captor.getValue().output(true)).containsEntry("rawBody", body);
     }

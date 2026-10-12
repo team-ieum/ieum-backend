@@ -1,7 +1,7 @@
 package com.ieum.api.webhook;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -39,7 +39,7 @@ class HookReceiveIntegrationTest {
 
     private Map<String, Object> received() {
         ArgumentCaptor<HookRequest> captor = ArgumentCaptor.forClass(HookRequest.class);
-        verify(webhookService).receive(eq("tok"), captor.capture());
+        verify(webhookService).receive(any(), captor.capture());
         return captor.getValue().output(false);
     }
 
