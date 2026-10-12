@@ -5,15 +5,18 @@ import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowVersion;
+import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.service.NodeTestRunner;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import com.ieum.workflowcore.service.WorkflowWebhookTokenService;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -57,10 +60,24 @@ public class WebhookService {
      * 토큰 주소({@code /api/v1/hooks/{token}}) 수신. 흐름·반환은 {@link #trigger}와 같다.
      * 토큰이 없거나 맞지 않으면 404 — 토큰 존재 여부 외엔 알리지 않는다. 토큰은 로그에 남기지 않는다.
      */
-    public WorkflowExecutionResponse receive(String token, Map<String, Object> payload) {
+    public WorkflowExecutionResponse receive(String token, HookRequest request) {
         UUID workflowId = webhookTokenService.findWorkflowIdByToken(token)
             .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
-        return start(workflowCrudService.getWorkflowById(workflowId), payload);
+        Workflow workflow = workflowCrudService.getWorkflowById(workflowId);
+        return start(workflow, request.output(includeRaw(workflowId)));
+    }
+
+    /** 저장된 최신 버전의 TRIGGER 노드 {@code config.includeRaw}(R6). 버전·노드·config가 없으면 false. */
+    private boolean includeRaw(UUID workflowId) {
+        return workflowCrudService.findLatestVersion(workflowId)
+            .map(workflowCrudService::loadDefinition)
+            .map(WorkflowDefinitionDocument::getNodes)
+            .orElse(List.of())
+            .stream()
+            .filter(node -> NodeType.TRIGGER.name().equals(node.get("type")))
+            .findFirst()
+            .map(node -> node.get("config") instanceof Map<?, ?> config && Boolean.TRUE.equals(config.get("includeRaw")))
+            .orElse(false);
     }
 
     private WorkflowExecutionResponse start(Workflow workflow, Map<String, Object> payload) {

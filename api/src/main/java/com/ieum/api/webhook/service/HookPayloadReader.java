@@ -11,16 +11,19 @@ import java.net.URLDecoder;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.InvalidMediaTypeException;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 
 /**
- * 토큰 주소 웹훅의 원문 요청을 노드 출력 맵으로 바꾼다(IEUM-BE-91 R4).
+ * 토큰 주소 웹훅의 원문 요청을 읽는다(IEUM-BE-91 R4 — 원문+헤더 모양(R5)은 {@link HookRequest#output}).
  * JSON 객체는 그대로, 배열은 {@code items}, 스칼라는 {@code value}, form은 키→값(같은 키 여러 번이면 리스트),
  * 그 밖의 타입은 {@code {"value": 원문}}. 쿼리는 합치되 본문 키가 우선한다. GET이거나 본문이 없으면 쿼리만.
  *
@@ -32,19 +35,30 @@ import org.springframework.stereotype.Component;
 public class HookPayloadReader {
 
     static final int MAX_BODY_BYTES = 5 * 1024 * 1024;
+    private static final Set<String> MASKED_HEADERS = Set.of("authorization", "cookie");
 
     private final ObjectMapper objectMapper;
 
-    public Map<String, Object> read(HttpServletRequest request) {
-        Map<String, Object> result = parseForm(request.getQueryString(), StandardCharsets.UTF_8);
-        if ("GET".equalsIgnoreCase(request.getMethod())) {
-            return result;
-        }
-        byte[] body = readBody(request);
+    public HookRequest read(HttpServletRequest request) {
+        Map<String, Object> query = parseForm(request.getQueryString(), StandardCharsets.UTF_8);
+        Map<String, Object> result = new LinkedHashMap<>(query);
+        byte[] body = "GET".equalsIgnoreCase(request.getMethod()) ? new byte[0] : readBody(request);
         if (body.length > 0) {
             result.putAll(parseBody(body, request.getContentType()));
         }
-        return result;
+        return new HookRequest(request.getMethod(), headers(request), query, result, body);
+    }
+
+    /** 소문자 키, 여러 값은 {@code ", "}로 잇는다. 자격증명이 담기는 {@code authorization}·{@code cookie}는 가린다(R5). */
+    private static Map<String, String> headers(HttpServletRequest request) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        for (String name : Collections.list(request.getHeaderNames())) {
+            String key = name.toLowerCase(Locale.ROOT);
+            headers.put(key, MASKED_HEADERS.contains(key)
+                ? "***"
+                : String.join(", ", Collections.list(request.getHeaders(name))));
+        }
+        return headers;
     }
 
     private static byte[] readBody(HttpServletRequest request) {
