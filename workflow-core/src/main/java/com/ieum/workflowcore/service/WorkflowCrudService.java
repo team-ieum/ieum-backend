@@ -15,6 +15,7 @@ import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.NodeTestSampleRepository;
 import com.ieum.workflowcore.repository.WorkflowRepository;
 import com.ieum.workflowcore.repository.WorkflowVersionRepository;
+import com.ieum.workflowcore.repository.WorkflowWebhookTokenRepository;
 import com.ieum.workflowcore.scheduler.CronConverter;
 import com.ieum.workflowcore.scheduler.WorkflowScheduler;
 import java.time.LocalDateTime;
@@ -62,6 +63,7 @@ public class WorkflowCrudService {
     private final WorkflowDefinitionRepository definitionRepository;
     private final ObjectMapper objectMapper;
     private final AppTriggerSubscriptionService appTriggerSubscriptionService;
+    private final WorkflowWebhookTokenRepository webhookTokenRepository;
 
     // ------------------------------------------------------------------ WRITE
 
@@ -301,6 +303,7 @@ public class WorkflowCrudService {
         // 사용자 삭제와 스케줄러 자동 정리가 모두 이 메서드를 지나므로 여기 한 곳이면 된다.
         nodeTestSampleRepository.deleteByWorkflow(workflow);
         appTriggerSubscriptionService.deleteByWorkflowId(workflowId);
+        webhookTokenRepository.deleteByWorkflowId(workflowId);
         workflowRepository.delete(workflow);
 
         afterCommit(() -> {
