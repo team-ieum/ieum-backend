@@ -19,6 +19,9 @@ import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.executor.AlertNotifier;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
+import com.ieum.workflowcore.engine.validation.WorkflowValidationClient;
+import com.ieum.workflowcore.engine.validation.WorkflowValidationException;
+import com.ieum.workflowcore.engine.validation.WorkflowValidationResult;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.util.SensitiveDataMasker;
@@ -68,6 +71,7 @@ public class SyncExecutionRuntime {
     private final RetryProperties retryProperties;
     private final IdempotencyStore idempotencyStore;
     private final AlertNotifier alertNotifier;
+    private final WorkflowValidationClient validationClient;
 
     /** {@code node_runs.error_message} 컬럼 길이(VARCHAR 255). */
     private static final int ERROR_MESSAGE_MAX_LENGTH = 255;
@@ -155,7 +159,7 @@ public class SyncExecutionRuntime {
         log.info("[Runtime] 워크플로우 실행 시작 — executionId: {}, versionId: {}",
             execution.getId(), workflowVersion.getId());
 
-        // 1. MongoDB에서 노드/엣지 로드 및 TRIGGER 검증 (start() 이전 — 실패 시 FAILED로 전환)
+        // 1. MongoDB에서 노드/엣지 로드, TRIGGER 확인, 정적 검증 (start() 이전 — 실패 시 FAILED로 전환)
         List<Node> nodes;
         List<Edge> edges;
         Node triggerNode;
@@ -167,9 +171,18 @@ public class SyncExecutionRuntime {
                 .filter(n -> n.getType() == NodeType.TRIGGER)
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException("TRIGGER 노드가 없습니다."));
+            // 에러가 있으면 노드를 하나도 실행하지 않는다. agent 장애·타임아웃(empty)은 검사 없이 진행한다(fail-open).
+            // 스케줄·웹훅·앱 트리거·재처리·승인·큐 실행이 전부 이 자리를 지난다.
+            validationClient.validate(definition.getNodes(), definition.getEdges())
+                .filter(WorkflowValidationResult::hasErrors)
+                .ifPresent(result -> {
+                    throw new WorkflowValidationException(result.errors());
+                });
         } catch (Exception e) {
             log.error("[Runtime] 워크플로우 초기화 실패 — executionId: {}, error: {}",
                 execution.getId(), e.getMessage());
+            // 이 단계 실패엔 노드 로그가 없다 — 실행 단위 사유가 유일한 원인 기록이다(finishIfNotTerminal은 상태만 쓴다).
+            workflowExecutionRepository.recordErrorIfNotTerminal(executionId, e.getMessage(), LocalDateTime.now());
             finalizeFailure(execution, executionId, false, null, e.getMessage());
             eventPublisher.complete(executionId);
             throw e;

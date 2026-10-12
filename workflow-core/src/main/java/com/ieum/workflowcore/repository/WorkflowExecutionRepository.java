@@ -118,6 +118,24 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
     int startIfNotTerminal(@Param("id") UUID id, @Param("now") LocalDateTime now);
 
     /**
+     * 아직 종료·승인 대기가 아닌 실행에만 실행 단위 실패 사유를 쓴다. 썼으면 1, 아니면 0.
+     *
+     * <p>런타임 1단계(정의 로드·TRIGGER 확인·정적 검증) 실패 전용이다 — 노드 로그가 없는 실패라
+     * {@code error_message}가 유일한 원인 기록인데, 이어지는 {@link #finishIfNotTerminal}은 상태만 바꾸고
+     * 러너의 {@code markAsFailed}는 이미 FAILED라 no-op이다. 종료 전이와 같은 조건이라 다른 종료자가
+     * 먼저 확정한 실행의 사유를 덮지 않는다.
+     */
+    @Transactional
+    @Modifying
+    @Query("UPDATE WorkflowExecution e SET e.errorMessage = :errorMessage, e.updatedAt = :now "
+        + "WHERE e.id = :id AND e.status NOT IN ("
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.SUCCESS, "
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.FAILED, "
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL)")
+    int recordErrorIfNotTerminal(@Param("id") UUID id, @Param("errorMessage") String errorMessage,
+                                 @Param("now") LocalDateTime now);
+
+    /**
      * {@code RUNNING}인 실행만 승인 대기로 멈춘다. 멈췄으면 1, 그사이 다른 종료자가 끝냈으면 0.
      *
      * <p>종료 전이와 같은 조건부 UPDATE다 — 메모리 엔티티를 {@code save()}하면 sweeper가 확정한

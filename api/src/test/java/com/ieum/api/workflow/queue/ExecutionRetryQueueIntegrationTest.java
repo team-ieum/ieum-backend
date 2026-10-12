@@ -31,6 +31,7 @@ import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.SyncExecutionRuntime;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.executor.AlertNotifier;
+import com.ieum.workflowcore.engine.validation.WorkflowValidationClient;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.engine.executor.TriggerNodeExecutor;
@@ -289,7 +290,7 @@ class ExecutionRetryQueueIntegrationTest {
             Mockito.mock(ExecutionEventPublisher.class),
             List.of(new TriggerNodeExecutor(), new RecordingAiExecutor()),
             retryProperties, Mockito.mock(IdempotencyStore.class),
-            Mockito.mock(AlertNotifier.class));
+            Mockito.mock(AlertNotifier.class), Mockito.mock(WorkflowValidationClient.class));
         ReflectionTestUtils.invokeMethod(runtime, "initExecutorMap");
         ReflectionTestUtils.setField(runtime, "parallelism", 2);
         return runtime;
