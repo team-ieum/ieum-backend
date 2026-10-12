@@ -40,6 +40,7 @@ class WorkflowWebhookTokenServiceTest {
         Workflow workflow = newWorkflow();
 
         IssuedToken issued = service.issue(workflow);
+        tokenRepository.flush(); // 조회는 JDBC라 영속성 컨텍스트를 보지 않는다
 
         assertThat(issued.token()).matches("[A-Za-z0-9_-]{43}"); // 32바이트 URL-safe Base64, 패딩 없음
         WorkflowWebhookToken stored = tokenRepository.findByWorkflowId(workflow.getId()).orElseThrow();
@@ -69,6 +70,7 @@ class WorkflowWebhookTokenServiceTest {
     @DisplayName("미발급·빈 토큰·모르는 토큰은 empty")
     void unknownLookupsAreEmpty() {
         Workflow workflow = newWorkflow();
+        tokenRepository.flush();
 
         assertThat(service.status(workflow.getId())).isEmpty();
         assertThat(service.findWorkflowIdByToken(null)).isEmpty();
