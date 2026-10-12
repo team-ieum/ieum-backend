@@ -16,6 +16,7 @@
 - CONDITION 분기 시 선택 안 된 경로는 live 입력이 없어 자연 스킵
 - 실행 트리거는 api 모듈 `WorkflowExecutionRunner` → Redis Stream 잡 큐 → 같은 프로세스 워커 (Redis 장애 시 `@Async` 직접 실행 폴백). Quartz 스케줄 실행도 `ExecutionJobEnqueuer` 포트로 같은 큐를 탄다(IEUM-BE-51)
 - 실패 확정은 `finalizeFailure()` 한 곳 — 상태 전이 + SSE 종료 이벤트 + `AlertNotifier` 발신. 이미 종료된 실행은 상태·알림을 다시 건드리지 않는다(중복 알림 방지)
+- **정적 검증(1단계)** — Mongo 정의 로드·TRIGGER 확인 직후, `startIfNotTerminal` 전에 `engine/validation/WorkflowValidationClient`(agent `POST /v1/workflows/validate`, 3초)로 검사한다. 응답 `errors`가 비어 있지 않을 때만 `WorkflowValidationException`(`"검증 실패 N건: <첫 message>"`)으로 노드 0개 FAILED. agent 장애·타임아웃·4xx·5xx·파싱 실패는 `Optional.empty()` → 검사 없이 진행(fail-open). 스케줄·웹훅·앱 트리거·재처리·승인 이어진 실행·큐 전부 이 자리를 지나고, 노드 단일 테스트(`NodeTestRunner`)는 지나지 않는다. 1단계 실패는 `recordErrorIfNotTerminal`로 `workflow_runs.error_message`에 사유를 남긴다(러너의 `markAsFailed`는 이미 FAILED라 no-op)
 
 ### 노드 재시도 (retry)
 - `RetryPolicy` — 노드 config의 `retry` 객체를 파싱한 record(정책 파싱·백오프 계산·회차별 모델 선택). 사용자 편집값이라 `maxAttempts` ≤ 10, 단일 백오프 ≤ 10분으로 상·하한 강제
@@ -40,6 +41,7 @@
 ### 성공 노드 스킵 (실패 실행 재처리)
 `execute(version, executionId, triggerData, preCompletedOutputs)` 4-인자 오버로드. `preCompletedOutputs`에 있는 노드는 executor를 부르지 않고 주어진 출력을 성공 결과로 삼아 `SKIPPED` 로그를 남긴다. 빈 Map이면 3-인자와 완전히 동일 동작.
 **TRIGGER 노드는 스킵 대상에서 제외한다** — `node_runs`의 output은 `SensitiveDataMasker`를 거쳐 민감값이 `***`인데, `TriggerNodeExecutor`는 부작용이 없어 재실행이 공짜이고 복호된 triggerData로 같은 출력을 다시 만든다.
+**재사용 체인 거슬러 가기** — `WorkflowExecutionService.loadReusableNodeOutputs`는 직전 실행(`findByRetriedByExecutionId`)의 SUCCESS·SKIPPED 행이 0건이면(정적 검증 등 1단계에서 막힌 이어진 실행·재처리) 그 실행의 원본으로 한 단계씩 더 거슬러 가 첫 비어 있지 않은 실행의 행을 쓴다(방문 집합으로 순환 차단). 막힌 실행을 재처리해도 앞 실행의 성공 노드·승인 게이트를 다시 돌리지 않는다 — 거부 게이트 FAILED 행은 여전히 재사용 대상이 아니다.
 
 ### 승인 게이트 (HITL, IEUM-BE-45)
 `APPROVAL` 노드는 NodeExecutor가 없다 — `dispatch()`가 사전 완료 출력(`preCompleted`)이 없는 APPROVAL을 **제출하지 않고** 대기 목록에 넣고 `APPROVAL_REQUESTED`를 발행한다. 제출하지 않으니 `propagate`가 불리지 않아 하류의 남은 입력 수가 줄지 않는다 — 미승인 게이트의 하류는 이 실행에서 절대 ready가 되지 않는다. 게이트와 무관한 분기는 계속 돈다.
@@ -133,7 +135,7 @@ enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROV
 - `workflow_runs.retried_by_execution_id` — 이 실행을 재처리하려 만든 새 실행. 역방향(재처리 → 원본) 조회는 `findByRetriedByExecutionId`
 
 새 컬럼 (IEUM-BE-50):
-- `workflow_runs.error_message` — **실행 단위** 실패 사유. 노드 로그(`node_runs.error_message`)가 남지 않은 실패(런타임 진입 전 실패, 고립 실행 sweeper 확정)에서 유일한 원인 기록이라 `markAsFailed`만 채운다. 노드가 특정된 실패는 여기가 null이고 노드 로그에 원인이 있다. 대시보드 에러 목록이 "노드 로그 → 이 컬럼 → 기본 문구" 순으로 고른다
+- `workflow_runs.error_message` — **실행 단위** 실패 사유. 노드 로그(`node_runs.error_message`)가 남지 않은 실패(런타임 진입 전 실패, 고립 실행 sweeper 확정)에서 유일한 원인 기록이라 `markAsFailed`와 런타임 1단계 실패(`recordErrorIfNotTerminal` — 정의 로드·TRIGGER 없음·정적 검증)가 채운다. 노드가 특정된 실패는 여기가 null이고 노드 로그에 원인이 있다. 대시보드 에러 목록이 "노드 로그 → 이 컬럼 → 기본 문구" 순으로 고른다
 
 새 컬럼 (IEUM-BE-45):
 - `workflow_runs.waiting_approval_node_ids` — 멈춘 순간 대기 중인 게이트 ID(JSON 배열 TEXT). `pauseForApproval`만 쓴다. 승인·거부 뒤에도 지우지 않는다(이력) — "대기 중"은 `status = WAITING_APPROVAL`일 때만의 의미. 읽기는 `WorkflowExecution.waitingApprovalNodeIdList()`(해석 실패 시 빈 목록 → 게이트 재대기, 우회 아님)

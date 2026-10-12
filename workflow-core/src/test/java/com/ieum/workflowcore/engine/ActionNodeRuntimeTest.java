@@ -24,6 +24,7 @@ import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.executor.ActionNodeExecutor;
 import com.ieum.workflowcore.engine.executor.AlertNotifier;
+import com.ieum.workflowcore.engine.validation.WorkflowValidationClient;
 import com.ieum.workflowcore.engine.executor.CredentialProvider;
 import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
 import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
@@ -113,7 +114,7 @@ class ActionNodeRuntimeTest {
         List<NodeExecutor> executors = List.of(new TriggerNodeExecutor(), action);
         runtime = new SyncExecutionRuntime(objectMapper, logRepository, executionRepository, crudService,
             mock(ExecutionEventPublisher.class), executors, new RetryProperties(), idempotencyStore,
-            alertNotifier);
+            alertNotifier, mock(WorkflowValidationClient.class));
         runtime.initExecutorMap();
         ReflectionTestUtils.setField(runtime, "parallelism", 4);
     }

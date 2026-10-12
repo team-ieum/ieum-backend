@@ -24,6 +24,7 @@ import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.event.ExecutionEventType;
 import com.ieum.workflowcore.engine.event.NodeEventStatus;
 import com.ieum.workflowcore.engine.executor.AlertNotifier;
+import com.ieum.workflowcore.engine.validation.WorkflowValidationClient;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
@@ -116,7 +117,8 @@ class LiveAndSnapshotEventParityTest {
             List.of(new FakeExecutor(NodeType.TRIGGER, conditionResults),
                 new FakeExecutor(NodeType.AI, conditionResults),
                 new FakeExecutor(NodeType.CONDITION, conditionResults)),
-            new RetryProperties(), mock(IdempotencyStore.class), mock(AlertNotifier.class));
+            new RetryProperties(), mock(IdempotencyStore.class), mock(AlertNotifier.class),
+            mock(WorkflowValidationClient.class));
         runtime.initExecutorMap();
         // 완료 순서를 제출 순서로 고정해 라이브·재생 순서를 결정적으로 비교한다.
         ReflectionTestUtils.setField(runtime, "parallelism", 1);

@@ -9,6 +9,7 @@ import com.ieum.api.common.GlobalExceptionHandler;
 import com.ieum.api.workflow.service.ExecutionApprovalService;
 import com.ieum.api.workflow.service.ExecutionRetryService;
 import com.ieum.api.workflow.service.WorkflowService;
+import com.ieum.api.workflow.service.WorkflowValidationService;
 import com.ieum.auth.security.CustomUserDetails;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import jakarta.validation.ConstraintViolation;
@@ -39,7 +40,7 @@ class WorkflowControllerValidationTest {
     private final ExecutableValidator executableValidator =
         Validation.buildDefaultValidatorFactory().getValidator().forExecutables();
 
-    private final WorkflowController controller = new WorkflowController(mock(WorkflowService.class), mock(ExecutionRetryService.class), mock(ExecutionApprovalService.class));
+    private final WorkflowController controller = new WorkflowController(mock(WorkflowService.class), mock(ExecutionRetryService.class), mock(ExecutionApprovalService.class), mock(WorkflowValidationService.class));
     private final CustomUserDetails userDetails =
         CustomUserDetails.of(UUID.randomUUID(), "user@example.com", "ROLE_USER");
 
@@ -103,7 +104,7 @@ class WorkflowControllerValidationTest {
             postProcessor.setProxyTargetClass(true);
             postProcessor.afterPropertiesSet();
             Object validatedController = postProcessor.postProcessAfterInitialization(
-                new WorkflowController(mock(WorkflowService.class), mock(ExecutionRetryService.class), mock(ExecutionApprovalService.class)), "workflowController");
+                new WorkflowController(mock(WorkflowService.class), mock(ExecutionRetryService.class), mock(ExecutionApprovalService.class), mock(WorkflowValidationService.class)), "workflowController");
 
             mockMvc = MockMvcBuilders.standaloneSetup(validatedController)
                 .setControllerAdvice(new GlobalExceptionHandler())

@@ -3,6 +3,7 @@ package com.ieum.api.workflow;
 import com.ieum.api.workflow.queue.ExecutionJobQueue;
 import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.engine.SyncExecutionRuntime;
+import com.ieum.workflowcore.engine.validation.WorkflowValidationException;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.util.Map;
 import java.util.UUID;
@@ -51,6 +52,13 @@ public class WorkflowExecutionRunner {
         try {
             syncExecutionRuntime.execute(workflowVersion, executionId, triggerData,
                 workflowExecutionService.loadReusableNodeOutputs(executionId));
+        } catch (WorkflowValidationException e) {
+            // 정적 검증 차단은 사용자 설정 오류다 — 스택트레이스 없이 WARN 한 줄. 실행은 런타임 1단계가 이미 FAILED로 끝냈다.
+            log.warn("[Runner] 정적 검증 차단 — executionId: {}, workflowId: {}, 사유: {}",
+                executionId,
+                workflowVersion.getWorkflow() != null ? workflowVersion.getWorkflow().getId() : null,
+                e.getMessage());
+            workflowExecutionService.markAsFailed(executionId, e.getMessage());
         } catch (Exception e) {
             log.error("[Runner] 워크플로우 실행 예외 — executionId: {}", executionId, e);
             workflowExecutionService.markAsFailed(executionId, e.getMessage());

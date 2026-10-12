@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -28,6 +29,9 @@ import com.ieum.workflowcore.engine.event.NodeEventStatus;
 import com.ieum.workflowcore.engine.executor.AlertNotifier;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
+import com.ieum.workflowcore.engine.validation.WorkflowValidationClient;
+import com.ieum.workflowcore.engine.validation.WorkflowValidationException;
+import com.ieum.workflowcore.engine.validation.WorkflowValidationResult;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
@@ -54,6 +58,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.test.util.ReflectionTestUtils;
 
 class SyncExecutionRuntimeTest {
@@ -64,6 +69,7 @@ class SyncExecutionRuntimeTest {
     private ExecutionEventPublisher eventPublisher;
     private IdempotencyStore idempotencyStore;
     private AlertNotifier alertNotifier;
+    private WorkflowValidationClient validationClient;
     private WorkflowExecution execution;
     private Workflow workflow;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -119,6 +125,7 @@ class SyncExecutionRuntimeTest {
         eventPublisher = mock(ExecutionEventPublisher.class);
         idempotencyStore = mock(IdempotencyStore.class);
         alertNotifier = mock(AlertNotifier.class);
+        validationClient = mock(WorkflowValidationClient.class);
         execution = mock(WorkflowExecution.class);
         workflow = mock(Workflow.class);
         when(workflow.getUserId()).thenReturn(UUID.randomUUID());
@@ -144,7 +151,7 @@ class SyncExecutionRuntimeTest {
         );
         SyncExecutionRuntime runtime = new SyncExecutionRuntime(
             objectMapper, logRepository, executionRepository, crudService, eventPublisher, executors,
-            new RetryProperties(), idempotencyStore, alertNotifier);
+            new RetryProperties(), idempotencyStore, alertNotifier, validationClient);
         runtime.initExecutorMap();
         ReflectionTestUtils.setField(runtime, "parallelism", 4);
         return runtime;
@@ -426,6 +433,21 @@ class SyncExecutionRuntimeTest {
         verify(alertNotifier).notifyExecutionFailed(captor.capture());
         assertThat(captor.getValue().failedNodeId()).isNull();
         assertThat(captor.getValue().errorSummary()).isEqualTo("정의 없음");
+    }
+
+    @Test
+    @DisplayName("예상 밖 1단계 예외(Mongo 장애 등)는 사용자에게 보이는 error_message에 원문 대신 고정 문구를 남긴다 — 운영 알림은 원문")
+    void unexpectedInitFailure_recordsGenericReason() {
+        when(crudService.loadDefinition(any()))
+            .thenThrow(new RuntimeException("Timed out after 30000 ms while waiting to connect. cluster: 10.10.10.3:27017"));
+
+        assertThatThrownBy(this::run).isInstanceOf(RuntimeException.class);
+
+        verify(executionRepository).recordErrorIfNotTerminal(eq(executionId), eq("워크플로우 정의를 불러오지 못했습니다."), any());
+        ArgumentCaptor<AlertNotifier.ExecutionFailureAlert> captor =
+            ArgumentCaptor.forClass(AlertNotifier.ExecutionFailureAlert.class);
+        verify(alertNotifier).notifyExecutionFailed(captor.capture());
+        assertThat(captor.getValue().errorSummary()).contains("10.10.10.3:27017");
     }
 
     @Test
@@ -1032,7 +1054,8 @@ class SyncExecutionRuntimeTest {
         private SyncExecutionRuntime retryRuntime(NodeExecutor... executors) {
             SyncExecutionRuntime runtime = new SyncExecutionRuntime(
                 objectMapper, logRepository, executionRepository, crudService, eventPublisher,
-                List.of(executors), retryProperties, idempotencyStore, alertNotifier);
+                List.of(executors), retryProperties, idempotencyStore, alertNotifier,
+                mock(WorkflowValidationClient.class));
             runtime.initExecutorMap();
             ReflectionTestUtils.setField(runtime, "parallelism", 4);
             return runtime;
@@ -1674,7 +1697,7 @@ class SyncExecutionRuntimeTest {
                 objectMapper, logRepository, executionRepository, crudService, eventPublisher,
                 List.of(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults),
                     failingAi(message)),
-                new RetryProperties(), idempotencyStore, alertNotifier);
+                new RetryProperties(), idempotencyStore, alertNotifier, mock(WorkflowValidationClient.class));
             runtime.initExecutorMap();
             ReflectionTestUtils.setField(runtime, "parallelism", 4);
 
@@ -1733,6 +1756,169 @@ class SyncExecutionRuntimeTest {
         @DisplayName("오류 메시지가 null이어도 예외 없이 저장된다")
         void nullErrorMessage_isKept() throws Exception {
             assertThat(savedFailedLog(null).getErrorMessage()).isNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("정적 검증(1단계) — 에러가 있으면 노드를 하나도 실행하지 않는다")
+    class StaticValidation {
+
+        private final WorkflowValidationResult.ValidationError missingMappings =
+            new WorkflowValidationResult.ValidationError("a", "config.mappings", "REQUIRED", "'매핑'을 입력하세요.");
+        private final WorkflowValidationResult.ValidationError ghostRef =
+            new WorkflowValidationResult.ValidationError("a", "config.prompt", "REF_UNKNOWN_NODE", "없는 노드를 참조합니다.");
+        private final List<Map<String, Object>> nodes = List.of(node("t", "TRIGGER"), node("a", "AI"));
+        private final List<Map<String, Object>> edges = List.of(edge("t", "a", null));
+
+        @BeforeEach
+        void twoNodes() {
+            stubDefinition(nodes, edges);
+        }
+
+        private void givenErrors() {
+            when(validationClient.validate(any(), any())).thenReturn(Optional.of(
+                new WorkflowValidationResult(false, List.of(missingMappings, ghostRef))));
+        }
+
+        @Test
+        @DisplayName("에러 → 노드 0개, RUNNING 전이 없음, FAILED + 사유 기록 + 알림, 예외 재던짐")
+        void errors_blockAllNodes() {
+            givenErrors();
+
+            assertThatThrownBy(() -> run())
+                .isInstanceOf(WorkflowValidationException.class)
+                .hasMessage("검증 실패 2건: '매핑'을 입력하세요.");
+
+            assertThat(log).isEmpty();
+            verify(executionRepository, never()).startIfNotTerminal(any(), any());
+            verify(executionRepository).recordErrorIfNotTerminal(
+                eq(executionId), eq("검증 실패 2건: '매핑'을 입력하세요."), any());
+            verifyFinished(ExecutionStatus.FAILED, false);
+            // 사유가 먼저다 — 종료 전이가 앞서면 recordErrorIfNotTerminal의 WHERE(비종료)에 걸려 사유가 사라진다
+            InOrder order = inOrder(executionRepository);
+            order.verify(executionRepository).recordErrorIfNotTerminal(any(), any(), any());
+            order.verify(executionRepository).finishIfNotTerminal(any(), any(), anyBoolean(), any());
+            verify(logRepository, never()).save(any());
+
+            ArgumentCaptor<AlertNotifier.ExecutionFailureAlert> captor =
+                ArgumentCaptor.forClass(AlertNotifier.ExecutionFailureAlert.class);
+            verify(alertNotifier).notifyExecutionFailed(captor.capture());
+            assertThat(captor.getValue().failedNodeId()).isNull();
+            assertThat(captor.getValue().errorSummary()).isEqualTo("검증 실패 2건: '매핑'을 입력하세요.");
+        }
+
+        @Test
+        @DisplayName("검증 차단은 사용자 설정 오류라 ERROR가 아니라 WARN 한 줄(executionId·workflowId·사유)로 남는다")
+        void errors_loggedAsSingleWarn() {
+            givenErrors();
+            ch.qos.logback.classic.Logger runtimeLogger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SyncExecutionRuntime.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            runtimeLogger.addAppender(appender);
+            try {
+                assertThatThrownBy(() -> run()).isInstanceOf(WorkflowValidationException.class);
+            } finally {
+                runtimeLogger.detachAppender(appender);
+            }
+
+            List<ch.qos.logback.classic.spi.ILoggingEvent> blocked = appender.list.stream()
+                .filter(e -> e.getFormattedMessage().contains("검증 실패 2건"))
+                .toList();
+            assertThat(blocked).hasSize(1);
+            assertThat(blocked.get(0).getLevel()).isEqualTo(ch.qos.logback.classic.Level.WARN);
+            assertThat(blocked.get(0).getThrowableProxy()).isNull();
+            assertThat(blocked.get(0).getFormattedMessage())
+                .contains(executionId.toString(), workflowId.toString());
+        }
+
+        @Test
+        @DisplayName("Mongo 정의의 nodes·edges 원본을 그대로 검증기에 넘긴다")
+        void sendsRawDefinition() throws Exception {
+            run();
+
+            verify(validationClient).validate(nodes, edges);
+        }
+
+        @Test
+        @DisplayName("agent 장애·타임아웃(Optional.empty) → 검사 없이 정상 실행(fail-open)")
+        void agentUnavailable_runsNormally() throws Exception {
+            when(validationClient.validate(any(), any())).thenReturn(Optional.empty());
+
+            run();
+
+            assertThat(log).containsExactly("t", "a");
+            verifyFinished(ExecutionStatus.SUCCESS, false);
+            verify(executionRepository, never()).recordErrorIfNotTerminal(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("valid=true, errors 없음 → 정상 실행")
+        void valid_runsNormally() throws Exception {
+            when(validationClient.validate(any(), any()))
+                .thenReturn(Optional.of(new WorkflowValidationResult(true, List.of())));
+
+            run();
+
+            assertThat(log).containsExactly("t", "a");
+            verifyFinished(ExecutionStatus.SUCCESS, false);
+        }
+
+        @Test
+        @DisplayName("valid=false여도 errors가 비어 있으면 막지 않는다")
+        void invalidFlagWithoutErrors_doesNotBlock() throws Exception {
+            when(validationClient.validate(any(), any()))
+                .thenReturn(Optional.of(new WorkflowValidationResult(false, null)));
+
+            run();
+
+            assertThat(log).containsExactly("t", "a");
+            verifyFinished(ExecutionStatus.SUCCESS, false);
+        }
+
+        @Test
+        @DisplayName("재처리·승인 이어진 실행(preCompletedOutputs)도 검사를 지나 막힌다")
+        void retryPath_isValidatedToo() {
+            givenErrors();
+
+            assertThatThrownBy(() -> runtime().execute(mock(WorkflowVersion.class), executionId,
+                new HashMap<>(), Map.of("a", Map.of("output", "원본"))))
+                .isInstanceOf(WorkflowValidationException.class);
+
+            assertThat(log).isEmpty();
+            verifyFinished(ExecutionStatus.FAILED, false);
+        }
+
+        @Test
+        @DisplayName("TRIGGER 노드가 없으면 기존 메시지로 실패하고 agent를 부르지 않는다 — 사유는 error_message에 남는다")
+        void noTrigger_keepsExistingFailure() {
+            stubDefinition(List.of(node("a", "AI")), List.of());
+
+            assertThatThrownBy(() -> run()).hasMessage("TRIGGER 노드가 없습니다.");
+
+            verify(validationClient, never()).validate(any(), any());
+            verify(executionRepository).recordErrorIfNotTerminal(eq(executionId), eq("TRIGGER 노드가 없습니다."), any());
+        }
+
+        @Test
+        @DisplayName("검증 외 1단계 실패(TRIGGER 없음)는 WARN으로 낮추지 않고 ERROR로 남긴다")
+        void otherInitFailure_staysError() {
+            stubDefinition(List.of(node("a", "AI")), List.of());
+            ch.qos.logback.classic.Logger runtimeLogger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SyncExecutionRuntime.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            runtimeLogger.addAppender(appender);
+            try {
+                assertThatThrownBy(() -> run()).hasMessage("TRIGGER 노드가 없습니다.");
+            } finally {
+                runtimeLogger.detachAppender(appender);
+            }
+
+            assertThat(appender.list).anyMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
+            assertThat(appender.list).noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN);
         }
     }
 }

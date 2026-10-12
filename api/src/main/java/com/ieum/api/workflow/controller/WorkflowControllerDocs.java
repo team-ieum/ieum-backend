@@ -12,6 +12,7 @@ import com.ieum.common.dto.ApiResponse;
 import com.ieum.common.dto.PageResponse;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.engine.event.ExecutionEvent;
+import com.ieum.workflowcore.engine.validation.WorkflowValidationResult;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -340,7 +341,10 @@ public interface WorkflowControllerDocs {
             CustomUserDetails userDetails,
             @Parameter(description = "워크플로우 ID") UUID id);
 
-    @Operation(summary = "워크플로우 수동 실행")
+    @Operation(summary = "워크플로우 수동 실행",
+        description = "최신 버전을 실행한다(202). 실행 전에 정적 검증을 하고, 설정 에러가 있으면 실행 기록 없이 "
+            + "400 WORKFLOW_VALIDATION_FAILED + data.errors(검증 엔드포인트의 errors와 같은 모양)를 돌려준다. "
+            + "검증 서버 장애·3초 초과면 검사 없이 실행한다.")
     @PreAuthorize("hasRole('USER')")
     @RequestBody(content = @Content(
         mediaType = "application/json",
@@ -376,6 +380,17 @@ public interface WorkflowControllerDocs {
             CustomUserDetails userDetails,
             @Parameter(description = "워크플로우 ID") UUID id,
             ExecuteWorkflowRequest request);
+
+    @Operation(summary = "워크플로우 정적 검증",
+        description = "최신 버전 저장본을 실행 없이 검사한다. data = {valid, errors:[{nodeId, field, code, message}]}. "
+            + "field는 노드 카탈로그 칸의 path(예: config.channel), 칸이 없는 에러(ORPHAN_NODE 등)는 field가 null, 워크플로우 전체 에러(TRIGGER_COUNT·TOO_LARGE 등)는 nodeId도 null — nodeId가 null이면 배너로 보여 준다. "
+            + "code: REQUIRED TYPE CHOICE REF_NOT_ALLOWED REF_FORMAT REF_UNKNOWN_NODE REF_SELF REF_NOT_UPSTREAM "
+            + "REF_UNKNOWN_FIELD TRIGGER_COUNT EDGE_INVALID ORPHAN_NODE CRON TOO_LARGE. 실행 차단 기준은 errors가 비어 있지 않은지다. "
+            + "검증 서버(ieum-agent)에 닿지 못하면 502 PROVIDER_ERROR.")
+    @PreAuthorize("hasRole('USER')")
+    ResponseEntity<ApiResponse<WorkflowValidationResult>> validate(
+            CustomUserDetails userDetails,
+            @Parameter(description = "워크플로우 ID") UUID id);
 
     @Operation(summary = "실패 실행 재처리",
         description = "FAILED 상태의 실행을 같은 버전·같은 트리거 입력으로 다시 실행한다. "
