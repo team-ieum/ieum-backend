@@ -140,9 +140,9 @@ class DefaultBetaPlatformProviderTest {
     @Test
     @DisplayName("isModelAllowed - allowedModels 설정을 넓히면 그 목록을 그대로 따른다")
     void isModelAllowed_customAllowedModels_followsProperty() {
-        properties.setAllowedModels(java.util.List.of("gemini-3.5-flash", "gemini-3.5-pro"));
+        properties.setAllowedModels(java.util.List.of("gemini-3.7-flash", "gemini-3.1-pro-preview"));
 
-        assertThat(provider.isModelAllowed("gemini-3.5-pro")).isTrue();
+        assertThat(provider.isModelAllowed("gemini-3.1-pro-preview")).isTrue();
         assertThat(provider.isModelAllowed("gemini-2.5-flash")).isFalse();
     }
 }

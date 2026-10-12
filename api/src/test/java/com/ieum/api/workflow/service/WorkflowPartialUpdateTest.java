@@ -199,13 +199,13 @@ class WorkflowPartialUpdateTest {
             "label", "요약하기",
             "description", "글을 요약해요.",
             "position", Map.of("x", 40, "y", 120),
-            "config", Map.of("model", "gemini-3.5-flash"))));
+            "config", Map.of("model", "gemini-3.7-flash"))));
         stubSaveSucceeds();
 
         // FE가 보내는 최소 요청 — description·position이 없다.
         workflowService.updateWorkflow(userId, workflowId, request("""
             { "id": "%s", "type": "AI", "label": "요약하기 v2",
-              "config": { "model": "gemini-3.5-flash" } }""".formatted(NODE_ID)));
+              "config": { "model": "gemini-3.7-flash" } }""".formatted(NODE_ID)));
 
         Map<String, Object> saved = capturedNodes().get(0);
         assertThat(saved.get("description")).isEqualTo("글을 요약해요.");

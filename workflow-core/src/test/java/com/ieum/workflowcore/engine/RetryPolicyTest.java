@@ -205,10 +205,10 @@ class RetryPolicyTest {
                 "modelFallback", List.of("haiku", "sonnet")
             )), NodeType.AI, defaults);
 
-            assertThat(policy.modelForAttempt(1, "gemini-3.5-flash")).isEqualTo("gemini-3.5-flash");
-            assertThat(policy.modelForAttempt(2, "gemini-3.5-flash")).isEqualTo("haiku");
-            assertThat(policy.modelForAttempt(3, "gemini-3.5-flash")).isEqualTo("sonnet");
-            assertThat(policy.modelForAttempt(4, "gemini-3.5-flash")).isEqualTo("gemini-3.5-flash");
+            assertThat(policy.modelForAttempt(1, "gemini-3.7-flash")).isEqualTo("gemini-3.7-flash");
+            assertThat(policy.modelForAttempt(2, "gemini-3.7-flash")).isEqualTo("haiku");
+            assertThat(policy.modelForAttempt(3, "gemini-3.7-flash")).isEqualTo("sonnet");
+            assertThat(policy.modelForAttempt(4, "gemini-3.7-flash")).isEqualTo("gemini-3.7-flash");
         }
     }
 
