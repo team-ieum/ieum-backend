@@ -179,7 +179,7 @@ class WorkflowCredentialOwnershipTest {
     void ignoresNodeWithoutCredentialId() {
         stubSaveSucceeds();
         CreateWorkflowRequest request = read(CreateWorkflowRequest.class,
-            "{ \"model\": \"gemini-3.5-flash\" }");
+            "{ \"model\": \"gemini-3.7-flash\" }");
 
         assertThatCode(() -> workflowService.createWorkflow(userId, request))
             .doesNotThrowAnyException();

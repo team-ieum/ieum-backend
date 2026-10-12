@@ -1003,14 +1003,14 @@ class AgentNodeExecutorTest {
         mockWebServer.enqueue(new MockResponse().setResponseCode(200)
             .setHeader("Content-Type", "application/json").setBody(SUCCESS_RESPONSE));
 
-        Node node = buildAgentNodeNoCredentialWithModel("요약해줘", "CLAUDE", "gemini-3.5-flash");
+        Node node = buildAgentNodeNoCredentialWithModel("요약해줘", "CLAUDE", "gemini-3.7-flash");
         RetryPolicy policy = policyWithModelFallback(List.of("gpt-4"));
         NodeExecutor.NodeAttempt attempt2 = new NodeExecutor.NodeAttempt(2, "key-1", policy);
 
         exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId), attempt2);
 
         RecordedRequest recorded = mockWebServer.takeRequest();
-        assertThat(recorded.getBody().readUtf8()).contains("\"model\":\"gemini-3.5-flash\"");
+        assertThat(recorded.getBody().readUtf8()).contains("\"model\":\"gemini-3.7-flash\"");
         assertThat(recorded.getHeader("X-Key-Mode")).isEqualTo("platform");
         verify(betaProvider).reserveQuota(userId);
     }
@@ -1021,20 +1021,20 @@ class AgentNodeExecutorTest {
         UUID userId = UUID.randomUUID();
         BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class, CALLS_REAL_METHODS);
         when(betaProvider.isBetaEligible(userId)).thenReturn(true);
-        when(betaProvider.isModelAllowed("gemini-3.5-flash")).thenReturn(true);
+        when(betaProvider.isModelAllowed("gemini-3.7-flash")).thenReturn(true);
         AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
 
         mockWebServer.enqueue(new MockResponse().setResponseCode(200)
             .setHeader("Content-Type", "application/json").setBody(SUCCESS_RESPONSE));
 
         Node node = buildAgentNodeNoCredentialWithModel("요약해줘", "CLAUDE", "gemini-2.5-flash");
-        RetryPolicy policy = policyWithModelFallback(List.of("gemini-3.5-flash"));
+        RetryPolicy policy = policyWithModelFallback(List.of("gemini-3.7-flash"));
         NodeExecutor.NodeAttempt attempt2 = new NodeExecutor.NodeAttempt(2, "key-1", policy);
 
         exec.execute(node, Collections.emptyMap(), buildCursorWithUserId(userId), attempt2);
 
         RecordedRequest recorded = mockWebServer.takeRequest();
-        assertThat(recorded.getBody().readUtf8()).contains("\"model\":\"gemini-3.5-flash\"");
+        assertThat(recorded.getBody().readUtf8()).contains("\"model\":\"gemini-3.7-flash\"");
     }
 
     // ── 구조화 출력 (outputFields · 객체 output) ─────────────────────────────
