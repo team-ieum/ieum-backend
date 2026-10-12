@@ -12,6 +12,7 @@ import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.service.NodeTestRunner;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
+import com.ieum.workflowcore.service.WorkflowWebhookTokenService;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Optional;
@@ -36,6 +37,7 @@ public class WebhookService {
     private final WorkflowExecutionRunner workflowExecutionRunner;
     private final WebhookListenStore webhookListenStore;
     private final NodeTestRunner nodeTestRunner;
+    private final WorkflowWebhookTokenService webhookTokenService;
 
     // @Transactional 미사용 의도:
     // prepareExecution()이 자체 트랜잭션으로 커밋된 뒤 @Async 런너가 실행되어야
@@ -45,12 +47,24 @@ public class WebhookService {
      *     WEBHOOK 트리거가 아니면 샘플만 저장하고 실행하지 않으므로 {@code null}이다(컨트롤러는 data 없는 202).
      */
     public WorkflowExecutionResponse trigger(UUID workflowId, WebhookTriggerRequest request) {
-        Workflow workflow = workflowCrudService.getWorkflowById(workflowId);
-
         Map<String, Object> payload = (request != null && request.getPayload() != null)
             ? request.getPayload()
             : Collections.emptyMap();
+        return start(workflowCrudService.getWorkflowById(workflowId), payload);
+    }
 
+    /**
+     * 토큰 주소({@code /api/v1/hooks/{token}}) 수신. 흐름·반환은 {@link #trigger}와 같다.
+     * 토큰이 없거나 맞지 않으면 404 — 토큰 존재 여부 외엔 알리지 않는다. 토큰은 로그에 남기지 않는다.
+     */
+    public WorkflowExecutionResponse receive(String token, Map<String, Object> payload) {
+        UUID workflowId = webhookTokenService.findWorkflowIdByToken(token)
+            .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+        return start(workflowCrudService.getWorkflowById(workflowId), payload);
+    }
+
+    private WorkflowExecutionResponse start(Workflow workflow, Map<String, Object> payload) {
+        UUID workflowId = workflow.getId();
         // 노드 테스트가 첫 수신을 기다리는 중이면 이 요청이 그 1건이다 — 소비는 원자적이라 동시 요청 중 하나만 받는다.
         boolean sampled = captureListenSample(workflow, payload);
         boolean runnable = workflow.isActive() && workflow.getTriggerType() == TriggerType.WEBHOOK;

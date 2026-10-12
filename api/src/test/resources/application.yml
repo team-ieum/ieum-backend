@@ -4,6 +4,12 @@ spring:
       - org.springframework.boot.autoconfigure.quartz.QuartzAutoConfiguration
       - org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration
 
+  servlet:
+    multipart:
+      # 접근 시점에 파싱한다 — 기본(즉시)이면 DispatcherServlet이 multipart 본문을 먼저 소비해
+      # /api/v1/hooks/{token} 리더가 빈 본문을 받고 5MB 상한도 우회된다(IEUM-BE-91)
+      resolve-lazily: true
+
   datasource:
     url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=PostgreSQL
     username: sa

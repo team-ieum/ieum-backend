@@ -10,6 +10,12 @@ spring:
       # 진행 스냅샷으로 복구된다. (미설정 시 서블릿 컨테이너 기본값이 SSE를 조기 종료할 수 있음)
       request-timeout: ${MVC_ASYNC_TIMEOUT_MS:600000}
 
+  servlet:
+    multipart:
+      # 접근 시점에 파싱한다 — 기본(즉시)이면 DispatcherServlet이 multipart 본문을 먼저 소비해
+      # /api/v1/hooks/{token} 리더가 빈 본문을 받고 5MB 상한도 우회된다(IEUM-BE-91)
+      resolve-lazily: true
+
   autoconfigure:
     exclude:
       - org.springframework.boot.autoconfigure.quartz.QuartzAutoConfiguration
