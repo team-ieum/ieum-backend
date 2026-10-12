@@ -31,6 +31,8 @@ import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.SyncExecutionRuntime;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.executor.AlertNotifier;
+import com.ieum.workflowcore.engine.validation.WorkflowValidationClient;
+import com.ieum.workflowcore.engine.validation.WorkflowValidationResult;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.engine.executor.TriggerNodeExecutor;
@@ -115,6 +117,9 @@ class ExecutionRetryQueueIntegrationTest {
     /** AI 노드 executor가 실제로 호출된 노드와 그때 받은 입력. 런타임 워커 스레드가 쓴다. */
     private final ConcurrentLinkedQueue<String> aiCalls = new ConcurrentLinkedQueue<>();
     private final Map<String, Map<String, Object>> aiInputs = new ConcurrentHashMap<>();
+
+    /** 정적 검증 대역. 기본(목 기본값 Optional.empty)은 fail-open이라 검사 없이 진행한다. */
+    private final WorkflowValidationClient validationClient = Mockito.mock(WorkflowValidationClient.class);
 
     private WorkflowExecutionRepository executionRepository;
     private WorkflowExecutionLogRepository logRepository;
@@ -289,7 +294,7 @@ class ExecutionRetryQueueIntegrationTest {
             Mockito.mock(ExecutionEventPublisher.class),
             List.of(new TriggerNodeExecutor(), new RecordingAiExecutor()),
             retryProperties, Mockito.mock(IdempotencyStore.class),
-            Mockito.mock(AlertNotifier.class));
+            Mockito.mock(AlertNotifier.class), validationClient);
         ReflectionTestUtils.invokeMethod(runtime, "initExecutorMap");
         ReflectionTestUtils.setField(runtime, "parallelism", 2);
         return runtime;
@@ -644,5 +649,64 @@ class ExecutionRetryQueueIntegrationTest {
         // 게이트의 FAILED 행은 재사용 대상(SUCCESS·SKIPPED)이 아니다 — 새 실행에서 게이트가 다시 멈춘다.
         assertThat(rows.get(retryId).getStatus()).isEqualTo(ExecutionStatus.WAITING_APPROVAL);
         assertThat(aiCalls).containsExactly("a");   // a는 SKIPPED로 재사용, b는 여전히 막혔다
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // 재사용 체인 거슬러 가기 — 1단계(정적 검증)에서 막혀 node_runs가 0건인 실행을 건너뛴다
+    // ──────────────────────────────────────────────────────────────────────
+
+    private void givenValidationErrors() {
+        when(validationClient.validate(any(), any())).thenReturn(Optional.of(
+            new WorkflowValidationResult(false, List.of(
+                new WorkflowValidationResult.ValidationError(
+                    "b", "config.prompt", "REF_UNKNOWN_FIELD", "알 수 없는 필드")))));
+    }
+
+    private void givenValidationPasses() {
+        when(validationClient.validate(any(), any())).thenReturn(Optional.empty());
+    }
+
+    @Test
+    @DisplayName("승인 뒤 이어진 실행이 검증에 막혔다가 재처리되면 직전 승인 실행의 출력을 재사용한다 — 상류 재실행·재승인 없음")
+    void approvalContinuation_blockedByValidation_retryReusesApprovedRun() {
+        stubGatedDefinition();
+        WorkflowExecution original = givenPausedOriginal();
+        assertThat(aiCalls).containsExactly("a");
+
+        givenValidationErrors();
+        UUID continuationId = approveAndCommit(original.getId());
+        consumeOneJob();
+        assertThat(rows.get(continuationId).getStatus()).isEqualTo(ExecutionStatus.FAILED);
+        assertThat(nodeRuns).noneMatch(r -> continuationId.equals(r.getExecution().getId()));
+
+        givenValidationPasses();
+        UUID retryId = retryAndCommit(continuationId);
+        consumeOneJob();
+
+        assertThat(rows.get(retryId).getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
+        assertThat(nodeRunOf(retryId, "a").getStatus()).isEqualTo(ExecutionLogStatus.SKIPPED);
+        assertThat(nodeRunOf(retryId, "g").getStatus()).isEqualTo(ExecutionLogStatus.SKIPPED);
+        assertThat(aiCalls).containsExactly("a", "b");
+    }
+
+    @Test
+    @DisplayName("재처리가 검증에 막혔다가 다시 재처리되면 원 실행의 성공 노드를 재사용한다")
+    void retryBlockedByValidation_retryOfRetry_reusesOriginalOutputs() {
+        WorkflowExecution original = givenFailedOriginal();
+        givenOriginalNodeRuns(original);   // a는 원 실행에서 SUCCESS
+        stubDefinition();
+
+        givenValidationErrors();
+        UUID firstRetryId = retryAndCommit(original.getId());
+        consumeOneJob();
+        assertThat(rows.get(firstRetryId).getStatus()).isEqualTo(ExecutionStatus.FAILED);
+
+        givenValidationPasses();
+        UUID secondRetryId = retryAndCommit(firstRetryId);
+        consumeOneJob();
+
+        assertThat(rows.get(secondRetryId).getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
+        assertThat(nodeRunOf(secondRetryId, "a").getStatus()).isEqualTo(ExecutionLogStatus.SKIPPED);
+        assertThat(aiCalls).containsExactly("b");
     }
 }

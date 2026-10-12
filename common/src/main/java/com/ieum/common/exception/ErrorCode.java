@@ -68,6 +68,7 @@ public enum ErrorCode {
     WORKFLOW_DEFINITION_NOT_FOUND(HttpStatus.INTERNAL_SERVER_ERROR,
         "워크플로우 정의(nodes/edges)를 MongoDB에서 찾을 수 없습니다. 데이터 정합성을 확인해주세요."),
     INVALID_WORKFLOW(HttpStatus.BAD_REQUEST, "워크플로우 구성이 올바르지 않습니다."),
+    WORKFLOW_VALIDATION_FAILED(HttpStatus.BAD_REQUEST, "워크플로우 설정에 오류가 있어 실행할 수 없습니다."),
     INVALID_CRON_EXPRESSION(HttpStatus.BAD_REQUEST, "올바르지 않은 Cron 표현식입니다."),
     WORKFLOW_NOT_ACTIVE(HttpStatus.BAD_REQUEST, "비활성화된 워크플로우입니다."),
     WEBHOOK_TRIGGER_MISMATCH(HttpStatus.BAD_REQUEST, "WEBHOOK 트리거 타입의 워크플로우가 아닙니다."),
