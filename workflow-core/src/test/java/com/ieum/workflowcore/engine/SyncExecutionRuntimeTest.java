@@ -1793,6 +1793,32 @@ class SyncExecutionRuntimeTest {
         }
 
         @Test
+        @DisplayName("검증 차단은 사용자 설정 오류라 ERROR가 아니라 WARN 한 줄(executionId·workflowId·사유)로 남는다")
+        void errors_loggedAsSingleWarn() {
+            givenErrors();
+            ch.qos.logback.classic.Logger runtimeLogger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SyncExecutionRuntime.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            runtimeLogger.addAppender(appender);
+            try {
+                assertThatThrownBy(() -> run()).isInstanceOf(WorkflowValidationException.class);
+            } finally {
+                runtimeLogger.detachAppender(appender);
+            }
+
+            List<ch.qos.logback.classic.spi.ILoggingEvent> blocked = appender.list.stream()
+                .filter(e -> e.getFormattedMessage().contains("검증 실패 2건"))
+                .toList();
+            assertThat(blocked).hasSize(1);
+            assertThat(blocked.get(0).getLevel()).isEqualTo(ch.qos.logback.classic.Level.WARN);
+            assertThat(blocked.get(0).getThrowableProxy()).isNull();
+            assertThat(blocked.get(0).getFormattedMessage())
+                .contains(executionId.toString(), workflowId.toString());
+        }
+
+        @Test
         @DisplayName("Mongo 정의의 nodes·edges 원본을 그대로 검증기에 넘긴다")
         void sendsRawDefinition() throws Exception {
             run();
@@ -1858,6 +1884,26 @@ class SyncExecutionRuntimeTest {
 
             verify(validationClient, never()).validate(any(), any());
             verify(executionRepository).recordErrorIfNotTerminal(eq(executionId), eq("TRIGGER 노드가 없습니다."), any());
+        }
+
+        @Test
+        @DisplayName("검증 외 1단계 실패(TRIGGER 없음)는 WARN으로 낮추지 않고 ERROR로 남긴다")
+        void otherInitFailure_staysError() {
+            stubDefinition(List.of(node("a", "AI")), List.of());
+            ch.qos.logback.classic.Logger runtimeLogger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SyncExecutionRuntime.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            runtimeLogger.addAppender(appender);
+            try {
+                assertThatThrownBy(() -> run()).hasMessage("TRIGGER 노드가 없습니다.");
+            } finally {
+                runtimeLogger.detachAppender(appender);
+            }
+
+            assertThat(appender.list).anyMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
+            assertThat(appender.list).noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN);
         }
     }
 }
