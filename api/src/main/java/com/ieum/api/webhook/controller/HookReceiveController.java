@@ -5,6 +5,7 @@ import com.ieum.api.webhook.service.HookPayloadReader;
 import com.ieum.api.webhook.service.WebhookService;
 import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
 import jakarta.servlet.http.HttpServletRequest;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -22,7 +23,9 @@ public class HookReceiveController implements HookReceiveControllerDocs {
 
     @RequestMapping(value = "/{token}", method = {RequestMethod.GET, RequestMethod.POST, RequestMethod.PUT})
     public ResponseEntity<HookReceiveResponse> receive(@PathVariable String token, HttpServletRequest request) {
-        WorkflowExecutionResponse execution = webhookService.receive(token, hookPayloadReader.read(request));
+        // 토큰 → 횟수 → 본문 순서 — 모르는 토큰·한도 초과 요청엔 본문(최대 5MB)을 읽지 않는다
+        UUID workflowId = webhookService.resolveHook(token);
+        WorkflowExecutionResponse execution = webhookService.receive(workflowId, hookPayloadReader.read(request));
         return ResponseEntity.ok(new HookReceiveResponse(true, execution == null ? null : execution.getId()));
     }
 }

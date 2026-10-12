@@ -73,6 +73,7 @@ public enum ErrorCode {
     WORKFLOW_NOT_ACTIVE(HttpStatus.BAD_REQUEST, "비활성화된 워크플로우입니다."),
     WEBHOOK_TRIGGER_MISMATCH(HttpStatus.BAD_REQUEST, "WEBHOOK 트리거 타입의 워크플로우가 아닙니다."),
     WEBHOOK_PAYLOAD_TOO_LARGE(HttpStatus.PAYLOAD_TOO_LARGE, "웹훅 본문은 5MB를 넘을 수 없습니다."),
+    WEBHOOK_RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "웹훅은 워크플로우당 분당 60회까지 받을 수 있습니다."),
     EXECUTION_NOT_FOUND(HttpStatus.NOT_FOUND, "실행 기록을 찾을 수 없습니다."),
     EXECUTION_NOT_RETRYABLE(HttpStatus.BAD_REQUEST, "실패한 실행만 재처리할 수 있습니다."),
     EXECUTION_NOT_WAITING_APPROVAL(HttpStatus.CONFLICT, "승인 대기 중인 실행이 아닙니다."),

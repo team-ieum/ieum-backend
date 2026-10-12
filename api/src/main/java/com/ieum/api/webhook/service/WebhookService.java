@@ -41,6 +41,7 @@ public class WebhookService {
     private final WebhookListenStore webhookListenStore;
     private final NodeTestRunner nodeTestRunner;
     private final WorkflowWebhookTokenService webhookTokenService;
+    private final WebhookRateLimiter webhookRateLimiter;
 
     // @Transactional 미사용 의도:
     // prepareExecution()이 자체 트랜잭션으로 커밋된 뒤 @Async 런너가 실행되어야
@@ -57,12 +58,20 @@ public class WebhookService {
     }
 
     /**
-     * 토큰 주소({@code /api/v1/hooks/{token}}) 수신. 흐름·반환은 {@link #trigger}와 같다.
-     * 토큰이 없거나 맞지 않으면 404 — 토큰 존재 여부 외엔 알리지 않는다. 토큰은 로그에 남기지 않는다.
+     * 토큰 주소({@code /api/v1/hooks/{token}}) 수신 1단계 — 본문을 읽기 전에 부른다. 토큰이 없거나 맞지 않으면 404
+     * (토큰 존재 여부 외엔 알리지 않는다), 워크플로우당 분당 한도를 넘으면 429. 토큰은 로그에 남기지 않는다.
      */
-    public WorkflowExecutionResponse receive(String token, HookRequest request) {
+    public UUID resolveHook(String token) {
         UUID workflowId = webhookTokenService.findWorkflowIdByToken(token)
             .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+        if (!webhookRateLimiter.tryAcquire(workflowId)) {
+            throw new CustomException(ErrorCode.WEBHOOK_RATE_LIMITED);
+        }
+        return workflowId;
+    }
+
+    /** 토큰 주소 수신 2단계({@link #resolveHook} 뒤). 흐름·반환은 {@link #trigger}와 같다. */
+    public WorkflowExecutionResponse receive(UUID workflowId, HookRequest request) {
         Workflow workflow = workflowCrudService.getWorkflowById(workflowId);
         return start(workflow, request.output(includeRaw(workflowId)));
     }
