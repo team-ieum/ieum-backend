@@ -32,6 +32,23 @@ spring:
       max-lifetime: ${DB_POOL_MAX_LIFETIME_MS:1800000}
       idle-timeout: ${DB_POOL_IDLE_TIMEOUT_MS:600000}
 
+  # [IEUM-BE-70] 이메일 인증코드 발송용 SMTP. Gmail은 계정 비밀번호가 아니라 앱 비밀번호를 쓴다.
+  # 미설정이어도 부팅은 되고, 발송 시점에만 실패한다.
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
+
   jpa:
     hibernate:
       ddl-auto: update
@@ -84,6 +101,10 @@ server:
   port: 8080
 
 management:
+  health:
+    # SMTP 장애가 앱 전체 health를 DOWN으로 만들지 않도록 제외한다 (메일은 부가 기능)
+    mail:
+      enabled: false
   endpoints:
     web:
       exposure:
