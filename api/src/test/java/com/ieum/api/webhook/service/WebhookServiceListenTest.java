@@ -24,6 +24,7 @@ import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.service.NodeTestRunner;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
+import com.ieum.workflowcore.service.WorkflowWebhookTokenService;
 import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.Optional;
@@ -43,8 +44,9 @@ class WebhookServiceListenTest {
     private final WorkflowExecutionRunner runner = mock(WorkflowExecutionRunner.class);
     private final WebhookListenStore listenStore = mock(WebhookListenStore.class);
     private final NodeTestRunner nodeTestRunner = mock(NodeTestRunner.class);
+    private final WorkflowWebhookTokenService tokenService = mock(WorkflowWebhookTokenService.class);
     private final WebhookService service =
-        new WebhookService(crudService, executionService, runner, listenStore, nodeTestRunner);
+        new WebhookService(crudService, executionService, runner, listenStore, nodeTestRunner, tokenService);
 
     private final UUID workflowId = UUID.randomUUID();
     private final WorkflowVersion version = mock(WorkflowVersion.class);
@@ -192,5 +194,57 @@ class WebhookServiceListenTest {
         assertThatThrownBy(() -> service.trigger(workflowId, request))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WORKFLOW_NOT_ACTIVE));
+    }
+
+    // ──────────────────── 토큰 주소(/api/v1/hooks/{token}) ────────────────────
+
+    @Test
+    @DisplayName("토큰 주소 — 토큰이 맞지 않으면 404, 워크플로우 조회·listen 소비 없음")
+    void receive_unknownToken_404() {
+        given(tokenService.findWorkflowIdByToken("bad")).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.receive("bad", payload))
+            .isInstanceOfSatisfying(CustomException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WORKFLOW_NOT_FOUND));
+        verifyNoInteractions(crudService, listenStore, runner);
+    }
+
+    @Test
+    @DisplayName("토큰 주소 — 기존 주소와 같은 흐름: 활성 WEBHOOK면 payload 그대로 실행")
+    void receive_runsWithPayload() {
+        workflow(true, TriggerType.WEBHOOK);
+        listening(null);
+        given(tokenService.findWorkflowIdByToken("tok")).willReturn(Optional.of(workflowId));
+
+        assertThat(service.receive("tok", payload)).isNotNull();
+        verify(runner).run(eq(version), any(), eq(payload));
+    }
+
+    @Test
+    @DisplayName("토큰 주소 — listen 중이면 샘플 저장, 비활성이면 샘플만 남기고 null")
+    void receive_listening_savesSample() {
+        Workflow workflow = workflow(false, TriggerType.WEBHOOK);
+        listening("t");
+        given(tokenService.findWorkflowIdByToken("tok")).willReturn(Optional.of(workflowId));
+
+        assertThat(service.receive("tok", payload)).isNull();
+        verify(nodeTestRunner).recordWebhookSample(workflow, "t", payload);
+        verify(runner, never()).run(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("토큰 주소 — 비활성·불일치 거절은 기존 주소와 같다")
+    void receive_rejectionsSameAsTrigger() {
+        given(tokenService.findWorkflowIdByToken("tok")).willReturn(Optional.of(workflowId));
+        workflow(false, TriggerType.WEBHOOK);
+        listening(null);
+        assertThatThrownBy(() -> service.receive("tok", payload))
+            .isInstanceOfSatisfying(CustomException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WORKFLOW_NOT_ACTIVE));
+
+        workflow(true, TriggerType.MANUAL);
+        assertThatThrownBy(() -> service.receive("tok", payload))
+            .isInstanceOfSatisfying(CustomException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WEBHOOK_TRIGGER_MISMATCH));
     }
 }

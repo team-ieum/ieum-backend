@@ -102,11 +102,22 @@ public class GlobalExceptionHandler {
         // 여기서 500으로 덮으면 클라이언트 실수가 서버 오류로 보인다.
         if (e instanceof ErrorResponse er && er.getStatusCode().is4xxClientError()) {
             ErrorCode code = er.getStatusCode().value() == 404 ? ErrorCode.NOT_FOUND : ErrorCode.INVALID_INPUT;
-            log.warn("[{}] {} {} — {}", code.name(), request.getMethod(), request.getRequestURI(), e.getMessage());
+            String uri = loggableUri(request);
+            // NoResourceFoundException 등은 메시지에 경로를 담는다 — 토큰 경로면 메시지 대신 예외 이름만 남긴다
+            String detail = uri.equals(request.getRequestURI()) ? e.getMessage() : e.getClass().getSimpleName();
+            log.warn("[{}] {} {} — {}", code.name(), request.getMethod(), uri, detail);
             return ResponseEntity.status(er.getStatusCode()).headers(er.getHeaders()).body(ApiResponse.error(code));
         }
-        log.error("[UNHANDLED] {} {}", request.getMethod(), request.getRequestURI(), e);
+        log.error("[UNHANDLED] {} {}", request.getMethod(), loggableUri(request), e);
         return ResponseEntity.internalServerError()
                 .body(ApiResponse.error(ErrorCode.INTERNAL_SERVER_ERROR));
+    }
+
+    private static final String HOOK_PATH_PREFIX = "/api/v1/hooks/";
+
+    /** 웹훅 토큰 주소는 경로 자체가 비밀이라 토큰 구간을 가린다(IEUM-BE-91). */
+    static String loggableUri(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        return uri != null && uri.startsWith(HOOK_PATH_PREFIX) ? HOOK_PATH_PREFIX + "***" : uri;
     }
 }
