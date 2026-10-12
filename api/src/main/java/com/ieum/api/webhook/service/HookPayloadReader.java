@@ -57,12 +57,16 @@ public class HookPayloadReader {
         return new HookRequest(request.getMethod(), headers(request), query, result, body);
     }
 
-    /** 소문자 키, 여러 값은 {@code ", "}로 잇는다. 자격증명 헤더({@link #MASKED_HEADERS})는 가린다(R5). */
+    /**
+     * 키는 소문자로 바꾼 뒤 {@code -}를 {@code _}로 바꾼다({@code x_hub_signature_256}) — 참조식 경로 문법
+     * ({@code [a-zA-Z0-9_.]+})이 하이픈을 허용하지 않기 때문이다(R11). 여러 값은 {@code ", "}로 잇는다.
+     * 자격증명 헤더({@link #MASKED_HEADERS}, 정규화 전 소문자 이름으로 비교)는 가린다(R5).
+     */
     private static Map<String, String> headers(HttpServletRequest request) {
         Map<String, String> headers = new LinkedHashMap<>();
         for (String name : Collections.list(request.getHeaderNames())) {
-            String key = name.toLowerCase(Locale.ROOT);
-            headers.put(key, MASKED_HEADERS.contains(key)
+            String lower = name.toLowerCase(Locale.ROOT);
+            headers.put(lower.replace('-', '_'), MASKED_HEADERS.contains(lower)
                 ? "***"
                 : String.join(", ", Collections.list(request.getHeaders(name))));
         }
@@ -95,7 +99,9 @@ public class HookPayloadReader {
             }
         }
         Charset charset = type != null && type.getCharset() != null ? type.getCharset() : StandardCharsets.UTF_8;
-        if (type == null || MediaType.APPLICATION_JSON.equalsTypeAndSubtype(type)) {
+        // application/json 또는 +json 접미사(application/cloudevents+json 등)는 JSON이다(R12)
+        if (type == null || MediaType.APPLICATION_JSON.equalsTypeAndSubtype(type)
+            || "json".equalsIgnoreCase(type.getSubtypeSuffix())) {
             return parseJson(body);
         }
         if (MediaType.APPLICATION_FORM_URLENCODED.equalsTypeAndSubtype(type)) {

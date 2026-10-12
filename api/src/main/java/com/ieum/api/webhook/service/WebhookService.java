@@ -62,12 +62,17 @@ public class WebhookService {
      * (토큰 존재 여부 외엔 알리지 않는다), 워크플로우당 분당 한도를 넘으면 429. 토큰은 로그에 남기지 않는다.
      */
     public UUID resolveHook(String token) {
-        UUID workflowId = webhookTokenService.findWorkflowIdByToken(token)
-            .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+        UUID workflowId = verifyHook(token);
         if (!webhookRateLimiter.tryAcquire(workflowId)) {
             throw new CustomException(ErrorCode.WEBHOOK_RATE_LIMITED);
         }
         return workflowId;
+    }
+
+    /** 토큰만 확인한다(없거나 맞지 않으면 404). 횟수는 세지 않는다 — HEAD 주소 확인용(R13). */
+    public UUID verifyHook(String token) {
+        return webhookTokenService.findWorkflowIdByToken(token)
+            .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
     }
 
     /** 토큰 주소 수신 2단계({@link #resolveHook} 뒤). 흐름·반환은 {@link #trigger}와 같다. */
