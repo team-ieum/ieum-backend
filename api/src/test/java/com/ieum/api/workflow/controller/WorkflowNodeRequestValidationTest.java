@@ -9,6 +9,7 @@ import com.ieum.api.common.GlobalExceptionHandler;
 import com.ieum.api.workflow.service.ExecutionApprovalService;
 import com.ieum.api.workflow.service.ExecutionRetryService;
 import com.ieum.api.workflow.service.WorkflowService;
+import com.ieum.api.workflow.service.WorkflowValidationService;
 import com.ieum.auth.security.CustomUserDetails;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,7 +41,7 @@ class WorkflowNodeRequestValidationTest {
         mockMvc = MockMvcBuilders
             .standaloneSetup(new WorkflowController(
                 mock(WorkflowService.class), mock(ExecutionRetryService.class),
-                mock(ExecutionApprovalService.class)))
+                mock(ExecutionApprovalService.class), mock(WorkflowValidationService.class)))
             .setControllerAdvice(new GlobalExceptionHandler())
             .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
             .build();

@@ -16,6 +16,7 @@ import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
 import com.ieum.api.workflow.service.ExecutionApprovalService;
 import com.ieum.api.workflow.service.ExecutionRetryService;
 import com.ieum.api.workflow.service.WorkflowService;
+import com.ieum.api.workflow.service.WorkflowValidationService;
 import com.ieum.auth.security.CustomUserDetails;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
@@ -48,7 +49,8 @@ class WorkflowApprovalEndpointTest {
     void setUp() {
         mockMvc = MockMvcBuilders
             .standaloneSetup(new WorkflowController(
-                mock(WorkflowService.class), mock(ExecutionRetryService.class), approvalService))
+                mock(WorkflowService.class), mock(ExecutionRetryService.class), approvalService,
+                mock(WorkflowValidationService.class)))
             .setControllerAdvice(new GlobalExceptionHandler())
             .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
             .build();

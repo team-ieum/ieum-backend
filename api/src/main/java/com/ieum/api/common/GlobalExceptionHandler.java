@@ -3,6 +3,8 @@ package com.ieum.api.common;
 import com.ieum.common.dto.ApiResponse;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.engine.validation.WorkflowValidationException;
+import com.ieum.workflowcore.engine.validation.WorkflowValidationResult;
 import com.ieum.workflowcore.service.TestSampleMissingException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
@@ -41,6 +43,15 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(code.getStatus())
                 .body(ApiResponse.error(code, e.getMessage(),
                         Map.of("missingNodeIds", e.getMissingNodeIds())));
+    }
+
+    @ExceptionHandler(WorkflowValidationException.class)
+    public ResponseEntity<ApiResponse<Map<String, List<WorkflowValidationResult.ValidationError>>>> handleWorkflowValidation(
+            WorkflowValidationException e) {
+        ErrorCode code = e.getErrorCode();
+        log.warn("[{}] {}", code.name(), e.getMessage());
+        return ResponseEntity.status(code.getStatus())
+                .body(ApiResponse.error(code, e.getMessage(), Map.of("errors", e.getErrors())));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

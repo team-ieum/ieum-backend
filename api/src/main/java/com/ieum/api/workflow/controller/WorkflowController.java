@@ -10,11 +10,13 @@ import com.ieum.api.workflow.dto.WorkflowResponse;
 import com.ieum.api.workflow.service.ExecutionApprovalService;
 import com.ieum.api.workflow.service.ExecutionRetryService;
 import com.ieum.api.workflow.service.WorkflowService;
+import com.ieum.api.workflow.service.WorkflowValidationService;
 import com.ieum.auth.security.CustomUserDetails;
 import com.ieum.common.dto.ApiResponse;
 import com.ieum.common.dto.PageResponse;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.engine.event.ExecutionEvent;
+import com.ieum.workflowcore.engine.validation.WorkflowValidationResult;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -48,6 +50,7 @@ public class WorkflowController implements WorkflowControllerDocs {
     private final WorkflowService workflowService;
     private final ExecutionRetryService executionRetryService;
     private final ExecutionApprovalService executionApprovalService;
+    private final WorkflowValidationService workflowValidationService;
 
     @PostMapping
     public ResponseEntity<ApiResponse<WorkflowResponse>> create(
@@ -124,9 +127,20 @@ public class WorkflowController implements WorkflowControllerDocs {
         if (request == null) {
             request = new ExecuteWorkflowRequest();
         }
+        // 실행 트랜잭션(executeWorkflow) 밖에서 agent 검증 — 에러면 실행 기록 없이 400.
+        workflowValidationService.assertExecutable(userDetails.getId(), id);
         WorkflowExecutionResponse response =
             workflowService.executeWorkflow(userDetails.getId(), id, request);
         return ResponseEntity.status(202).body(ApiResponse.ok(response));
+    }
+
+    @PostMapping("/{id}/validate")
+    public ResponseEntity<ApiResponse<WorkflowValidationResult>> validate(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable UUID id) {
+
+        WorkflowValidationResult result = workflowValidationService.validate(userDetails.getId(), id);
+        return ResponseEntity.ok(ApiResponse.ok(result));
     }
 
     @PostMapping("/executions/{executionId}/retry")
