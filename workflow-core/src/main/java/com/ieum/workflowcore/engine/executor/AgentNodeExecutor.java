@@ -195,14 +195,14 @@ public class AgentNodeExecutor implements NodeExecutor {
             if (rawOutput instanceof Map<?, ?> map) {
                 output = new LinkedHashMap<>((Map<String, Object>) map);
             } else if (rawOutput == null || rawOutput instanceof String) {
-                if (rawOutput != null && declaresOutputFields(config)) {
-                    // 옛 agent(P3 롤백)는 outputFields를 무시하고 문장을 준다. 그대로 감싸면 하류의
+                if (declaresOutputFields(config)) {
+                    // 옛 agent(P3 롤백)는 outputFields를 무시하고 문장(또는 null)을 준다. 그대로 감싸면 하류의
                     // {{…output.<칸>}}이 ""로 치환돼 CONDITION이 오류 없이 엉뚱한 분기를 탄다.
                     // 재시도 없음 — 옛 agent는 결정적이고 성공 응답을 멱등 캐시해 재시도마다 같은 응답(토큰만 중복 합산).
                     betaPlatformProvider.releaseQuietly(betaReservationKey);
                     log.error("[AgentNodeExecutor] 출력 칸 선언 노드에 문장 응답 — nodeId: {}", node.getId());
                     return ExecutorResult.failure(
-                        "출력 칸이 선언된 AI 노드인데 agent가 문장 출력을 돌려줬습니다 — agent 버전을 확인하세요.",
+                        "출력 칸이 선언된 AI 노드인데 agent가 칸 객체가 아닌 출력을 돌려줬습니다 — agent 버전을 확인하세요.",
                         System.currentTimeMillis() - startTime,
                         FailureKind.CLIENT_ERROR, usage);
                 }

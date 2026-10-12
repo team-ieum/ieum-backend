@@ -1139,6 +1139,18 @@ class AgentNodeExecutorTest {
     }
 
     @Test
+    @DisplayName("칸이 선언된 노드인데 null output이어도 CLIENT_ERROR — 하류 칸 참조가 \"\"로 조용히 분기하지 않게")
+    void execute_declaredFieldsButNullOutput_failsAsClientError() {
+        enqueueJson("{\"success\":true,\"output\":null}");
+
+        ExecutorResult result = executor.execute(
+            buildAgentNodeWithOutputFields(URGENT_FIELDS), Collections.emptyMap(), buildCursor());
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getFailureKind()).isEqualTo(FailureKind.CLIENT_ERROR);
+    }
+
+    @Test
     @DisplayName("칸 선언이 비었거나 목록이 아니면 가드를 걸지 않는다 — 문자열 output은 {output}")
     void execute_emptyOrNonListFields_stringOutputIsWrapped() {
         enqueueJson("{\"success\":true,\"output\":\"a\"}");
