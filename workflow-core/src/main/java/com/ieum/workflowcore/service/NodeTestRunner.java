@@ -202,9 +202,9 @@ public class NodeTestRunner {
      * 런타임 순서를 그대로 따른다({@code SyncExecutionRuntime}의 트리거 출력 선주입
      * ({@code setNodeOutput(triggerNode…)}) → {@code prepareNodeInput} 치환 → 실행): 페이로드를
      * 트리거 노드 출력으로 먼저 심은 뒤 config를 치환하고, 그 결과를 {@code TriggerNodeExecutor}가 출력으로
-     * 돌려준다. 그래서 샘플은 원 페이로드가 아니라 <b>치환된 트리거 config</b>이고, 페이로드 필드는 config가
-     * {@code {{nodes.<id>.output.X}}}로 자기 참조할 때만 남는다. 단 앱 트리거(Gmail 등)는 예외로, 실행기가 심어 둔
-     * 정규화 페이로드를 그대로 출력하므로 샘플 = 페이로드다(config 키는 섞이지 않는다). 앞 노드 샘플은 요구하지 않는다.
+     * 돌려준다. MANUAL은 샘플이 <b>치환된 트리거 config</b>이고, 페이로드 필드는 config가
+     * {@code {{nodes.<id>.output.X}}}로 자기 참조할 때만 남는다. WEBHOOK·앱 트리거(Gmail 등)는 실행기가 심어 둔
+     * 페이로드를 그대로 출력하므로 샘플 = 페이로드다(config 키는 섞이지 않는다). 앞 노드 샘플은 요구하지 않는다.
      */
     private NodeTestResult runTrigger(Workflow workflow, Node node, Map<String, Object> payload) {
         NodeExecutor executor = executorFor(node);

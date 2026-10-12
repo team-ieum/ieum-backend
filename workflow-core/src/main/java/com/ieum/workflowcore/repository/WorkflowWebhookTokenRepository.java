@@ -10,8 +10,6 @@ import org.springframework.data.repository.query.Param;
 
 public interface WorkflowWebhookTokenRepository extends JpaRepository<WorkflowWebhookToken, UUID> {
 
-    Optional<WorkflowWebhookToken> findByTokenHash(String tokenHash);
-
     Optional<WorkflowWebhookToken> findByWorkflowId(UUID workflowId);
 
     /** 워크플로우 삭제 시 호출자 트랜잭션 안에서 부른다. */

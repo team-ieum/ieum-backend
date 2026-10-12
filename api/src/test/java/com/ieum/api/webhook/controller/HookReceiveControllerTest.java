@@ -8,6 +8,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -116,6 +117,30 @@ class HookReceiveControllerTest {
     }
 
     @Test
+    @DisplayName("+json 접미사 Content-Type(application/cloudevents+json) → JSON으로 읽는다")
+    void plusJsonSuffixIsJson() throws Exception {
+        mockMvc.perform(post("/api/v1/hooks/{token}", TOKEN)
+                .contentType("application/cloudevents+json; charset=utf-8")
+                .content("{\"type\": \"com.example.created\", \"data\": {\"id\": 3}}"))
+            .andExpect(status().isOk());
+        assertThat(received()).isEqualTo(Map.of("type", "com.example.created", "data", Map.of("id", 3)));
+    }
+
+    @Test
+    @DisplayName("HEAD → 토큰만 확인하고 200 — 실행·횟수 카운트·listen 소비 없음, 모르는 토큰은 404")
+    void head_verifiesTokenOnly() throws Exception {
+        given(webhookService.verifyHook(TOKEN)).willReturn(WORKFLOW_ID);
+        given(webhookService.verifyHook("nope")).willThrow(new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+
+        mockMvc.perform(head("/api/v1/hooks/{token}", TOKEN)).andExpect(status().isOk());
+        mockMvc.perform(head("/api/v1/hooks/{token}", "nope")).andExpect(status().isNotFound());
+
+        verify(webhookService).verifyHook(TOKEN);
+        verify(webhookService, never()).resolveHook(any());
+        verify(webhookService, never()).receive(any(), any());
+    }
+
+    @Test
     @DisplayName("form 본문 → 키→값, 같은 키 여러 번이면 리스트, URL 디코딩")
     void form() throws Exception {
         mockMvc.perform(post("/api/v1/hooks/{token}", TOKEN)
@@ -212,7 +237,7 @@ class HookReceiveControllerTest {
     }
 
     @Test
-    @DisplayName("includeRaw true → method·headers·query·body·rawBody, 자격증명 헤더는 대소문자 무관 가림, 서명 헤더는 원문")
+    @DisplayName("includeRaw true → method·headers·query·body·rawBody, 헤더 키는 소문자+_로 정규화, 자격증명 헤더는 대소문자 무관 가림, 서명 헤더는 원문")
     void includeRaw_shape() throws Exception {
         String raw = "{\"event\": \"fromBody\"}";
         mockMvc.perform(post("/api/v1/hooks/{token}?event=fromQuery&source=q", TOKEN)
@@ -245,21 +270,23 @@ class HookReceiveControllerTest {
         Map<String, String> headers = (Map<String, String>) out.get("headers");
         assertThat(headers).containsEntry("authorization", "***")
             .containsEntry("cookie", "***")
-            .containsEntry("proxy-authorization", "***")
-            .containsEntry("set-cookie", "***")
-            .containsEntry("x-api-key", "***")
-            .containsEntry("x-auth-token", "***")
-            .containsEntry("x-access-token", "***")
-            .containsEntry("x-csrf-token", "***")
-            .containsEntry("x-xsrf-token", "***")
+            .containsEntry("proxy_authorization", "***")
+            .containsEntry("set_cookie", "***")
+            .containsEntry("x_api_key", "***")
+            .containsEntry("x_auth_token", "***")
+            .containsEntry("x_access_token", "***")
+            .containsEntry("x_csrf_token", "***")
+            .containsEntry("x_xsrf_token", "***")
             // 서명·검증 헤더는 includeRaw의 존재 이유다 — 가리면 워크플로우가 서명을 검증할 수 없다
-            .containsEntry("x-hub-signature-256", "sha256=abc")
-            .containsEntry("x-hub-signature", "sha1=def")
-            .containsEntry("stripe-signature", "t=1,v1=ghi")
-            .containsEntry("x-slack-signature", "v0=jkl")
-            .containsEntry("x-gitlab-token", "glverify")
-            .containsEntry("x-hook-secret", "asanaverify")
-            .doesNotContainKeys("AUTHORIZATION", "Cookie");
+            .containsEntry("x_hub_signature_256", "sha256=abc")
+            .containsEntry("x_hub_signature", "sha1=def")
+            .containsEntry("stripe_signature", "t=1,v1=ghi")
+            .containsEntry("x_slack_signature", "v0=jkl")
+            .containsEntry("x_gitlab_token", "glverify")
+            .containsEntry("x_hook_secret", "asanaverify")
+            // 참조식 경로 문법([a-zA-Z0-9_.]+)이 하이픈을 못 쓰므로 키에 '-'가 남으면 안 된다(R11)
+            .doesNotContainKeys("AUTHORIZATION", "Cookie", "x-hub-signature-256", "x-api-key");
+        assertThat(headers.keySet()).allSatisfy(k -> assertThat(k).matches("[a-z0-9_]+"));
         assertThat(headers.values().toString()).doesNotContain("secret");
     }
 

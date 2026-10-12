@@ -58,7 +58,7 @@
 - **단일 시도** — 재시도·모델 fallback 없음. `NodeAttempt(1, "test-<uuid>:<nodeId>", RetryPolicy.from(...))`, MARKER 모드면 러너가 `clearInFlight`
 - config가 **직접 참조한** 노드의 SUCCESS 샘플만 `nodeOutputs`에 넣는다(`ExecutionCursor.referencedNodeIds`). 하나라도 없으면 `TestSampleMissingException`(400, `missingNodeIds`). 실패(FAILED) 샘플은 참조 해석에 쓰지 않고, **실패한 재테스트는 이전 SUCCESS 샘플을 덮어쓴다**
 - 샘플 출력은 저장 직전 마스킹 — 하류가 `token`·`apiKey` 같은 필드를 참조하면 `***`가 들어간다(재처리 `loadReusableNodeOutputs`와 같은 트레이드오프)
-- 트리거: 페이로드를 트리거 출력으로 먼저 심고 `renderDeep(config)`를 `TriggerNodeExecutor`에 넘긴 출력이 샘플이다(런타임과 같은 모양 — 페이로드 필드는 config 자기 참조로만 남는다). webhook 수신은 `recordWebhookSample`(저장 최신 버전의 노드, 없으면 최소 WEBHOOK 트리거)
+- 트리거: 페이로드를 트리거 출력으로 먼저 심고 `renderDeep(config)`를 `TriggerNodeExecutor`에 넘긴 출력이 샘플이다(런타임과 같은 모양 — WEBHOOK·앱 트리거는 페이로드 그대로, MANUAL은 페이로드 필드가 config 자기 참조로만 남는다). webhook 수신은 `recordWebhookSample`(저장 최신 버전의 노드, 없으면 최소 WEBHOOK 트리거)
 - upsert는 find → record → saveAndFlush, UNIQUE 경합(`DataIntegrityViolationException`)이면 한 번 더 갱신으로 쓴다
 - 트랜잭션을 걸지 않는다(외부 호출을 한 트랜잭션에 묶지 않기 위해, 저장소 호출은 각자 트랜잭션. OSIV 기본 on이라 커넥션은 요청 끝까지 유지됨)
 
@@ -66,7 +66,7 @@
 `TRIGGER`, `AI`, `CONDITION`, `HTTP`, `TRANSFORM`, `APPROVAL`, `ACTION` — 7종. `ACTION`은 앱 도구 하나를 LLM 없이 실행하는 결정론적 노드다(config 모양은 AI 노드 `tools[0]`과 같다 — `{"tools":[{"name":"<tool_key>","config":{…}}],"brand":…,"serviceType":…}`). 그 외 외부 서비스(Gmail·Notion 등) 연동은 AI 노드의 도구/HTTP 노드로 처리한다. `APPROVAL`은 NodeExecutor가 없다(위 "승인 게이트").
 
 ### NodeExecutor
-`NodeExecutor` 인터페이스 + 타입별 구현체(`AgentNodeExecutor`, `ActionNodeExecutor`, `ConditionNodeExecutor`, `HttpNodeExecutor`, `TransformNodeExecutor`, `TriggerNodeExecutor`). 결과는 `ExecutorResult`. 앱 트리거는 심어 둔 정규화 페이로드를 그대로 출력한다(config 에코 아님).
+`NodeExecutor` 인터페이스 + 타입별 구현체(`AgentNodeExecutor`, `ActionNodeExecutor`, `ConditionNodeExecutor`, `HttpNodeExecutor`, `TransformNodeExecutor`, `TriggerNodeExecutor`). 결과는 `ExecutorResult`. WEBHOOK·앱 트리거는 심어 둔 페이로드를 그대로 출력한다(config 에코 아님).
 
 **`AgentNodeExecutor`**(`AI`) — `/v1/execute` body `workflowContext` = `{nodes:{<id>:{output, status:"COMPLETED", type}}, trigger:<TRIGGER 노드 출력>}`(agent `tools/workflow_context.py` 계약, 평평한 `{<id>:output}` 아님). `nodeOutputs`를 감싼 것이라 성공·재사용 노드만 있고, trigger는 원 페이로드가 아니라 트리거 노드 출력이다. 노드 테스트에선 직접 참조한 샘플만 들어가 type은 null, trigger는 없다. 요청에 `outputFields`(노드 `config.outputFields` 원값 — 캐스트·검사 없음, 검사는 agent `INVALID_OUTPUT_FIELDS`)를 싣는다. 응답 `output`은 `Object`: Map이면 그 칸이 곧 노드 출력(`{output, metadata}` 래퍼 없음), 문자열이면 `{output: 문자열}`, null이면 `{output: null}`. 칸 선언 노드(비어 있지 않은 목록)인데 문자열·null이면 CLIENT_ERROR(재시도 없음 — 옛 agent는 결정적이고 멱등 캐시로 같은 응답을 되풀이한다) — 롤백된 agent의 문장이 하류에서 `""`로 조용히 분기하는 걸 막는다. 배열·숫자·불은 agent 계약 버그라 CLIENT_ERROR. 가드 실패는 agent 실패 응답과 같이 베타 일일 호출 환불·토큰 차감 없음. 실패 응답 usage도 `ExecutorResult`에 실린다.
 **`ActionNodeExecutor`**(`ACTION`) — `tools[0]`만 ieum-agent `POST ${ieum.agent.url}/v1/actions/execute`에 위임한다(body `{nodeId, toolKey, config}` = `ActionNodeRequest`, 응답 `ActionExecutionResult{success, output(dict), errorMessage, errorCode}`). 노드 출력은 agent `output` dict 그대로(AI 노드 객체 출력과 같은 모양). LLM 헤더(`X-LLM-*`·`X-Key-Mode`)·쿼터·토큰 차감·모델 fallback이 **없다**(과금 0). 헤더는 `X-User-Id`·`X-User-Role`·`X-Node-Id`·`X-Trace-Id`·`X-Idempotency-Key`(HEADER이고 재시도가 켜졌을 때)·`X-Google-Access-Token`·도구 인증 헤더. 실패 분류: `ACTION_TOOL_FAILED`→CLIENT_ERROR(재시도 안 함), 알 수 없는 toolKey(HTTP 400)→`AGENT_BAD_REQUEST`→CLIENT_ERROR, 5xx·429·타임아웃은 재시도 대상. 쓸 수 없는 정의(tools 없음·name 없음)는 agent 호출 없이 CLIENT_ERROR.
