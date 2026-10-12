@@ -40,7 +40,7 @@ public final class FailureClassifier {
         Map.entry("ACTION_TOOL_FAILED", FailureKind.CLIENT_ERROR),
         // AI 노드 config.outputFields 규칙 위반 — 저장된 값이 그대로면 몇 번을 돌려도 같다
         Map.entry("INVALID_OUTPUT_FIELDS", FailureKind.CLIENT_ERROR),
-        // 모델이 선언한 출력 칸 모양을 어김(agent 검증) 또는 칸 선언 노드에 문장 응답(BE 가드).
+        // agent가 보낸 모델 출력 불일치 — 모델이 선언한 출력 칸 모양을 어김(agent 검증).
         // "상대가 계약을 어겼다"에 가장 가까운 재시도 분류 — 같은 모델로 다시 부르면 맞출 수 있다
         Map.entry("AI_OUTPUT_MISMATCH", FailureKind.SERVER_ERROR)
     );
