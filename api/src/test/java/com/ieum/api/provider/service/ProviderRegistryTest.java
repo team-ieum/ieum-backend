@@ -23,7 +23,7 @@ class ProviderRegistryTest {
      * 크로스레포라 코드로 묶을 수 없어 테스트로 고정한다.
      */
     private static final Map<AiProvider, String> AGENT_DEFAULTS = Map.of(
-            AiProvider.CLAUDE, "claude-sonnet-5",
+            AiProvider.CLAUDE, "claude-sonnet-5-5",
             AiProvider.OPENAI, "gpt-5.6-terra",
             AiProvider.GEMINI, "gemini-3.7-flash"
     );
@@ -46,6 +46,23 @@ class ProviderRegistryTest {
                         tuple(AiProvider.CLAUDE.name(), AiProvider.CLAUDE.getDisplayName()),
                         tuple(AiProvider.OPENAI.name(), AiProvider.OPENAI.getDisplayName()),
                         tuple(AiProvider.GEMINI.name(), AiProvider.GEMINI.getDisplayName()));
+    }
+
+    @Test
+    @DisplayName("카탈로그 14종 — provider별 id와 순서(FE 셀렉트·ai.models 순서)가 고정이다. 추가분은 기존 항목 뒤")
+    void catalogListsFourteenModelsInOrder() {
+        Map<String, List<String>> idsByProvider = new java.util.LinkedHashMap<>();
+        registry.getAllProviders().forEach(p ->
+                idsByProvider.put(p.provider(), p.models().stream().map(ModelInfo::id).toList()));
+
+        assertThat(idsByProvider.get("CLAUDE")).containsExactly(
+                "claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5",
+                "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1");
+        assertThat(idsByProvider.get("OPENAI")).containsExactly(
+                "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol");
+        assertThat(idsByProvider.get("GEMINI")).containsExactly(
+                "gemini-3.5-flash-lite", "gemini-3.7-flash", "gemini-2.5-pro",
+                "gemini-3.8-flash", "gemini-3.1-pro-preview");
     }
 
     @Test
