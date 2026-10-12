@@ -1125,15 +1125,15 @@ class AgentNodeExecutorTest {
     }
 
     @Test
-    @DisplayName("칸이 선언된 노드인데 문자열 output이면 AI_OUTPUT_MISMATCH(재시도 대상) — 롤백된 agent의 조용한 오분기 방지")
-    void execute_declaredFieldsButStringOutput_failsAsMismatch() {
+    @DisplayName("칸이 선언된 노드인데 문자열 output이면 CLIENT_ERROR(재시도 없음) — 롤백된 agent의 조용한 오분기 방지")
+    void execute_declaredFieldsButStringOutput_failsAsClientError() {
         enqueueJson("{\"success\":true,\"output\":\"긴급해 보입니다\"," + USAGE_15 + "}");
 
         ExecutorResult result = executor.execute(
             buildAgentNodeWithOutputFields(URGENT_FIELDS), Collections.emptyMap(), buildCursor());
 
         assertThat(result.isSuccess()).isFalse();
-        assertThat(result.getFailureKind()).isEqualTo(FailureKind.SERVER_ERROR);
+        assertThat(result.getFailureKind()).isEqualTo(FailureKind.CLIENT_ERROR);
         assertThat(result.getErrorMessage()).contains("출력 칸");
         assertThat(result.getUsage().totalTokens()).isEqualTo(15);
     }

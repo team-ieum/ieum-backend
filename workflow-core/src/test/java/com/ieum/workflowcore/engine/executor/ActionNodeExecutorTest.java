@@ -143,7 +143,7 @@ class ActionNodeExecutorTest {
     }
 
     @Test
-    @DisplayName("노드 출력은 agent output dict 그대로다 — AI 노드의 {output, metadata} 래퍼도 usage도 없다")
+    @DisplayName("노드 출력은 agent output dict 그대로다 — usage도 없다")
     void success_outputIsAgentOutputDictAsIs() throws Exception {
         enqueue(200, "{\"success\":true,\"output\":{\"issues\":[{\"number\":1,\"title\":\"첫 이슈\"}],\"count\":1}}");
 

@@ -1115,6 +1115,11 @@ class SyncExecutionRuntimeTest {
             assertThat(ExecutorResult.TokenUsage.sum(
                 new ExecutorResult.TokenUsage(null, 1, 1), new ExecutorResult.TokenUsage(null, 2, 3)))
                 .isEqualTo(new ExecutorResult.TokenUsage(null, 3, 4));
+            assertThat(ExecutorResult.TokenUsage.sum(
+                new ExecutorResult.TokenUsage(5, null, 1), new ExecutorResult.TokenUsage(null, 2, 1)))
+                .isEqualTo(new ExecutorResult.TokenUsage(5, 2, 2));
+            ExecutorResult.TokenUsage u = new ExecutorResult.TokenUsage(7, 8, 15);
+            assertThat(ExecutorResult.TokenUsage.sum(u, null)).isEqualTo(u);
         }
 
         @Test
