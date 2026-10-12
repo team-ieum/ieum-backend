@@ -41,7 +41,7 @@ public class HookPayloadReader {
      * {@code SensitiveDataMasker}는 부분 일치({@code token}·{@code secret})라 {@code x-gitlab-token} 같은 검증 헤더까지
      * 가리므로 쓰지 않는다.
      */
-    static final Set<String> MASKED_HEADERS = Set.of(
+    private static final Set<String> MASKED_HEADERS = Set.of(
         "authorization", "proxy-authorization", "cookie", "set-cookie",
         "x-api-key", "x-auth-token", "x-access-token", "x-csrf-token", "x-xsrf-token");
 
