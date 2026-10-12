@@ -118,7 +118,7 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 | `Workflow` | `workflows` | |
 | `WorkflowVersion` | `workflow_versions` | 실행 시점 버전 고정 참조 |
 | `WorkflowExecution` | `workflow_runs` | status, triggerType, startedAt/finishedAt, traceId, `retry_exhausted`, `trigger_data`, `retried_by_execution_id`, `error_message` |
-| `WorkflowExecutionLog` | `node_runs` | nodeId, nodeType, status, input/output JSON(TEXT), errorMessage, durationMs, traceId, prompt/completion/total tokens, `attempt_count` |
+| `WorkflowExecutionLog` | `node_runs` | nodeId, nodeType, status, input/output JSON(TEXT), errorMessage, durationMs, traceId, prompt/completion/total tokens(재시도 전 회차 합 — 실패 회차 포함), `attempt_count` |
 | `ChatMessage`/`ChatSession` | chat/ 하위 | 워크플로우 채팅 |
 | `NodeTestSample` | `node_test_samples` | 노드 단일 테스트의 최신 결과 1건(UNIQUE workflow_id+node_id). 출력은 `SensitiveDataMasker` 적용 후 TEXT JSON. 삭제는 `WorkflowCrudService.deleteWorkflowInternal`이 워크플로우 행보다 먼저 |
 | `AppTriggerSubscription` | `app_trigger_subscriptions` | 활성 앱 트리거 1건(UNIQUE workflow_id+node_id, FK 없음). 행 있음 = 켜짐. `AppTriggerSubscriptionService.sync`가 `WorkflowCrudService` 생성·수정·AI 저장·활성화·비활성화에서 **트랜잭션 안**으로 맞춘다(Quartz만 afterCommit). config는 스냅샷만(Gmail `{query}`, GitHub `{repoId}` = `resource_key` — 파싱은 public static `githubRepoId`(숫자·숫자 문자열, 형식 오류 400)이고 api `GitHubIssueSource`도 같이 쓴다. Gmail은 `gmailQuery`). Gmail 커서 `poll_cursor` — 리셋 시 `{afterSec: now}`만 쓰고 나머지 키(`floorSec`·`okSec`·`seen`)는 api `GmailCursor`가 채운다, query·triggerType 변경 시만 리셋. `sync`는 활성 + 최상위 triggerType이 앱 트리거인데 노드 선언이 없으면 400(`INVALID_WORKFLOW`). 스윕 클레임은 `lockDue`(네이티브 `FOR UPDATE SKIP LOCKED`). 삭제는 `deleteWorkflowInternal` |
