@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 
 import com.ieum.api.NoRedisTestConfig;
+import com.ieum.api.webhook.service.HookRequest;
 import com.ieum.api.webhook.service.WebhookService;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -33,7 +34,6 @@ class HookReceiveRealServerTest {
 
     @Test
     @DisplayName("multipart 본문도 리졸버에 먹히지 않고 {value: 원문}으로 온다")
-    @SuppressWarnings("unchecked")
     void multipart_isReadAsText() throws Exception {
         String body = "--b\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n1\r\n--b--\r\n";
         HttpResponse<String> res = HttpClient.newHttpClient().send(
@@ -44,8 +44,9 @@ class HookReceiveRealServerTest {
             HttpResponse.BodyHandlers.ofString());
 
         assertThat(res.statusCode()).isEqualTo(200);
-        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<HookRequest> captor = ArgumentCaptor.forClass(HookRequest.class);
         verify(webhookService).receive(eq("tok"), captor.capture());
-        assertThat(captor.getValue()).isEqualTo(Map.of("value", body));
+        assertThat(captor.getValue().output(false)).isEqualTo(Map.of("value", body));
+        assertThat(captor.getValue().output(true)).containsEntry("rawBody", body);
     }
 }

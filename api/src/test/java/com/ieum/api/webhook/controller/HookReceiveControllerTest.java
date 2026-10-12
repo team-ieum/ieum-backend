@@ -2,7 +2,6 @@ package com.ieum.api.webhook.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
@@ -17,6 +16,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.common.GlobalExceptionHandler;
 import com.ieum.api.webhook.service.HookPayloadReader;
+import com.ieum.api.webhook.service.HookRequest;
 import com.ieum.api.webhook.service.WebhookService;
 import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
 import com.ieum.common.exception.CustomException;
@@ -48,18 +48,22 @@ class HookReceiveControllerTest {
             .build();
     }
 
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> received() {
-        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+    private HookRequest receivedRequest() {
+        ArgumentCaptor<HookRequest> captor = ArgumentCaptor.forClass(HookRequest.class);
         verify(webhookService).receive(eq(TOKEN), captor.capture());
         return captor.getValue();
+    }
+
+    /** includeRaw false 모양(R4). */
+    private Map<String, Object> received() {
+        return receivedRequest().output(false);
     }
 
     @Test
     @DisplayName("감싸지 않은 JSON 객체(GitHub ping) → 그대로 payload, 200 {ok, executionId}")
     void unwrappedJsonObject() throws Exception {
         UUID executionId = UUID.randomUUID();
-        given(webhookService.receive(eq(TOKEN), anyMap()))
+        given(webhookService.receive(eq(TOKEN), any()))
             .willReturn(WorkflowExecutionResponse.builder().id(executionId).build());
 
         mockMvc.perform(post("/api/v1/hooks/{token}", TOKEN)
@@ -183,10 +187,57 @@ class HookReceiveControllerTest {
     @Test
     @DisplayName("토큰이 없거나 틀리면 404 WORKFLOW_NOT_FOUND")
     void unknownToken_404() throws Exception {
-        given(webhookService.receive(any(), anyMap())).willThrow(new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+        given(webhookService.receive(any(), any())).willThrow(new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
 
         mockMvc.perform(post("/api/v1/hooks/{token}", "nope").contentType(MediaType.APPLICATION_JSON).content("{}"))
             .andExpect(status().isNotFound())
             .andExpect(jsonPath("$.code").value(ErrorCode.WORKFLOW_NOT_FOUND.name()));
+    }
+
+    @Test
+    @DisplayName("includeRaw true → method·headers·query·body·rawBody, authorization·cookie는 대소문자 무관 가림")
+    void includeRaw_shape() throws Exception {
+        String raw = "{\"event\": \"fromBody\"}";
+        mockMvc.perform(post("/api/v1/hooks/{token}?event=fromQuery&source=q", TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("AUTHORIZATION", "Bearer secret")
+                .header("Cookie", "sid=secret")
+                .header("X-Hub-Signature-256", "sha256=abc")
+                .content(raw))
+            .andExpect(status().isOk());
+
+        Map<String, Object> out = receivedRequest().output(true);
+        assertThat(out).containsOnlyKeys("method", "headers", "query", "body", "rawBody")
+            .containsEntry("method", "POST")
+            .containsEntry("query", Map.of("event", "fromQuery", "source", "q"))
+            .containsEntry("body", Map.of("event", "fromBody", "source", "q"))
+            .containsEntry("rawBody", raw);
+        @SuppressWarnings("unchecked")
+        Map<String, String> headers = (Map<String, String>) out.get("headers");
+        assertThat(headers).containsEntry("authorization", "***")
+            .containsEntry("cookie", "***")
+            .containsEntry("x-hub-signature-256", "sha256=abc")
+            .doesNotContainKeys("AUTHORIZATION", "Cookie");
+        assertThat(headers.toString()).doesNotContain("secret");
+    }
+
+    @Test
+    @DisplayName("includeRaw false → Task 2 모양(R4) 그대로, 헤더·원문 없음")
+    void includeRawFalse_unchanged() throws Exception {
+        mockMvc.perform(post("/api/v1/hooks/{token}", TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer secret")
+                .content("[1]"))
+            .andExpect(status().isOk());
+        assertThat(received()).isEqualTo(Map.of("items", List.of(1)));
+    }
+
+    @Test
+    @DisplayName("includeRaw GET → rawBody 빈 문자열, body는 쿼리")
+    void includeRaw_get() throws Exception {
+        mockMvc.perform(get("/api/v1/hooks/{token}?a=1", TOKEN)).andExpect(status().isOk());
+        Map<String, Object> out = receivedRequest().output(true);
+        assertThat(out).containsEntry("method", "GET").containsEntry("rawBody", "")
+            .containsEntry("body", Map.of("a", "1")).containsEntry("query", Map.of("a", "1"));
     }
 }

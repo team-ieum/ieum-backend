@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.ieum.api.NoRedisTestConfig;
+import com.ieum.api.webhook.service.HookRequest;
 import com.ieum.api.webhook.service.WebhookService;
 import java.util.List;
 import java.util.Map;
@@ -36,11 +37,10 @@ class HookReceiveIntegrationTest {
     @Autowired private MockMvc mockMvc;
     @MockitoBean private WebhookService webhookService;
 
-    @SuppressWarnings("unchecked")
     private Map<String, Object> received() {
-        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<HookRequest> captor = ArgumentCaptor.forClass(HookRequest.class);
         verify(webhookService).receive(eq("tok"), captor.capture());
-        return captor.getValue();
+        return captor.getValue().output(false);
     }
 
     @Test

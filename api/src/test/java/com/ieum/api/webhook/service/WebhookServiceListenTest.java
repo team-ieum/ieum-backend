@@ -16,6 +16,7 @@ import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowVersion;
@@ -25,7 +26,9 @@ import com.ieum.workflowcore.service.NodeTestRunner;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import com.ieum.workflowcore.service.WorkflowWebhookTokenService;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -52,6 +55,8 @@ class WebhookServiceListenTest {
     private final WorkflowVersion version = mock(WorkflowVersion.class);
     private final Map<String, Object> payload = Map.of("orderId", "ORD-1");
     private final WebhookTriggerRequest request = request(payload);
+    private final HookRequest hook = new HookRequest("POST", Map.of("authorization", "***"), Map.of(), payload,
+        "{\"orderId\":\"ORD-1\"}".getBytes(StandardCharsets.UTF_8));
 
     private static WebhookTriggerRequest request(Map<String, Object> payload) {
         WebhookTriggerRequest request = new WebhookTriggerRequest();
@@ -203,7 +208,7 @@ class WebhookServiceListenTest {
     void receive_unknownToken_404() {
         given(tokenService.findWorkflowIdByToken("bad")).willReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.receive("bad", payload))
+        assertThatThrownBy(() -> service.receive("bad", hook))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WORKFLOW_NOT_FOUND));
         verifyNoInteractions(crudService, listenStore, runner);
@@ -216,7 +221,7 @@ class WebhookServiceListenTest {
         listening(null);
         given(tokenService.findWorkflowIdByToken("tok")).willReturn(Optional.of(workflowId));
 
-        assertThat(service.receive("tok", payload)).isNotNull();
+        assertThat(service.receive("tok", hook)).isNotNull();
         verify(runner).run(eq(version), any(), eq(payload));
     }
 
@@ -227,7 +232,7 @@ class WebhookServiceListenTest {
         listening("t");
         given(tokenService.findWorkflowIdByToken("tok")).willReturn(Optional.of(workflowId));
 
-        assertThat(service.receive("tok", payload)).isNull();
+        assertThat(service.receive("tok", hook)).isNull();
         verify(nodeTestRunner).recordWebhookSample(workflow, "t", payload);
         verify(runner, never()).run(any(), any(), any());
     }
@@ -238,13 +243,63 @@ class WebhookServiceListenTest {
         given(tokenService.findWorkflowIdByToken("tok")).willReturn(Optional.of(workflowId));
         workflow(false, TriggerType.WEBHOOK);
         listening(null);
-        assertThatThrownBy(() -> service.receive("tok", payload))
+        assertThatThrownBy(() -> service.receive("tok", hook))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WORKFLOW_NOT_ACTIVE));
 
         workflow(true, TriggerType.MANUAL);
-        assertThatThrownBy(() -> service.receive("tok", payload))
+        assertThatThrownBy(() -> service.receive("tok", hook))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WEBHOOK_TRIGGER_MISMATCH));
+    }
+
+    // ──────────────────── includeRaw(R5·R6·R8) ────────────────────
+
+    private void savedNodes(List<Map<String, Object>> nodes) {
+        given(crudService.loadDefinition(version))
+            .willReturn(WorkflowDefinitionDocument.builder().nodes(nodes).build());
+    }
+
+    private static Map<String, Object> trigger(Map<String, Object> config) {
+        Map<String, Object> node = new java.util.HashMap<>(Map.of("id", "t", "type", "TRIGGER"));
+        if (config != null) {
+            node.put("config", config);
+        }
+        return node;
+    }
+
+    @Test
+    @DisplayName("includeRaw true → 실행·샘플 둘 다 {method, headers, query, body, rawBody}")
+    void receive_includeRaw_runsAndSamplesRawShape() {
+        Workflow workflow = workflow(true, TriggerType.WEBHOOK);
+        listening("t");
+        savedNodes(List.of(Map.of("id", "a", "type", "AI"), trigger(Map.of("includeRaw", true))));
+        given(tokenService.findWorkflowIdByToken("tok")).willReturn(Optional.of(workflowId));
+
+        service.receive("tok", hook);
+
+        Map<String, Object> raw = hook.output(true);
+        assertThat(raw).containsEntry("body", payload).containsEntry("rawBody", "{\"orderId\":\"ORD-1\"}")
+            .containsEntry("method", "POST").containsEntry("headers", Map.of("authorization", "***"));
+        verify(nodeTestRunner).recordWebhookSample(workflow, "t", raw);
+        verify(runner).run(eq(version), any(), eq(raw));
+    }
+
+    @Test
+    @DisplayName("includeRaw false·config 없음·트리거 노드 없음·버전 없음 → R4 모양 그대로")
+    void receive_includeRawAbsent_keepsPlainShape() {
+        given(tokenService.findWorkflowIdByToken("tok")).willReturn(Optional.of(workflowId));
+        List<List<Map<String, Object>>> cases = List.of(
+            List.of(trigger(Map.of("includeRaw", false))),
+            List.of(trigger(null)),
+            List.of(trigger(Map.of("includeRaw", "true"))),
+            List.of());
+        for (List<Map<String, Object>> nodes : cases) {
+            workflow(true, TriggerType.WEBHOOK);
+            listening(null);
+            savedNodes(nodes);
+            service.receive("tok", hook);
+        }
+        verify(runner, times(cases.size())).run(eq(version), any(), eq(payload));
     }
 }
