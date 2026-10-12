@@ -188,7 +188,11 @@ public class SyncExecutionRuntime {
                     execution.getId(), e.getMessage());
             }
             // 이 단계 실패엔 노드 로그가 없다 — 실행 단위 사유가 유일한 원인 기록이다(finishIfNotTerminal은 상태만 쓴다).
-            workflowExecutionRepository.recordErrorIfNotTerminal(executionId, e.getMessage(), LocalDateTime.now());
+            // 사용자 대시보드에 보이는 값이라 우리가 만든 메시지만 싣는다. Mongo·Jackson 원문(호스트·config 조각)은
+            // 고정 문구로 바꾸고 원문은 운영 알림·로그에만 남긴다.
+            String reason = e instanceof CustomException || e instanceof IllegalStateException
+                ? e.getMessage() : "워크플로우 정의를 불러오지 못했습니다.";
+            workflowExecutionRepository.recordErrorIfNotTerminal(executionId, reason, LocalDateTime.now());
             finalizeFailure(execution, executionId, false, null, e.getMessage());
             eventPublisher.complete(executionId);
             throw e;
