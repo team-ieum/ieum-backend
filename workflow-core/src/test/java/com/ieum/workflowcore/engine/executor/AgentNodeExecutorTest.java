@@ -1036,4 +1036,175 @@ class AgentNodeExecutorTest {
         RecordedRequest recorded = mockWebServer.takeRequest();
         assertThat(recorded.getBody().readUtf8()).contains("\"model\":\"gemini-3.5-flash\"");
     }
+
+    // ── 구조화 출력 (outputFields · 객체 output) ─────────────────────────────
+
+    private static final List<Map<String, Object>> URGENT_FIELDS = List.of(
+        Map.of("key", "urgent", "type", "boolean"),
+        Map.of("key", "reason", "type", "text"));
+
+    private Node buildAgentNodeWithOutputFields(Object outputFields) {
+        Map<String, Object> config = new java.util.HashMap<>();
+        config.put("llmProvider", "CLAUDE");
+        config.put("credentialId", "cred-id-1");
+        config.put("prompt", "긴급한지 판단해");
+        config.put("outputFields", outputFields);
+        return new Node("node-1", NodeType.AI, "AI 노드", config);
+    }
+
+    private void enqueueJson(String body) {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody(body));
+    }
+
+    private static final String USAGE_15 =
+        "\"usage\":{\"promptTokens\":10,\"completionTokens\":5,\"totalTokens\":15}";
+
+    @Test
+    @DisplayName("config.outputFields를 검사·캐스트 없이 요청 outputFields로 싣는다 — 목록이든 문자열이든")
+    void execute_sendsOutputFieldsAsIs() throws Exception {
+        enqueueJson("{\"success\":true,\"output\":{\"urgent\":true,\"reason\":\"마감\"}}");
+        enqueueJson("{\"success\":false,\"errorCode\":\"INVALID_OUTPUT_FIELDS\","
+            + "\"errorMessage\":\"outputFields는 목록이어야 합니다\"}");
+
+        executor.execute(buildAgentNodeWithOutputFields(URGENT_FIELDS), Collections.emptyMap(), buildCursor());
+        ExecutorResult invalid = executor.execute(
+            buildAgentNodeWithOutputFields("urgent"), Collections.emptyMap(), buildCursor());
+
+        ObjectMapper om = new ObjectMapper();
+        JsonNode listBody = om.readTree(mockWebServer.takeRequest().getBody().readUtf8());
+        assertThat(listBody.at("/outputFields/0/key").asText()).isEqualTo("urgent");
+        assertThat(listBody.at("/outputFields/1/type").asText()).isEqualTo("text");
+        JsonNode stringBody = om.readTree(mockWebServer.takeRequest().getBody().readUtf8());
+        assertThat(stringBody.get("outputFields").isTextual()).isTrue();
+        assertThat(stringBody.get("outputFields").asText()).isEqualTo("urgent");
+        // ClassCastException(UNKNOWN)으로 새지 않고 agent 코드가 그대로 분류된다
+        assertThat(invalid.getFailureKind()).isEqualTo(FailureKind.CLIENT_ERROR);
+        assertThat(invalid.getErrorMessage()).isEqualTo("outputFields는 목록이어야 합니다");
+    }
+
+    @Test
+    @DisplayName("객체 output은 선언한 칸 그대로 노드 출력이 된다 — output·metadata 래퍼 없음, 타입 보존")
+    void execute_mapOutput_becomesNodeOutput() {
+        enqueueJson("{\"success\":true,\"output\":{\"urgent\":true,\"count\":4,\"reason\":\"마감\"},"
+            + USAGE_15 + "}");
+
+        ExecutorResult result = executor.execute(
+            buildAgentNodeWithOutputFields(URGENT_FIELDS), Collections.emptyMap(), buildCursor());
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).containsOnlyKeys("urgent", "count", "reason");
+        assertThat(result.getOutput().get("urgent")).isEqualTo(true);
+        assertThat(result.getOutput().get("count")).isEqualTo(4);
+        assertThat(result.getUsage().totalTokens()).isEqualTo(15);
+    }
+
+    @Test
+    @DisplayName("문자열 output(옛 agent·기본 칸)은 {output: 문자열}로 감싼다 — metadata 키는 없다")
+    void execute_stringOutput_wrapsWithoutMetadata() {
+        enqueueJson("{\"success\":true,\"output\":\"요약 완료\",\"metadata\":{\"x\":1}}");
+
+        ExecutorResult result = executor.execute(
+            buildAgentNode("요약해줘", "CLAUDE", "cred-id-1"), Collections.emptyMap(), buildCursor());
+
+        assertThat(result.getOutput()).containsOnlyKeys("output");
+        assertThat(result.getOutput().get("output")).isEqualTo("요약 완료");
+    }
+
+    @Test
+    @DisplayName("null output은 {output: null}이다(지금 동작 유지)")
+    void execute_nullOutput_wrapsNull() {
+        enqueueJson("{\"success\":true,\"output\":null}");
+
+        ExecutorResult result = executor.execute(
+            buildAgentNode("요약해줘", "CLAUDE", "cred-id-1"), Collections.emptyMap(), buildCursor());
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).containsOnlyKeys("output");
+        assertThat(result.getOutput().get("output")).isNull();
+    }
+
+    @Test
+    @DisplayName("칸이 선언된 노드인데 문자열 output이면 AI_OUTPUT_MISMATCH(재시도 대상) — 롤백된 agent의 조용한 오분기 방지")
+    void execute_declaredFieldsButStringOutput_failsAsMismatch() {
+        enqueueJson("{\"success\":true,\"output\":\"긴급해 보입니다\"," + USAGE_15 + "}");
+
+        ExecutorResult result = executor.execute(
+            buildAgentNodeWithOutputFields(URGENT_FIELDS), Collections.emptyMap(), buildCursor());
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getFailureKind()).isEqualTo(FailureKind.SERVER_ERROR);
+        assertThat(result.getErrorMessage()).contains("출력 칸");
+        assertThat(result.getUsage().totalTokens()).isEqualTo(15);
+    }
+
+    @Test
+    @DisplayName("칸 선언이 비었거나 목록이 아니면 가드를 걸지 않는다 — 문자열 output은 {output}")
+    void execute_emptyOrNonListFields_stringOutputIsWrapped() {
+        enqueueJson("{\"success\":true,\"output\":\"a\"}");
+        enqueueJson("{\"success\":true,\"output\":\"b\"}");
+
+        ExecutorResult empty = executor.execute(
+            buildAgentNodeWithOutputFields(List.of()), Collections.emptyMap(), buildCursor());
+        ExecutorResult nonList = executor.execute(
+            buildAgentNodeWithOutputFields("urgent"), Collections.emptyMap(), buildCursor());
+
+        assertThat(empty.isSuccess()).isTrue();
+        assertThat(empty.getOutput()).containsOnlyKeys("output");
+        assertThat(empty.getOutput().get("output")).isEqualTo("a");
+        assertThat(nonList.isSuccess()).isTrue();
+        assertThat(nonList.getOutput().get("output")).isEqualTo("b");
+    }
+
+    @Test
+    @DisplayName("output이 배열·숫자·불이면 agent 계약 버그 — CLIENT_ERROR로 재시도 없이 실패")
+    void execute_nonObjectNonStringOutput_failsAsClientError() {
+        enqueueJson("{\"success\":true,\"output\":[1,2]}");
+        enqueueJson("{\"success\":true,\"output\":4}");
+        enqueueJson("{\"success\":true,\"output\":true}");
+        Node node = buildAgentNode("요약해줘", "CLAUDE", "cred-id-1");
+
+        for (int i = 0; i < 3; i++) {
+            ExecutorResult r = executor.execute(node, Collections.emptyMap(), buildCursor());
+            assertThat(r.isSuccess()).as("응답 %d", i).isFalse();
+            assertThat(r.getFailureKind()).as("응답 %d", i).isEqualTo(FailureKind.CLIENT_ERROR);
+        }
+    }
+
+    @Test
+    @DisplayName("agent 실패 응답의 usage도 ExecutorResult에 실린다 — 불일치 재시도 비용이 node_runs에 남는다")
+    void execute_failureResponse_carriesUsage() {
+        enqueueJson("{\"success\":false,\"output\":null,\"errorCode\":\"AI_OUTPUT_MISMATCH\","
+            + "\"errorMessage\":\"출력 필드 'urgent' 누락\"," + USAGE_15 + "}");
+
+        ExecutorResult result = executor.execute(
+            buildAgentNodeWithOutputFields(URGENT_FIELDS), Collections.emptyMap(), buildCursor());
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getFailureKind()).isEqualTo(FailureKind.SERVER_ERROR);
+        assertThat(result.getErrorMessage()).isEqualTo("출력 필드 'urgent' 누락");
+        assertThat(result.getUsage().totalTokens()).isEqualTo(15);
+    }
+
+    @Test
+    @DisplayName("베타 platform 키 + BE 문자열 가드 실패 — agent 실패 응답처럼 일일 호출을 환불하고 토큰 차감은 하지 않는다")
+    void execute_betaPlatformKeyAndGuardFailure_releasesDailyCallWithoutRecordingTokens() {
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class, CALLS_REAL_METHODS);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        when(betaProvider.reserveQuota(userId)).thenReturn("beta:calls:" + userId + ":test-key");
+        AgentNodeExecutor exec = buildExecutorWithBetaProvider(betaProvider);
+        enqueueJson("{\"success\":true,\"output\":\"긴급해 보입니다\"," + USAGE_15 + "}");
+
+        Map<String, Object> config = new java.util.HashMap<>();
+        config.put("llmProvider", "CLAUDE");
+        config.put("prompt", "긴급한지 판단해");
+        config.put("outputFields", URGENT_FIELDS);
+        ExecutorResult result = exec.execute(new Node("node-1", NodeType.AI, "AI 노드", config),
+            Collections.emptyMap(), buildCursorWithUserId(userId));
+
+        assertThat(result.isSuccess()).isFalse();
+        verify(betaProvider).releaseDailyCall("beta:calls:" + userId + ":test-key");
+        verify(betaProvider, never()).recordTokens(any(), org.mockito.ArgumentMatchers.anyLong());
+    }
 }

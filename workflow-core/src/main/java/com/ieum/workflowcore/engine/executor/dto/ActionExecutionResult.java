@@ -7,8 +7,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 /**
- * ieum-agent {@code POST /v1/actions/execute} 응답. AI 노드의 {@link AgentExecutionResult}와 달리
- * {@code output}이 문자열이 아니라 도구가 돌려준 dict이고, usage·metadata가 없다.
+ * ieum-agent {@code POST /v1/actions/execute} 응답. {@code output}은 도구가 돌려준 dict이고,
+ * AI 노드의 {@link AgentExecutionResult}와 달리 usage가 없다(과금 0).
  */
 @Getter
 @NoArgsConstructor
