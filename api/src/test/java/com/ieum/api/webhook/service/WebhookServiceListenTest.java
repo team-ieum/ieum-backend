@@ -11,7 +11,6 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
-import com.ieum.api.webhook.dto.WebhookTriggerRequest;
 import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
 import com.ieum.common.exception.CustomException;
@@ -55,15 +54,8 @@ class WebhookServiceListenTest {
     private final UUID workflowId = UUID.randomUUID();
     private final WorkflowVersion version = mock(WorkflowVersion.class);
     private final Map<String, Object> payload = Map.of("orderId", "ORD-1");
-    private final WebhookTriggerRequest request = request(payload);
     private final HookRequest hook = new HookRequest("POST", Map.of("authorization", "***"), Map.of(), payload,
         "{\"orderId\":\"ORD-1\"}".getBytes(StandardCharsets.UTF_8));
-
-    private static WebhookTriggerRequest request(Map<String, Object> payload) {
-        WebhookTriggerRequest request = new WebhookTriggerRequest();
-        ReflectionTestUtils.setField(request, "payload", payload);
-        return request;
-    }
 
     private Workflow workflow(boolean active, TriggerType type) {
         Workflow workflow = Workflow.builder().userId(UUID.randomUUID()).name("w")
@@ -85,15 +77,15 @@ class WebhookServiceListenTest {
         given(listenStore.consume(workflowId)).willReturn(Optional.ofNullable(nodeId));
     }
 
-    // ──────────────────── listen 없음 — 기존 동작 회귀 ────────────────────
+    // ──────────────────── listen 없음 ────────────────────
 
     @Test
-    @DisplayName("listen 없음 + 활성 WEBHOOK → 기존대로 실행, 샘플 기록 없음")
+    @DisplayName("listen 없음 + 활성 WEBHOOK → 실행, 샘플 기록 없음")
     void withoutListener_activeWebhook_runsAsBefore() {
         Workflow workflow = workflow(true, TriggerType.WEBHOOK);
         listening(null);
 
-        WorkflowExecutionResponse response = service.trigger(workflowId, request);
+        WorkflowExecutionResponse response = service.receive(workflowId, hook);
 
         assertThat(response).isNotNull();
         verify(runner).run(eq(version), any(), eq(payload));
@@ -101,16 +93,16 @@ class WebhookServiceListenTest {
     }
 
     @Test
-    @DisplayName("listen 없음 + 비활성 → 기존대로 WORKFLOW_NOT_ACTIVE, listen 없음 + MANUAL → WEBHOOK_TRIGGER_MISMATCH")
+    @DisplayName("listen 없음 + 비활성 → WORKFLOW_NOT_ACTIVE, listen 없음 + MANUAL → WEBHOOK_TRIGGER_MISMATCH")
     void withoutListener_rejectionsUnchanged() {
         workflow(false, TriggerType.WEBHOOK);
         listening(null);
-        assertThatThrownBy(() -> service.trigger(workflowId, request))
+        assertThatThrownBy(() -> service.receive(workflowId, hook))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WORKFLOW_NOT_ACTIVE));
 
         workflow(true, TriggerType.MANUAL);
-        assertThatThrownBy(() -> service.trigger(workflowId, request))
+        assertThatThrownBy(() -> service.receive(workflowId, hook))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WEBHOOK_TRIGGER_MISMATCH));
         verify(runner, never()).run(any(), any(), any());
@@ -120,12 +112,12 @@ class WebhookServiceListenTest {
     // ──────────────────── listen 중 ────────────────────
 
     @Test
-    @DisplayName("listen + 비활성 → 샘플만 저장하고 null(202), 실행 없음")
+    @DisplayName("listen + 비활성 → 샘플만 저장하고 null, 실행 없음")
     void listening_inactive_savesSampleOnly() {
         Workflow workflow = workflow(false, TriggerType.WEBHOOK);
         listening("t");
 
-        WorkflowExecutionResponse response = service.trigger(workflowId, request);
+        WorkflowExecutionResponse response = service.receive(workflowId, hook);
 
         assertThat(response).isNull();
         verify(nodeTestRunner).recordWebhookSample(workflow, "t", payload);
@@ -134,24 +126,24 @@ class WebhookServiceListenTest {
     }
 
     @Test
-    @DisplayName("listen + triggerType 불일치(MANUAL) → 샘플만 저장하고 null(202), 실행 없음")
+    @DisplayName("listen + triggerType 불일치(MANUAL) → 샘플만 저장하고 null, 실행 없음")
     void listening_triggerMismatch_savesSampleOnly() {
         Workflow workflow = workflow(true, TriggerType.MANUAL);
         listening("t");
 
-        assertThat(service.trigger(workflowId, request)).isNull();
+        assertThat(service.receive(workflowId, hook)).isNull();
 
         verify(nodeTestRunner).recordWebhookSample(workflow, "t", payload);
         verify(runner, never()).run(any(), any(), any());
     }
 
     @Test
-    @DisplayName("listen + 활성 WEBHOOK → 샘플 저장 + 기존 실행")
+    @DisplayName("listen + 활성 WEBHOOK → 샘플 저장 + 실행")
     void listening_activeWebhook_savesSampleAndRuns() {
         Workflow workflow = workflow(true, TriggerType.WEBHOOK);
         listening("t");
 
-        WorkflowExecutionResponse response = service.trigger(workflowId, request);
+        WorkflowExecutionResponse response = service.receive(workflowId, hook);
 
         assertThat(response).isNotNull();
         verify(nodeTestRunner).recordWebhookSample(workflow, "t", payload);
@@ -164,8 +156,8 @@ class WebhookServiceListenTest {
         Workflow workflow = workflow(false, TriggerType.WEBHOOK);
         given(listenStore.consume(workflowId)).willReturn(Optional.of("t"), Optional.empty());
 
-        assertThat(service.trigger(workflowId, request)).isNull();
-        assertThatThrownBy(() -> service.trigger(workflowId, request))
+        assertThat(service.receive(workflowId, hook)).isNull();
+        assertThatThrownBy(() -> service.receive(workflowId, hook))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WORKFLOW_NOT_ACTIVE));
 
@@ -178,7 +170,7 @@ class WebhookServiceListenTest {
         Workflow workflow = workflow(false, TriggerType.WEBHOOK);
         listening("t");
 
-        service.trigger(workflowId, null);
+        service.receive(workflowId, new HookRequest("POST", Map.of(), Map.of(), Map.of(), new byte[0]));
 
         verify(nodeTestRunner).recordWebhookSample(workflow, "t", Map.of());
     }
@@ -191,13 +183,13 @@ class WebhookServiceListenTest {
         given(nodeTestRunner.recordWebhookSample(eq(workflow), eq("t"), any()))
             .willThrow(new IllegalStateException("mongo down"));
 
-        assertThat(service.trigger(workflowId, request)).isNotNull();
+        assertThat(service.receive(workflowId, hook)).isNotNull();
         verify(runner).run(eq(version), any(), eq(payload));
 
         Workflow inactive = workflow(false, TriggerType.WEBHOOK);
         given(nodeTestRunner.recordWebhookSample(eq(inactive), eq("t"), any()))
             .willThrow(new IllegalStateException("mongo down"));
-        assertThatThrownBy(() -> service.trigger(workflowId, request))
+        assertThatThrownBy(() -> service.receive(workflowId, hook))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WORKFLOW_NOT_ACTIVE));
     }
@@ -226,55 +218,6 @@ class WebhookServiceListenTest {
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WEBHOOK_RATE_LIMITED));
         verifyNoInteractions(crudService, listenStore, runner);
-    }
-
-    @Test
-    @DisplayName("기존 주소(/api/v1/webhooks/{workflowId})엔 횟수 제한이 걸리지 않는다(R1)")
-    void trigger_notRateLimited() {
-        workflow(true, TriggerType.WEBHOOK);
-        listening(null);
-
-        for (int i = 0; i < 61; i++) {
-            service.trigger(workflowId, request);
-        }
-        verify(runner, times(61)).run(eq(version), any(), eq(payload));
-        verifyNoInteractions(rateLimiter);
-    }
-
-    @Test
-    @DisplayName("토큰 주소 — 기존 주소와 같은 흐름: 활성 WEBHOOK면 payload 그대로 실행")
-    void receive_runsWithPayload() {
-        workflow(true, TriggerType.WEBHOOK);
-        listening(null);
-
-        assertThat(service.receive(workflowId, hook)).isNotNull();
-        verify(runner).run(eq(version), any(), eq(payload));
-    }
-
-    @Test
-    @DisplayName("토큰 주소 — listen 중이면 샘플 저장, 비활성이면 샘플만 남기고 null")
-    void receive_listening_savesSample() {
-        Workflow workflow = workflow(false, TriggerType.WEBHOOK);
-        listening("t");
-
-        assertThat(service.receive(workflowId, hook)).isNull();
-        verify(nodeTestRunner).recordWebhookSample(workflow, "t", payload);
-        verify(runner, never()).run(any(), any(), any());
-    }
-
-    @Test
-    @DisplayName("토큰 주소 — 비활성·불일치 거절은 기존 주소와 같다")
-    void receive_rejectionsSameAsTrigger() {
-        workflow(false, TriggerType.WEBHOOK);
-        listening(null);
-        assertThatThrownBy(() -> service.receive(workflowId, hook))
-            .isInstanceOfSatisfying(CustomException.class,
-                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WORKFLOW_NOT_ACTIVE));
-
-        workflow(true, TriggerType.MANUAL);
-        assertThatThrownBy(() -> service.receive(workflowId, hook))
-            .isInstanceOfSatisfying(CustomException.class,
-                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WEBHOOK_TRIGGER_MISMATCH));
     }
 
     // ──────────────────── includeRaw(R5·R6·R8) ────────────────────

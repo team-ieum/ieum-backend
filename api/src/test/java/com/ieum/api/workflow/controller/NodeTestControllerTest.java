@@ -112,16 +112,16 @@ class NodeTestControllerTest {
     }
 
     @Test
-    @DisplayName("webhook 대기 응답은 status·webhookUrl·expiresAt만 싣는다")
+    @DisplayName("webhook 대기 응답은 status·expiresAt만 싣는다 — webhookUrl은 null이라 빠진다(R15)")
     void listeningResponseShape() throws Exception {
         given(service.test(any(), any(), any(), any())).willReturn(
-            NodeTestResponse.listening(workflowId, LocalDateTime.of(2026, 10, 6, 12, 5)));
+            NodeTestResponse.listening(LocalDateTime.of(2026, 10, 6, 12, 5)));
 
         mockMvc.perform(post("/api/v1/workflows/{workflowId}/nodes/{nodeId}/test", workflowId, "t")
                 .contentType(MediaType.APPLICATION_JSON).content("{}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.data.status").value("LISTENING"))
-            .andExpect(jsonPath("$.data.webhookUrl").value("/api/v1/webhooks/" + workflowId))
+            .andExpect(jsonPath("$.data.webhookUrl").doesNotExist())
             .andExpect(jsonPath("$.data.expiresAt").exists())
             .andExpect(jsonPath("$.data.output").doesNotExist())
             .andExpect(jsonPath("$.data.testedAt").doesNotExist());

@@ -139,7 +139,7 @@ public interface <Domain>Repository extends JpaRepository<<Domain>, UUID> {
 | 워크플로우 | `/workflows` (CRUD), `/workflows/{id}/activate`, `/workflows/{id}/deactivate` | workflow-core |
 | 버전 | `/workflows/{id}/versions`, `/workflows/{id}/versions/{v}/restore` | workflow-core |
 | 실행 | `/workflows/{id}/runs`, `/workflows/{id}/runs/{run_id}/retry` | workflow-core |
-| Webhook | `/api/v1/webhooks/{workflowId}` (Public, 인증 불필요) | workflow-core |
+| Webhook | `/api/v1/hooks/{token}` (Public, URL 토큰이 인증 — 토큰 발급 `/workflows/{id}/webhook-token`) | api |
 | 알림 | `/notifications`, `/notifications/{id}/read`, `/notification-settings` | api |
 
 ## 체크리스트
