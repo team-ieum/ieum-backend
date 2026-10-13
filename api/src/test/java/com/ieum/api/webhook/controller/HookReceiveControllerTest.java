@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
@@ -288,6 +289,24 @@ class HookReceiveControllerTest {
             .doesNotContainKeys("AUTHORIZATION", "Cookie", "x-hub-signature-256", "x-api-key");
         assertThat(headers.keySet()).allSatisfy(k -> assertThat(k).matches("[a-z0-9_]+"));
         assertThat(headers.values().toString()).doesNotContain("secret");
+    }
+
+    @Test
+    @DisplayName("X-Api-Key와 X_Api_Key가 같이 와도 정규화 키 x_api_key는 가려진다 — 원문이 가린 값을 덮지 못한다")
+    void includeRaw_underscoreVariantStillMasked() throws Exception {
+        for (String[] order : new String[][] {{"X-Api-Key", "X_Api_Key"}, {"X_Api_Key", "X-Api-Key"}}) {
+            mockMvc.perform(post("/api/v1/hooks/{token}", TOKEN)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .header(order[0], "secret1")
+                    .header(order[1], "secret2")
+                    .content("{}"))
+                .andExpect(status().isOk());
+
+            @SuppressWarnings("unchecked")
+            Map<String, String> headers = (Map<String, String>) receivedRequest().output(true).get("headers");
+            assertThat(headers).containsEntry("x_api_key", "***");
+            clearInvocations(webhookService);
+        }
     }
 
     @Test

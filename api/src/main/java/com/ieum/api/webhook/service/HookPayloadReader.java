@@ -60,13 +60,14 @@ public class HookPayloadReader {
     /**
      * 키는 소문자로 바꾼 뒤 {@code -}를 {@code _}로 바꾼다({@code x_hub_signature_256}) — 참조식 경로 문법
      * ({@code [a-zA-Z0-9_.]+})이 하이픈을 허용하지 않기 때문이다(R11). 여러 값은 {@code ", "}로 잇는다.
-     * 자격증명 헤더({@link #MASKED_HEADERS}, 정규화 전 소문자 이름으로 비교)는 가린다(R5).
+     * 자격증명 헤더({@link #MASKED_HEADERS})는 가린다(R5). 비교는 정규화 후 이름으로 한다 — {@code X-Api-Key}와
+     * {@code X_Api_Key}가 같은 키({@code x_api_key})가 되므로 한쪽만 가리면 다른 쪽 원문이 덮어쓴다.
      */
     private static Map<String, String> headers(HttpServletRequest request) {
         Map<String, String> headers = new LinkedHashMap<>();
         for (String name : Collections.list(request.getHeaderNames())) {
-            String lower = name.toLowerCase(Locale.ROOT);
-            headers.put(lower.replace('-', '_'), MASKED_HEADERS.contains(lower)
+            String key = name.toLowerCase(Locale.ROOT).replace('-', '_');
+            headers.put(key, MASKED_HEADERS.contains(key.replace('_', '-'))
                 ? "***"
                 : String.join(", ", Collections.list(request.getHeaders(name))));
         }

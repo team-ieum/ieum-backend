@@ -101,7 +101,6 @@ public class SecurityConfig {
                     "/api/v1/providers",
                     "/swagger-ui/**",
                     "/v3/api-docs/**",
-                    "/api/v1/webhooks/**",
                     "/api/v1/hooks/**",       // 토큰 주소 웹훅 — URL의 토큰이 인증(HookReceiveController)
                     "/api/v1/integrations/github/webhook",   // GitHub App webhook — HMAC 서명이 인증(GitHubWebhookService)
                     "/actuator/**",

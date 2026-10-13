@@ -1,6 +1,5 @@
 package com.ieum.api.webhook.service;
 
-import com.ieum.api.webhook.dto.WebhookTriggerRequest;
 import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
 import com.ieum.common.exception.CustomException;
@@ -15,7 +14,6 @@ import com.ieum.workflowcore.service.NodeTestRunner;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import com.ieum.workflowcore.service.WorkflowWebhookTokenService;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -25,10 +23,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 /**
- * Webhook 트리거 비즈니스 로직.
+ * Webhook 트리거 비즈니스 로직 — 토큰 주소({@code /api/v1/hooks/{token}}) 수신.
  *
  * <p>인증 없이 외부 시스템이 호출하는 엔드포인트이므로, JWT 인증 대신
- * workflowId + WEBHOOK 트리거 타입 + 활성 상태 검증으로 실행 권한을 확인한다.
+ * 토큰 + WEBHOOK 트리거 타입 + 활성 상태 검증으로 실행 권한을 확인한다.
  */
 @Slf4j
 @Service
@@ -42,20 +40,6 @@ public class WebhookService {
     private final NodeTestRunner nodeTestRunner;
     private final WorkflowWebhookTokenService webhookTokenService;
     private final WebhookRateLimiter webhookRateLimiter;
-
-    // @Transactional 미사용 의도:
-    // prepareExecution()이 자체 트랜잭션으로 커밋된 뒤 @Async 런너가 실행되어야
-    // 비동기 스레드에서 detached entity merge 오류를 방지할 수 있다.
-    /**
-     * @return 실행 응답. 노드 테스트가 이 워크플로우의 webhook 수신을 기다리던 중이었고 워크플로우가 비활성이거나
-     *     WEBHOOK 트리거가 아니면 샘플만 저장하고 실행하지 않으므로 {@code null}이다(컨트롤러는 data 없는 202).
-     */
-    public WorkflowExecutionResponse trigger(UUID workflowId, WebhookTriggerRequest request) {
-        Map<String, Object> payload = (request != null && request.getPayload() != null)
-            ? request.getPayload()
-            : Collections.emptyMap();
-        return start(workflowCrudService.getWorkflowById(workflowId), payload);
-    }
 
     /**
      * 토큰 주소({@code /api/v1/hooks/{token}}) 수신 1단계 — 본문을 읽기 전에 부른다. 토큰이 없거나 맞지 않으면 404
@@ -75,7 +59,15 @@ public class WebhookService {
             .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
     }
 
-    /** 토큰 주소 수신 2단계({@link #resolveHook} 뒤). 흐름·반환은 {@link #trigger}와 같다. */
+    // @Transactional 미사용 의도:
+    // prepareExecution()이 자체 트랜잭션으로 커밋된 뒤 @Async 런너가 실행되어야
+    // 비동기 스레드에서 detached entity merge 오류를 방지할 수 있다.
+    /**
+     * 토큰 주소 수신 2단계({@link #resolveHook} 뒤).
+     *
+     * @return 실행 응답. 노드 테스트가 이 워크플로우의 webhook 수신을 기다리던 중이었고 워크플로우가 비활성이거나
+     *     WEBHOOK 트리거가 아니면 샘플만 저장하고 실행하지 않으므로 {@code null}이다(응답 executionId null).
+     */
     public WorkflowExecutionResponse receive(UUID workflowId, HookRequest request) {
         Workflow workflow = workflowCrudService.getWorkflowById(workflowId);
         return start(workflow, request.output(includeRaw(workflowId)));
