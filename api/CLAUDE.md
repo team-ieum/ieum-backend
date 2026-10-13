@@ -56,6 +56,7 @@ Quartz 스케줄 실행(`WorkflowScheduleJob`)은 workflow-core 포트 `Executio
 - **brand 유지**(`NodeDefinitionMerger`) — REST 수정은 노드 config를 통째로 교체하지만, 요청 config에 `brand` 키가 없으면 이전 `config.brand`를 이어받는다(FE 아이콘·연동 목록의 유일한 근거). 요청이 명시한 값은 `null`·빈 문자열도 존중한다.
 - **연동 서비스별 목록**(`IntegrationServiceType`) — `GOOGLE`만 brand 셋(`google`·`gmail`·`sheets`)으로 Mongo `$in` 조회한다. agent가 Google 도구 노드에 세 값을 섞어 넣는다. 나머지 서비스는 brand 하나. (집계 파이프라인의 실 Mongo 동작은 단위 테스트로 못 본다 — 바인딩만 `WorkflowDefinitionRepositoryPipelineTest`가 고정.)
 - **cron은 TRIGGER 노드가 진실원**(`TriggerNodeSchedule`) — 노드 `config.triggerType`이 있으면 REST 생성·수정과 AI 저장 모두 `triggerType`과 `cron`을 **둘 다 노드에서** 가져와 최상위 값을 덮는다(노드에 cron이 없으면 null — 최상위·저장된 값으로 채우지 않는다). 수정은 `NodeDefinitionMerger` 병합 결과 기준이다. 노드에 `triggerType`이 없을 때만 기존 최상위 값·`resolveCronExpression` 폴백을 쓴다. 알 수 없는 `triggerType`은 400(`INVALID_WORKFLOW`).
+- 트리거 노드 `config.triggerType`이 비고 최상위가 WEBHOOK이면 저장 시 노드에 채운다(`WorkflowCrudService.fillTriggerType`, 생성·REST 수정·AI 저장 공통) — 이후에는 기존 규칙대로 노드 값이 기준(`TriggerNodeSchedule`). MANUAL·SCHEDULE·앱 트리거는 채우지 않는다.
 
 ## 노드 단일 테스트 (workflow/service/NodeTestService, controller/NodeTestController)
 `POST /api/v1/workflows/{workflowId}/nodes/{nodeId}/test`(body `{node?, input?}`) / `GET .../sample`. 실행·샘플 저장은 workflow-core `NodeTestRunner`, 여기는 소유자 검사(`getWorkflowByOwner`, 항상 먼저)·body 노드 가드·webhook 분기만. `WorkflowController`에 붙이지 않은 이유: 그 생성자를 여러 테스트가 직접 호출한다.
