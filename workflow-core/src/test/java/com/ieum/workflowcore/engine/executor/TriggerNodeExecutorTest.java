@@ -45,7 +45,20 @@ class TriggerNodeExecutorTest {
     }
 
     @Test
-    @DisplayName("MANUAL·WEBHOOK은 기존대로 치환된 config(input)를 출력한다 — 회귀")
+    @DisplayName("WEBHOOK 출력 = 심어 둔 수신 페이로드 그대로 — config(triggerType·includeRaw)는 섞이지 않는다")
+    void webhookOutputsPlantedPayload() {
+        Map<String, Object> config = new HashMap<>(Map.of("triggerType", "WEBHOOK", "includeRaw", true));
+        Node node = new Node("t1", NodeType.TRIGGER, "트리거", config);
+        Map<String, Object> payload = Map.of("action", "opened", "issue", Map.of("number", 7));
+
+        ExecutorResult result = executor.execute(node, new HashMap<>(config), cursorWith("t1", payload));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).isEqualTo(payload);
+    }
+
+    @Test
+    @DisplayName("MANUAL은 기존대로 치환된 config(input)를 출력한다 — 회귀")
     void manualStillEchoesInput() {
         Map<String, Object> config = new HashMap<>(Map.of("triggerType", "MANUAL", "x", "{{nodes.t1.output.a}}"));
         Node node = new Node("t1", NodeType.TRIGGER, "트리거", config);

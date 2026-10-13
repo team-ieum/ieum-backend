@@ -27,6 +27,7 @@ import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.service.NodeTestResult;
 import com.ieum.workflowcore.service.NodeTestRunner;
 import com.ieum.workflowcore.service.WorkflowCrudService;
+import com.ieum.workflowcore.service.WorkflowWebhookTokenService;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
@@ -43,12 +44,14 @@ class NodeTestServiceTest {
     private final NodeTestRunner runner = mock(NodeTestRunner.class);
     private final CredentialService credentialService = mock(CredentialService.class);
     private final WebhookListenStore listenStore = mock(WebhookListenStore.class);
+    private final WorkflowWebhookTokenService tokenService = mock(WorkflowWebhookTokenService.class);
     private final AppTriggerSampleFetcher gmailFetcher = mock(AppTriggerSampleFetcher.class);
     {
         given(gmailFetcher.triggerType()).willReturn(TriggerType.GMAIL_NEW_EMAIL);
+        given(tokenService.status(any())).willReturn(Optional.of(LocalDateTime.now()));
     }
-    private final NodeTestService service =
-        new NodeTestService(crudService, runner, credentialService, listenStore, List.of(gmailFetcher));
+    private final NodeTestService service = new NodeTestService(
+        crudService, runner, credentialService, listenStore, tokenService, List.of(gmailFetcher));
     private final ObjectMapper json = new ObjectMapper();
 
     private final UUID userId = UUID.randomUUID();
@@ -206,7 +209,7 @@ class NodeTestServiceTest {
     }
 
     @Test
-    @DisplayName("webhook 트리거는 실행하지 않고 대기를 시작한다 — LISTENING + 경로 + 만료 시각")
+    @DisplayName("webhook 트리거는 실행하지 않고 대기를 시작한다 — LISTENING + 만료 시각, webhookUrl은 null(R15)")
     void webhookTriggerStartsListening() throws Exception {
         owns(workflow(TriggerType.MANUAL));
         given(credentialService.getByUserId(userId)).willReturn(List.of());
@@ -218,9 +221,25 @@ class NodeTestServiceTest {
                 + "\"config\":{\"triggerType\":\"WEBHOOK\"}}}"));
 
         assertThat(response.getStatus()).isEqualTo("LISTENING");
-        assertThat(response.getWebhookUrl()).isEqualTo("/api/v1/webhooks/" + workflowId);
+        assertThat(response.getWebhookUrl()).isNull();
         assertThat(response.getExpiresAt()).isEqualTo(expiresAt);
         assertThat(response.getOutput()).isNull();
+        verify(runner, never()).run(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("토큰이 발급되지 않았으면 webhook listen을 시작하지 않고 400 WEBHOOK_TOKEN_NOT_ISSUED(R15)")
+    void webhookListenRequiresIssuedToken() {
+        owns(workflow(TriggerType.MANUAL));
+        given(credentialService.getByUserId(userId)).willReturn(List.of());
+        given(tokenService.status(workflowId)).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.test(userId, workflowId, "t", request(
+            "{\"node\":{\"id\":\"t\",\"type\":\"TRIGGER\",\"label\":\"수신\","
+                + "\"config\":{\"triggerType\":\"WEBHOOK\"}}}")))
+            .isInstanceOfSatisfying(CustomException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WEBHOOK_TOKEN_NOT_ISSUED));
+        verifyNoInteractions(listenStore);
         verify(runner, never()).run(any(), any(), any());
     }
 
@@ -341,7 +360,7 @@ class NodeTestServiceTest {
     @DisplayName("같은 triggerType 공급원 빈이 둘이면 생성 실패(조용히 덮지 않는다)")
     void duplicateFetcherFailsFast() {
         assertThatThrownBy(() -> new NodeTestService(crudService, runner, credentialService, listenStore,
-            List.of(gmailFetcher, gmailFetcher)))
+            tokenService, List.of(gmailFetcher, gmailFetcher)))
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("GMAIL_NEW_EMAIL");
     }

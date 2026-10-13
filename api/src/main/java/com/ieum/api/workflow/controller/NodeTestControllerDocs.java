@@ -27,14 +27,15 @@ public interface NodeTestControllerDocs {
             + "이전 SUCCESS 샘플을 덮어쓴다. output의 민감 키(token·apiKey 등)는 마스킹된다. "
             + "manual 트리거는 input을 페이로드로 쓴다(샘플은 치환된 트리거 config — 페이로드 필드는 config가 "
             + "`{{nodes.<triggerId>.output.<key>}}`로 자기 참조할 때만 남는다). "
-            + "webhook 트리거는 실행하지 않고 LISTENING(webhookUrl 경로 /api/v1/webhooks/{workflowId}, expiresAt)을 돌려준다 — 5분 안에 그 경로로 "
-            + "온 첫 요청 1건이 샘플이 되며, FE는 GET .../sample을 폴링해 testedAt이 시작 시각 이후인지 본다. "
+            + "webhook 트리거는 실행하지 않고 LISTENING(expiresAt)을 돌려준다 — 수신 주소 토큰이 발급돼 있어야 하며(없으면 400 "
+            + "WEBHOOK_TOKEN_NOT_ISSUED), webhookUrl은 null이라 FE는 발급 때 받은 /api/v1/hooks/{token} 주소를 쓴다. 5분 안에 그 주소로 "
+            + "온 첫 요청 1건이 샘플(받은 페이로드 그대로, config는 섞이지 않음)이 되며, FE는 GET .../sample을 폴링해 testedAt이 시작 시각 이후인지 본다. "
             + "수신 시 트리거 정의는 저장된 최신 버전에서 읽으므로 webhook 테스트 전에 저장해야 한다. "
             + "approval 게이트는 실행 없이 런타임 승인 출력 모양({approved: true, approvedBy: 소유자 ID, approvedAt})을 "
             + "SUCCESS 샘플로 남긴다 — 하류의 `{{nodes.<gate>.output.approvedBy}}` 참조를 테스트하기 위해서다. "
             + "오류 code: WORKFLOW_NOT_FOUND(404, 남의 워크플로우 포함), NOT_FOUND(404, 저장된 노드 없음), "
             + "INVALID_INPUT(400, node.id 불일치·실행기가 없는 타입), INVALID_WORKFLOW(400, 남의 크레덴셜·웹훅 URL 원문·"
-            + "API 키 원문), TEST_SAMPLE_MISSING(400)")
+            + "API 키 원문), TEST_SAMPLE_MISSING(400), WEBHOOK_TOKEN_NOT_ISSUED(400, webhook 트리거인데 수신 주소 토큰 미발급)")
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<NodeTestResponse>> test(
         CustomUserDetails userDetails,

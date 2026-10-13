@@ -34,7 +34,7 @@ OAuth 로그인은 Google만, Notion·GitHub는 연동(커넥터 토큰) 용도�
 ## 공개 경로 (인증 불필요)
 - `/api/v1/auth/**`, `/api/v1/providers`
 - `/swagger-ui/**`, `/v3/api-docs/**`
-- `/api/v1/webhooks/**`, `/actuator/**`
+- `/api/v1/hooks/**`(URL 토큰이 인증), `/api/v1/integrations/github/webhook`(HMAC 서명), `/actuator/**`
 
 ## 주의사항
 - JWT 예외는 반드시 `CustomException(ErrorCode.TOKEN_EXPIRED)` 또는 `CustomException(ErrorCode.TOKEN_INVALID)`로 변환

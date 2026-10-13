@@ -19,7 +19,7 @@ import org.springframework.stereotype.Component;
  * triggerData를 트리거 노드 출력 자리에 심은 뒤 이 Executor를 호출한다 — 재처리 때도 TRIGGER 노드는 스킵하지 않고
  * 다시 실행한다(node_runs의 마스킹된 출력 대신 복호된 triggerData로 같은 출력을 만든다).
  * TRIGGER 노드는 루프에서 첫 번째로 만나는 노드이므로 input을 그대로 output으로 전달하는 역할만 한다.
- * 앱 트리거(GMAIL_NEW_EMAIL·GITHUB_NEW_ISSUE)는 심어 둔 페이로드를 그대로 출력한다.
+ * 앱 트리거(GMAIL_NEW_EMAIL·GITHUB_NEW_ISSUE)와 WEBHOOK은 심어 둔 페이로드를 그대로 출력한다.
  */
 @Slf4j
 @Component
@@ -37,9 +37,10 @@ public class TriggerNodeExecutor implements NodeExecutor {
 
         try {
             Map<String, Object> output = new HashMap<>();
-            // 앱 트리거: 런타임·노드 테스트가 트리거 노드 출력 자리에 심어 둔 정규화 페이로드가 곧 출력이다.
-            // config(query·repoId)는 구독 설정이지 이벤트가 아니라 출력에 섞지 않는다(spec §2.4).
-            if (TriggerType.appTriggerOf(node.getConfig().get("triggerType")) != null) {
+            // 앱 트리거·WEBHOOK: 런타임·노드 테스트가 트리거 노드 출력 자리에 심어 둔 페이로드가 곧 출력이다.
+            // config(query·repoId·includeRaw)는 수신 설정이지 이벤트가 아니라 출력에 섞지 않는다(spec §2.4).
+            Object declared = node.getConfig().get("triggerType");
+            if (TriggerType.appTriggerOf(declared) != null || TriggerType.WEBHOOK.name().equals(declared)) {
                 output.putAll(cursor.getContext().getNodeOutput(node.getId()));
                 return ExecutorResult.success(output, System.currentTimeMillis() - startTime);
             }
@@ -58,7 +59,7 @@ public class TriggerNodeExecutor implements NodeExecutor {
                     log.debug("[TriggerExecutor] SCHEDULE 트리거 — cron: {}, triggeredAt: {}", cron, triggeredAt);
                 }
                 default -> {
-                    // WEBHOOK, MANUAL: 입력 데이터를 그대로 output으로 전달
+                    // MANUAL: 치환된 config를 그대로 output으로 전달
                     if (input != null) {
                         output.putAll(input);
                     }
