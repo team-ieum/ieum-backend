@@ -6,7 +6,7 @@
 ## 핵심 규칙
 - Controller는 반드시 Swagger 문서화: `@Tag` (클래스), `@Operation` (메서드)
 - Docs 인터페이스 분리 패턴: `{Domain}ControllerDocs` 인터페이스에 Swagger 어노테이션 선언, Controller가 이를 구현
-- 모든 응답은 `ApiResponse<T>` 래핑
+- 모든 응답은 `ApiResponse<T>` 래핑 — 예외: 외부 호출자용 웹훅 수신 `/api/v1/hooks/{token}` 성공 응답은 평문 `{ok, executionId}`(오류 응답은 그대로 `ApiResponse`)
 - Request DTO에 `@Valid` + Bean Validation 어노테이션 (`@NotBlank`, `@Email` 등)
 - Response DTO에 `from(Entity)` 정적 팩토리 메서드
 - 비즈니스 로직은 Controller에 두지 않음 — Service에 위임

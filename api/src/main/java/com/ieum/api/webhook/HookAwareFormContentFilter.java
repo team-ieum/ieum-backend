@@ -12,10 +12,17 @@ import org.springframework.stereotype.Component;
 @Component
 public class HookAwareFormContentFilter extends OrderedFormContentFilter {
 
+    public static final String HOOK_PATH_PREFIX = "/api/v1/hooks/";
+
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
+        return isHookPath(request);
+    }
+
+    /** 토큰 주소 웹훅 경로인가. 이 필터와 오류 로그 마스킹이 같은 판정을 쓴다. */
+    public static boolean isHookPath(HttpServletRequest request) {
         // 디코드·정규화된 servletPath+pathInfo로 본다(Security와 같은 기준) — getRequestURI()면 %68ooks 같은 인코딩 경로가 빠져나간다
         String pathInfo = request.getPathInfo();
-        return (request.getServletPath() + (pathInfo == null ? "" : pathInfo)).startsWith("/api/v1/hooks/");
+        return (request.getServletPath() + (pathInfo == null ? "" : pathInfo)).startsWith(HOOK_PATH_PREFIX);
     }
 }
