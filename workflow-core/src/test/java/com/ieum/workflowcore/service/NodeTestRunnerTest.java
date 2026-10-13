@@ -556,7 +556,7 @@ class NodeTestRunnerTest {
     }
 
     @Test
-    @DisplayName("webhook 수신 — 저장된 트리거 config를 쓰고 페이로드는 자기 참조로만 남는다")
+    @DisplayName("webhook 수신 — 저장된 트리거 노드로 실행하고 샘플은 받은 페이로드 그대로다(config는 섞이지 않는다)")
     void webhookSampleUsesSavedTriggerConfig() {
         saveVersionWithNodes(List.of(Map.of("id", "t", "type", "TRIGGER", "label", "수신", "config",
             Map.of("triggerType", "WEBHOOK", "orderId", "{{nodes.t.output.orderId}}"))));
@@ -564,7 +564,7 @@ class NodeTestRunnerTest {
         NodeTestResult result = runner.recordWebhookSample(workflow, "t", Map.of("orderId", "ORD-1", "memo", "x"));
 
         assertThat(result.status()).isEqualTo(SampleStatus.SUCCESS);
-        assertThat(result.output()).isEqualTo(Map.of("triggerType", "WEBHOOK", "orderId", "ORD-1"));
+        assertThat(result.output()).isEqualTo(Map.of("orderId", "ORD-1", "memo", "x"));
         assertThat(stored("t").getOutputJson()).contains("ORD-1");
     }
 
@@ -573,13 +573,13 @@ class NodeTestRunnerTest {
     void webhookSampleFallsBackToMinimalTrigger() {
         given(crudService.findLatestVersion(workflow.getId())).willReturn(Optional.empty());
         assertThat(runner.recordWebhookSample(workflow, "t", Map.of("a", 1)).output())
-            .isEqualTo(Map.of("triggerType", "WEBHOOK"));
+            .isEqualTo(Map.of("a", 1));
 
         saveVersionWithNodes(List.of(
             Map.of("id", "other", "type", "TRIGGER", "label", "x", "config", Map.of()),
             Map.of("id", "t", "type", "HTTP", "label", "충돌", "config", Map.of("method", "GET"))));
-        assertThat(runner.recordWebhookSample(workflow, "t", Map.of()).output())
-            .isEqualTo(Map.of("triggerType", "WEBHOOK"));
+        assertThat(runner.recordWebhookSample(workflow, "t", Map.of("b", 2)).output())
+            .isEqualTo(Map.of("b", 2));
     }
 
     @Test

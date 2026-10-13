@@ -9,6 +9,9 @@ import com.ieum.workflowcore.service.TestSampleMissingException;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -24,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+@ExtendWith(OutputCaptureExtension.class)
 class GlobalExceptionHandlerTest {
 
     private MockMvc mockMvc;
@@ -104,6 +108,34 @@ class GlobalExceptionHandlerTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         assertThat(response.getBody().getCode()).isEqualTo(ErrorCode.NOT_FOUND.name());
+    }
+
+    // 웹훅 토큰 주소는 경로 자체가 비밀 — 4xx 경고·[UNHANDLED] 로그에 토큰이 남으면 안 된다(IEUM-BE-91)
+    @Test
+    void hookTokenPath_isMaskedInLogs(CapturedOutput output) {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/hooks/SECRET-TOKEN-123/x");
+        request.setServletPath("/api/v1/hooks/SECRET-TOKEN-123/x");
+        GlobalExceptionHandler handler = new GlobalExceptionHandler();
+
+        handler.handleException(new NoResourceFoundException(HttpMethod.POST, "api/v1/hooks/SECRET-TOKEN-123/x"), request);
+        handler.handleException(new IllegalStateException("boom"), request);
+
+        assertThat(output).doesNotContain("SECRET-TOKEN-123").contains("/api/v1/hooks/***");
+        assertThat(GlobalExceptionHandler.loggableUri(new MockHttpServletRequest("GET", "/api/v1/webhooks/abc")))
+                .isEqualTo("/api/v1/webhooks/abc");
+    }
+
+    // 비예약 문자를 퍼센트 인코딩해도 MVC·Security는 hooks로 매칭한다 — 판정은 디코드된 servletPath 기준이어야 한다
+    @Test
+    void encodedHookTokenPath_isMaskedInLogs(CapturedOutput output) {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/%68ooks/SECRET-TOKEN-123");
+        request.setServletPath("/api/v1/hooks/SECRET-TOKEN-123");
+
+        new GlobalExceptionHandler().handleException(
+                new NoResourceFoundException(HttpMethod.POST, "api/v1/hooks/SECRET-TOKEN-123"), request);
+
+        assertThat(GlobalExceptionHandler.loggableUri(request)).isEqualTo("/api/v1/hooks/***");
+        assertThat(output).doesNotContain("SECRET-TOKEN-123");
     }
 
     @Test

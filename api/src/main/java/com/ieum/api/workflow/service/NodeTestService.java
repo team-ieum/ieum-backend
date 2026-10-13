@@ -15,7 +15,7 @@ import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.service.NodeTestResult;
 import com.ieum.workflowcore.service.NodeTestRunner;
 import com.ieum.workflowcore.service.WorkflowCrudService;
-import java.time.LocalDateTime;
+import com.ieum.workflowcore.service.WorkflowWebhookTokenService;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
@@ -43,15 +43,18 @@ public class NodeTestService {
     private final NodeTestRunner nodeTestRunner;
     private final CredentialService credentialService;
     private final WebhookListenStore webhookListenStore;
+    private final WorkflowWebhookTokenService webhookTokenService;
     private final Map<TriggerType, AppTriggerSampleFetcher> sampleFetchers = new EnumMap<>(TriggerType.class);
 
     public NodeTestService(WorkflowCrudService workflowCrudService, NodeTestRunner nodeTestRunner,
                            CredentialService credentialService, WebhookListenStore webhookListenStore,
+                           WorkflowWebhookTokenService webhookTokenService,
                            List<AppTriggerSampleFetcher> sampleFetchers) {
         this.workflowCrudService = workflowCrudService;
         this.nodeTestRunner = nodeTestRunner;
         this.credentialService = credentialService;
         this.webhookListenStore = webhookListenStore;
+        this.webhookTokenService = webhookTokenService;
         // 같은 triggerType 공급원이 둘이면 부팅에서 막는다 — EnumMap.put이 한쪽을 조용히 덮는다
         sampleFetchers.forEach(f -> {
             if (this.sampleFetchers.put(f.triggerType(), f) != null) {
@@ -66,8 +69,11 @@ public class NodeTestService {
         Node node = resolveNode(userId, workflowId, nodeId, request);
 
         if (listensForWebhook(workflow, node)) {
-            LocalDateTime expiresAt = webhookListenStore.start(workflowId, nodeId);
-            return NodeTestResponse.listening(workflowId, expiresAt);
+            // 수신 주소는 토큰 주소뿐이다 — 토큰이 없으면 listen해도 받을 길이 없다(R15)
+            if (webhookTokenService.status(workflowId).isEmpty()) {
+                throw new CustomException(ErrorCode.WEBHOOK_TOKEN_NOT_ISSUED);
+            }
+            return NodeTestResponse.listening(webhookListenStore.start(workflowId, nodeId));
         }
         TriggerType appTrigger = node.getType() == NodeType.TRIGGER && node.getConfig() != null
             ? TriggerType.appTriggerOf(node.getConfig().get("triggerType")) : null;

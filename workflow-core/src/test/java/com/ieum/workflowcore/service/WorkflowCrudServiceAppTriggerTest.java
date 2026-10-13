@@ -23,6 +23,7 @@ import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowRepository;
 import com.ieum.workflowcore.repository.WorkflowVersionRepository;
+import com.ieum.workflowcore.repository.WorkflowWebhookTokenRepository;
 import com.ieum.workflowcore.scheduler.WorkflowScheduler;
 import java.util.List;
 import java.util.Map;
@@ -55,6 +56,7 @@ class WorkflowCrudServiceAppTriggerTest {
     @Mock private WorkflowScheduler workflowScheduler;
     @Mock private WorkflowDefinitionRepository definitionRepository;
     @Mock private AppTriggerSubscriptionService appTriggerSubscriptionService;
+    @Mock private WorkflowWebhookTokenRepository webhookTokenRepository;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
     @InjectMocks private WorkflowCrudService service;
 

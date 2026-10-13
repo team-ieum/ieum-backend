@@ -223,6 +223,28 @@ class ActionNodeRuntimeTest {
     }
 
     @Test
+    @DisplayName("WEBHOOK 트리거 — 받은 페이로드가 트리거 출력이 되어 하류 참조로 넘어가고 config(includeRaw)는 섞이지 않는다")
+    void webhookTrigger_payloadFlowsDownstream() throws Exception {
+        Map<String, Object> createTool = githubTool("builtin:github_create_issue", new HashMap<>(Map.of(
+            "owner", "ieum", "repo", "demo", "title", "{{nodes.t.output.issue.title}}")));
+        when(crudService.loadDefinition(any())).thenReturn(WorkflowDefinitionDocument.builder()
+            .nodes(List.of(
+                node("t", "TRIGGER", new HashMap<>(Map.of("triggerType", "WEBHOOK", "includeRaw", false))),
+                node("create", "ACTION", actionConfig(createTool))))
+            .edges(List.of(edge("t", "create")))
+            .build());
+        enqueue(200, CREATE_RESPONSE);
+
+        runtime.execute(mock(WorkflowVersion.class), executionId,
+            new HashMap<>(Map.of("issue", Map.of("title", "웹훅 제목"))));
+
+        JsonNode createBody = objectMapper.readTree(mockWebServer.takeRequest().getBody().readUtf8());
+        assertThat(createBody.get("config").get("title").asText()).isEqualTo("웹훅 제목");
+        assertThat(savedLog("t").getOutputJson()).contains("웹훅 제목")
+            .doesNotContain("triggerType").doesNotContain("includeRaw");
+    }
+
+    @Test
     @DisplayName("도구 오류 본문이 255자를 넘어도 ACTION의 FAILED 이력이 남고 이후 노드는 실행되지 않는다")
     void toolFailureWithLongMessage_keepsFailedRowAndStops() throws Exception {
         stubTwoActionWorkflow(listConfig());

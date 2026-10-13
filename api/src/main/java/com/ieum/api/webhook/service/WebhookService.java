@@ -1,18 +1,20 @@
 package com.ieum.api.webhook.service;
 
-import com.ieum.api.webhook.dto.WebhookTriggerRequest;
 import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowVersion;
+import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.service.NodeTestRunner;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
-import java.util.Collections;
+import com.ieum.workflowcore.service.WorkflowWebhookTokenService;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -21,10 +23,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 /**
- * Webhook 트리거 비즈니스 로직.
+ * Webhook 트리거 비즈니스 로직 — 토큰 주소({@code /api/v1/hooks/{token}}) 수신.
  *
  * <p>인증 없이 외부 시스템이 호출하는 엔드포인트이므로, JWT 인증 대신
- * workflowId + WEBHOOK 트리거 타입 + 활성 상태 검증으로 실행 권한을 확인한다.
+ * 토큰 + WEBHOOK 트리거 타입 + 활성 상태 검증으로 실행 권한을 확인한다.
  */
 @Slf4j
 @Service
@@ -36,21 +38,56 @@ public class WebhookService {
     private final WorkflowExecutionRunner workflowExecutionRunner;
     private final WebhookListenStore webhookListenStore;
     private final NodeTestRunner nodeTestRunner;
+    private final WorkflowWebhookTokenService webhookTokenService;
+    private final WebhookRateLimiter webhookRateLimiter;
+
+    /**
+     * 토큰 주소({@code /api/v1/hooks/{token}}) 수신 1단계 — 본문을 읽기 전에 부른다. 토큰이 없거나 맞지 않으면 404
+     * (토큰 존재 여부 외엔 알리지 않는다), 워크플로우당 분당 한도를 넘으면 429. 토큰은 로그에 남기지 않는다.
+     */
+    public UUID resolveHook(String token) {
+        UUID workflowId = verifyHook(token);
+        if (!webhookRateLimiter.tryAcquire(workflowId)) {
+            throw new CustomException(ErrorCode.WEBHOOK_RATE_LIMITED);
+        }
+        return workflowId;
+    }
+
+    /** 토큰만 확인한다(없거나 맞지 않으면 404). 횟수는 세지 않는다 — HEAD 주소 확인용(R13). */
+    public UUID verifyHook(String token) {
+        return webhookTokenService.findWorkflowIdByToken(token)
+            .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+    }
 
     // @Transactional 미사용 의도:
     // prepareExecution()이 자체 트랜잭션으로 커밋된 뒤 @Async 런너가 실행되어야
     // 비동기 스레드에서 detached entity merge 오류를 방지할 수 있다.
     /**
+     * 토큰 주소 수신 2단계({@link #resolveHook} 뒤).
+     *
      * @return 실행 응답. 노드 테스트가 이 워크플로우의 webhook 수신을 기다리던 중이었고 워크플로우가 비활성이거나
-     *     WEBHOOK 트리거가 아니면 샘플만 저장하고 실행하지 않으므로 {@code null}이다(컨트롤러는 data 없는 202).
+     *     WEBHOOK 트리거가 아니면 샘플만 저장하고 실행하지 않으므로 {@code null}이다(응답 executionId null).
      */
-    public WorkflowExecutionResponse trigger(UUID workflowId, WebhookTriggerRequest request) {
+    public WorkflowExecutionResponse receive(UUID workflowId, HookRequest request) {
         Workflow workflow = workflowCrudService.getWorkflowById(workflowId);
+        return start(workflow, request.output(includeRaw(workflowId)));
+    }
 
-        Map<String, Object> payload = (request != null && request.getPayload() != null)
-            ? request.getPayload()
-            : Collections.emptyMap();
+    /** 저장된 최신 버전의 TRIGGER 노드 {@code config.includeRaw}(R6). 버전·노드·config가 없으면 false. */
+    private boolean includeRaw(UUID workflowId) {
+        return workflowCrudService.findLatestVersion(workflowId)
+            .map(workflowCrudService::loadDefinition)
+            .map(WorkflowDefinitionDocument::getNodes)
+            .orElse(List.of())
+            .stream()
+            .filter(node -> NodeType.TRIGGER.name().equals(node.get("type")))
+            .findFirst()
+            .map(node -> node.get("config") instanceof Map<?, ?> config && Boolean.TRUE.equals(config.get("includeRaw")))
+            .orElse(false);
+    }
 
+    private WorkflowExecutionResponse start(Workflow workflow, Map<String, Object> payload) {
+        UUID workflowId = workflow.getId();
         // 노드 테스트가 첫 수신을 기다리는 중이면 이 요청이 그 1건이다 — 소비는 원자적이라 동시 요청 중 하나만 받는다.
         boolean sampled = captureListenSample(workflow, payload);
         boolean runnable = workflow.isActive() && workflow.getTriggerType() == TriggerType.WEBHOOK;

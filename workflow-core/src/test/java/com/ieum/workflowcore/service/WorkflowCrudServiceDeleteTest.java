@@ -11,6 +11,7 @@ import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowRepository;
 import com.ieum.workflowcore.repository.WorkflowVersionRepository;
+import com.ieum.workflowcore.repository.WorkflowWebhookTokenRepository;
 import com.ieum.workflowcore.scheduler.WorkflowScheduler;
 import java.util.Optional;
 import java.util.UUID;
@@ -42,6 +43,7 @@ class WorkflowCrudServiceDeleteTest {
     @Mock private WorkflowDefinitionRepository definitionRepository;
     @Mock private NodeTestSampleRepository nodeTestSampleRepository;
     @Mock private AppTriggerSubscriptionService appTriggerSubscriptionService;
+    @Mock private WorkflowWebhookTokenRepository webhookTokenRepository;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
     @InjectMocks private WorkflowCrudService service;
 
@@ -77,6 +79,19 @@ class WorkflowCrudServiceDeleteTest {
 
         InOrder order = inOrder(nodeTestSampleRepository, workflowRepository);
         order.verify(nodeTestSampleRepository).deleteByWorkflow(workflow);
+        order.verify(workflowRepository).delete(workflow);
+    }
+
+    @Test
+    @DisplayName("삭제 — 웹훅 토큰이 워크플로우 행보다 먼저 지워진다(IEUM-BE-91, 지운 워크플로우의 토큰이 남지 않게)")
+    void delete_removesWebhookTokenBeforeWorkflow() {
+        Workflow workflow = workflow();
+        given(workflowRepository.findByIdAndUserId(workflowId, userId)).willReturn(Optional.of(workflow));
+
+        runInTransaction(() -> service.deleteWorkflow(userId, workflowId));
+
+        InOrder order = inOrder(webhookTokenRepository, workflowRepository);
+        order.verify(webhookTokenRepository).deleteByWorkflowId(workflowId);
         order.verify(workflowRepository).delete(workflow);
     }
 
