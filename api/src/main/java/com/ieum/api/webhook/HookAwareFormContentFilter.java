@@ -14,6 +14,8 @@ public class HookAwareFormContentFilter extends OrderedFormContentFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return request.getRequestURI().startsWith("/api/v1/hooks/");
+        // 디코드·정규화된 servletPath+pathInfo로 본다(Security와 같은 기준) — getRequestURI()면 %68ooks 같은 인코딩 경로가 빠져나간다
+        String pathInfo = request.getPathInfo();
+        return (request.getServletPath() + (pathInfo == null ? "" : pathInfo)).startsWith("/api/v1/hooks/");
     }
 }
