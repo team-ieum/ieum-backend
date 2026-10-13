@@ -324,7 +324,6 @@ public class WorkflowCrudService {
      */
     private WorkflowVersion saveVersionWithCompensation(
             Workflow workflow, int versionNumber, List<Map<String, Object>> nodes, String edgesJson) {
-        fillTriggerType(workflow, nodes);
         WorkflowDefinitionDocument savedDoc = definitionRepository.save(
             buildDefinitionDocument(UUID.randomUUID().toString(), nodes, edgesJson));
 
@@ -343,27 +342,6 @@ public class WorkflowCrudService {
                     savedDoc.getId(), ignore);
             }
             throw e;
-        }
-    }
-
-    /**
-     * 최상위 triggerType이 WEBHOOK이고 TRIGGER 노드 {@code config.triggerType}이 비면 WEBHOOK을 채운다 — 실행기
-     * ({@code TriggerNodeExecutor})·노드 테스트 listen·샘플이 모두 노드 config를 보므로, 최상위만 WEBHOOK이면 페이로드 대신
-     * config가 출력됐다. 생성·REST 수정·AI 저장이 전부 여기를 지난다. 이미 값이 있으면 건드리지 않는다.
-     * MANUAL·SCHEDULE·앱 트리거는 채우지 않는다 — SCHEDULE은 Quartz cron이 노드에 들어가 agent 5필드 cron 검증에 걸리고,
-     * 앱 트리거는 노드 선언 필수 규칙({@code AppTriggerSubscriptionService.sync} 400)을 우회하게 된다.
-     */
-    private static void fillTriggerType(Workflow workflow, List<Map<String, Object>> nodes) {
-        if (workflow.getTriggerType() != TriggerType.WEBHOOK) {
-            return;
-        }
-        for (Map<String, Object> node : nodes) {
-            if ("TRIGGER".equals(node.get("type")) && node.get("config") instanceof Map<?, ?> raw
-                    && raw.get("triggerType") == null) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> config = (Map<String, Object>) raw;
-                config.put("triggerType", TriggerType.WEBHOOK.name());
-            }
         }
     }
 
