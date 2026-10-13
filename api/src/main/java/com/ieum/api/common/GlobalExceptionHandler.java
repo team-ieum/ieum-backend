@@ -1,5 +1,8 @@
 package com.ieum.api.common;
 
+import static com.ieum.api.webhook.HookAwareFormContentFilter.HOOK_PATH_PREFIX;
+import static com.ieum.api.webhook.HookAwareFormContentFilter.isHookPath;
+
 import com.ieum.common.dto.ApiResponse;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
@@ -113,16 +116,9 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error(ErrorCode.INTERNAL_SERVER_ERROR));
     }
 
-    private static final String HOOK_PATH_PREFIX = "/api/v1/hooks/";
-
     /** 웹훅 토큰 주소는 경로 자체가 비밀이라 토큰 구간을 가린다(IEUM-BE-91). */
     static String loggableUri(HttpServletRequest request) {
         return isHookPath(request) ? HOOK_PATH_PREFIX + "***" : request.getRequestURI();
     }
 
-    // 디코드·정규화된 servletPath+pathInfo로 본다(Security와 같은 기준) — getRequestURI()면 %68ooks 같은 인코딩 경로가 빠져나간다
-    private static boolean isHookPath(HttpServletRequest request) {
-        String pathInfo = request.getPathInfo();
-        return (request.getServletPath() + (pathInfo == null ? "" : pathInfo)).startsWith(HOOK_PATH_PREFIX);
-    }
 }
