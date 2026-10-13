@@ -114,6 +114,7 @@ class GlobalExceptionHandlerTest {
     @Test
     void hookTokenPath_isMaskedInLogs(CapturedOutput output) {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/hooks/SECRET-TOKEN-123/x");
+        request.setServletPath("/api/v1/hooks/SECRET-TOKEN-123/x");
         GlobalExceptionHandler handler = new GlobalExceptionHandler();
 
         handler.handleException(new NoResourceFoundException(HttpMethod.POST, "api/v1/hooks/SECRET-TOKEN-123/x"), request);
@@ -122,6 +123,19 @@ class GlobalExceptionHandlerTest {
         assertThat(output).doesNotContain("SECRET-TOKEN-123").contains("/api/v1/hooks/***");
         assertThat(GlobalExceptionHandler.loggableUri(new MockHttpServletRequest("GET", "/api/v1/webhooks/abc")))
                 .isEqualTo("/api/v1/webhooks/abc");
+    }
+
+    // 비예약 문자를 퍼센트 인코딩해도 MVC·Security는 hooks로 매칭한다 — 판정은 디코드된 servletPath 기준이어야 한다
+    @Test
+    void encodedHookTokenPath_isMaskedInLogs(CapturedOutput output) {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/%68ooks/SECRET-TOKEN-123");
+        request.setServletPath("/api/v1/hooks/SECRET-TOKEN-123");
+
+        new GlobalExceptionHandler().handleException(
+                new NoResourceFoundException(HttpMethod.POST, "api/v1/hooks/SECRET-TOKEN-123"), request);
+
+        assertThat(GlobalExceptionHandler.loggableUri(request)).isEqualTo("/api/v1/hooks/***");
+        assertThat(output).doesNotContain("SECRET-TOKEN-123");
     }
 
     @Test

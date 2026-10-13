@@ -104,7 +104,7 @@ public class GlobalExceptionHandler {
             ErrorCode code = er.getStatusCode().value() == 404 ? ErrorCode.NOT_FOUND : ErrorCode.INVALID_INPUT;
             String uri = loggableUri(request);
             // NoResourceFoundException 등은 메시지에 경로를 담는다 — 토큰 경로면 메시지 대신 예외 이름만 남긴다
-            String detail = uri.equals(request.getRequestURI()) ? e.getMessage() : e.getClass().getSimpleName();
+            String detail = isHookPath(request) ? e.getClass().getSimpleName() : e.getMessage();
             log.warn("[{}] {} {} — {}", code.name(), request.getMethod(), uri, detail);
             return ResponseEntity.status(er.getStatusCode()).headers(er.getHeaders()).body(ApiResponse.error(code));
         }
@@ -117,7 +117,12 @@ public class GlobalExceptionHandler {
 
     /** 웹훅 토큰 주소는 경로 자체가 비밀이라 토큰 구간을 가린다(IEUM-BE-91). */
     static String loggableUri(HttpServletRequest request) {
-        String uri = request.getRequestURI();
-        return uri != null && uri.startsWith(HOOK_PATH_PREFIX) ? HOOK_PATH_PREFIX + "***" : uri;
+        return isHookPath(request) ? HOOK_PATH_PREFIX + "***" : request.getRequestURI();
+    }
+
+    // 디코드·정규화된 servletPath+pathInfo로 본다(Security와 같은 기준) — getRequestURI()면 %68ooks 같은 인코딩 경로가 빠져나간다
+    private static boolean isHookPath(HttpServletRequest request) {
+        String pathInfo = request.getPathInfo();
+        return (request.getServletPath() + (pathInfo == null ? "" : pathInfo)).startsWith(HOOK_PATH_PREFIX);
     }
 }

@@ -49,4 +49,20 @@ class HookReceiveRealServerTest {
         assertThat(captor.getValue().output(false)).isEqualTo(Map.of("value", body));
         assertThat(captor.getValue().output(true)).containsEntry("rawBody", body);
     }
+
+    @Test
+    @DisplayName("퍼센트 인코딩 경로(%68ooks)로 온 PUT form도 기본 FormContentFilter에 먹히지 않는다")
+    void encodedPath_putForm_isNotConsumed() throws Exception {
+        HttpResponse<String> res = HttpClient.newHttpClient().send(
+            HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/v1/%68ooks/tok"))
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .PUT(HttpRequest.BodyPublishers.ofString("a=1"))
+                .build(),
+            HttpResponse.BodyHandlers.ofString());
+
+        assertThat(res.statusCode()).isEqualTo(200);
+        ArgumentCaptor<HookRequest> captor = ArgumentCaptor.forClass(HookRequest.class);
+        verify(webhookService).receive(any(), captor.capture());
+        assertThat(captor.getValue().output(false)).isEqualTo(Map.of("a", "1"));
+    }
 }
