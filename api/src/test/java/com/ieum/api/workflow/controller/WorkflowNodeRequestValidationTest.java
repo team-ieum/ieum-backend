@@ -160,13 +160,12 @@ class WorkflowNodeRequestValidationTest {
     }
 
     @Test
-    @DisplayName("ACTION 노드 type은 저장 요청에서 허용된다 — tools[0] 모양 config도 그대로 통과")
+    @DisplayName("ACTION 노드는 event와 평평한 config.<칸>으로 저장 요청에서 허용된다")
     void actionNodeType_returns201() throws Exception {
         String node = """
             { "id": "node-action", "event": "github.create_issue", "type": "ACTION", "label": "이슈 만들기",
-              "config": { "tools": [ { "name": "builtin:github_create_issue",
-                "config": { "owner": "ieum", "repo": "demo", "title": "{{nodes.node-list.output.issues.0.title}}" } } ],
-                "brand": "github", "serviceType": "GITHUB" } }""";
+              "config": { "owner": "ieum", "repo": "demo",
+                "title": "{{nodes.node-list.output.issues.0.title}}" } }""";
         expectStatus(body(node, ""), 201);
     }
 

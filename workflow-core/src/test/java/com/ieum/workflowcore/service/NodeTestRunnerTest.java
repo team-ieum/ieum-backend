@@ -239,15 +239,11 @@ class NodeTestRunnerTest {
             new RetryProperties(), idempotencyStore, objectMapper);
         seed(workflow, "list", SampleStatus.SUCCESS, "{\"issues\":[{\"title\":\"첫 이슈\"},{\"title\":\"둘째\"}]}");
         Node create = new Node("node-1", NodeType.ACTION, "이슈 만들기", new HashMap<>(Map.of(
-            "tools", List.of(Map.of("name", "builtin:github_create_issue",
-                "config", Map.of("title", "{{nodes.list.output.issues.0.title}}"))))));
+            "title", "{{nodes.list.output.issues.0.title}}")), "github.create_issue");
 
         withAction.run(workflow, create, Map.of());
 
-        @SuppressWarnings("unchecked")
-        Map<String, Object> toolConfig = (Map<String, Object>) ((Map<String, Object>)
-            ((List<Object>) action.calls.get(0).input().get("tools")).get(0)).get("config");
-        assertThat(toolConfig).containsEntry("title", "첫 이슈");
+        assertThat(action.calls.get(0).input()).containsEntry("title", "첫 이슈");
     }
 
     // ──────────────────────────── 저장·마스킹·실패 ────────────────────────────
