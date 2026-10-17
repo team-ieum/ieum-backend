@@ -46,7 +46,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 class WorkflowCrudServiceAppTriggerTest {
 
     private static final String GMAIL_NODES =
-        "[{\"id\":\"t1\",\"type\":\"TRIGGER\",\"config\":{\"triggerType\":\"GMAIL_NEW_EMAIL\",\"query\":\"from:x\"}}]";
+        "[{\"id\":\"t1\",\"type\":\"TRIGGER\",\"event\":\"gmail.new_email\",\"config\":{\"query\":\"from:x\"}}]";
 
     @Mock private WorkflowRepository workflowRepository;
     @Mock private WorkflowVersionRepository workflowVersionRepository;
@@ -133,13 +133,13 @@ class WorkflowCrudServiceAppTriggerTest {
         WorkflowVersion version = WorkflowVersion.builder().workflow(w).version(1).mongoDefinitionId("m1").build();
         given(workflowVersionRepository.findFirstByWorkflowIdOrderByVersionDesc(workflowId)).willReturn(Optional.of(version));
         given(definitionRepository.findById("m1")).willReturn(Optional.of(WorkflowDefinitionDocument.builder()
-            .nodes(List.of(Map.of("id", "t1", "type", "TRIGGER", "config", Map.of("triggerType", "GMAIL_NEW_EMAIL"))))
+            .nodes(List.of(Map.of("id", "t1", "type", "TRIGGER", "event", "gmail.new_email", "config", Map.of())))
             .edges(List.of()).build()));
 
         runInTransaction(() -> service.activateWorkflow(userId, workflowId));
 
         verify(appTriggerSubscriptionService).sync(eq(w), eq(List.of(
-            Map.of("id", "t1", "type", "TRIGGER", "config", Map.of("triggerType", "GMAIL_NEW_EMAIL")))));
+            Map.of("id", "t1", "type", "TRIGGER", "event", "gmail.new_email", "config", Map.of()))));
     }
 
     @Test

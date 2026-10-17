@@ -254,8 +254,8 @@ class GitHubIssueSourceTest {
             .andRespond(withSuccess("[" + ISSUE + "]", MediaType.APPLICATION_JSON));
 
         assertThat(source.triggerType()).isEqualTo(TriggerType.GITHUB_NEW_ISSUE);
-        assertThat(source.fetchLatest(userId, Map.of("triggerType", "GITHUB_NEW_ISSUE", "repoId", "123"))).isPresent();
-        assertErrorCode(() -> source.fetchLatest(userId, Map.of("triggerType", "GITHUB_NEW_ISSUE", "repoId", "")),
+        assertThat(source.fetchLatest(userId, Map.of("repoId", "123"))).isPresent();
+        assertErrorCode(() -> source.fetchLatest(userId, Map.of("repoId", "")),
             ErrorCode.INVALID_INPUT);
     }
 }
