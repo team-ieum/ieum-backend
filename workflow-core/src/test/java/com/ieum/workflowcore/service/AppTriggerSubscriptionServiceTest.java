@@ -160,16 +160,19 @@ class AppTriggerSubscriptionServiceTest {
     }
 
     @Test
-    @DisplayName("활성 + 최상위만 앱 트리거, 노드 선언 없음 → 400(활성인데 구독 행 없어 미발화 방지), 행을 건드리지 않는다")
-    void appTriggerWithoutNodeDeclarationIsRejected() {
+    @DisplayName("활성 + PG만 앱 트리거, 노드에 앱 트리거 없음 → 거부하지 않고 행을 지운다(PG 값은 저장 때 노드에서 계산 — IEUM-BE-92)")
+    void topLevelAppTriggerWithoutNodeDeletesRowsWithoutRejecting() {
         Workflow w = workflow(true);
         ReflectionTestUtils.setField(w, "triggerType", TriggerType.GMAIL_NEW_EMAIL);
+        AppTriggerSubscription existing = AppTriggerSubscription.create(workflowId, "t1", userId,
+            TriggerType.GMAIL_NEW_EMAIL, null, Map.of(), LocalDateTime.now());
+        given(repository.findByWorkflowId(workflowId)).willReturn(List.of(existing));
 
-        assertThatThrownBy(() -> service.sync(w, List.of(trigger("t1", new HashMap<>()))))
-            .isInstanceOf(CustomException.class)
-            .extracting(e -> ((CustomException) e).getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW);
-        verify(repository, never()).findByWorkflowId(any());
+        service.sync(w, List.of(trigger("t1", new HashMap<>())));
+
+        verify(repository).delete(existing);
         verify(repository, never()).save(any());
+        org.mockito.Mockito.verifyNoInteractions(verifier);
     }
 
     @Test

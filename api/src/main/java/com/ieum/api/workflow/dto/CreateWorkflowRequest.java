@@ -29,9 +29,15 @@ public class CreateWorkflowRequest {
     @Valid
     private List<@NotNull EdgeDto> edges;
 
-    /** 트리거 타입. 미입력 시 MANUAL로 처리 */
+    /**
+     * 검증용(선택). 서버가 노드에서 계산한 트리거 타입과 다르면 400 {@code INVALID_WORKFLOW}, 미입력이면 통과한다.
+     * 저장되는 값은 늘 계산값이다 — 첫 번째 TRIGGER 노드의 event, 트리거 노드가 없으면 MANUAL (IEUM-BE-92).
+     */
     private TriggerType triggerType;
 
-    /** SCHEDULE 트리거일 때 필수. Quartz 6자리 Cron 표현식 (예: "0 0 10 * * ?") */
+    /**
+     * 검증용(선택). 계산된 트리거가 SCHEDULE일 때만 보낼 수 있고, 노드 {@code config.cron}과 Quartz로 정규화해 같아야 한다.
+     * 미입력(빈 문자열 포함)이면 통과한다 (IEUM-BE-92).
+     */
     private String cronExpression;
 }

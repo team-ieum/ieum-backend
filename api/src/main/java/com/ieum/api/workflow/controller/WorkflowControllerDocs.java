@@ -45,8 +45,15 @@ public interface WorkflowControllerDocs {
             + " 함께 실려 빌더가 UUID 대신 이름을 보여줄 수 있다 — 요청 사용자가 소유하지 않았거나 없는"
             + " id는 사전에 실리지 않는다.";
 
+    /** 생성·수정 요청 최상위 triggerType·cronExpression의 의미 (IEUM-BE-92). */
+    String TRIGGER_FIELDS_NOTICE =
+        " 워크플로우 트리거는 첫 번째 TRIGGER 노드의 event로 서버가 계산한다(schedule.every면 그 노드 config.cron,"
+            + " 트리거 노드가 없으면 MANUAL). 요청 최상위 triggerType·cronExpression은 검증용이다 — 보내지 않으면 통과,"
+            + " 보내면 계산값과 같아야 하고 다르면 400(INVALID_WORKFLOW, 메시지에 계산값). cronExpression은 Unix 5필드·Quartz"
+            + " 어느 쪽이든 Quartz로 바꿔 비교하고, SCHEDULE이 아닌데 보내면 400이다. 응답의 두 값은 계산해 저장한 값이다.";
+
     @Operation(summary = "워크플로우 생성",
-        description = WEBHOOK_URL_NOTICE)
+        description = WEBHOOK_URL_NOTICE + TRIGGER_FIELDS_NOTICE)
     @PreAuthorize("hasRole('USER')")
     @RequestBody(content = @Content(
         mediaType = "application/json",
@@ -59,12 +66,11 @@ public interface WorkflowControllerDocs {
                     {
                       "name": "MANUAL 인사 워크플로우",
                       "description": "수동으로 실행하면 이름을 받아 인사 메시지를 만든다",
-                      "triggerType": "MANUAL",
                       "nodes": [
-                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "시작",
+                        { "id": "node-trigger",   "event": "manual.run", "type": "TRIGGER",   "label": "시작",
                           "description": "실행 버튼을 누르면 시작해요.",
                           "position": { "x": 40, "y": 120 }, "config": {} },
-                        { "id": "node-transform", "type": "TRANSFORM", "label": "메시지 생성",
+                        { "id": "node-transform", "event": "transform.map", "type": "TRANSFORM", "label": "메시지 생성",
                           "description": "입력한 이름으로 인사말을 만들어요.",
                           "position": { "x": 420, "y": 120 },
                           "config": { "mappings": {
@@ -83,17 +89,15 @@ public interface WorkflowControllerDocs {
                     {
                       "name": "SCHEDULE 일일 보고 워크플로우",
                       "description": "매일 오전 10시에 외부 API를 호출해 데이터를 수집한다",
-                      "triggerType": "SCHEDULE",
-                      "cronExpression": "0 0 10 * * ?",
                       "nodes": [
-                        { "id": "node-trigger",   "type": "TRIGGER", "label": "스케줄 시작",
+                        { "id": "node-trigger",   "event": "schedule.every", "type": "TRIGGER", "label": "스케줄 시작",
                           "description": "매일 오전 10시에 자동으로 시작해요.",
-                          "position": { "x": 40, "y": 120 }, "config": {} },
-                        { "id": "node-http",      "type": "HTTP",    "label": "데이터 수집",
+                          "position": { "x": 40, "y": 120 }, "config": { "cron": "0 0 10 * * ?" } },
+                        { "id": "node-http",      "event": "http.request", "type": "HTTP",    "label": "데이터 수집",
                           "description": "외부 서비스에서 오늘 데이터를 가져와요.",
                           "position": { "x": 420, "y": 120 },
                           "config": { "method": "GET", "url": "https://jsonplaceholder.typicode.com/todos/1", "headers": {} }},
-                        { "id": "node-transform", "type": "TRANSFORM", "label": "결과 정리",
+                        { "id": "node-transform", "event": "transform.map", "type": "TRANSFORM", "label": "결과 정리",
                           "description": "가져온 데이터에서 필요한 값만 골라내요.",
                           "position": { "x": 800, "y": 120 },
                           "config": { "mappings": {
@@ -114,20 +118,19 @@ public interface WorkflowControllerDocs {
                     {
                       "name": "WEBHOOK 주문 알림 워크플로우",
                       "description": "외부 쇼핑몰에서 주문 이벤트 발생 시 호출",
-                      "triggerType": "WEBHOOK",
                       "nodes": [
-                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "Webhook 수신",
+                        { "id": "node-trigger",   "event": "webhook.catch", "type": "TRIGGER",   "label": "Webhook 수신",
                           "description": "쇼핑몰에서 주문이 들어오면 시작해요.",
                           "position": { "x": 40, "y": 120 }, "config": {} },
-                        { "id": "node-condition", "type": "CONDITION", "label": "주문 금액 확인",
+                        { "id": "node-condition", "event": "branch.if", "type": "CONDITION", "label": "주문 금액 확인",
                           "description": "주문 금액이 5만원을 넘는지 확인해요.",
                           "position": { "x": 420, "y": 120 },
                           "config": { "left": "{{nodes.node-trigger.output.amount}}", "operator": "greaterThan", "right": "50000" }},
-                        { "id": "node-vip",   "type": "TRANSFORM", "label": "VIP 처리",
+                        { "id": "node-vip",   "event": "transform.map", "type": "TRANSFORM", "label": "VIP 처리",
                           "description": "고액 주문을 VIP 등급으로 표시해요.",
                           "position": { "x": 800, "y": 40 },
                           "config": { "mappings": { "grade": "VIP", "orderId": "{{nodes.node-trigger.output.orderId}}" }}},
-                        { "id": "node-normal", "type": "TRANSFORM", "label": "일반 처리",
+                        { "id": "node-normal", "event": "transform.map", "type": "TRANSFORM", "label": "일반 처리",
                           "description": "그 외 주문을 일반 등급으로 표시해요.",
                           "position": { "x": 800, "y": 320 },
                           "config": { "mappings": { "grade": "일반", "orderId": "{{nodes.node-trigger.output.orderId}}" }}}
@@ -146,12 +149,11 @@ public interface WorkflowControllerDocs {
                     {
                       "name": "문의 분류 워크플로우",
                       "description": "들어온 문의를 AI가 분류하고 담당 채널에 알린다",
-                      "triggerType": "WEBHOOK",
                       "nodes": [
-                        { "id": "inquiry-trigger", "type": "TRIGGER", "label": "문의가 도착하면",
+                        { "id": "inquiry-trigger", "event": "webhook.catch", "type": "TRIGGER", "label": "문의가 도착하면",
                           "description": "새 고객 문의가 들어오면 자동으로 시작해요.",
                           "position": { "x": 40, "y": 120 }, "config": {} },
-                        { "id": "classify-inquiry", "type": "AI", "label": "문의 유형 나누기",
+                        { "id": "classify-inquiry", "event": "ai.reasoning", "type": "AI", "label": "문의 유형 나누기",
                           "description": "AI가 문의 내용을 읽고 알맞은 유형으로 나눠요.",
                           "position": { "x": 420, "y": 120 },
                           "config": {
@@ -162,11 +164,10 @@ public interface WorkflowControllerDocs {
                             "agentType": "simple",
                             "tools": []
                           }},
-                        { "id": "notify-team", "type": "AI", "label": "담당 채널에 알리기",
+                        { "id": "notify-team", "event": "ai.agent", "type": "AI", "label": "담당 채널에 알리기",
                           "description": "분류 결과를 담당 팀의 Slack 채널로 보내요.",
                           "position": { "x": 800, "y": 120 },
                           "config": {
-                            "serviceType": "SLACK",
                             "llmProvider": "GEMINI",
                             "model": "gemini-3.7-flash",
                             "prompt": "다음 분류 결과를 슬랙으로 보내줘: {{nodes.classify-inquiry.output.output}}",
@@ -188,10 +189,10 @@ public interface WorkflowControllerDocs {
                       "name": "변수 치환 테스트",
                       "description": "triggerData 값을 TRANSFORM으로 가공",
                       "nodes": [
-                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "시작",
+                        { "id": "node-trigger",   "event": "manual.run", "type": "TRIGGER",   "label": "시작",
                           "description": "실행하면 시작해요.",
                           "position": { "x": 40, "y": 120 }, "config": {} },
-                        { "id": "node-transform", "type": "TRANSFORM", "label": "메시지 가공",
+                        { "id": "node-transform", "event": "transform.map", "type": "TRANSFORM", "label": "메시지 가공",
                           "description": "받은 이름을 인사말로 바꿔요.",
                           "position": { "x": 420, "y": 120 },
                           "config": { "mappings": {
@@ -212,18 +213,18 @@ public interface WorkflowControllerDocs {
                       "name": "CONDITION 분기 테스트",
                       "description": "score 값에 따라 pass/fail 분기",
                       "nodes": [
-                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "시작",
+                        { "id": "node-trigger",   "event": "manual.run", "type": "TRIGGER",   "label": "시작",
                           "description": "실행하면 시작해요.",
                           "position": { "x": 40, "y": 120 }, "config": {} },
-                        { "id": "node-condition", "type": "CONDITION", "label": "점수 판정",
+                        { "id": "node-condition", "event": "branch.if", "type": "CONDITION", "label": "점수 판정",
                           "description": "점수가 60점 이상인지 확인해요.",
                           "position": { "x": 420, "y": 120 },
                           "config": { "left": "{{nodes.node-trigger.output.score}}", "operator": "greaterThanOrEqual", "right": "60" }},
-                        { "id": "node-pass", "type": "TRANSFORM", "label": "합격 처리",
+                        { "id": "node-pass", "event": "transform.map", "type": "TRANSFORM", "label": "합격 처리",
                           "description": "60점 이상이면 합격으로 표시해요.",
                           "position": { "x": 800, "y": 40 },
                           "config": { "mappings": { "result": "합격", "score": "{{nodes.node-trigger.output.score}}" }}},
-                        { "id": "node-fail", "type": "TRANSFORM", "label": "불합격 처리",
+                        { "id": "node-fail", "event": "transform.map", "type": "TRANSFORM", "label": "불합격 처리",
                           "description": "60점 미만이면 불합격으로 표시해요.",
                           "position": { "x": 800, "y": 320 },
                           "config": { "mappings": { "result": "불합격", "score": "{{nodes.node-trigger.output.score}}" }}}
@@ -243,14 +244,14 @@ public interface WorkflowControllerDocs {
                       "name": "HTTP 호출 테스트",
                       "description": "공개 API 호출 후 결과 가공",
                       "nodes": [
-                        { "id": "node-trigger",   "type": "TRIGGER",   "label": "시작",
+                        { "id": "node-trigger",   "event": "manual.run", "type": "TRIGGER",   "label": "시작",
                           "description": "실행하면 시작해요.",
                           "position": { "x": 40, "y": 120 }, "config": {} },
-                        { "id": "node-http",      "type": "HTTP",      "label": "공개 API 호출",
+                        { "id": "node-http",      "event": "http.request", "type": "HTTP",      "label": "공개 API 호출",
                           "description": "외부 서비스에서 할 일 정보를 가져와요.",
                           "position": { "x": 420, "y": 120 },
                           "config": { "method": "GET", "url": "https://jsonplaceholder.typicode.com/todos/1", "headers": {} }},
-                        { "id": "node-transform", "type": "TRANSFORM", "label": "결과 정리",
+                        { "id": "node-transform", "event": "transform.map", "type": "TRANSFORM", "label": "결과 정리",
                           "description": "가져온 정보에서 제목과 완료 여부만 남겨요.",
                           "position": { "x": 800, "y": 120 },
                           "config": { "mappings": {
@@ -285,7 +286,7 @@ public interface WorkflowControllerDocs {
 
     @Operation(summary = "워크플로우 수정 (새 버전 생성)",
         description = "수정은 정의 전체를 새 버전으로 다시 쓴다. " + WEBHOOK_URL_NOTICE
-            + " 이미 원문 URL이 저장된 워크플로우는 그 값을 바꾸기 전까지 수정을 저장할 수 없다.")
+            + " 이미 원문 URL이 저장된 워크플로우는 그 값을 바꾸기 전까지 수정을 저장할 수 없다." + TRIGGER_FIELDS_NOTICE)
     @PreAuthorize("hasRole('USER')")
     @RequestBody(content = @Content(
         mediaType = "application/json",
@@ -298,14 +299,14 @@ public interface WorkflowControllerDocs {
                       "name": "변수 치환 테스트 v2",
                       "description": "노드 하나 추가",
                       "nodes": [
-                        { "id": "node-trigger",    "type": "TRIGGER",   "label": "시작",
+                        { "id": "node-trigger",    "event": "manual.run", "type": "TRIGGER",   "label": "시작",
                           "description": "실행하면 시작해요.",
                           "position": { "x": 40, "y": 120 }, "config": {} },
-                        { "id": "node-transform1", "type": "TRANSFORM", "label": "1차 가공",
+                        { "id": "node-transform1", "event": "transform.map", "type": "TRANSFORM", "label": "1차 가공",
                           "description": "받은 이름을 그대로 넘겨요.",
                           "position": { "x": 420, "y": 120 },
                           "config": { "mappings": { "step1": "{{nodes.node-trigger.output.name}}" }}},
-                        { "id": "node-transform2", "type": "TRANSFORM", "label": "2차 가공",
+                        { "id": "node-transform2", "event": "transform.map", "type": "TRANSFORM", "label": "2차 가공",
                           "description": "1차 결과에 안내 문구를 붙여요.",
                           "position": { "x": 800, "y": 120 },
                           "config": { "mappings": { "step2": "가공완료: {{nodes.node-transform1.output.step1}}" }}}

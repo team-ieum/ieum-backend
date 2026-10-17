@@ -1136,6 +1136,34 @@ class ChatServiceTest {
     }
 
     @Test
+    @DisplayName("currentNodes 원소가 객체가 아니거나 null이면 INVALID_WORKFLOW(500 아님) — agent 호출·쿼터 예약 없음")
+    void chat_currentNodesNotObject_rejectedBeforeAgentCall() {
+        givenChatSetup();
+        ChatRequest request = buildRequestBeforeReserve("수정해줘", null);
+        given(request.getCurrentNodes()).willReturn(List.of("x"));
+
+        assertThatThrownBy(() -> chatService.chat(workflowId, userId, "ROLE_USER", request))
+            .isInstanceOfSatisfying(CustomException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
+        verify(betaPlatformProvider, never()).reserveQuota(any());
+        verify(agentClient, never()).chat(any(AgentChatCallParams.class));
+    }
+
+    @Test
+    @DisplayName("currentNodes에 null 원소가 있으면 INVALID_WORKFLOW(500 아님) — agent 호출·쿼터 예약 없음")
+    void chat_currentNodesNullElement_rejectedBeforeAgentCall() {
+        givenChatSetup();
+        ChatRequest request = buildRequestBeforeReserve("수정해줘", null);
+        given(request.getCurrentNodes()).willReturn(java.util.Arrays.asList((Object) null));
+
+        assertThatThrownBy(() -> chatService.chat(workflowId, userId, "ROLE_USER", request))
+            .isInstanceOfSatisfying(CustomException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
+        verify(betaPlatformProvider, never()).reserveQuota(any());
+        verify(agentClient, never()).chat(any(AgentChatCallParams.class));
+    }
+
+    @Test
     @DisplayName("currentNodes는 파생된 모양으로 agent에 간다 — 옛 키 없음·type은 event가 정한다")
     @SuppressWarnings("unchecked")
     void chat_currentNodes_passedDerived() throws Exception {
@@ -1201,12 +1229,13 @@ class ChatServiceTest {
         return CATALOG.app(CATALOG.event(event).orElseThrow().app()).orElseThrow().brand();
     }
 
-    // ─────────────────── TRIGGER 노드 → 트리거 타입·cron 전달 (IEUM-AI-56) ───────────
+    // ─────────────────── TRIGGER 노드 → 트리거 타입·cron 계산 (IEUM-AI-56, IEUM-BE-92) ───────────
 
     @Test
-    @DisplayName("SCHEDULE TRIGGER 노드의 triggerType·cron 원문이 저장 경로로 넘어간다 — 변환은 저장 쪽이 한다")
+    @DisplayName("schedule.every 노드면 SCHEDULE과 cron 원문이 저장 경로로 넘어간다 — 변환은 저장 쪽이 한다")
     void finalizeStream_scheduleTrigger_passesTriggerTypeAndCron() throws Exception {
-        ChatAgentResponse resp = buildTriggerResponse("schedule.every", "{ \"cron\": \"0 9 * * *\" }");
+        ChatAgentResponse resp = buildNodeResponse("""
+            { "id": "node-trigger", "event": "schedule.every", "type": "TRIGGER", "config": { "cron": "0 9 * * *" } }""");
         givenFinalizeStreamSession();
         ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
 
@@ -1217,9 +1246,10 @@ class ChatServiceTest {
     }
 
     @Test
-    @DisplayName("WEBHOOK TRIGGER 노드면 WEBHOOK이 넘어간다 — 웹훅 호출이 트리거 타입 불일치로 막히지 않게")
+    @DisplayName("webhook.catch 노드면 WEBHOOK이 넘어간다 — 웹훅 호출이 트리거 타입 불일치로 막히지 않게")
     void finalizeStream_webhookTrigger_passesWebhook() throws Exception {
-        ChatAgentResponse resp = buildTriggerResponse("webhook.catch", "{}");
+        ChatAgentResponse resp = buildNodeResponse("""
+            { "id": "node-trigger", "event": "webhook.catch", "type": "TRIGGER", "config": {} }""");
         givenFinalizeStreamSession();
         ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
 
@@ -1230,46 +1260,62 @@ class ChatServiceTest {
     }
 
     @Test
-    @DisplayName("TRIGGER 노드가 없으면 트리거 정보를 null로 넘겨 기존 스케줄을 건드리지 않는다")
-    void finalizeStream_noTriggerNode_passesNull() throws Exception {
-        ChatAgentResponse resp = buildWorkflowResponse("{ \"method\": \"GET\" }");
+    @DisplayName("TRIGGER 노드가 없으면 MANUAL·cron null이 넘어간다 — 기존 스케줄 유지 규칙은 없다(IEUM-BE-92)")
+    void finalizeStream_noTriggerNode_passesManual() throws Exception {
+        ChatAgentResponse resp = buildNodeResponse("""
+            { "id": "node-http", "event": "http.request", "type": "HTTP", "config": { "method": "GET" } }""");
         givenFinalizeStreamSession();
         ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
 
         chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
 
         verify(workflowCrudService).saveAgentVersion(
-            eq(workflowId), any(), any(), isNull(), isNull());
+            eq(workflowId), any(), any(), eq(TriggerType.MANUAL), isNull());
+    }
+
+    @Test
+    @DisplayName("TRIGGER 노드가 여럿이면 첫 번째가 기준이다 — 실행과 같은 선택")
+    void finalizeStream_multipleTriggers_firstWins() throws Exception {
+        ChatAgentResponse resp = buildNodeResponse("""
+            { "id": "node-hook", "event": "webhook.catch", "type": "TRIGGER", "config": {} },
+            { "id": "node-cron", "event": "schedule.every", "type": "TRIGGER", "config": { "cron": "0 9 * * *" } }""");
+        givenFinalizeStreamSession();
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+
+        verify(workflowCrudService).saveAgentVersion(
+            eq(workflowId), any(), any(), eq(TriggerType.WEBHOOK), isNull());
     }
 
     @Test
     @DisplayName("TRIGGER 노드의 event를 카탈로그가 모르면 저장하지 않는다 — 메시지에 event·노드 id")
     void finalizeStream_unknownTriggerEvent_notSaved() throws Exception {
-        ChatAgentResponse resp = buildTriggerResponse("schedule.daily", "{}");
+        ChatAgentResponse resp = buildNodeResponse("""
+            { "id": "node-trigger", "event": "schedule.daily", "type": "TRIGGER", "config": {} }""");
         ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
 
-        assertThatThrownBy(() ->
-            chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId))
+        assertThatThrownBy(() -> chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId))
             .isInstanceOfSatisfying(CustomException.class, e -> {
                 assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW);
                 assertThat(e.getMessage()).contains("schedule.daily").contains("node-trigger");
             });
-
         verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
     }
 
-    /** TRIGGER 노드 하나짜리 WORKFLOW_GENERATED 응답. event·config만 테스트마다 바꾼다. */
-    private ChatAgentResponse buildTriggerResponse(String event, String triggerConfig) throws Exception {
-        return objectMapper.readValue("""
-            {
-                "message": "완성됐어요",
-                "type": "WORKFLOW_GENERATED",
-                "nodes": [
-                    { "id": "node-trigger", "event": "%s", "type": "TRIGGER", "config": %s }
-                ],
-                "edges": []
-            }
-            """.formatted(event, triggerConfig), ChatAgentResponse.class);
+    @Test
+    @DisplayName("schedule.every 노드에 cron이 없으면 INVALID_CRON_EXPRESSION으로 저장하지 않는다 — REST와 같은 문구")
+    void finalizeStream_scheduleWithoutCron_notSaved() throws Exception {
+        ChatAgentResponse resp = buildNodeResponse("""
+            { "id": "node-trigger", "event": "schedule.every", "type": "TRIGGER", "config": {} }""");
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        assertThatThrownBy(() -> chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId))
+            .isInstanceOfSatisfying(CustomException.class, e -> {
+                assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_CRON_EXPRESSION);
+                assertThat(e.getMessage()).isEqualTo("schedule.every 노드(node-trigger)의 config.cron이 필요합니다");
+            });
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
     }
 
     /** finalizeStream이 메시지를 저장하는 데 필요한 최소 스텁. */
