@@ -1,5 +1,7 @@
 package com.ieum.workflowcore.engine.executor;
 
+import com.ieum.workflowcore.catalog.EventCatalog;
+import com.ieum.workflowcore.catalog.EventDefinition;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.ExecutionCursor;
 import com.ieum.workflowcore.engine.ExecutorResult;
@@ -24,10 +26,12 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 /**
  * ACTION 노드 Executor — 앱 도구 하나를 LLM 없이 실행하는 결정론적 노드(ADR-005).
  *
- * <p>{@code config.tools[0]}({@code {"name": "<tool_key>", "config": {...}}})을 ieum-agent
- * {@code POST /v1/actions/execute}에 위임한다. AI 노드와 같은 도구 전처리({@link ToolCallPreparer})를 쓰고,
- * workflow-core 안에서 {@code ${ieum.agent.url}} 기반 WebClient로 직접 호출한다(api 모듈 {@code AgentClient}는
- * 의존 방향상 쓸 수 없다).
+ * <p>도구는 노드 {@code event}의 카탈로그 {@code tool_key}다(IEUM-BE-92). 합성 도구
+ * {@code {"name": <tool_key>, "config": <노드 config에서 brand를 뺀 사본>}} 하나를 AI 노드와 같은 전처리
+ * ({@link ToolCallPreparer}: 참조식·Google 토큰·Notion/GitHub 헤더·slack/discord 웹훅 URL)에 태운 뒤 ieum-agent
+ * {@code POST /v1/actions/execute}에 위임한다. workflow-core 안에서 {@code ${ieum.agent.url}} 기반 WebClient로
+ * 직접 호출한다(api 모듈 {@code AgentClient}는 의존 방향상 쓸 수 없다). 합성 도구에는 {@code auth}·
+ * {@code credentialId}가 없으므로 ACTION BYOK는 없다.
  *
  * <p>LLM 전용 처리가 없다 — LLM 헤더·베타 키 모드·쿼터 예약·토큰 차감·모델 fallback 모두 없고 과금은 0이다.
  * 노드 출력은 agent {@code output} dict 그대로다(AI 노드 객체 출력과 같은 모양).
@@ -49,13 +53,15 @@ public class ActionNodeExecutor implements NodeExecutor {
     private final UserRoleProvider userRoleProvider;
     private final IdempotencyStore idempotencyStore;
     private final int agentTimeoutSeconds;
+    private final EventCatalog eventCatalog;
 
     public ActionNodeExecutor(
         @Value("${ieum.agent.url}") String agentBaseUrl,
         ToolCallPreparer toolCallPreparer,
         UserRoleProvider userRoleProvider,
         IdempotencyStore idempotencyStore,
-        @Value("${ieum.agent.timeout-seconds:120}") int agentTimeoutSeconds
+        @Value("${ieum.agent.timeout-seconds:120}") int agentTimeoutSeconds,
+        EventCatalog eventCatalog
     ) {
         this.webClient = WebClient.builder()
             .baseUrl(agentBaseUrl)
@@ -65,6 +71,7 @@ public class ActionNodeExecutor implements NodeExecutor {
         this.userRoleProvider = userRoleProvider;
         this.idempotencyStore = idempotencyStore;
         this.agentTimeoutSeconds = agentTimeoutSeconds;
+        this.eventCatalog = eventCatalog;
     }
 
     @Override
@@ -84,28 +91,32 @@ public class ActionNodeExecutor implements NodeExecutor {
         RetryPolicy policy = attempt.policy();
 
         try {
-            Object rawTools = node.getConfig() == null ? null : node.getConfig().get("tools");
-            if (!(rawTools instanceof List<?> list) || list.isEmpty()) {
-                return ExecutorResult.failure("ACTION 노드에는 config.tools[0]이 필요합니다.",
-                    System.currentTimeMillis() - startTime, FailureKind.CLIENT_ERROR);
-            }
-            // 전처리 전에 이름부터 확인한다 — 이름 없는 도구를 토큰·헤더 해석에 태우지 않는다.
-            Object first = list.get(0);
-            Object rawName = first instanceof Map<?, ?> entry ? entry.get("name") : first;
-            if (!(rawName instanceof String name) || name.isBlank()) {
-                return ExecutorResult.failure("ACTION 노드의 tools[0].name이 필요합니다.",
+            // 도구 이름을 노드 config에서 읽지 않는다 — event의 카탈로그 tool_key가 유일한 출처다(IEUM-BE-92).
+            String toolKey = eventCatalog.event(node.getEvent())
+                .filter(def -> def.nodeType() == NodeType.ACTION)
+                .map(EventDefinition::toolKey)
+                .orElse(null);
+            if (toolKey == null) {
+                return ExecutorResult.failure("ACTION 노드에 카탈로그 ACTION event가 필요합니다.",
                     System.currentTimeMillis() - startTime, FailureKind.CLIENT_ERROR);
             }
 
-            // 첫 도구만 쓴다 — 나머지 도구가 Google 토큰 조회·인증 헤더에 끼어들지 못하게 전처리 앞에서 자른다.
-            ToolCallPreparer.PreparedTools prepared = toolCallPreparer.prepare(List.of(first), cursor);
-            Map<String, Object> tool = prepared.tools().get(0);
-            String toolKey = (String) tool.get("name");
+            // 합성 도구 하나만 전처리한다 — config 안의 다른 키(tools 등)가 토큰 조회·인증 헤더에 끼어들지 못한다.
+            // brand는 서버가 쓰는 표시용 키라 agent에 보내지 않는다. 사본이라 노드 원본은 그대로다.
+            Map<String, Object> nodeConfig = node.getConfig() == null
+                ? new HashMap<>() : new HashMap<>(node.getConfig());
+            nodeConfig.remove("brand");
+            Map<String, Object> syntheticTool = new HashMap<>();
+            syntheticTool.put("name", toolKey);
+            syntheticTool.put("config", nodeConfig);
+            ToolCallPreparer.PreparedTools prepared = toolCallPreparer.prepare(List.of(syntheticTool), cursor);
             // config 값은 로그에 싣지 않는다 — slack·discord는 복호화된 웹훅 URL이 들어 있다.
-            log.info("[ActionNodeExecutor] 노드 실행 — nodeId: {}, toolKey: {}", node.getId(), toolKey);
+            log.info("[ActionNodeExecutor] 노드 실행 — nodeId: {}, event: {}, toolKey: {}",
+                node.getId(), node.getEvent(), toolKey);
 
-            Map<String, Object> toolConfig = tool.get("config") instanceof Map<?, ?> configMap
-                ? new HashMap<>((Map<String, Object>) configMap) : new HashMap<>();
+            // renderDeep 사본(웹훅 URL 주입 포함)을 다시 복사해 쓴다 — 기존 코드와 같이 이 Map은 실행기 소유다.
+            Map<String, Object> toolConfig =
+                new HashMap<>((Map<String, Object>) prepared.tools().get(0).get("config"));
             UUID userId = cursor.getContext().getUserId();
             String userRole = userId != null ? userRoleProvider.findRoleByUserId(userId) : null;
 

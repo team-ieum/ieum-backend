@@ -111,7 +111,8 @@ class ActionNodeRuntimeTest {
                 new StubWebhookCredentialProvider()),
             uid -> "ROLE_USER",
             idempotencyStore,
-            30);
+            30,
+            CATALOG);
 
         List<NodeExecutor> executors = List.of(new TriggerNodeExecutor(CATALOG), action);
         runtime = new SyncExecutionRuntime(objectMapper, logRepository, executionRepository, crudService,
@@ -128,29 +129,14 @@ class ActionNodeRuntimeTest {
 
     // ── 정의 ────────────────────────────────────────────────────────────────
 
-    private static Map<String, Object> node(String id, String type, Map<String, Object> config) {
+    private static Map<String, Object> node(String id, String type, String event, Map<String, Object> config) {
         Map<String, Object> node = new HashMap<>();
         node.put("id", id);
         node.put("type", type);
+        node.put("event", event);
         node.put("label", id);
         node.put("config", config);
         return node;
-    }
-
-    private static Map<String, Object> trigger(String event, Map<String, Object> config) {
-        Map<String, Object> node = node("t", "TRIGGER", config);
-        node.put("event", event);
-        return node;
-    }
-
-    private static Map<String, Object> githubTool(String toolKey, Map<String, Object> config) {
-        return Map.of("name", toolKey, "config", config);
-    }
-
-    private static Map<String, Object> actionConfig(Map<String, Object> tool) {
-        Map<String, Object> config = new HashMap<>();
-        config.put("tools", List.of(tool));
-        return config;
     }
 
     private static Map<String, Object> edge(String source, String target) {
@@ -162,21 +148,20 @@ class ActionNodeRuntimeTest {
 
     /** 트리거 → list(이슈 목록) → create(이슈 생성, title이 list 출력 참조). */
     private void stubTwoActionWorkflow(Map<String, Object> listConfig) {
-        Map<String, Object> createTool = githubTool("builtin:github_create_issue", new HashMap<>(Map.of(
-            "owner", "ieum", "repo", "demo", "title", "{{nodes.list.output.issues.0.title}}")));
+        Map<String, Object> createConfig = new HashMap<>(Map.of(
+            "owner", "ieum", "repo", "demo", "title", "{{nodes.list.output.issues.0.title}}"));
         WorkflowDefinitionDocument doc = WorkflowDefinitionDocument.builder()
             .nodes(List.of(
-                trigger("manual.run", new HashMap<>()),
-                node("list", "ACTION", listConfig),
-                node("create", "ACTION", actionConfig(createTool))))
+                node("t", "TRIGGER", "manual.run", new HashMap<>()),
+                node("list", "ACTION", "github.list_issues", listConfig),
+                node("create", "ACTION", "github.create_issue", createConfig)))
             .edges(List.of(edge("t", "list"), edge("list", "create")))
             .build();
         when(crudService.loadDefinition(any())).thenReturn(doc);
     }
 
     private Map<String, Object> listConfig() {
-        return actionConfig(githubTool("builtin:github_list_issues",
-            new HashMap<>(Map.of("owner", "ieum", "repo", "demo"))));
+        return new HashMap<>(Map.of("owner", "ieum", "repo", "demo"));
     }
 
     private void run() throws Exception {
@@ -233,12 +218,12 @@ class ActionNodeRuntimeTest {
     @Test
     @DisplayName("WEBHOOK 트리거 — 받은 페이로드가 트리거 출력이 되어 하류 참조로 넘어가고 config(includeRaw)는 섞이지 않는다")
     void webhookTrigger_payloadFlowsDownstream() throws Exception {
-        Map<String, Object> createTool = githubTool("builtin:github_create_issue", new HashMap<>(Map.of(
-            "owner", "ieum", "repo", "demo", "title", "{{nodes.t.output.issue.title}}")));
+        Map<String, Object> createConfig = new HashMap<>(Map.of(
+            "owner", "ieum", "repo", "demo", "title", "{{nodes.t.output.issue.title}}"));
         when(crudService.loadDefinition(any())).thenReturn(WorkflowDefinitionDocument.builder()
             .nodes(List.of(
-                trigger("webhook.catch", new HashMap<>(Map.of("includeRaw", false))),
-                node("create", "ACTION", actionConfig(createTool))))
+                node("t", "TRIGGER", "webhook.catch", new HashMap<>(Map.of("includeRaw", false))),
+                node("create", "ACTION", "github.create_issue", createConfig)))
             .edges(List.of(edge("t", "create")))
             .build());
         enqueue(200, CREATE_RESPONSE);
