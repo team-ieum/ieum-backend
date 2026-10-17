@@ -21,6 +21,8 @@ import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.api.workflow.dto.UpdateWorkflowRequest;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.catalog.EventCatalog;
+import com.ieum.workflowcore.catalog.NodeDerivation;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowVersion;
@@ -52,6 +54,8 @@ import org.springframework.http.HttpStatus;
  */
 class WorkflowPartialUpdateTest {
 
+    private static final EventCatalog CATALOG = EventCatalog.loadFromClasspath();
+
     private final WorkflowCrudService workflowCrudService = mock(WorkflowCrudService.class);
     private final CredentialService credentialService = mock(CredentialService.class);
     private final WorkflowService workflowService = new WorkflowService(
@@ -61,7 +65,8 @@ class WorkflowPartialUpdateTest {
         mock(ExecutionEventPublisher.class),
         new ObjectMapper(),
         mock(WebhookCredentialService.class),
-        credentialService);
+        credentialService,
+        new NodeDerivation(CATALOG), CATALOG);
 
     private final ObjectMapper jsonMapper = new ObjectMapper();
     private final UUID userId = UUID.randomUUID();
@@ -178,7 +183,7 @@ class WorkflowPartialUpdateTest {
         stubSaveSucceeds();
 
         workflowService.updateWorkflow(userId, workflowId, request(
-            "{ \"id\": \"" + NODE_ID + "\", \"type\": \"AI\", \"label\": \"요약하기\" }",
+            "{ \"id\": \"" + NODE_ID + "\", \"event\": \"ai.agent\", \"type\": \"AI\", \"label\": \"요약하기\" }",
             "{ \"source\": \"" + NODE_ID + "\", \"target\": \"n-yes\" }",
             ""));
 
@@ -204,7 +209,7 @@ class WorkflowPartialUpdateTest {
 
         // FE가 보내는 최소 요청 — description·position이 없다.
         workflowService.updateWorkflow(userId, workflowId, request("""
-            { "id": "%s", "type": "AI", "label": "요약하기 v2",
+            { "id": "%s", "event": "ai.agent", "type": "AI", "label": "요약하기 v2",
               "config": { "model": "gemini-3.7-flash" } }""".formatted(NODE_ID)));
 
         Map<String, Object> saved = capturedNodes().get(0);
@@ -227,7 +232,7 @@ class WorkflowPartialUpdateTest {
 
         // config 없는 요청 — 요청만 검사하면 아무것도 걸리지 않는다.
         UpdateWorkflowRequest request = request(
-            "{ \"id\": \"" + NODE_ID + "\", \"type\": \"AI\", \"label\": \"요약하기\" }");
+            "{ \"id\": \"" + NODE_ID + "\", \"event\": \"ai.agent\", \"type\": \"AI\", \"label\": \"요약하기\" }");
 
         assertThatThrownBy(() -> workflowService.updateWorkflow(userId, workflowId, request))
             .isInstanceOf(CustomException.class)
@@ -249,11 +254,11 @@ class WorkflowPartialUpdateTest {
         stubSaveSucceeds();
 
         assertThatCode(() -> workflowService.updateWorkflow(userId, workflowId, request("""
-            { "id": "%s", "type": "AI", "label": "요약하기" }""".formatted(NODE_ID))))
+            { "id": "%s", "event": "ai.agent", "type": "AI", "label": "요약하기" }""".formatted(NODE_ID))))
             .doesNotThrowAnyException();
 
         Map<String, Object> saved = capturedNodes().get(0);
-        assertThat(saved).containsOnlyKeys("id", "type", "label");
+        assertThat(saved).containsOnlyKeys("id", "event", "type", "label", "config");
         assertThat(saved.get("id")).isEqualTo(NODE_ID);
     }
 
@@ -264,7 +269,7 @@ class WorkflowPartialUpdateTest {
             .given(workflowCrudService).getWorkflowByOwner(userId, workflowId);
 
         UpdateWorkflowRequest request = request(
-            "{ \"id\": \"" + NODE_ID + "\", \"type\": \"AI\", \"label\": \"요약하기\" }");
+            "{ \"id\": \"" + NODE_ID + "\", \"event\": \"ai.agent\", \"type\": \"AI\", \"label\": \"요약하기\" }");
 
         assertThatThrownBy(() -> workflowService.updateWorkflow(userId, workflowId, request))
             .isInstanceOf(CustomException.class);
@@ -301,7 +306,7 @@ class WorkflowPartialUpdateTest {
         stubSaveSucceeds();
 
         workflowService.updateWorkflow(userId, workflowId, request("""
-            { "id": "%s", "type": "AI", "label": "요약하기" }""".formatted(NODE_ID)));
+            { "id": "%s", "event": "ai.agent", "type": "AI", "label": "요약하기" }""".formatted(NODE_ID)));
 
         SavedWorkflowFields saved = capturedWorkflowFields();
         assertThat(saved.description()).isEqualTo("매일 아침 리포트를 보냅니다.");
@@ -318,7 +323,7 @@ class WorkflowPartialUpdateTest {
         stubSaveSucceeds();
 
         workflowService.updateWorkflow(userId, workflowId, request("""
-            { "id": "%s", "type": "AI", "label": "요약하기" }""".formatted(NODE_ID),
+            { "id": "%s", "event": "ai.agent", "type": "AI", "label": "요약하기" }""".formatted(NODE_ID),
             ",\n  \"triggerType\": \"MANUAL\""));
 
         SavedWorkflowFields saved = capturedWorkflowFields();
@@ -344,7 +349,7 @@ class WorkflowPartialUpdateTest {
                 any(), any(), any(), any(), any(), any(), eq(TriggerType.SCHEDULE), isNull());
 
         UpdateWorkflowRequest request = request("""
-            { "id": "%s", "type": "AI", "label": "요약하기" }""".formatted(NODE_ID),
+            { "id": "%s", "event": "ai.agent", "type": "AI", "label": "요약하기" }""".formatted(NODE_ID),
             ",\n  \"triggerType\": \"SCHEDULE\"");
 
         assertThatThrownBy(() -> workflowService.updateWorkflow(userId, workflowId, request))

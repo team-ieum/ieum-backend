@@ -18,6 +18,8 @@ import com.ieum.api.workflow.dto.CreateWorkflowRequest;
 import com.ieum.api.workflow.dto.UpdateWorkflowRequest;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.catalog.EventCatalog;
+import com.ieum.workflowcore.catalog.NodeDerivation;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowVersion;
@@ -34,16 +36,18 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 /**
- * REST 생성·수정이 TRIGGER 노드의 {@code config.triggerType}·{@code cron}을 워크플로우 최상위 값의 진실원으로
+ * REST 생성·수정이 TRIGGER 노드의 {@code event}·{@code cron}을 워크플로우 최상위 값의 진실원으로
  * 쓰는지 본다. 노드가 선언하면 둘 다 노드 값이 최상위 요청 값을 덮고(노드에 cron이 없으면 null), 선언이 없을 때만
  * 기존 최상위 값·폴백을 쓴다(하위호환). 수정은 직전 정의와 병합한 결과가 기준이다.
  */
 class WorkflowTriggerScheduleTest {
 
+    private static final EventCatalog CATALOG = EventCatalog.loadFromClasspath();
+
     private static final String NODE_CRON = "0 0 10 * * ?";
     private static final String SCHEDULE_TRIGGER =
-        "{ \"id\": \"t\", \"type\": \"TRIGGER\", \"label\": \"시작\","
-            + " \"config\": { \"triggerType\": \"SCHEDULE\", \"cron\": \"" + NODE_CRON + "\" } }";
+        "{ \"id\": \"t\", \"event\": \"schedule.every\", \"label\": \"시작\", \"config\": { \"cron\": \""
+            + NODE_CRON + "\" } }";
 
     private final WorkflowCrudService workflowCrudService = mock(WorkflowCrudService.class);
     private final WorkflowService workflowService = new WorkflowService(
@@ -53,7 +57,8 @@ class WorkflowTriggerScheduleTest {
         mock(ExecutionEventPublisher.class),
         new ObjectMapper(),
         mock(WebhookCredentialService.class),
-        mock(CredentialService.class));
+        mock(CredentialService.class),
+        new NodeDerivation(CATALOG), CATALOG);
 
     private final ObjectMapper jsonMapper = new ObjectMapper();
     private final UUID userId = UUID.randomUUID();
@@ -151,8 +156,7 @@ class WorkflowTriggerScheduleTest {
     @DisplayName("생성: 노드가 triggerType만 선언하고 cron이 없으면 cron은 null이다 — 최상위 cron으로 채우지 않는다")
     void create_nodeWithoutCron_doesNotBorrowTopLevelCron() {
         stubSaveSucceeds();
-        String triggerWithoutCron = "{ \"id\": \"t\", \"type\": \"TRIGGER\", \"label\": \"시작\","
-            + " \"config\": { \"triggerType\": \"SCHEDULE\" } }";
+        String triggerWithoutCron = "{ \"id\": \"t\", \"event\": \"schedule.every\", \"label\": \"시작\", \"config\": {} }";
 
         workflowService.createWorkflow(userId, create(triggerWithoutCron,
             ", \"cronExpression\": \"0 0 1 * * ?\""));
@@ -162,10 +166,10 @@ class WorkflowTriggerScheduleTest {
     }
 
     @Test
-    @DisplayName("생성: 노드에 triggerType이 없으면 기존처럼 요청 최상위 값을 쓴다(하위호환)")
-    void create_nodeWithoutTriggerType_usesTopLevel() {
+    @DisplayName("생성: TRIGGER 노드가 없으면 요청 최상위 값을 쓴다(하위호환 — Task 3이 지운다)")
+    void create_noTriggerNode_usesTopLevel() {
         stubSaveSucceeds();
-        String plainTrigger = "{ \"id\": \"t\", \"type\": \"TRIGGER\", \"label\": \"시작\", \"config\": {} }";
+        String plainTrigger = "{ \"id\": \"h\", \"event\": \"http.request\", \"label\": \"호출\", \"config\": {} }";
 
         workflowService.createWorkflow(userId, create(plainTrigger,
             ", \"triggerType\": \"SCHEDULE\", \"cronExpression\": \"0 0 1 * * ?\""));
@@ -174,10 +178,9 @@ class WorkflowTriggerScheduleTest {
     }
 
     @Test
-    @DisplayName("생성: 노드의 triggerType이 알 수 없는 값이면 400이고 아무것도 저장하지 않는다")
-    void create_unknownNodeTriggerType_isRejected() {
-        String bad = "{ \"id\": \"t\", \"type\": \"TRIGGER\", \"label\": \"시작\","
-            + " \"config\": { \"triggerType\": \"DAILY\" } }";
+    @DisplayName("생성: 노드 event를 카탈로그가 모르면 400이고 아무것도 저장하지 않는다")
+    void create_unknownEvent_isRejected() {
+        String bad = "{ \"id\": \"t\", \"event\": \"schedule.daily\", \"label\": \"시작\", \"config\": {} }";
 
         assertThatThrownBy(() -> workflowService.createWorkflow(userId, create(bad, "")))
             .isInstanceOfSatisfying(CustomException.class,
@@ -205,13 +208,13 @@ class WorkflowTriggerScheduleTest {
     @DisplayName("수정: 요청이 config를 생략해 이전 TRIGGER config가 병합으로 되살아나도 그 노드 값이 기준이다")
     void update_usesMergedNodesNotRequestNodes() {
         stubStoredWorkflow(TriggerType.MANUAL, null);
-        stubPreviousNodes(List.of(Map.of("id", "t", "type", "TRIGGER", "label", "시작",
-            "config", Map.of("triggerType", "SCHEDULE", "cron", "0 30 8 * * ?"))));
+        stubPreviousNodes(List.of(Map.of("id", "t", "event", "schedule.every", "type", "TRIGGER", "label", "시작",
+            "config", Map.of("cron", "0 30 8 * * ?"))));
         stubSaveSucceeds();
 
         // config 없는 요청 — 요청 노드만 보면 triggerType을 찾지 못한다
         workflowService.updateWorkflow(userId, workflowId, update(
-            "{ \"id\": \"t\", \"type\": \"TRIGGER\", \"label\": \"시작\" }", ""));
+            "{ \"id\": \"t\", \"event\": \"schedule.every\", \"label\": \"시작\" }", ""));
 
         assertThat(capturedOnUpdate()).isEqualTo(new Saved(TriggerType.SCHEDULE, "0 30 8 * * ?"));
     }
@@ -222,8 +225,7 @@ class WorkflowTriggerScheduleTest {
         stubStoredWorkflow(TriggerType.SCHEDULE, "0 0 3 * * ?");
         stubPreviousNodes(null);
         stubSaveSucceeds();
-        String triggerWithoutCron = "{ \"id\": \"t\", \"type\": \"TRIGGER\", \"label\": \"시작\","
-            + " \"config\": { \"triggerType\": \"SCHEDULE\" } }";
+        String triggerWithoutCron = "{ \"id\": \"t\", \"event\": \"schedule.every\", \"label\": \"시작\", \"config\": {} }";
 
         workflowService.updateWorkflow(userId, workflowId, update(triggerWithoutCron, ""));
 
@@ -231,25 +233,24 @@ class WorkflowTriggerScheduleTest {
     }
 
     @Test
-    @DisplayName("수정: 노드에 triggerType이 없으면 기존 규칙대로 최상위 생략 시 저장된 값을 잇는다(하위호환)")
-    void update_nodeWithoutTriggerType_keepsLegacyFallback() {
+    @DisplayName("수정: TRIGGER 노드가 없으면 기존 규칙대로 최상위 생략 시 저장된 값을 잇는다(하위호환 — Task 3이 지운다)")
+    void update_noTriggerNode_keepsLegacyFallback() {
         stubStoredWorkflow(TriggerType.SCHEDULE, "0 0 3 * * ?");
         stubPreviousNodes(null);
         stubSaveSucceeds();
 
         workflowService.updateWorkflow(userId, workflowId, update(
-            "{ \"id\": \"t\", \"type\": \"TRIGGER\", \"label\": \"시작\", \"config\": {} }", ""));
+            "{ \"id\": \"h\", \"event\": \"http.request\", \"label\": \"호출\", \"config\": {} }", ""));
 
         assertThat(capturedOnUpdate()).isEqualTo(new Saved(TriggerType.SCHEDULE, "0 0 3 * * ?"));
     }
 
     @Test
-    @DisplayName("수정: 노드의 triggerType이 알 수 없는 값이면 400이고 새 버전을 만들지 않는다")
-    void update_unknownNodeTriggerType_isRejected() {
+    @DisplayName("수정: 노드 event를 카탈로그가 모르면 400이고 새 버전을 만들지 않는다")
+    void update_unknownEvent_isRejected() {
         stubStoredWorkflow(TriggerType.MANUAL, null);
         stubPreviousNodes(null);
-        String bad = "{ \"id\": \"t\", \"type\": \"TRIGGER\", \"label\": \"시작\","
-            + " \"config\": { \"triggerType\": \"DAILY\" } }";
+        String bad = "{ \"id\": \"t\", \"event\": \"schedule.daily\", \"label\": \"시작\", \"config\": {} }";
 
         assertThatThrownBy(() -> workflowService.updateWorkflow(userId, workflowId, update(bad, "")))
             .isInstanceOfSatisfying(CustomException.class,

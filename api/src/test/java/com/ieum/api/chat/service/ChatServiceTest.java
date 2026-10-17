@@ -15,6 +15,8 @@ import com.ieum.api.mcp.repository.McpServerCatalogRepository;
 import com.ieum.api.webhookcredential.repository.WebhookCredentialRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.catalog.EventCatalog;
+import com.ieum.workflowcore.catalog.NodeDerivation;
 import com.ieum.workflowcore.chat.domain.ChatMessage;
 import com.ieum.workflowcore.chat.domain.ChatSession;
 import com.ieum.workflowcore.chat.domain.MessageType;
@@ -84,6 +86,8 @@ class ChatServiceTest {
     @InjectMocks
     private ChatService chatService;
 
+    private static final EventCatalog CATALOG = EventCatalog.loadFromClasspath();
+
     private final ObjectMapper objectMapper = new ObjectMapper();
     private UUID workflowId;
     private UUID userId;
@@ -93,6 +97,9 @@ class ChatServiceTest {
     void setUp() {
         // ObjectMapper는 @InjectMocks가 주입 못하는 경우 직접 설정
         ReflectionTestUtils.setField(chatService, "objectMapper", objectMapper);
+        // NodeDerivation·EventCatalog는 mock이 아니라 실물이다 — @InjectMocks가 null로 채운 자리를 덮는다
+        ReflectionTestUtils.setField(chatService, "nodeDerivation", new NodeDerivation(CATALOG));
+        ReflectionTestUtils.setField(chatService, "eventCatalog", CATALOG);
         workflowId = UUID.randomUUID();
         userId = UUID.randomUUID();
         sessionId = UUID.randomUUID();
@@ -1034,12 +1041,172 @@ class ChatServiceTest {
         assertThat(((Map<?, ?>) saved.get(2)).get("id")).isNotNull();
     }
 
+    // ─────────────────── 노드 event 파생 (IEUM-BE-92) ───────────
+
+    @Test
+    @DisplayName("agent 노드에 event가 없으면 저장하지 않는다")
+    void finalizeStream_missingEvent_notSaved() throws Exception {
+        ChatAgentResponse resp = buildNodeResponse(
+            "{ \"id\": \"node-x\", \"type\": \"HTTP\", \"config\": {} }");
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        assertThatThrownBy(() -> chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId))
+            .isInstanceOfSatisfying(CustomException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("크레덴셜 주입은 agent가 보낸 type이 아니라 event로 계산한 type을 본다")
+    @SuppressWarnings("unchecked")
+    void finalizeStream_injectsByDerivedType() throws Exception {
+        UUID fallbackCredentialId = UUID.randomUUID();
+        ChatAgentResponse resp = buildNodeResponse("{ \"id\": \"node-ai\", \"event\": \"ai.agent\","
+            + " \"type\": \"HTTP\", \"config\": { \"llmProvider\": \"CLAUDE\" } }");
+        givenFinalizeStreamSession();
+        given(credentialService.getByUserId(userId))
+            .willReturn(List.of(buildCredential(fallbackCredentialId)));
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        chatService.finalizeStream(workflowId, sessionId, resp, config, fallbackCredentialId, userId);
+
+        Map<String, Object> saved = captureSavedNodes().get(0);
+        assertThat(saved).containsEntry("type", "AI");
+        assertThat((Map<String, Object>) saved.get("config"))
+            .containsEntry("credentialId", fallbackCredentialId.toString());
+    }
+
+    @Test
+    @DisplayName("저장되는 노드는 파생값이다 — 비AI brand는 카탈로그 값, 옛 키(triggerType·serviceType)는 지운다")
+    @SuppressWarnings("unchecked")
+    void finalizeStream_savesDerivedNodes() throws Exception {
+        ChatAgentResponse resp = buildNodeResponse("{ \"id\": \"node-http\", \"event\": \"http.request\","
+            + " \"type\": \"HTTP\", \"config\": { \"method\": \"GET\", \"brand\": \"evil\","
+            + " \"serviceType\": \"GOOGLE\", \"triggerType\": \"WEBHOOK\" } }");
+        givenFinalizeStreamSession();
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+
+        Map<String, Object> saved = captureSavedNodes().get(0);
+        assertThat(saved).containsEntry("event", "http.request");
+        Map<String, Object> savedConfig = (Map<String, Object>) saved.get("config");
+        assertThat(savedConfig).containsEntry("method", "GET")
+            .containsEntry("brand", brandOf("http.request"))
+            .doesNotContainKeys("serviceType", "triggerType");
+    }
+
+    @Test
+    @DisplayName("agent 노드에 type이 없어도 event로 계산한다 — 저장 type AI·credentialId 주입, 응답 nodes도 파생 노드")
+    @SuppressWarnings("unchecked")
+    void finalizeStream_typeOmitted_derivedFromEvent() throws Exception {
+        UUID fallbackCredentialId = UUID.randomUUID();
+        ChatAgentResponse resp = buildNodeResponse("{ \"id\": \"node-ai\", \"event\": \"ai.agent\","
+            + " \"config\": { \"llmProvider\": \"CLAUDE\", \"tools\": [ { \"name\": \"builtin:web_search\" } ] } }");
+        givenFinalizeStreamSession();
+        given(credentialService.getByUserId(userId))
+            .willReturn(List.of(buildCredential(fallbackCredentialId)));
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        ChatResponse response =
+            chatService.finalizeStream(workflowId, sessionId, resp, config, fallbackCredentialId, userId);
+
+        Map<String, Object> saved = captureSavedNodes().get(0);
+        assertThat(saved).containsEntry("type", "AI");
+        assertThat((Map<String, Object>) saved.get("config"))
+            .containsEntry("credentialId", fallbackCredentialId.toString());
+        // FE는 응답 nodes를 type으로 거른다 — agent 원본(type 없음)이 아니라 저장한 파생 노드가 실린다
+        assertThat(response.getNodes()).hasSize(1);
+        assertThat((Map<String, Object>) response.getNodes().get(0))
+            .containsEntry("type", "AI").containsEntry("event", "ai.agent");
+    }
+
+    @Test
+    @DisplayName("currentNodes에 event가 없으면 INVALID_WORKFLOW — agent 호출·쿼터 예약 없음")
+    void chat_currentNodesWithoutEvent_rejectedBeforeAgentCall() {
+        givenChatSetup();
+        ChatRequest request = buildRequestBeforeReserve("수정해줘", null);
+        given(request.getCurrentNodes()).willReturn(List.of(Map.of("id", "n1", "type", "HTTP", "config", Map.of())));
+
+        assertThatThrownBy(() -> chatService.chat(workflowId, userId, "ROLE_USER", request))
+            .isInstanceOfSatisfying(CustomException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
+        verify(betaPlatformProvider, never()).reserveQuota(any());
+        verify(agentClient, never()).chat(any(AgentChatCallParams.class));
+    }
+
+    @Test
+    @DisplayName("currentNodes는 파생된 모양으로 agent에 간다 — 옛 키 없음·type은 event가 정한다")
+    @SuppressWarnings("unchecked")
+    void chat_currentNodes_passedDerived() throws Exception {
+        givenChatSetup();
+        ChatRequest request = buildRequestBeforeReserve("수정해줘", null);
+        given(request.getCurrentNodes()).willReturn(List.of(Map.of("id", "n1", "event", "http.request", "type", "AI",
+            "config", Map.of("method", "GET", "serviceType", "GOOGLE", "triggerType", "MANUAL"))));
+        given(agentClient.chat(any(AgentChatCallParams.class)))
+            .willReturn(buildAgentResponse("CLARIFICATION_NEEDED", null));
+        given(messageRepository.save(any()))
+            .willReturn(buildMessage(buildSession(workflowId, userId), MessageType.AGENT, "응답"));
+
+        chatService.chat(workflowId, userId, "ROLE_USER", request);
+
+        ArgumentCaptor<AgentChatCallParams> params = ArgumentCaptor.forClass(AgentChatCallParams.class);
+        verify(agentClient).chat(params.capture());
+        Map<String, Object> sent = (Map<String, Object>) params.getValue().currentNodes().get(0);
+        assertThat(sent).containsEntry("type", "HTTP").containsEntry("event", "http.request");
+        assertThat((Map<String, Object>) sent.get("config")).containsEntry("method", "GET")
+            .doesNotContainKeys("serviceType", "triggerType");
+    }
+
+    @Test
+    @DisplayName("WS prepareStream도 currentNodes를 파생해 넘긴다")
+    @SuppressWarnings("unchecked")
+    void prepareStream_currentNodes_derived() {
+        givenChatSetup();
+        ChatRequest request = buildRequestBeforeReserve("수정해줘", null);
+        given(request.getCurrentNodes()).willReturn(List.of(Map.of("id", "n1", "event", "http.request", "type", "AI",
+            "config", Map.of())));
+
+        ChatService.StreamSetupResult setup = chatService.prepareStream(workflowId, userId, "ROLE_USER", request);
+
+        assertThat((Map<String, Object>) setup.currentNodes().get(0)).containsEntry("type", "HTTP");
+    }
+
+    /** chat()·prepareStream()이 agent 호출(스트림 준비) 직전까지 가는 데 필요한 스텁. */
+    private void givenChatSetup() {
+        WorkflowVersion version = buildVersionWithNodesJson("[]");   // given(...) 밖에서 만든다(중첩 스텁 금지)
+        given(sessionRepository.save(any())).willReturn(buildSession(workflowId, userId));
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(credentialService.getByUserId(userId)).willReturn(List.of());
+        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
+        given(integrationContextService.resolve(userId))
+            .willReturn(new IntegrationContext(List.of(), List.of()));
+    }
+
+    /** WORKFLOW_GENERATED 응답. 노드 JSON 조각(여러 개면 쉼표로 이어 붙인다)을 nodes 배열에 그대로 넣는다. */
+    private ChatAgentResponse buildNodeResponse(String nodeJson) throws Exception {
+        return objectMapper.readValue("""
+            { "message": "완성됐어요", "type": "WORKFLOW_GENERATED", "nodes": [ %s ], "edges": [] }
+            """.formatted(nodeJson), ChatAgentResponse.class);
+    }
+
+    /** saveAgentVersion에 넘어간 nodesJson을 캡처해 파싱한다. */
+    private List<Map<String, Object>> captureSavedNodes() throws Exception {
+        ArgumentCaptor<String> nodesJson = ArgumentCaptor.forClass(String.class);
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), nodesJson.capture(), any(), any(), any());
+        return objectMapper.readValue(nodesJson.getValue(), new TypeReference<>() {});
+    }
+
+    private static String brandOf(String event) {
+        return CATALOG.app(CATALOG.event(event).orElseThrow().app()).orElseThrow().brand();
+    }
+
     // ─────────────────── TRIGGER 노드 → 트리거 타입·cron 전달 (IEUM-AI-56) ───────────
 
     @Test
     @DisplayName("SCHEDULE TRIGGER 노드의 triggerType·cron 원문이 저장 경로로 넘어간다 — 변환은 저장 쪽이 한다")
     void finalizeStream_scheduleTrigger_passesTriggerTypeAndCron() throws Exception {
-        ChatAgentResponse resp = buildTriggerResponse("{ \"triggerType\": \"SCHEDULE\", \"cron\": \"0 9 * * *\" }");
+        ChatAgentResponse resp = buildTriggerResponse("schedule.every", "{ \"cron\": \"0 9 * * *\" }");
         givenFinalizeStreamSession();
         ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
 
@@ -1052,7 +1219,7 @@ class ChatServiceTest {
     @Test
     @DisplayName("WEBHOOK TRIGGER 노드면 WEBHOOK이 넘어간다 — 웹훅 호출이 트리거 타입 불일치로 막히지 않게")
     void finalizeStream_webhookTrigger_passesWebhook() throws Exception {
-        ChatAgentResponse resp = buildTriggerResponse("{ \"triggerType\": \"WEBHOOK\" }");
+        ChatAgentResponse resp = buildTriggerResponse("webhook.catch", "{}");
         givenFinalizeStreamSession();
         ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
 
@@ -1076,31 +1243,33 @@ class ChatServiceTest {
     }
 
     @Test
-    @DisplayName("TRIGGER 노드의 triggerType이 알 수 없는 값이면 저장하지 않는다 — REST의 잘못된 enum 거부와 같다")
-    void finalizeStream_unknownTriggerType_notSaved() throws Exception {
-        ChatAgentResponse resp = buildTriggerResponse("{ \"triggerType\": \"DAILY\" }");
+    @DisplayName("TRIGGER 노드의 event를 카탈로그가 모르면 저장하지 않는다 — 메시지에 event·노드 id")
+    void finalizeStream_unknownTriggerEvent_notSaved() throws Exception {
+        ChatAgentResponse resp = buildTriggerResponse("schedule.daily", "{}");
         ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
 
         assertThatThrownBy(() ->
             chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId))
-            .isInstanceOfSatisfying(CustomException.class, e ->
-                assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
+            .isInstanceOfSatisfying(CustomException.class, e -> {
+                assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW);
+                assertThat(e.getMessage()).contains("schedule.daily").contains("node-trigger");
+            });
 
         verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
     }
 
-    /** TRIGGER 노드 하나짜리 WORKFLOW_GENERATED 응답. config만 테스트마다 바꾼다. */
-    private ChatAgentResponse buildTriggerResponse(String triggerConfig) throws Exception {
+    /** TRIGGER 노드 하나짜리 WORKFLOW_GENERATED 응답. event·config만 테스트마다 바꾼다. */
+    private ChatAgentResponse buildTriggerResponse(String event, String triggerConfig) throws Exception {
         return objectMapper.readValue("""
             {
                 "message": "완성됐어요",
                 "type": "WORKFLOW_GENERATED",
                 "nodes": [
-                    { "id": "node-trigger", "type": "TRIGGER", "config": %s }
+                    { "id": "node-trigger", "event": "%s", "type": "TRIGGER", "config": %s }
                 ],
                 "edges": []
             }
-            """.formatted(triggerConfig), ChatAgentResponse.class);
+            """.formatted(event, triggerConfig), ChatAgentResponse.class);
     }
 
     /** finalizeStream이 메시지를 저장하는 데 필요한 최소 스텁. */
@@ -1125,8 +1294,8 @@ class ChatServiceTest {
                 "message": "완성됐어요",
                 "type": "WORKFLOW_GENERATED",
                 "nodes": [
-                    { "id": "node-a", "type": "HTTP", "config": {} },
-                    { "id": "node-b", "type": "HTTP", "config": {} }
+                    { "id": "node-a", "event": "http.request", "type": "HTTP", "config": {} },
+                    { "id": "node-b", "event": "http.request", "type": "HTTP", "config": {} }
                 ],
                 "edges": %s
             }
@@ -1141,7 +1310,7 @@ class ChatServiceTest {
                 "message": "완성됐어요",
                 "type": "WORKFLOW_GENERATED",
                 "nodes": [
-                    { "id": "node-ai", "type": "AI", "config": { "llmProvider": "CLAUDE" } }
+                    { "id": "node-ai", "event": "ai.agent", "type": "AI", "config": { "llmProvider": "CLAUDE" } }
                 ],
                 "edges": []
             }
@@ -1160,7 +1329,7 @@ class ChatServiceTest {
                 "type": "WORKFLOW_GENERATED",
                 "workflowName": "알림 워크플로우",
                 "nodes": [
-                    { "id": "node-http", "type": "HTTP", "config": %s }
+                    { "id": "node-http", "event": "http.request", "type": "HTTP", "config": %s }
                 ],
                 "edges": []
             }
@@ -1200,8 +1369,8 @@ class ChatServiceTest {
     }
 
     /**
-     * reserveQuota 이전에 예외로 끝나는 시나리오용 — getCurrentNodes()/getCurrentEdges()는
-     * AgentChatCallParams 빌드 시점(reserveQuota 이후)에만 쓰이므로 미리 스텁하면 strict
+     * reserveQuota 이전에 예외로 끝나는 시나리오용 — getCurrentNodes()는 reserveQuota 직전 파생에서,
+     * getCurrentEdges()는 AgentChatCallParams 빌드 시점에 읽히고 미스텁이면 빈 리스트라 미리 스텁하면 strict
      * stubbing에서 미사용으로 실패한다. 필요한 최소 스텁만 둔다.
      */
     private ChatRequest buildRequestBeforeReserve(String prompt, UUID credentialId) {

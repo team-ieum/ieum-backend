@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 class WorkflowServiceTypeTest {
 
     private NodeView node(String type, Map<String, Object> config) {
-        return new NodeView("n", NodeType.valueOf(type), null, null, null, config);
+        return new NodeView("n", NodeType.valueOf(type), null, null, null, config, null);
     }
 
     @Test

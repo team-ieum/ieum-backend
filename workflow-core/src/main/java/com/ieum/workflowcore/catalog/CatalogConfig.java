@@ -11,4 +11,9 @@ public class CatalogConfig {
     public EventCatalog eventCatalog() {
         return EventCatalog.loadFromClasspath();
     }
+
+    @Bean
+    public NodeDerivation nodeDerivation(EventCatalog eventCatalog) {
+        return new NodeDerivation(eventCatalog);
+    }
 }

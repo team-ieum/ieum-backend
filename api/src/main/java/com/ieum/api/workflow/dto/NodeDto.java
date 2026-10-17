@@ -6,6 +6,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import java.util.Map;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -24,11 +25,9 @@ public class NodeDto {
     private String id;
 
     /**
-     * 알 수 없는 값은 역직렬화 단계에서 예외 대신 null로 흘리고, 그 null을 아래 {@code @NotNull}이
-     * 400으로 잡는다. 예외로 두면 본문 전체 파싱 실패({@code HttpMessageNotReadableException})가 되어
-     * 응답이 어느 필드가 잘못됐는지 알려주지 못한다(둘 다 400이라 상태 코드는 같다).
+     * 선택 필드다. 보내도 무시하고 서버가 {@code event}로 계산한 값으로 덮는다(IEUM-BE-92). 알 수 없는 값은
+     * 예외 대신 null로 흘린다. 본문 전체 파싱이 실패하면 응답이 어느 필드가 잘못됐는지 알려주지 못하기 때문이다.
      */
-    @NotNull(message = "노드 type은 필수입니다.")
     @JsonFormat(with = JsonFormat.Feature.READ_UNKNOWN_ENUM_VALUES_AS_NULL)
     private NodeType type;
 
@@ -60,6 +59,15 @@ public class NodeDto {
         additionalProperties = Schema.AdditionalPropertiesValue.TRUE,
         example = "{\"method\": \"POST\", \"url\": \"https://example.com/hook\", \"headers\": {}}")
     private Map<String, Object> config;
+
+    /**
+     * 노드 종류. 카탈로그 이벤트 이름이다(예: {@code github.create_issue}). 노드의 유일한 정체성이다(IEUM-BE-92).
+     * 카탈로그에 없는 값은 저장 단계({@code NodeDerivation})에서 400이 된다.
+     */
+    @NotBlank(message = "노드 event는 필수입니다.")
+    @Size(max = 100, message = "노드 event는 100자 이하여야 합니다.")
+    @Schema(description = "카탈로그 이벤트 이름. type은 서버가 이 값으로 계산한다.", example = "github.create_issue")
+    private String event;
 
     @Getter
     @NoArgsConstructor

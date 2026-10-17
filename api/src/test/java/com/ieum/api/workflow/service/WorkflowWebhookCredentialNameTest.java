@@ -17,6 +17,8 @@ import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.api.workflow.dto.NodeDto;
 import com.ieum.api.workflow.dto.WorkflowResponse;
 import com.ieum.common.dto.PageResponse;
+import com.ieum.workflowcore.catalog.EventCatalog;
+import com.ieum.workflowcore.catalog.NodeDerivation;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowVersion;
@@ -42,6 +44,8 @@ import org.junit.jupiter.api.Test;
  */
 class WorkflowWebhookCredentialNameTest {
 
+    private static final EventCatalog CATALOG = EventCatalog.loadFromClasspath();
+
     private final WorkflowCrudService workflowCrudService = mock(WorkflowCrudService.class);
     private final WebhookCredentialService webhookCredentialService =
         mock(WebhookCredentialService.class);
@@ -52,7 +56,8 @@ class WorkflowWebhookCredentialNameTest {
         mock(ExecutionEventPublisher.class),
         new ObjectMapper(),
         webhookCredentialService,
-        mock(CredentialService.class));
+        mock(CredentialService.class),
+        new NodeDerivation(CATALOG), CATALOG);
 
     private final ObjectMapper jsonMapper = new ObjectMapper();
     private final UUID userId = UUID.randomUUID();
@@ -232,7 +237,7 @@ class WorkflowWebhookCredentialNameTest {
 
         JsonNode viewTree = tree(response.getNodes().get(0));
         assertThat(fieldNames(viewTree))
-            .containsExactlyInAnyOrder("id", "type", "label", "description", "position", "config");
+            .containsExactlyInAnyOrder("id", "type", "label", "description", "position", "config", "event");
         assertThat(fieldNames(viewTree.get("config")))
             .containsExactlyInAnyOrder("method", "webhookCredentialId");
         assertThat(viewTree.at("/config/webhookCredentialId").asText())
