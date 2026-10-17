@@ -71,7 +71,7 @@ class WorkflowNodeRequestValidationTest {
     }
 
     private static final String VALID_NODE = """
-        { "id": "node-trigger", "type": "TRIGGER", "label": "시작",
+        { "id": "node-trigger", "event": "manual.run", "type": "TRIGGER", "label": "시작",
           "description": "실행하면 시작해요.",
           "position": { "x": 40, "y": 120 }, "config": {} }""";
 
@@ -124,10 +124,10 @@ class WorkflowNodeRequestValidationTest {
      * 사실을 확인했고 이것이 그 상위 집합이다.
      */
     @Test
-    @DisplayName("프론트 최소 노드(id·type·label·config)면 201")
+    @DisplayName("프론트 최소 노드(id·event·type·label·config)면 201")
     void frontendMinimalNode_returns201() throws Exception {
         String node = """
-            { "id": "node-trigger", "type": "TRIGGER", "label": "시작", "config": {} }""";
+            { "id": "node-trigger", "event": "manual.run", "type": "TRIGGER", "label": "시작", "config": {} }""";
         expectStatus(body(node, ""), 201);
     }
 
@@ -135,27 +135,26 @@ class WorkflowNodeRequestValidationTest {
     @DisplayName("position.y 누락이면 400 — 중첩 객체까지 검증된다")
     void missingPositionY_returns400() throws Exception {
         String node = """
-            { "id": "node-trigger", "type": "TRIGGER", "label": "시작",
+            { "id": "node-trigger", "event": "manual.run", "type": "TRIGGER", "label": "시작",
               "description": "실행하면 시작해요.",
               "position": { "x": 40 }, "config": {} }""";
         expectStatus(body(node, ""), 400);
     }
 
     @Test
-    @DisplayName("허용되지 않은 노드 type이면 400 — 실행 시점이 아니라 생성 시점에 걸린다")
-    void unknownNodeType_returns400() throws Exception {
+    @DisplayName("type이 enum에 없는 값이어도 무시된다 — 서버가 event로 계산한다 (IEUM-BE-92)")
+    void unknownNodeType_isIgnored_returns201() throws Exception {
         String node = """
-            { "id": "node-x", "type": "SLACK", "label": "슬랙",
-              "description": "슬랙으로 보내요.",
-              "position": { "x": 40, "y": 120 }, "config": {} }""";
-        expectStatus(body(node, ""), 400);
+            { "id": "node-x", "event": "slack.send_message", "type": "SLACK", "label": "슬랙",
+              "config": {} }""";
+        expectStatus(body(node, ""), 201);
     }
 
     @Test
     @DisplayName("APPROVAL 노드 type은 저장 요청에서 허용된다 (IEUM-BE-45)")
     void approvalNodeType_returns201() throws Exception {
         String node = """
-            { "id": "node-gate", "type": "APPROVAL", "label": "발송 전 승인",
+            { "id": "node-gate", "event": "approval.request", "type": "APPROVAL", "label": "발송 전 승인",
               "config": { "message": "보내도 될까요?" } }""";
         expectStatus(body(node, ""), 201);
     }
@@ -164,7 +163,7 @@ class WorkflowNodeRequestValidationTest {
     @DisplayName("ACTION 노드 type은 저장 요청에서 허용된다 — tools[0] 모양 config도 그대로 통과")
     void actionNodeType_returns201() throws Exception {
         String node = """
-            { "id": "node-action", "type": "ACTION", "label": "이슈 만들기",
+            { "id": "node-action", "event": "github.create_issue", "type": "ACTION", "label": "이슈 만들기",
               "config": { "tools": [ { "name": "builtin:github_create_issue",
                 "config": { "owner": "ieum", "repo": "demo", "title": "{{nodes.node-list.output.issues.0.title}}" } } ],
                 "brand": "github", "serviceType": "GITHUB" } }""";
@@ -183,7 +182,7 @@ class WorkflowNodeRequestValidationTest {
     @DisplayName("config에 문자열·숫자·boolean·배열·객체가 섞여 있어도 201")
     void mixedConfigValueTypes_returns201() throws Exception {
         String node = """
-            { "id": "node-http", "type": "HTTP", "label": "외부 호출",
+            { "id": "node-http", "event": "http.request", "type": "HTTP", "label": "외부 호출",
               "description": "외부 서비스를 호출해요.",
               "position": { "x": 40, "y": 120 },
               "config": {
@@ -195,5 +194,34 @@ class WorkflowNodeRequestValidationTest {
                 "headers": { "X-Trace": "1" }
               }}""";
         expectStatus(body(node, ""), 201);
+    }
+
+    @Test
+    @DisplayName("event가 없으면 400 — 노드의 유일한 정체성이다 (IEUM-BE-92)")
+    void missingEvent_returns400() throws Exception {
+        expectStatus(body("""
+            { "id": "node-trigger", "type": "TRIGGER", "label": "시작", "config": {} }""", ""), 400);
+    }
+
+    @Test
+    @DisplayName("event가 공백이면 400")
+    void blankEvent_returns400() throws Exception {
+        expectStatus(body("""
+            { "id": "node-trigger", "event": " ", "label": "시작", "config": {} }""", ""), 400);
+    }
+
+    @Test
+    @DisplayName("event가 100자를 넘으면 400")
+    void tooLongEvent_returns400() throws Exception {
+        expectStatus(body("""
+            { "id": "node-trigger", "event": "%s", "label": "시작", "config": {} }"""
+            .formatted("a".repeat(101)), ""), 400);
+    }
+
+    @Test
+    @DisplayName("type은 선택이다 — 없어도 201 (서버가 event로 계산한다)")
+    void typeOmitted_returns201() throws Exception {
+        expectStatus(body("""
+            { "id": "node-trigger", "event": "manual.run", "label": "시작", "config": {} }""", ""), 201);
     }
 }
