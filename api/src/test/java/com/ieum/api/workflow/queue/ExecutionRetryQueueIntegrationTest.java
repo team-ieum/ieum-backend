@@ -15,6 +15,7 @@ import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.api.workflow.service.ExecutionApprovalService;
 import com.ieum.api.workflow.service.ExecutionRetryService;
 import com.ieum.common.util.AesEncryptor;
+import com.ieum.workflowcore.catalog.EventCatalog;
 import com.ieum.workflowcore.config.RetryProperties;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.Workflow;
@@ -101,7 +102,7 @@ class ExecutionRetryQueueIntegrationTest {
      * 마스킹된 자격증명이 흘러간다. 트리거를 스킵 대상에서 제외하는 이유가 이것이다.
      */
     private static final String ORIGINAL_MASKED_TRIGGER_OUTPUT =
-        "{\"triggerType\":\"WEBHOOK\",\"score\":\"85\",\"token\":\"***\"}";
+        "{\"score\":\"85\",\"token\":\"***\"}";
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final UUID userId = UUID.randomUUID();
@@ -292,7 +293,7 @@ class ExecutionRetryQueueIntegrationTest {
         SyncExecutionRuntime runtime = new SyncExecutionRuntime(
             objectMapper, logRepository, executionRepository, crudService,
             Mockito.mock(ExecutionEventPublisher.class),
-            List.of(new TriggerNodeExecutor(), new RecordingAiExecutor()),
+            List.of(new TriggerNodeExecutor(EventCatalog.loadFromClasspath()), new RecordingAiExecutor()),
             retryProperties, Mockito.mock(IdempotencyStore.class),
             Mockito.mock(AlertNotifier.class), validationClient);
         ReflectionTestUtils.invokeMethod(runtime, "initExecutorMap");
@@ -325,8 +326,8 @@ class ExecutionRetryQueueIntegrationTest {
      */
     private void stubDefinition() {
         Map<String, Object> trigger = node("t", "TRIGGER");
+        trigger.put("event", "webhook.catch");
         trigger.put("config", new HashMap<>(Map.of(
-            "triggerType", "WEBHOOK",
             "score", "{{nodes.t.output.score}}",
             "token", "{{nodes.t.output.token}}")));
         Map<String, Object> b = node("b", "AI");

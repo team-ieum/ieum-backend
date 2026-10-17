@@ -102,13 +102,12 @@ public class NodeTestRunner {
 
     /**
      * webhook listen 중 받은 실제 요청 1건으로 트리거 샘플을 만든다. 노드 정의는 저장된 최신 버전에서 읽고,
-     * 거기 없거나 TRIGGER가 아니면(저장 전 노드) 최소 WEBHOOK 트리거로 대신한다.
+     * 거기 없거나 TRIGGER가 아니면(저장 전 노드) 최소 WEBHOOK 트리거({@code event: webhook.catch}, config {})로 대신한다.
      */
     public NodeTestResult recordWebhookSample(Workflow workflow, String nodeId, Map<String, Object> payload) {
         Node node = findSavedNode(workflow.getId(), nodeId)
             .filter(n -> n.getType() == NodeType.TRIGGER)
-            .orElseGet(() -> new Node(nodeId, NodeType.TRIGGER, "Webhook",
-                new HashMap<>(Map.of("triggerType", "WEBHOOK"))));
+            .orElseGet(() -> new Node(nodeId, NodeType.TRIGGER, "Webhook", new HashMap<>(), "webhook.catch"));
         return runTrigger(workflow, node, payload);
     }
 

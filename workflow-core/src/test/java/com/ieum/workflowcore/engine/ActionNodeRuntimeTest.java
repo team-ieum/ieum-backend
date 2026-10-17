@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.workflowcore.catalog.EventCatalog;
 import com.ieum.workflowcore.config.RetryProperties;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.Workflow;
@@ -61,6 +62,7 @@ import org.springframework.test.util.ReflectionTestUtils;
  */
 class ActionNodeRuntimeTest {
 
+    private static final EventCatalog CATALOG = EventCatalog.loadFromClasspath();
     private static final String LIST_RESPONSE =
         "{\"success\":true,\"output\":{\"issues\":[{\"number\":1,\"title\":\"첫 이슈\"}],\"count\":1}}";
     private static final String CREATE_RESPONSE =
@@ -111,7 +113,7 @@ class ActionNodeRuntimeTest {
             idempotencyStore,
             30);
 
-        List<NodeExecutor> executors = List.of(new TriggerNodeExecutor(), action);
+        List<NodeExecutor> executors = List.of(new TriggerNodeExecutor(CATALOG), action);
         runtime = new SyncExecutionRuntime(objectMapper, logRepository, executionRepository, crudService,
             mock(ExecutionEventPublisher.class), executors, new RetryProperties(), idempotencyStore,
             alertNotifier, mock(WorkflowValidationClient.class));
@@ -132,6 +134,12 @@ class ActionNodeRuntimeTest {
         node.put("type", type);
         node.put("label", id);
         node.put("config", config);
+        return node;
+    }
+
+    private static Map<String, Object> trigger(String event, Map<String, Object> config) {
+        Map<String, Object> node = node("t", "TRIGGER", config);
+        node.put("event", event);
         return node;
     }
 
@@ -158,7 +166,7 @@ class ActionNodeRuntimeTest {
             "owner", "ieum", "repo", "demo", "title", "{{nodes.list.output.issues.0.title}}")));
         WorkflowDefinitionDocument doc = WorkflowDefinitionDocument.builder()
             .nodes(List.of(
-                node("t", "TRIGGER", new HashMap<>(Map.of("triggerType", "MANUAL"))),
+                trigger("manual.run", new HashMap<>()),
                 node("list", "ACTION", listConfig),
                 node("create", "ACTION", actionConfig(createTool))))
             .edges(List.of(edge("t", "list"), edge("list", "create")))
@@ -229,7 +237,7 @@ class ActionNodeRuntimeTest {
             "owner", "ieum", "repo", "demo", "title", "{{nodes.t.output.issue.title}}")));
         when(crudService.loadDefinition(any())).thenReturn(WorkflowDefinitionDocument.builder()
             .nodes(List.of(
-                node("t", "TRIGGER", new HashMap<>(Map.of("triggerType", "WEBHOOK", "includeRaw", false))),
+                trigger("webhook.catch", new HashMap<>(Map.of("includeRaw", false))),
                 node("create", "ACTION", actionConfig(createTool))))
             .edges(List.of(edge("t", "create")))
             .build());
@@ -241,7 +249,7 @@ class ActionNodeRuntimeTest {
         JsonNode createBody = objectMapper.readTree(mockWebServer.takeRequest().getBody().readUtf8());
         assertThat(createBody.get("config").get("title").asText()).isEqualTo("웹훅 제목");
         assertThat(savedLog("t").getOutputJson()).contains("웹훅 제목")
-            .doesNotContain("triggerType").doesNotContain("includeRaw");
+            .doesNotContain("includeRaw");
     }
 
     @Test

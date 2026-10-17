@@ -74,17 +74,17 @@ public class NodeTestService {
         // 소유자 검사가 무엇보다 먼저다 — 남의 워크플로우는 존재 여부도 드러내지 않는 404.
         Workflow workflow = workflowCrudService.getWorkflowByOwner(userId, workflowId);
         Node node = resolveNode(userId, workflowId, nodeId, request);
-        TriggerType declared = declaredTriggerType(node);
+        TriggerType trigger = triggerTypeOf(node);
 
-        if (listensForWebhook(workflow, node, declared)) {
+        if (trigger == TriggerType.WEBHOOK) {
             // 수신 주소는 토큰 주소뿐이다 — 토큰이 없으면 listen해도 받을 길이 없다(R15)
             if (webhookTokenService.status(workflowId).isEmpty()) {
                 throw new CustomException(ErrorCode.WEBHOOK_TOKEN_NOT_ISSUED);
             }
             return NodeTestResponse.listening(webhookListenStore.start(workflowId, nodeId));
         }
-        if (declared != null && declared.isAppTrigger()) {
-            return NodeTestResponse.from(testAppTrigger(workflow, node, declared));
+        if (trigger != null && trigger.isAppTrigger()) {
+            return NodeTestResponse.from(testAppTrigger(workflow, node, trigger));
         }
         return NodeTestResponse.from(nodeTestRunner.run(workflow, node, request.getInput()));
     }
@@ -152,17 +152,8 @@ public class NodeTestService {
         RawWebhookUrlGuard.rejectRawWebhookUrl(config);
     }
 
-    /** TRIGGER 노드 event의 카탈로그 trigger_type. TRIGGER가 아니거나 event가 없으면(예전에 저장된 노드) null. */
-    private TriggerType declaredTriggerType(Node node) {
-        return node.getType() != NodeType.TRIGGER ? null
-            : eventCatalog.triggerTypeOf(node.getEvent()).orElse(null);
-    }
-
-    /** 노드 event의 trigger_type을 먼저 보고, 없으면 워크플로우 최상위 triggerType을 쓴다(IEUM-BE-92 Task 4가 이 폴백을 지운다). */
-    private static boolean listensForWebhook(Workflow workflow, Node node, TriggerType declared) {
-        if (node.getType() != NodeType.TRIGGER) {
-            return false;
-        }
-        return (declared != null ? declared : workflow.getTriggerType()) == TriggerType.WEBHOOK;
+    /** 노드 event의 카탈로그 trigger_type. event가 없거나 트리거 event가 아니면 null — 워크플로우 PG triggerType으로 폴백하지 않는다. */
+    private TriggerType triggerTypeOf(Node node) {
+        return eventCatalog.triggerTypeOf(node.getEvent()).orElse(null);
     }
 }

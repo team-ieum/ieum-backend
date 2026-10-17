@@ -251,20 +251,56 @@ class NodeTestServiceTest {
     }
 
     @Test
-    @DisplayName("event 없는 저장 TRIGGER 노드는 워크플로우의 triggerType을 따른다 (Task 4가 이 폴백을 지운다)")
-    void savedTriggerWithoutEventFollowsWorkflowTriggerType() throws Exception {
+    @DisplayName("event 없는 저장 TRIGGER 노드는 PG가 WEBHOOK이어도 listen하지 않고 실행한다 — PG triggerType 폴백 삭제")
+    void savedTriggerWithoutEventDoesNotFollowWorkflowTriggerType() throws Exception {
         Node saved = new Node("t", NodeType.TRIGGER, "수신", new HashMap<>());
         given(runner.findSavedNode(workflowId, "t")).willReturn(Optional.of(saved));
-        owns(workflow(TriggerType.WEBHOOK));
+        Workflow webhookWorkflow = workflow(TriggerType.WEBHOOK);
+        owns(webhookWorkflow);
+        given(runner.run(eq(webhookWorkflow), eq(saved), any())).willReturn(
+            new NodeTestResult(SampleStatus.SUCCESS, Map.of(), null, LocalDateTime.now()));
+
+        assertThat(service.test(userId, workflowId, "t", request("{}")).getStatus()).isEqualTo("SUCCESS");
+        verifyNoInteractions(listenStore);
+    }
+
+    @Test
+    @DisplayName("listen 판정은 노드 event만 본다 — PG가 WEBHOOK이어도 manual.run 노드는 실행, PG가 MANUAL이어도 저장된 webhook.catch(config {})는 listen")
+    void listenFollowsNodeEventNotWorkflowTriggerType() throws Exception {
+        Workflow webhookWorkflow = workflow(TriggerType.WEBHOOK);
+        owns(webhookWorkflow);
+        given(credentialService.getByUserId(userId)).willReturn(List.of());
+        given(runner.run(eq(webhookWorkflow), any(Node.class), any())).willReturn(
+            new NodeTestResult(SampleStatus.SUCCESS, Map.of(), null, LocalDateTime.now()));
+
+        assertThat(service.test(userId, workflowId, "t", request(
+            "{\"node\":{\"id\":\"t\",\"event\":\"manual.run\",\"label\":\"수동\",\"config\":{}}}")).getStatus())
+            .isEqualTo("SUCCESS");
+        verifyNoInteractions(listenStore);
+
+        owns(workflow(TriggerType.MANUAL));
+        given(runner.findSavedNode(workflowId, "t")).willReturn(Optional.of(
+            new Node("t", NodeType.TRIGGER, "수신", new HashMap<>(), "webhook.catch")));
         given(listenStore.start(workflowId, "t")).willReturn(LocalDateTime.now().plusMinutes(5));
 
         assertThat(service.test(userId, workflowId, "t", request("{}")).getStatus()).isEqualTo("LISTENING");
+    }
 
-        Workflow manualWorkflow = workflow(TriggerType.MANUAL);
-        owns(manualWorkflow);
-        given(runner.run(eq(manualWorkflow), eq(saved), any())).willReturn(
-            new NodeTestResult(SampleStatus.SUCCESS, Map.of(), null, LocalDateTime.now()));
-        assertThat(service.test(userId, workflowId, "t", request("{}")).getStatus()).isEqualTo("SUCCESS");
+    @Test
+    @DisplayName("body 없이 저장된 gmail.new_email 노드도 앱 트리거로 판정해 최근 1건을 샘플로 넘긴다")
+    void savedGmailNodeSamplesLatest() throws Exception {
+        Workflow workflow = workflow(TriggerType.MANUAL);
+        owns(workflow);
+        Node saved = new Node("t1", NodeType.TRIGGER, "Gmail", new HashMap<>(Map.of("query", "from:x")),
+            "gmail.new_email");
+        given(runner.findSavedNode(workflowId, "t1")).willReturn(Optional.of(saved));
+        Map<String, Object> latest = Map.of("messageId", "m1");
+        given(gmailFetcher.fetchLatest(userId, saved.getConfig())).willReturn(Optional.of(latest));
+        given(runner.run(workflow, saved, latest))
+            .willReturn(new NodeTestResult(SampleStatus.SUCCESS, latest, null, LocalDateTime.now()));
+
+        assertThat(service.test(userId, workflowId, "t1", request("{}")).getStatus()).isEqualTo("SUCCESS");
+        verify(listenStore, never()).start(any(), any());
     }
 
     @Test
