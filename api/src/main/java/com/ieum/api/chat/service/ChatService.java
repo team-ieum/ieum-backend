@@ -527,11 +527,15 @@ public class ChatService {
 
     /**
      * FE가 보낸 캔버스 노드를 저장 경로와 같은 파생에 통과시킨다(IEUM-BE-92). null이면 null(신규 생성)이다.
-     * 모르는 event는 CustomException(INVALID_WORKFLOW)이다 — 호출부는 쿼터 예약·agent 호출보다 앞에서 부른다.
+     * 모르는 event나 객체가 아닌 원소는 CustomException(INVALID_WORKFLOW)이다 — 호출부는 쿼터 예약·agent 호출보다 앞에서 부른다.
      */
     private List<Object> deriveCurrentNodes(List<Object> currentNodes) {
         if (currentNodes == null) {
             return null;
+        }
+        // 객체가 아닌 원소(문자열·null)는 변환·파생에서 500이 된다 — 400으로 먼저 막는다.
+        if (currentNodes.stream().anyMatch(node -> !(node instanceof Map))) {
+            throw new CustomException(ErrorCode.INVALID_WORKFLOW, "currentNodes의 원소는 노드 객체여야 합니다.");
         }
         return List.copyOf(nodeDerivation.deriveAll(objectMapper.convertValue(
             currentNodes, new TypeReference<List<Map<String, Object>>>() {})));
@@ -606,10 +610,11 @@ public class ChatService {
 
             String nodesJson = objectMapper.writeValueAsString(nodes);
             String edgesJson = objectMapper.writeValueAsString(fillEdgeIds(agentResponse.getEdges()));
-            // TRIGGER 노드가 없으면 null — 저장 쪽이 스케줄을 건드리지 않는다(IEUM-BE-92 Task 3이 MANUAL로 바꾼다).
-            TriggerNodeSchedule schedule = TriggerNodeSchedule.find(nodes, eventCatalog).orElse(null);
+            // 트리거는 저장할 노드에서 계산한다 — 트리거 노드가 없으면 MANUAL이라 기존 스케줄·Job이 해제된다(IEUM-BE-92).
+            TriggerNodeSchedule schedule = TriggerNodeSchedule.compute(nodes, eventCatalog);
+            schedule.assertCronPresent(nodes);   // REST와 같은 400 문구 — 저장 쪽 일반 문구보다 먼저
             workflowCrudService.saveAgentVersion(workflowId, nodesJson, edgesJson,
-                schedule != null ? schedule.triggerType() : null, schedule != null ? schedule.cron() : null);
+                schedule.triggerType(), schedule.cron());
             log.info("[ChatService] 워크플로우 버전 저장 완료 — workflowId: {}, type: {}",
                 workflowId, agentResponse.getType());
             return nodes;

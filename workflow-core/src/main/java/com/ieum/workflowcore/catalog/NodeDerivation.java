@@ -27,16 +27,17 @@ public final class NodeDerivation {
      * @param node 노드 정의. 이 메서드는 입력을 바꾸지 않는다
      * @return 새 Map. type은 event의 node_type이다. config는 변경 가능한 LinkedHashMap 사본으로,
      *         triggerType·serviceType이 지워지고 ACTION이면 tools도 지워진다. 비AI 노드는 brand가 앱 brand로 덮인다
-     * @throws CustomException INVALID_WORKFLOW: event가 없거나 카탈로그에 없는 값일 때, 또는 실행할 수 없는 이벤트
+     * @throws CustomException INVALID_WORKFLOW: event가 없거나 카탈로그에 없는 값일 때("알 수 없는"), 또는 실행할 수 없는 이벤트
      *         (ACTION인데 builder가 아님, 그 밖은 builder·generation 둘 다 false — agent {@code /v1/actions/execute}가
-     *         builder ACTION의 tool_key만 받는다)일 때
+     *         builder ACTION의 tool_key만 받는다)일 때("실행할 수 없는")
      */
     public Map<String, Object> derive(Map<String, Object> node) {
         Object event = node.get("event");
         EventDefinition definition = event instanceof String name ? catalog.event(name).orElse(null) : null;
         if (definition == null || !executable(definition)) {
             throw new CustomException(ErrorCode.INVALID_WORKFLOW,
-                "알 수 없는 노드 종류입니다: " + echo(event) + " (노드 " + echo(node.get("id")) + ")");
+                (definition == null ? "알 수 없는" : "실행할 수 없는") + " 노드 종류입니다: " + echo(event)
+                    + " (노드 " + echo(node.get("id")) + ")");
         }
         Map<String, Object> config = new LinkedHashMap<>();
         if (node.get("config") instanceof Map<?, ?> raw) {
@@ -71,9 +72,12 @@ public final class NodeDerivation {
             : definition.builder() || definition.generation();
     }
 
-    /** 제어 문자(개행 등)를 '?'로 바꾼 뒤 64자에서 자른다 — 요청 값이 메시지·로그 줄을 흔들지 못하게. */
+    /**
+     * 제어·서식·줄 구분 문자(개행, NEL, U+2028/2029, RLO 등)를 '?'로 바꾼 뒤 64자에서 자른다 — 요청 값이 메시지·로그 줄이나
+     * 표시 방향을 흔들지 못하게.
+     */
     public static String echo(Object value) {
-        String text = String.valueOf(value).replaceAll("\\p{Cntrl}", "?");
+        String text = String.valueOf(value).replaceAll("[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]", "?");
         return text.length() > 64 ? text.substring(0, 64) : text;
     }
 }

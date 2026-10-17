@@ -93,16 +93,19 @@ public class WorkflowService {
         // 엣지 맵 변환은 수정 경로와 같은 것을 쓴다 — 이전 정의가 없으면 요청 엣지가 그대로 나온다.
         List<Map<String, Object>> edges =
             withEdgeIds(EdgeDefinitionMerger.merge(null, request.getEdges()), request.getEdges());
-        // TRIGGER 노드가 있으면 그 event가 진실원이다. 없을 때만 요청 최상위 값을 쓴다(하위호환 — IEUM-BE-92 Task 3이 지운다).
-        TriggerNodeSchedule fromNode = TriggerNodeSchedule.find(nodes, eventCatalog).orElse(null);
+        // 트리거는 저장할 노드에서 계산한다(첫 TRIGGER 노드의 event, 없으면 MANUAL). 요청 최상위 값은 검증에만 쓴다 —
+        // 다르면 400, 보내지 않으면 통과(IEUM-BE-92).
+        TriggerNodeSchedule schedule = TriggerNodeSchedule.compute(nodes, eventCatalog);
+        schedule.assertCronPresent(nodes);   // schedule.every에 cron이 없으면 어느 노드인지 밝혀 400 (최상위 비교보다 먼저)
+        schedule.assertMatchesRequest(request.getTriggerType(), request.getCronExpression());
         WorkflowVersion version = workflowCrudService.createWorkflow(
             userId,
             request.getName(),
             request.getDescription(),
             toJson(nodes),
             toJson(edges),
-            fromNode != null ? fromNode.triggerType() : request.getTriggerType(),
-            fromNode != null ? fromNode.cron() : request.getCronExpression()
+            schedule.triggerType(),
+            schedule.cron()
         );
         return toResponse(version.getWorkflow(), version, ownedWebhookNames(userId));
     }
@@ -161,16 +164,11 @@ public class WorkflowService {
         rejectRawWebhookUrls(configs);
         rejectForeignCredentialIds(userId, configs);
 
-        // 워크플로우 레벨 optional 필드도 노드와 같은 규칙이다 — 요청의 null은 "변경 없음"이라
-        // 저장된 값을 그대로 넘긴다. 그대로 넘기면 triggerType이 MANUAL로 강등되고 cron이 지워져
-        // Quartz Job까지 삭제된다(200만 돌아와 다음 실행이 없을 때까지 아무도 모른다).
-        // 단 TRIGGER 노드가 있으면 그 event가 진실원이다 — 병합 결과(요청이 config를 생략하면 이전 config가 되살아난다)
-        // 기준으로 triggerType·cron 둘 다 노드 값을 쓴다. 노드에 cron이 없으면 저장된 값으로도 채우지 않는다.
-        TriggerNodeSchedule fromNode = TriggerNodeSchedule.find(mergedNodes, eventCatalog).orElse(null);
-        TriggerType triggerType = fromNode != null ? fromNode.triggerType()
-            : request.getTriggerType() != null ? request.getTriggerType() : current.getTriggerType();
-        String cronExpression = fromNode != null ? fromNode.cron()
-            : resolveCronExpression(request.getCronExpression(), triggerType, current);
+        // 트리거는 병합·파생한 노드에서 계산한다 — 저장돼 있던 값이나 요청 최상위 값으로 폴백하지 않는다. 최상위 값은
+        // 검증용이다(IEUM-BE-92). 트리거 노드를 지우면 MANUAL로 바뀌고 Quartz Job이 해제된다.
+        TriggerNodeSchedule schedule = TriggerNodeSchedule.compute(mergedNodes, eventCatalog);
+        schedule.assertCronPresent(mergedNodes);
+        schedule.assertMatchesRequest(request.getTriggerType(), request.getCronExpression());
         WorkflowVersion version = workflowCrudService.updateWorkflow(
             userId,
             workflowId,
@@ -178,8 +176,8 @@ public class WorkflowService {
             request.getDescription() != null ? request.getDescription() : current.getDescription(),
             toJson(mergedNodes),
             toJson(mergedEdges),
-            triggerType,
-            cronExpression
+            schedule.triggerType(),
+            schedule.cron()
         );
         return toResponse(version.getWorkflow(), version, ownedWebhookNames(userId));
     }
@@ -216,27 +214,6 @@ public class WorkflowService {
             }
         }
         return edges;
-    }
-
-    /**
-     * 저장할 cron 표현식. 요청이 보낸 값이 우선이고, 생략했을 때만 저장된 값을 잇는다.
-     *
-     * <p>단 폴백은 유효 triggerType이 SCHEDULE일 때뿐이다 — {@code triggerType: "MANUAL"}로 스케줄을
-     * 끄는 요청에서 저장된 cron을 되살리면 트리거는 MANUAL인데 cron만 남은 유령 값이 된다
-     * ({@code validateScheduleConfig}는 SCHEDULE이 아니면 cron을 아예 보지 않아 걸러 주지 않는다).
-     *
-     * <p>저장된 트리거도 SCHEDULE이어야 한다. 그 유령 cron(MANUAL인데 cron이 남은 워크플로우)은 실제로
-     * 만들어지므로, 이 조건이 없으면 {@code triggerType: "SCHEDULE"}만 보낸 요청이 사용자가 이번에
-     * 지정한 적 없는 시각으로 Quartz Job을 등록한다. 여기서 {@code null}을 넘겨야 crud가 400으로 막는다.
-     */
-    private static String resolveCronExpression(String requested, TriggerType triggerType,
-            Workflow current) {
-        if (requested != null) {
-            return requested;
-        }
-        boolean keepsSchedule = triggerType == TriggerType.SCHEDULE
-            && current.getTriggerType() == TriggerType.SCHEDULE;
-        return keepsSchedule ? current.getCronExpression() : null;
     }
 
     /**

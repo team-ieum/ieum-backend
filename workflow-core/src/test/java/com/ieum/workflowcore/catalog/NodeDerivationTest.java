@@ -148,7 +148,8 @@ class NodeDerivationTest {
                 .as(String.valueOf(event))
                 .isInstanceOfSatisfying(CustomException.class, e -> {
                     assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW);
-                    assertThat(e.getMessage()).contains(String.valueOf(event)).contains("node-1");
+                    assertThat(e.getMessage()).startsWith("알 수 없는 노드 종류입니다: ")
+                        .contains(String.valueOf(event)).contains("node-1");
                 });
         }
     }
@@ -184,7 +185,13 @@ class NodeDerivationTest {
     }
 
     @Test
-    @DisplayName("실행할 수 없는 이벤트(ACTION은 builder 아님, 그 밖은 builder·generation 둘 다 false)는 모르는 event와 같은 400 — agent가 실행할 수 없다")
+    @DisplayName("메시지의 서식·줄 구분 문자(NEL·LS·PS·RLO)도 '?'로 바꿔 싣는다 — 응답·로그 표시 조작 방지")
+    void echoReplacesFormatAndLineSeparatorCharacters() {
+        assertThat(NodeDerivation.echo("a\u0085b\u2028c\u2029d\u202Ee")).isEqualTo("a?b?c?d?e");
+    }
+
+    @Test
+    @DisplayName("실행할 수 없는 이벤트(ACTION은 builder 아님, 그 밖은 builder·generation 둘 다 false)는 같은 400이되 \"실행할 수 없는\" 문구 — agent가 실행할 수 없다")
     void unexecutableEventIsRejected() {
         // agent /v1/actions/execute는 builder ACTION의 tool_key만 받는다. 이름은 카탈로그에서 고른다(하드코딩 금지).
         List<EventDefinition> targets = CATALOG.events().stream().filter(e -> !executable(e)).toList();
@@ -194,7 +201,8 @@ class NodeDerivationTest {
                 .as(event.name())
                 .isInstanceOfSatisfying(CustomException.class, e -> {
                     assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW);
-                    assertThat(e.getMessage()).contains(event.name()).contains("node-1");
+                    assertThat(e.getMessage()).startsWith("실행할 수 없는 노드 종류입니다: ")
+                        .contains(event.name()).contains("node-1");
                 });
         }
     }

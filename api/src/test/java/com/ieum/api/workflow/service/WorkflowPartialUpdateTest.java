@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.mock;
@@ -49,8 +48,8 @@ import org.springframework.http.HttpStatus;
  * ② 가드가 요청이 아니라 병합 결과에 돈다 ③ 소유권 검증이 이전 정의 조회보다 먼저 온다
  * ④ 노드와 엣지가 같은 문서 한 번의 조회에서 온다.
  *
- * <p>노드 하위 필드뿐 아니라 워크플로우 레벨 optional 필드(description·triggerType·cronExpression)도
- * 같은 규칙을 따르는지 함께 본다 — 여기가 새면 SCHEDULE 워크플로우가 조용히 MANUAL로 강등된다.
+ * <p>워크플로우 레벨 optional 필드 description도 같은 규칙(null은 변경 없음)을 따르는지 본다.
+ * triggerType·cronExpression은 노드에서 계산하므로 {@link WorkflowTriggerScheduleTest}가 본다(IEUM-BE-92).
  */
 class WorkflowPartialUpdateTest {
 
@@ -292,72 +291,20 @@ class WorkflowPartialUpdateTest {
             description.getValue(), triggerType.getValue(), cron.getValue());
     }
 
-    /**
-     * description과 스케줄을 따로 단언하던 테스트 둘을 합쳤다 — 둘 다 같은 사실(워크플로우 레벨
-     * 필드의 null은 "변경 없음")을 확인했고, 셋을 한 번에 생략한 이 요청이 그 상위 집합이다.
-     */
     @Test
-    @DisplayName("description·triggerType·cron을 보내지 않으면 저장된 값이 그대로 유지된다")
-    void keepsWorkflowFieldsWhenOmitted() {
+    @DisplayName("description을 보내지 않으면 저장된 값이 그대로 유지된다")
+    void keepsDescriptionWhenOmitted() {
         given(currentWorkflow.getDescription()).willReturn("매일 아침 리포트를 보냅니다.");
-        given(currentWorkflow.getTriggerType()).willReturn(TriggerType.SCHEDULE);
-        given(currentWorkflow.getCronExpression()).willReturn("0 0 10 * * ?");
         stubPreviousNodes(null);
         stubSaveSucceeds();
 
         workflowService.updateWorkflow(userId, workflowId, request("""
-            { "id": "%s", "event": "ai.agent", "type": "AI", "label": "요약하기" }""".formatted(NODE_ID)));
+            { "id": "%s", "event": "ai.agent", "label": "요약하기" }""".formatted(NODE_ID)));
 
         SavedWorkflowFields saved = capturedWorkflowFields();
         assertThat(saved.description()).isEqualTo("매일 아침 리포트를 보냅니다.");
-        assertThat(saved.triggerType()).isEqualTo(TriggerType.SCHEDULE);
-        assertThat(saved.cron()).isEqualTo("0 0 10 * * ?");
-    }
-
-    @Test
-    @DisplayName("triggerType을 MANUAL로 명시하면 저장된 cron이 되살아나지 않는다")
-    void doesNotReviveCronWhenTriggerSwitchedToManual() {
-        given(currentWorkflow.getTriggerType()).willReturn(TriggerType.SCHEDULE);
-        given(currentWorkflow.getCronExpression()).willReturn("0 0 10 * * ?");
-        stubPreviousNodes(null);
-        stubSaveSucceeds();
-
-        workflowService.updateWorkflow(userId, workflowId, request("""
-            { "id": "%s", "event": "ai.agent", "type": "AI", "label": "요약하기" }""".formatted(NODE_ID),
-            ",\n  \"triggerType\": \"MANUAL\""));
-
-        SavedWorkflowFields saved = capturedWorkflowFields();
         assertThat(saved.triggerType()).isEqualTo(TriggerType.MANUAL);
         assertThat(saved.cron()).isNull();
-    }
-
-    /**
-     * MANUAL인데 cron이 남은 워크플로우는 실제로 만들어진다 — 생성 시 {@code validateScheduleConfig}는
-     * SCHEDULE이 아니면 cron을 보지 않으므로 {@code triggerType: MANUAL} + cron을 함께 보내면 그대로
-     * 저장된다. 그 상태에서 cron 없이 SCHEDULE로 켜는 요청이 그 유령 cron을 이어받으면, 사용자가
-     * 이번 요청에 지정한 적 없는 시각으로 Quartz Job이 등록된다 (IEUM-BE-65).
-     */
-    @Test
-    @DisplayName("MANUAL에 남은 유령 cron은 SCHEDULE로 켜도 되살아나지 않는다")
-    void doesNotReviveOrphanCronWhenTriggerSwitchedToSchedule() {
-        given(currentWorkflow.getTriggerType()).willReturn(TriggerType.MANUAL);
-        given(currentWorkflow.getCronExpression()).willReturn("0 0 3 * * ?");
-        stubPreviousNodes(null);
-        // crud는 SCHEDULE + cron null을 400으로 거절한다 — 그 거절이 실제로 도달하는지까지 본다.
-        willThrow(new CustomException(ErrorCode.INVALID_CRON_EXPRESSION))
-            .given(workflowCrudService).updateWorkflow(
-                any(), any(), any(), any(), any(), any(), eq(TriggerType.SCHEDULE), isNull());
-
-        UpdateWorkflowRequest request = request("""
-            { "id": "%s", "event": "ai.agent", "type": "AI", "label": "요약하기" }""".formatted(NODE_ID),
-            ",\n  \"triggerType\": \"SCHEDULE\"");
-
-        assertThatThrownBy(() -> workflowService.updateWorkflow(userId, workflowId, request))
-            .isInstanceOf(CustomException.class)
-            .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
-                .isEqualTo(ErrorCode.INVALID_CRON_EXPRESSION));
-
-        assertThat(capturedWorkflowFields().cron()).isNull();
     }
 
 }
