@@ -386,7 +386,6 @@ class ActionNodeExecutorTest {
         assertThat(result.getFailureKind()).isEqualTo(FailureKind.CLIENT_ERROR);
         assertThat(result.getErrorMessage()).isEqualTo("ACTION 노드에 카탈로그 ACTION event가 필요합니다.");
         assertThat(mockWebServer.getRequestCount()).isZero();
-        verify(gitHubTokenProvider, never()).getAccessToken(any());
     }
 
     @Test

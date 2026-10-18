@@ -47,7 +47,9 @@ public interface WorkflowControllerDocs {
 
     /** 생성·수정 요청 최상위 triggerType·cronExpression의 의미 (IEUM-BE-92). */
     String TRIGGER_FIELDS_NOTICE =
-        " 워크플로우 트리거는 첫 번째 TRIGGER 노드의 event로 서버가 계산한다(schedule.every면 그 노드 config.cron,"
+        " 노드 종류는 event로 정한다 — 요청 type은 무시하고 event의 카탈로그 node_type으로 계산한다. event가 없으면"
+            + " 400(INVALID_INPUT), 카탈로그에 없거나 실행할 수 없는 event면 400(INVALID_WORKFLOW)이다."
+            + " 워크플로우 트리거는 첫 번째 TRIGGER 노드의 event로 서버가 계산한다(schedule.every면 그 노드 config.cron,"
             + " 트리거 노드가 없으면 MANUAL). 요청 최상위 triggerType·cronExpression은 검증용이다 — 보내지 않으면 통과,"
             + " 보내면 계산값과 같아야 하고 다르면 400(INVALID_WORKFLOW, 메시지에 계산값). cronExpression은 Unix 5필드·Quartz"
             + " 어느 쪽이든 Quartz로 바꿔 비교하고, SCHEDULE이 아닌데 보내면 400이다. 응답의 두 값은 계산해 저장한 값이다.";
