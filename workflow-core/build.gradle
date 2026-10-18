@@ -14,3 +14,35 @@ dependencies {
     annotationProcessor 'jakarta.annotation:jakarta.annotation-api'
     annotationProcessor 'jakarta.persistence:jakarta.persistence-api'
 }
+
+// 공유 노드 카탈로그(서브모듈 catalog/)를 클래스패스 catalog/… 로 싣는다. jar 안에서는 폴더 목록을 읽을 수 없어서
+// 빌드할 때 이벤트 파일 목록 catalog/index.txt를 만들어 같이 넣는다(EventCatalog는 이 목록만 읽는다).
+def catalogDir = rootProject.file('catalog')
+def catalogHint = '카탈로그 이벤트가 없다(catalog/events) — `git submodule update --init`으로 catalog/를 받아라'
+
+def catalogIndex = tasks.register('catalogIndex') {
+    def eventFiles = fileTree(new File(catalogDir, 'events')) { include '**/*.json' }
+    def outDir = layout.buildDirectory.dir('generated/catalog-index')
+    inputs.files(eventFiles).withPathSensitivity(PathSensitivity.RELATIVE)
+    outputs.dir(outDir)
+    doLast {
+        def paths = []
+        eventFiles.visit { if (!it.directory) paths << it.relativePath.pathString }
+        // 설정 시점이 아니라 실행 시점에 막는다. 서브모듈이 없는 체크아웃에서도 ./gradlew tasks 같은 명령은 돈다.
+        if (paths.isEmpty()) {
+            throw new GradleException(catalogHint)
+        }
+        def index = outDir.get().file('catalog/index.txt').asFile
+        index.parentFile.mkdirs()
+        index.text = paths.sort().join('\n') + '\n'
+    }
+}
+
+sourceSets.main.resources.srcDir(catalogIndex)
+
+processResources {
+    from(catalogDir) {
+        into 'catalog'
+        include 'events/**/*.json', 'apps.json', 'presets.json'
+    }
+}

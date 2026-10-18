@@ -3,6 +3,9 @@ package com.ieum.api.chat.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.chat.dto.ChatAgentResponse;
@@ -18,6 +21,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 class AgentClientTest {
 
@@ -173,5 +177,27 @@ class AgentClientTest {
             .isInstanceOf(CustomException.class)
             .extracting(e -> ((CustomException) e).getErrorCode())
             .isEqualTo(ErrorCode.PROVIDER_ERROR);
+    }
+
+    @Test
+    @DisplayName("chat — agent 422는 PROVIDER_ERROR이고, 로그에 응답 본문(노드 config·prompt가 실린다)을 남기지 않는다")
+    void chat_agent422_doesNotLogBody() {
+        String secretBody = "{\"detail\":[{\"input\":{\"prompt\":\"secret-prompt-xyz\"}}]}";
+        mockWebServer.enqueue(new MockResponse().setResponseCode(422)
+            .setHeader("Content-Type", "application/json").setBody(secretBody));
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        Logger logger = (Logger) LoggerFactory.getLogger(AgentClient.class);
+        logger.addAppender(appender);
+        try {
+            assertThatThrownBy(() -> agentClient.chat(baseParams().apiKey("key").build()))
+                .isInstanceOf(CustomException.class)
+                .extracting(e -> ((CustomException) e).getErrorCode())
+                .isEqualTo(ErrorCode.PROVIDER_ERROR);
+            assertThat(appender.list).isNotEmpty();
+            assertThat(appender.list).noneMatch(e -> e.getFormattedMessage().contains("secret-prompt-xyz"));
+        } finally {
+            logger.detachAppender(appender);
+        }
     }
 }

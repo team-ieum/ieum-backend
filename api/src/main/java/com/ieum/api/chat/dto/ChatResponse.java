@@ -60,8 +60,10 @@ public class ChatResponse {
      * @param message       저장된 AGENT 메시지 엔티티
      * @param sessionId     세션 ID (LAZY 로딩 회피)
      * @param agentResponse 원본 agent 응답 (nodes/edges/actions 포함)
+     * @param savedNodes    저장한 파생 노드(null이면 agent 응답 노드)
      */
-    public static ChatResponse from(ChatMessage message, UUID sessionId, ChatAgentResponse agentResponse) {
+    public static ChatResponse from(ChatMessage message, UUID sessionId, ChatAgentResponse agentResponse,
+            List<Object> savedNodes) {
         return ChatResponse.builder()
             .messageId(message.getId())
             .sessionId(sessionId)
@@ -69,7 +71,7 @@ public class ChatResponse {
             .content(agentResponse.getContent())
             .changeDescription(agentResponse.getChangeDescription())
             .workflowName(agentResponse.getWorkflowName())
-            .nodes(agentResponse.getNodes())
+            .nodes(savedNodes != null ? savedNodes : agentResponse.getNodes())
             .edges(agentResponse.getEdges())
             .actions(agentResponse.getActions())
             .options(agentResponse.getOptions())

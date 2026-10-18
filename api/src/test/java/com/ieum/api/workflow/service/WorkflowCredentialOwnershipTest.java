@@ -21,6 +21,8 @@ import com.ieum.api.workflow.dto.CreateWorkflowRequest;
 import com.ieum.api.workflow.dto.UpdateWorkflowRequest;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.catalog.EventCatalog;
+import com.ieum.workflowcore.catalog.NodeDerivation;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowVersion;
@@ -46,6 +48,8 @@ import org.springframework.http.HttpStatus;
  */
 class WorkflowCredentialOwnershipTest {
 
+    private static final EventCatalog CATALOG = EventCatalog.loadFromClasspath();
+
     private final WorkflowCrudService workflowCrudService = mock(WorkflowCrudService.class);
     private final CredentialService credentialService = mock(CredentialService.class);
     private final WorkflowService workflowService = new WorkflowService(
@@ -55,7 +59,8 @@ class WorkflowCredentialOwnershipTest {
         mock(ExecutionEventPublisher.class),
         new ObjectMapper(),
         mock(WebhookCredentialService.class),
-        credentialService);
+        credentialService,
+        new NodeDerivation(CATALOG), CATALOG);
 
     private final ObjectMapper jsonMapper = new ObjectMapper();
     private final UUID userId = UUID.randomUUID();
@@ -74,7 +79,7 @@ class WorkflowCredentialOwnershipTest {
               "name": "AI 워크플로우",
               "description": "크레덴셜 소유 검증",
               "nodes": [
-                { "id": "node-ai", "type": "AI", "label": "요약하기",
+                { "id": "node-ai", "event": "ai.agent", "type": "AI", "label": "요약하기",
                   "description": "글을 요약해요.",
                   "position": { "x": 40, "y": 120 },
                   "config": %s }
@@ -206,11 +211,11 @@ class WorkflowCredentialOwnershipTest {
             {
               "name": "AI 워크플로우",
               "nodes": [
-                { "id": "n1", "type": "AI", "position": { "x": 0, "y": 0 },
+                { "id": "n1", "event": "ai.agent", "type": "AI", "position": { "x": 0, "y": 0 },
                   "config": { "credentialId": "%s" } },
-                { "id": "n2", "type": "AI", "position": { "x": 0, "y": 80 },
+                { "id": "n2", "event": "ai.agent", "type": "AI", "position": { "x": 0, "y": 80 },
                   "config": { "credentialId": "%s" } },
-                { "id": "n3", "type": "AI", "position": { "x": 0, "y": 160 },
+                { "id": "n3", "event": "ai.agent", "type": "AI", "position": { "x": 0, "y": 160 },
                   "config": { "credentialId": "%s" } }
               ],
               "edges": []

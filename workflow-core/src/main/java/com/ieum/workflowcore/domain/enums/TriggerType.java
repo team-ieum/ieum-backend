@@ -23,17 +23,4 @@ public enum TriggerType {
     public boolean isAppTrigger() {
         return this == GMAIL_NEW_EMAIL || this == GITHUB_NEW_ISSUE;
     }
-
-    /** 노드 {@code config.triggerType} 값이 앱 트리거 이름이면 그 값, 아니면(없음·다른 트리거·모르는 값) null. */
-    public static TriggerType appTriggerOf(Object declared) {
-        if (!(declared instanceof String name)) {
-            return null;
-        }
-        for (TriggerType type : values()) {
-            if (type.isAppTrigger() && type.name().equals(name)) {
-                return type;
-            }
-        }
-        return null;
-    }
 }

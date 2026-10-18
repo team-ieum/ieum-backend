@@ -14,6 +14,7 @@ import java.util.Date;
 import java.util.EnumSet;
 import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
@@ -93,5 +94,13 @@ class CronConverterTest {
         assertThatThrownBy(() -> CronConverter.toQuartz(cron))
             .isInstanceOfSatisfying(CustomException.class, e ->
                 assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_CRON_EXPRESSION));
+    }
+
+    @Test
+    @DisplayName("오류 메시지에 싣는 cron 원문의 제어 문자는 '?'로 바뀐다")
+    void toQuartz_invalid_echoesSanitizedCron() {
+        assertThatThrownBy(() -> CronConverter.toQuartz("1 2 3 4 5 6 7\n8"))
+            .isInstanceOf(CustomException.class)
+            .hasMessageEndingWith(": 1 2 3 4 5 6 7?8");
     }
 }

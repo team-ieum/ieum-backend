@@ -24,7 +24,7 @@ class WorkflowValidationClientTest {
 
     private final ObjectMapper mapper = new ObjectMapper();
     private final List<Map<String, Object>> nodes = List.of(
-        Map.of("id", "t", "type", "TRIGGER", "config", Map.of("triggerType", "MANUAL")),
+        Map.of("id", "t", "type", "TRIGGER", "event", "manual.run", "config", Map.of()),
         Map.of("id", "a", "type", "TRANSFORM", "config", Map.of()));
     private final List<Map<String, Object>> edges = List.of(Map.of("source", "t", "target", "a"));
 

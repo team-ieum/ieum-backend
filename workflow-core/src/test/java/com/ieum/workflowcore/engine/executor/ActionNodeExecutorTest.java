@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.workflowcore.catalog.EventCatalog;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.ExecutionContext;
 import com.ieum.workflowcore.engine.ExecutionCursor;
@@ -34,11 +35,15 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /** ACTION 노드 실행기 — agent {@code POST /v1/actions/execute} 계약과 실패 분류를 고정한다. */
 class ActionNodeExecutorTest {
 
-    private static final String TOOL_KEY = "builtin:github_create_issue";
+    private static final EventCatalog CATALOG = EventCatalog.loadFromClasspath();
+    private static final String EVENT = "github.create_issue";
+    private static final String TOOL_KEY = toolKeyOf(EVENT);
     private static final String WEBHOOK_URL = "https://hooks.slack.com/services/T000/B000/secret-token";
 
     private final ObjectMapper mapper = new ObjectMapper();
@@ -80,27 +85,24 @@ class ActionNodeExecutorTest {
                 webhookCredentialProvider),
             uid -> "ROLE_USER",
             idempotencyStore,
-            30);
+            30,
+            CATALOG);
     }
 
     // ── 헬퍼 ────────────────────────────────────────────────────────────────
 
-    private static Map<String, Object> tool(String name, Map<String, Object> config) {
-        Map<String, Object> tool = new HashMap<>();
-        tool.put("name", name);
-        tool.put("config", config);
-        return tool;
+    private static String toolKeyOf(String event) {
+        return CATALOG.event(event).orElseThrow().toolKey();
     }
 
-    private static Node actionNode(List<Object> tools) {
-        Map<String, Object> config = new HashMap<>();
-        config.put("tools", tools);
-        return new Node("node-1", NodeType.ACTION, "이슈 만들기", config);
+    private static Node actionNode(String event, Map<String, Object> config) {
+        return new Node("node-1", NodeType.ACTION, "이슈 만들기", config, event);
     }
 
+    /** 저장 경로(NodeDerivation)를 거친 ACTION 노드 모양 — 평평한 칸 + 서버가 쓴 brand. */
     private static Node githubNode() {
-        return actionNode(List.of(tool(TOOL_KEY,
-            new HashMap<>(Map.of("owner", "ieum", "repo", "demo", "title", "버그")))));
+        return actionNode(EVENT, new HashMap<>(Map.of(
+            "owner", "ieum", "repo", "demo", "title", "버그", "brand", "github")));
     }
 
     private ExecutionCursor cursor(UUID user) {
@@ -159,11 +161,12 @@ class ActionNodeExecutorTest {
     }
 
     @Test
-    @DisplayName("요청 body는 {nodeId, toolKey, config}뿐이고 config는 tools[0].config다")
+    @DisplayName("요청 body는 {nodeId, toolKey, config}뿐 — toolKey는 event의 tool_key, config는 노드 config에서 brand를 뺀 것")
     void request_bodyIsNodeIdToolKeyConfigOnly() throws Exception {
         enqueueSuccess();
+        Node node = githubNode();
 
-        executor.execute(githubNode(), NO_INPUT, cursor(userId));
+        executor.execute(node, NO_INPUT, cursor(userId));
 
         JsonNode body = mapper.readTree(mockWebServer.takeRequest().getBody().readUtf8());
         List<String> fields = new ArrayList<>();
@@ -173,6 +176,8 @@ class ActionNodeExecutorTest {
         assertThat(body.get("toolKey").asText()).isEqualTo(TOOL_KEY);
         assertThat(body.get("config")).isEqualTo(mapper.valueToTree(
             Map.of("owner", "ieum", "repo", "demo", "title", "버그")));
+        // brand는 요청 사본에서만 빠진다 — 노드 원본은 그대로다
+        assertThat(node.getConfig()).containsEntry("brand", "github");
     }
 
     @Test
@@ -211,31 +216,33 @@ class ActionNodeExecutorTest {
     }
 
     @Test
-    @DisplayName("tools[0].config의 참조식을 앞 노드 출력으로 치환해 보낸다 — issues.0.title")
+    @DisplayName("노드 config의 참조식을 앞 노드 출력으로 치환해 보낸다 — issues.0.title")
     void request_rendersReferencesInToolConfig() throws Exception {
         enqueueSuccess();
         ExecutionCursor cursor = cursor(userId);
         cursor.getContext().setNodeOutput("list",
             Map.of("issues", List.of(Map.of("number", 1, "title", "첫 이슈"))));
-        Node node = actionNode(List.of(tool(TOOL_KEY,
-            new HashMap<>(Map.of("title", "{{nodes.list.output.issues.0.title}}")))));
+        Node node = actionNode(EVENT, new HashMap<>(Map.of("title", "{{nodes.list.output.issues.0.title}}")));
 
         executor.execute(node, NO_INPUT, cursor);
 
         JsonNode body = mapper.readTree(mockWebServer.takeRequest().getBody().readUtf8());
         assertThat(body.get("config").get("title").asText()).isEqualTo("첫 이슈");
+        assertThat(node.getConfig()).containsEntry("title", "{{nodes.list.output.issues.0.title}}");
     }
 
     @Test
-    @DisplayName("Google 도구면 액세스 토큰을 X-Google-Access-Token으로 보낸다")
+    @DisplayName("Google 이벤트면 액세스 토큰을 X-Google-Access-Token으로 보낸다")
     void request_googleTool_sendsAccessToken() throws Exception {
         enqueueSuccess();
         when(googleTokenProvider.getValidAccessToken(userId)).thenReturn("google-access");
-        Node node = actionNode(List.of(tool("builtin:google_sheets_read", new HashMap<>())));
 
-        executor.execute(node, NO_INPUT, cursor(userId));
+        executor.execute(actionNode("google_sheets.read", new HashMap<>()), NO_INPUT, cursor(userId));
 
-        assertThat(mockWebServer.takeRequest().getHeader("X-Google-Access-Token")).isEqualTo("google-access");
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Google-Access-Token")).isEqualTo("google-access");
+        assertThat(mapper.readTree(recorded.getBody().readUtf8()).get("toolKey").asText())
+            .isEqualTo(toolKeyOf("google_sheets.read"));
     }
 
     @Test
@@ -367,51 +374,42 @@ class ActionNodeExecutorTest {
 
     // ── 쓸 수 없는 ACTION 정의 ───────────────────────────────────────────────
 
-    @Test
-    @DisplayName("tools가 없거나 비었거나 tools[0]에 name이 없으면 agent를 부르지 않고 CLIENT_ERROR로 끝난다")
-    void invalidDefinition_failsFastWithoutCallingAgent() {
-        Map<String, Object> noTools = new HashMap<>();
-        Map<String, Object> toolsNotList = new HashMap<>(Map.of("tools", "builtin:github_list_issues"));
-        Map<String, Object> emptyTools = new HashMap<>(Map.of("tools", List.of()));
-        Node missingName = actionNode(List.of(tool(null, new HashMap<>())));
-        Node blankName = actionNode(List.of(tool("  ", new HashMap<>())));
-        Node numberEntry = actionNode(List.of(42));
-
-        List<Node> nodes = List.of(
-            new Node("n1", NodeType.ACTION, "tools 없음", noTools),
-            new Node("n2", NodeType.ACTION, "tools가 목록 아님", toolsNotList),
-            new Node("n3", NodeType.ACTION, "tools 비어 있음", emptyTools),
-            missingName, blankName, numberEntry);
-        for (Node node : nodes) {
-            ExecutorResult result = executor.execute(node, NO_INPUT, cursor(userId));
-
-            assertThat(result.isSuccess()).as(node.getLabel()).isFalse();
-            assertThat(result.getFailureKind()).as(node.getLabel()).isEqualTo(FailureKind.CLIENT_ERROR);
-            assertThat(result.getErrorMessage()).as(node.getLabel()).contains("tools");
-        }
-        assertThat(mockWebServer.getRequestCount()).isZero();
-    }
-
-    @Test
-    @DisplayName("node.config 자체가 null이어도 NPE 없이 CLIENT_ERROR다")
-    void nullConfig_isClientError() {
+    @ParameterizedTest(name = "event={0}")
+    @NullAndEmptySource
+    @ValueSource(strings = {"github.no_such_event", "webhook.catch", "ai.agent"})
+    @DisplayName("event가 없거나 모르거나 ACTION 이벤트가 아니면 전처리·agent 호출 없이 CLIENT_ERROR로 끝난다")
+    void nonActionEvent_failsFastWithoutCallingAgent(String event) {
         ExecutorResult result = executor.execute(
-            new Node("n1", NodeType.ACTION, "config 없음", null), NO_INPUT, cursor(userId));
+            actionNode(event, new HashMap<>(Map.of("title", "버그"))), NO_INPUT, cursor(userId));
 
+        assertThat(result.isSuccess()).isFalse();
         assertThat(result.getFailureKind()).isEqualTo(FailureKind.CLIENT_ERROR);
+        assertThat(result.getErrorMessage()).isEqualTo("ACTION 노드에 카탈로그 ACTION event가 필요합니다.");
         assertThat(mockWebServer.getRequestCount()).isZero();
     }
 
     @Test
-    @DisplayName("도구가 둘 이상이어도 첫 도구만 실행하고 둘째 도구의 토큰·헤더는 보내지 않는다")
-    void onlyFirstToolIsUsed() throws Exception {
+    @DisplayName("node.config가 null이어도 NPE 없이 빈 config로 보낸다 — 필수 입력 검사는 agent 몫")
+    void nullConfig_sendsEmptyConfig() throws Exception {
+        enqueueSuccess();
+
+        ExecutorResult result = executor.execute(actionNode(EVENT, null), NO_INPUT, cursor(userId));
+
+        assertThat(result.isSuccess()).isTrue();
+        JsonNode config = mapper.readTree(mockWebServer.takeRequest().getBody().readUtf8()).get("config");
+        assertThat(config.isObject()).isTrue();
+        assertThat(config.size()).isZero();
+    }
+
+    @Test
+    @DisplayName("도구는 event의 tool_key 하나뿐 — config에 tools가 남아 있어도 그 도구의 토큰·헤더는 보내지 않는다")
+    void configTools_areNotPrepared() throws Exception {
         enqueueSuccess();
         when(notionTokenProvider.getAccessToken(userId)).thenReturn(Optional.of("notion-token"));
-        Node node = actionNode(List.of(
-            tool(TOOL_KEY, new HashMap<>(Map.of("title", "버그"))),
-            tool("builtin:notion_search", new HashMap<>())));
+        Map<String, Object> config = new HashMap<>(Map.of(
+            "title", "버그", "tools", List.of(Map.of("name", "builtin:notion_search"))));
 
-        executor.execute(node, NO_INPUT, cursor(userId));
+        executor.execute(actionNode(EVENT, config), NO_INPUT, cursor(userId));
 
         RecordedRequest recorded = mockWebServer.takeRequest();
         JsonNode body = mapper.readTree(recorded.getBody().readUtf8());
@@ -423,27 +421,29 @@ class ActionNodeExecutorTest {
 
     // ── 웹훅 URL 원문 ────────────────────────────────────────────────────────
 
-    @Test
-    @DisplayName("slack 도구는 복호화한 webhook_url을 agent 요청에만 싣고, 노드 config·input에는 남기지 않는다")
-    void slackTool_webhookUrlOnlyInRequest() throws Exception {
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"slack.send_message", "discord.send_message"})
+    @DisplayName("웹훅 이벤트는 config.webhookCredentialId로 복호화한 webhook_url을 agent 요청에만 싣고, 노드 config·input에는 남기지 않는다")
+    void webhookEvent_webhookUrlOnlyInRequest(String event) throws Exception {
         enqueue(200, "{\"success\":true,\"output\":{\"ok\":true}}");
         UUID credentialId = UUID.randomUUID();
         when(webhookCredentialProvider.resolveWebhookUrl(credentialId, userId))
             .thenReturn(Optional.of(WEBHOOK_URL));
-        Map<String, Object> toolConfig = new HashMap<>(Map.of(
-            "webhookCredentialId", credentialId.toString(), "message", "안녕"));
-        Node node = actionNode(List.of(tool("slack", toolConfig)));
+        Map<String, Object> nodeConfig = new HashMap<>(Map.of(
+            "webhookCredentialId", credentialId.toString(), "message", "안녕", "brand", "slack"));
+        Node node = actionNode(event, nodeConfig);
         Map<String, Object> input = new HashMap<>(node.getConfig());
 
         ExecutorResult result = executor.execute(node, input, cursor(userId));
 
         assertThat(result.isSuccess()).isTrue();
         JsonNode body = mapper.readTree(mockWebServer.takeRequest().getBody().readUtf8());
-        assertThat(body.get("toolKey").asText()).isEqualTo("slack");
+        assertThat(body.get("toolKey").asText()).isEqualTo(toolKeyOf(event));
         assertThat(body.get("config").get("webhook_url").asText()).isEqualTo(WEBHOOK_URL);
         assertThat(body.get("config").get("webhookCredentialId").asText()).isEqualTo(credentialId.toString());
+        assertThat(body.get("config").has("brand")).isFalse();
         // node_runs 입력 로그·조회 응답으로 새지 않도록 노드 원본과 input에는 URL이 없어야 한다
-        assertThat(toolConfig).doesNotContainKey("webhook_url");
+        assertThat(nodeConfig).doesNotContainKey("webhook_url").containsEntry("brand", "slack");
         assertThat(node.getConfig().toString()).doesNotContain(WEBHOOK_URL);
         assertThat(input.toString()).doesNotContain(WEBHOOK_URL);
         assertThat(result.getOutput().toString()).doesNotContain(WEBHOOK_URL);

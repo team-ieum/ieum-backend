@@ -11,6 +11,7 @@ import static org.mockito.Mockito.verify;
 
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.catalog.EventCatalog;
 import com.ieum.workflowcore.domain.AppTriggerSubscription;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.enums.TriggerType;
@@ -32,7 +33,8 @@ class AppTriggerSubscriptionServiceTest {
 
     private final AppTriggerSubscriptionRepository repository = org.mockito.Mockito.mock(AppTriggerSubscriptionRepository.class);
     private final AppTriggerAccessVerifier verifier = org.mockito.Mockito.mock(AppTriggerAccessVerifier.class);
-    private final AppTriggerSubscriptionService service = new AppTriggerSubscriptionService(repository, verifier);
+    private static final EventCatalog CATALOG = EventCatalog.loadFromClasspath();
+    private final AppTriggerSubscriptionService service = new AppTriggerSubscriptionService(repository, verifier, CATALOG);
 
     private final UUID userId = UUID.randomUUID();
     private final UUID workflowId = UUID.randomUUID();
@@ -43,20 +45,27 @@ class AppTriggerSubscriptionServiceTest {
         return w;
     }
 
-    private static Map<String, Object> trigger(String id, Map<String, Object> config) {
+    private static Map<String, Object> trigger(String id, String event, Map<String, Object> config) {
         Map<String, Object> node = new HashMap<>();
         node.put("id", id);
         node.put("type", "TRIGGER");
+        node.put("event", event);
         node.put("config", config);
         return node;
     }
 
     private static Map<String, Object> gmailNode(String id, String query) {
-        Map<String, Object> config = new HashMap<>(Map.of("triggerType", "GMAIL_NEW_EMAIL", "serviceType", "GOOGLE"));
+        Map<String, Object> config = new HashMap<>();
         if (query != null) {
             config.put("query", query);
         }
-        return trigger(id, config);
+        return trigger(id, "gmail.new_email", config);
+    }
+
+    private static Map<String, Object> githubNode(String id, Object repoId) {
+        Map<String, Object> config = new HashMap<>();
+        config.put("repoId", repoId);
+        return trigger(id, "github.new_issue", config);
     }
 
     private AppTriggerSubscription savedRow() {
@@ -97,10 +106,7 @@ class AppTriggerSubscriptionServiceTest {
     @DisplayName("GitHub 노드 → resource_key = repoId 십진 문자열, 스냅샷 {repoId: Long}, 검증기에 스냅샷 전달")
     void githubRowUsesRepoId() {
         given(repository.findByWorkflowId(workflowId)).willReturn(List.of());
-        Map<String, Object> config = new HashMap<>(Map.of(
-            "triggerType", "GITHUB_NEW_ISSUE", "serviceType", "GITHUB", "repo", "o/r", "repoId", 123456));
-
-        service.sync(workflow(true), List.of(trigger("t1", config)));
+        service.sync(workflow(true), List.of(githubNode("t1", 123456)));
 
         AppTriggerSubscription row = savedRow();
         assertThat(row.getResourceKey()).isEqualTo("123456");
@@ -116,12 +122,10 @@ class AppTriggerSubscriptionServiceTest {
             TriggerType.GITHUB_NEW_ISSUE, "123", Map.of("repoId", 123L), LocalDateTime.now());
         given(repository.findByWorkflowId(workflowId)).willReturn(List.of(existing));
 
-        service.sync(workflow(true), List.of(trigger("t1", new HashMap<>(Map.of(
-            "triggerType", "GITHUB_NEW_ISSUE", "repoId", "123")))));
+        service.sync(workflow(true), List.of(githubNode("t1", "123")));
         verify(verifier, never()).verify(any(), any(), any());
 
-        service.sync(workflow(true), List.of(trigger("t1", new HashMap<>(Map.of(
-            "triggerType", "GITHUB_NEW_ISSUE", "repoId", "124")))));
+        service.sync(workflow(true), List.of(githubNode("t1", "124")));
         verify(verifier).verify(eq(userId), eq(TriggerType.GITHUB_NEW_ISSUE), any());
     }
 
@@ -129,18 +133,15 @@ class AppTriggerSubscriptionServiceTest {
     @DisplayName("[Review Focus 4] repoId 숫자 77과 문자열 \"77\"은 같은 resource_key, 양의 정수가 아니면 400(INVALID_WORKFLOW)·행 없음")
     void repoIdNormalization() {
         given(repository.findByWorkflowId(workflowId)).willReturn(List.of());
-        service.sync(workflow(true), List.of(trigger("t1", new HashMap<>(Map.of(
-            "triggerType", "GITHUB_NEW_ISSUE", "repoId", "77")))));
+        service.sync(workflow(true), List.of(githubNode("t1", "77")));
         assertThat(savedRow().getResourceKey()).isEqualTo("77");
 
         org.mockito.Mockito.clearInvocations(repository);
-        service.sync(workflow(true), List.of(trigger("t1", new HashMap<>(Map.of(
-            "triggerType", "GITHUB_NEW_ISSUE", "repoId", 77)))));
+        service.sync(workflow(true), List.of(githubNode("t1", 77)));
         assertThat(savedRow().getResourceKey()).isEqualTo("77");
 
         org.mockito.Mockito.clearInvocations(repository);
-        assertThatThrownBy(() -> service.sync(workflow(true), List.of(trigger("t1", new HashMap<>(Map.of(
-            "triggerType", "GITHUB_NEW_ISSUE", "repoId", "abc"))))))
+        assertThatThrownBy(() -> service.sync(workflow(true), List.of(githubNode("t1", "abc"))))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
         verify(repository, never()).save(any());
@@ -153,23 +154,25 @@ class AppTriggerSubscriptionServiceTest {
         willThrow(new CustomException(ErrorCode.INVALID_INPUT, "레포 접근 불가"))
             .given(verifier).verify(eq(userId), eq(TriggerType.GITHUB_NEW_ISSUE), any());
 
-        assertThatThrownBy(() -> service.sync(workflow(true), List.of(trigger("t1", new HashMap<>(Map.of(
-            "triggerType", "GITHUB_NEW_ISSUE", "repoId", 1))))))
+        assertThatThrownBy(() -> service.sync(workflow(true), List.of(githubNode("t1", 1))))
             .isInstanceOf(CustomException.class);
         verify(repository, never()).save(any());
     }
 
     @Test
-    @DisplayName("활성 + 최상위만 앱 트리거, 노드 선언 없음 → 400(활성인데 구독 행 없어 미발화 방지), 행을 건드리지 않는다")
-    void appTriggerWithoutNodeDeclarationIsRejected() {
+    @DisplayName("활성 + PG만 앱 트리거, 노드에 앱 트리거 없음 → 거부하지 않고 행을 지운다(PG 값은 저장 때 노드에서 계산 — IEUM-BE-92)")
+    void topLevelAppTriggerWithoutNodeDeletesRowsWithoutRejecting() {
         Workflow w = workflow(true);
         ReflectionTestUtils.setField(w, "triggerType", TriggerType.GMAIL_NEW_EMAIL);
+        AppTriggerSubscription existing = AppTriggerSubscription.create(workflowId, "t1", userId,
+            TriggerType.GMAIL_NEW_EMAIL, null, Map.of(), LocalDateTime.now());
+        given(repository.findByWorkflowId(workflowId)).willReturn(List.of(existing));
 
-        assertThatThrownBy(() -> service.sync(w, List.of(trigger("t1", new HashMap<>()))))
-            .isInstanceOf(CustomException.class)
-            .extracting(e -> ((CustomException) e).getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW);
-        verify(repository, never()).findByWorkflowId(any());
+        service.sync(w, List.of(trigger("t1", "manual.run", new HashMap<>())));
+
+        verify(repository).delete(existing);
         verify(repository, never()).save(any());
+        org.mockito.Mockito.verifyNoInteractions(verifier);
     }
 
     @Test
@@ -193,7 +196,7 @@ class AppTriggerSubscriptionServiceTest {
             TriggerType.GMAIL_NEW_EMAIL, null, Map.of(), LocalDateTime.now());
         given(repository.findByWorkflowId(workflowId)).willReturn(List.of(existing));
 
-        service.sync(workflow(true), List.of(trigger("t1", new HashMap<>(Map.of("triggerType", "SCHEDULE", "cron", "0 * * * *")))));
+        service.sync(workflow(true), List.of(trigger("t1", "schedule.every", new HashMap<>(Map.of("cron", "0 * * * *")))));
 
         verify(repository).delete(existing);
         verify(repository, never()).save(any());
@@ -243,15 +246,41 @@ class AppTriggerSubscriptionServiceTest {
     }
 
     @Test
-    @DisplayName("triggerType 없는 TRIGGER 노드는 건너뛴다(TriggerNodeSchedule.find와 같은 선택) — 앞의 Gmail 노드가 구독된다")
-    void triggerNodeWithoutTypeIsSkipped() {
-        given(repository.findByWorkflowId(workflowId)).willReturn(List.of());
+    @DisplayName("첫 TRIGGER 노드만 본다 — 첫 번째가 schedule.every면 뒤의 Gmail 노드는 구독되지 않고 기존 행은 지워진다")
+    void onlyFirstTriggerNodeCounts() {
+        AppTriggerSubscription existing = AppTriggerSubscription.create(workflowId, "t2", userId,
+            TriggerType.GMAIL_NEW_EMAIL, null, Map.of(), LocalDateTime.now());
+        given(repository.findByWorkflowId(workflowId)).willReturn(List.of(existing));
 
-        service.sync(workflow(true), List.of(gmailNode("t1", null), trigger("t2", new HashMap<>())));
+        service.sync(workflow(true), List.of(
+            trigger("t1", "schedule.every", new HashMap<>(Map.of("cron", "0 * * * *"))),
+            gmailNode("t2", "from:x")));
+
+        verify(repository).delete(existing);
+        verify(repository, never()).save(any());
+
+        org.mockito.Mockito.reset(repository);
+        given(repository.findByWorkflowId(workflowId)).willReturn(List.of());
+        service.sync(workflow(true), List.of(
+            gmailNode("t1", null),
+            trigger("t2", "schedule.every", new HashMap<>(Map.of("cron", "0 * * * *")))));
 
         AppTriggerSubscription row = savedRow();
         assertThat(row.getNodeId()).isEqualTo("t1");
         assertThat(row.getTriggerType()).isEqualTo(TriggerType.GMAIL_NEW_EMAIL);
+    }
+
+    @Test
+    @DisplayName("첫 TRIGGER 노드의 event가 없거나 모르는 값이면 구독하지 않는다(예외 없음) — 비TRIGGER 노드는 건너뛴다")
+    void missingOrUnknownEventIsNotSubscribed() {
+        given(repository.findByWorkflowId(workflowId)).willReturn(List.of());
+        Map<String, Object> ai = new HashMap<>(Map.of("id", "a", "type", "AI", "event", "ai.agent", "config", Map.of()));
+
+        service.sync(workflow(true), List.of(ai, trigger("t1", null, new HashMap<>())));
+        service.sync(workflow(true), List.of(trigger("t1", "nope.unknown", new HashMap<>(Map.of("query", "x")))));
+
+        verify(repository, never()).save(any());
+        verify(verifier, never()).verify(any(), any(), any());
     }
 
     @Test
@@ -270,7 +299,6 @@ class AppTriggerSubscriptionServiceTest {
 
     private static Map<String, Object> repoConfig(Object repoId) {
         Map<String, Object> config = new HashMap<>();
-        config.put("triggerType", "GITHUB_NEW_ISSUE");
         config.put("repoId", repoId);
         return config;
     }

@@ -2,6 +2,7 @@ package com.ieum.workflowcore.scheduler;
 
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.catalog.NodeDerivation;
 import java.util.regex.Pattern;
 import org.quartz.CronExpression;
 
@@ -26,10 +27,10 @@ public final class CronConverter {
         String quartz = switch (fields.length) {
             case 5 -> fromUnix(fields);
             case 6, 7 -> String.join(" ", fields);
-            default -> throw invalid("cron 필드 수는 5(Unix) 또는 6/7(Quartz)이어야 합니다: " + cron);
+            default -> throw invalid("cron 필드 수는 5(Unix) 또는 6/7(Quartz)이어야 합니다: " + NodeDerivation.echo(cron));
         };
         if (!CronExpression.isValidExpression(quartz)) {
-            throw invalid("올바르지 않은 cron 표현식입니다: " + cron);
+            throw invalid("올바르지 않은 cron 표현식입니다: " + NodeDerivation.echo(cron));
         }
         return quartz;
     }
@@ -44,7 +45,7 @@ public final class CronConverter {
             dayOfMonth = "?";
             dayOfWeek = toQuartzDays(dayOfWeek);
         } else {
-            throw invalid("일과 요일을 동시에 지정한 cron은 지원하지 않습니다: " + String.join(" ", f));
+            throw invalid("일과 요일을 동시에 지정한 cron은 지원하지 않습니다: " + NodeDerivation.echo(String.join(" ", f)));
         }
         return String.join(" ", "0", f[0], f[1], dayOfMonth, f[3], dayOfWeek);
     }
@@ -55,13 +56,13 @@ public final class CronConverter {
      */
     private static String toQuartzDays(String dayOfWeek) {
         if (dayOfWeek.matches(".*[A-Za-z].*") && dayOfWeek.contains("/")) {
-            throw invalid("요일 이름에는 step('/')을 붙일 수 없습니다: " + dayOfWeek);
+            throw invalid("요일 이름에는 step('/')을 붙일 수 없습니다: " + NodeDerivation.echo(dayOfWeek));
         }
         // Unix 0-7(매일)은 숫자로 옮기면 1-1(일요일만)이 된다.
         String days = dayOfWeek.replaceFirst("^0-7(?=/|$)", "*");
         return DAY_NUMBER.matcher(days).replaceAll(m -> {
             if (!m.group().matches("[0-7]")) {
-                throw invalid("요일은 0~7이어야 합니다: " + dayOfWeek);
+                throw invalid("요일은 0~7이어야 합니다: " + NodeDerivation.echo(dayOfWeek));
             }
             return String.valueOf(Integer.parseInt(m.group()) % 7 + 1);
         });

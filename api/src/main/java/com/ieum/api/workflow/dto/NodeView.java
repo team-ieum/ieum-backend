@@ -35,7 +35,9 @@ public record NodeView(
             + " (예: HTTP의 method/url, CONDITION의 operator).",
         additionalProperties = Schema.AdditionalPropertiesValue.TRUE,
         example = "{\"method\": \"POST\", \"url\": \"https://example.com/hook\", \"headers\": {}}")
-    Map<String, Object> config) {
+    Map<String, Object> config,
+    @Schema(description = "카탈로그 이벤트 이름. type은 서버가 이 값으로 계산한다.", example = "github.create_issue")
+    String event) {
 
     /** 좌표가 없는 노드에 조회 응답에서만 채워 주는 기본 배치값. */
     private static final double DEFAULT_X_ORIGIN = 40.0;
@@ -55,7 +57,7 @@ public record NodeView(
      *       목록의 id는 non-null이라 {@link EdgeView#fromDefinition}의 id 집합에 null이 섞이지 않는다.
      *   <li>{@code type} — {@link NodeType} 값과 정확히 일치하면 enum, 아니면 null이고 <b>노드는
      *       남긴다</b>. 노드를 빼면 엣지가 가리키는 대상이 사라져 프론트 그래프가 더 크게 깨진다.
-     *   <li>{@code label}·{@code description} — {@link #asText} 규칙(문자열·숫자·boolean은 받고 구조는
+     *   <li>{@code label}·{@code description}·{@code event} — {@link #asText} 규칙(문자열·숫자·boolean은 받고 구조는
      *       버린다).
      *   <li>{@code position} — {@code x}/{@code y}가 {@link #asCoordinate}로 읽히면 쓰고, 아닌 축만
      *       기본값으로 채운다.
@@ -95,7 +97,8 @@ public record NodeView(
                 asText(map.get("label"), "label", workflowId),
                 asText(map.get("description"), "description", workflowId),
                 asPosition(map.get("position"), defaultX, workflowId),
-                asConfig(map.get("config"), workflowId)));
+                asConfig(map.get("config"), workflowId),
+                asText(map.get("event"), "event", workflowId)));
         }
         return nodes;
     }

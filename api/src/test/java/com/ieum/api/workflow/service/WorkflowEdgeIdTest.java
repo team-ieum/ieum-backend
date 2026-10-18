@@ -15,6 +15,8 @@ import com.ieum.api.webhookcredential.service.WebhookCredentialService;
 import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.api.workflow.dto.CreateWorkflowRequest;
 import com.ieum.api.workflow.dto.UpdateWorkflowRequest;
+import com.ieum.workflowcore.catalog.EventCatalog;
+import com.ieum.workflowcore.catalog.NodeDerivation;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowVersion;
@@ -41,6 +43,8 @@ import org.mockito.ArgumentCaptor;
  */
 class WorkflowEdgeIdTest {
 
+    private static final EventCatalog CATALOG = EventCatalog.loadFromClasspath();
+
     private final WorkflowCrudService workflowCrudService = mock(WorkflowCrudService.class);
     private final WorkflowService workflowService = new WorkflowService(
         workflowCrudService,
@@ -49,7 +53,8 @@ class WorkflowEdgeIdTest {
         mock(ExecutionEventPublisher.class),
         new ObjectMapper(),
         mock(WebhookCredentialService.class),
-        mock(CredentialService.class));
+        mock(CredentialService.class),
+        new NodeDerivation(CATALOG), CATALOG);
 
     private final ObjectMapper jsonMapper = new ObjectMapper();
     private final UUID userId = UUID.randomUUID();
@@ -65,8 +70,8 @@ class WorkflowEdgeIdTest {
             {
               "name": "엣지 워크플로우",
               "nodes": [
-                { "id": "node-if", "type": "CONDITION", "label": "조건" },
-                { "id": "node-join", "type": "AI", "label": "요약하기" }
+                { "id": "node-if", "event": "branch.if", "type": "CONDITION", "label": "조건" },
+                { "id": "node-join", "event": "ai.agent", "type": "AI", "label": "요약하기" }
               ],
               "edges": [ %s ]
             }""".formatted(edgesJson);

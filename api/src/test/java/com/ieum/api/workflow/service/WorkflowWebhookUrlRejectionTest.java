@@ -19,6 +19,8 @@ import com.ieum.api.workflow.dto.CreateWorkflowRequest;
 import com.ieum.api.workflow.dto.UpdateWorkflowRequest;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.catalog.EventCatalog;
+import com.ieum.workflowcore.catalog.NodeDerivation;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowVersion;
@@ -44,6 +46,8 @@ import org.springframework.http.HttpStatus;
  */
 class WorkflowWebhookUrlRejectionTest {
 
+    private static final EventCatalog CATALOG = EventCatalog.loadFromClasspath();
+
     private final WorkflowCrudService workflowCrudService = mock(WorkflowCrudService.class);
     private final WorkflowService workflowService = new WorkflowService(
         workflowCrudService,
@@ -52,7 +56,8 @@ class WorkflowWebhookUrlRejectionTest {
         mock(ExecutionEventPublisher.class),
         new ObjectMapper(),
         mock(WebhookCredentialService.class),
-        mock(CredentialService.class));
+        mock(CredentialService.class),
+        new NodeDerivation(CATALOG), CATALOG);
 
     private final ObjectMapper jsonMapper = new ObjectMapper();
     private final UUID userId = UUID.randomUUID();
@@ -78,7 +83,7 @@ class WorkflowWebhookUrlRejectionTest {
               "name": "웹훅 워크플로우",
               "description": "웹훅 저장 거부 검증",
               "nodes": [
-                { "id": "node-http", "type": "HTTP", "label": "알림 보내기",
+                { "id": "node-http", "event": "http.request", "type": "HTTP", "label": "알림 보내기",
                   "description": "채널로 알림을 보내요.",
                   "position": { "x": 40, "y": 120 },
                   "config": %s }

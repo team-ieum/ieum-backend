@@ -45,6 +45,8 @@ jobs:
       # 저장소 코드 가져오기
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: true
 
       # JDK 21 설치
       - name: Setup JDK
