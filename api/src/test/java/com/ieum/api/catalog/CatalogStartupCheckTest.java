@@ -1,10 +1,12 @@
 package com.ieum.api.catalog;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.ieum.workflowcore.catalog.EventCatalog;
 import com.ieum.workflowcore.catalog.EventDefinition;
 import com.ieum.workflowcore.domain.enums.TriggerType;
+import com.ieum.workflowcore.trigger.TriggerHandlerRegistry;
 import java.io.IOException;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -47,6 +49,14 @@ class CatalogStartupCheckTest {
 
         assertThat(CatalogStartupCheck.problems(CATALOG, handled, catalogSources(CATALOG)))
                 .containsExactly("트리거 핸들러 없음: GITHUB_NEW_ISSUE");
+    }
+
+    @Test
+    @DisplayName("문제가 있으면 생성자가 IllegalStateException으로 컨텍스트 로드를 막는다(fail-closed)")
+    void constructor_throwsOnProblems() {
+        assertThatThrownBy(() -> new CatalogStartupCheck(CATALOG, new TriggerHandlerRegistry(List.of()), List.of()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("카탈로그 기동 검사 실패");
     }
 
     @Test
