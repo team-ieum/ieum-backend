@@ -1,10 +1,8 @@
 package com.ieum.api.node.controller;
 
-import static org.hamcrest.Matchers.containsString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -25,21 +23,21 @@ class NodeCatalogControllerTest {
         .build();
 
     @Test
-    @DisplayName("agent 카탈로그를 data에 그대로 — null·false 값과 점이 든 키도 보존")
+    @DisplayName("agent 카탈로그를 data에 그대로 — 중첩 fixed(event·brand)와 false 값도 보존")
     void wrapsAgentCatalogVerbatim() throws Exception {
         given(agentClient.getNodeCatalog()).willReturn(new ObjectMapper().readTree("""
-            {"entries":[{"id":"trigger.schedule","nodeType":"TRIGGER","app":null,
-              "match":{"type":"TRIGGER","config.triggerType":"SCHEDULE"},
-              "inputFields":[{"key":"cron","path":"config.cron","type":"cron","required":true,"ref":false}]}]}
+            {"entries":[{"id":"schedule.every","kind":"trigger","provider":"ieum","app":"schedule","nodeType":"TRIGGER",
+              "fixed":{"type":"TRIGGER","event":"schedule.every","config":{"brand":"webhook"}},
+              "inputFields":[{"key":"cron","title":"실행 주기","type":"cron","required":true,"ref":false}]}]}
             """));
 
         mockMvc.perform(get("/api/v1/nodes/catalog"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.success").value(true))
-            .andExpect(jsonPath("$.data.entries[0].id").value("trigger.schedule"))
-            .andExpect(jsonPath("$.data.entries[0].match['config.triggerType']").value("SCHEDULE"))
-            .andExpect(jsonPath("$.data.entries[0].inputFields[0].path").value("config.cron"))
-            .andExpect(jsonPath("$.data.entries[0].inputFields[0].ref").value(false))
-            .andExpect(content().string(containsString("\"app\":null")));
+            .andExpect(jsonPath("$.data.entries[0].id").value("schedule.every"))
+            .andExpect(jsonPath("$.data.entries[0].kind").value("trigger"))
+            .andExpect(jsonPath("$.data.entries[0].fixed.event").value("schedule.every"))
+            .andExpect(jsonPath("$.data.entries[0].fixed.config.brand").value("webhook"))
+            .andExpect(jsonPath("$.data.entries[0].inputFields[0].ref").value(false));
     }
 }
