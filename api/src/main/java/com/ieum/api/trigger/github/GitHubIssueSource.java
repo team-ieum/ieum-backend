@@ -4,9 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.ieum.api.integration.options.GitHubApiReader;
 import com.ieum.api.integration.options.OptionPage.OptionItem;
 import com.ieum.common.exception.CustomException;
-import com.ieum.api.trigger.AppTriggerSampleFetcher;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.enums.TriggerType;
+import com.ieum.workflowcore.trigger.NodeTestMode;
 import com.ieum.workflowcore.trigger.TriggerHandler;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
@@ -31,7 +31,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @RequiredArgsConstructor
-public class GitHubIssueSource implements AppTriggerSampleFetcher, TriggerHandler {
+public class GitHubIssueSource implements TriggerHandler {
 
     static final String REPO_NOT_INSTALLED =
         "이 레포에 GitHub 앱 설치가 필요합니다. GitHub App 설치 범위에 저장소를 추가해 주세요.";
@@ -144,14 +144,18 @@ public class GitHubIssueSource implements AppTriggerSampleFetcher, TriggerHandle
         }
     }
 
+    /** 노드 테스트는 listen하지 않고 최근 이슈 1건을 즉시 샘플로 만든다 */
     @Override
-    public TriggerType triggerType() {
-        return TriggerType.GITHUB_NEW_ISSUE;
+    public NodeTestMode nodeTestMode() {
+        return NodeTestMode.FETCH;
     }
 
-    /** BE-a 포트 — 노드 테스트 최근 1건. {@code config}는 노드 config 원본(repoId 문자열·숫자). */
+    /**
+     * 노드 테스트 최근 1건. {@code config}는 노드 config 원본(repoId 문자열·숫자). {@link #latestIssue}가 {@link #resolveRepo}로
+     * 설치 범위를 먼저 확인한다 — 저장 검증({@link #verifyAccess})을 거치지 않는 body 노드도 남의 레포를 읽지 못한다.
+     */
     @Override
-    public Optional<Map<String, Object>> fetchLatest(UUID userId, Map<String, Object> config) {
+    public Optional<Map<String, Object>> fetchSample(UUID userId, Map<String, Object> config) {
         long repoId = repoId(config)
             .orElseThrow(() -> new CustomException(ErrorCode.INVALID_INPUT, "GitHub 저장소를 먼저 선택해 주세요."));
         return latestIssue(userId, repoId);
@@ -159,7 +163,7 @@ public class GitHubIssueSource implements AppTriggerSampleFetcher, TriggerHandle
 
     /**
      * GitHub 트리거 config의 {@code repoId} — 라우팅({@code resource_key})과 접근 검증의 키. FE 드롭다운은 문자열("123"),
-     * agent·Swagger는 숫자(123)로 저장하므로 둘 다 받는다. 구독 스냅샷과 노드 테스트({@link #fetchLatest})가 함께 쓴다.
+     * agent·Swagger는 숫자(123)로 저장하므로 둘 다 받는다. 구독 스냅샷과 노드 테스트({@link #fetchSample})가 함께 쓴다.
      *
      * @return 미설정(없음·blank)이면 empty. 양의 정수가 아니면 {@code INVALID_WORKFLOW}(400)
      */

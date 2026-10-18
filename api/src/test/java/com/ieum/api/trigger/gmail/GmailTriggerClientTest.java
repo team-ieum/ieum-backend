@@ -16,6 +16,7 @@ import com.ieum.auth.service.GoogleTokenService;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.Node;
+import com.ieum.workflowcore.trigger.NodeTestMode;
 import com.ieum.workflowcore.trigger.PollStart;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -107,8 +108,8 @@ class GmailTriggerClientTest {
     }
 
     @Test
-    @DisplayName("fetchLatest — 최신 1건을 정규화, 0건이면 empty")
-    void fetchLatest() {
+    @DisplayName("노드 테스트 — FETCH 방식, fetchSample은 최신 1건을 정규화하고 0건이면 empty")
+    void fetchSample() {
         connected();
         server.expect(requestTo(LIST + "?q=%28label%3Awork%29%20-in%3Asent&maxResults=1"))
             .andRespond(withSuccess("{\"messages\":[{\"id\":\"m9\"}]}", MediaType.APPLICATION_JSON));
@@ -118,10 +119,11 @@ class GmailTriggerClientTest {
         server.expect(requestTo(LIST + "?q=in%3Ainbox%20-in%3Asent&maxResults=1"))
             .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
 
-        assertThat(client.triggerType()).isEqualTo(TriggerType.GMAIL_NEW_EMAIL);
-        assertThat(client.fetchLatest(userId, Map.of("query", "label:work")))
+        assertThat(client.type()).isEqualTo(TriggerType.GMAIL_NEW_EMAIL);
+        assertThat(client.nodeTestMode()).isEqualTo(NodeTestMode.FETCH);
+        assertThat(client.fetchSample(userId, Map.of("query", "label:work")))
             .hasValueSatisfying(out -> assertThat(out).containsEntry("messageId", "m9"));
-        assertThat(client.fetchLatest(userId, Map.of())).isEmpty();
+        assertThat(client.fetchSample(userId, Map.of())).isEmpty();
     }
 
     @Test

@@ -18,6 +18,7 @@ import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
+import com.ieum.workflowcore.trigger.NodeTestMode;
 import com.ieum.workflowcore.trigger.PollStart;
 import java.time.LocalDateTime;
 import java.util.HashMap;
@@ -306,19 +307,20 @@ class GitHubIssueSourceTest {
         // 기대 요청 0건 — 요청이 나갔으면 verifyRequests가 깨진다
     }
 
-    // ──────────── AppTriggerSampleFetcher (BE-a 포트 — Task 3이 fetchSample로 옮긴다) ────────────
+    // ──────────── TriggerHandler 노드 테스트(FETCH) ────────────
 
     @Test
-    @DisplayName("fetchLatest — 노드 config의 repoId(문자열)로 최근 이슈, repoId가 비면 400(→ BE-a가 FAILED 샘플)")
-    void fetchLatestUsesNodeConfig() {
+    @DisplayName("fetchSample — 노드 config의 repoId(문자열)로 설치 범위 확인 후 최근 이슈, repoId가 비면 400(→ NodeTestService가 FAILED 샘플)")
+    void fetchSampleUsesNodeConfig() {
         connected();
         expectInstalled(123, "dobee/ieum");
         server.expect(requestTo(startsWith(BASE + "/repos/dobee/ieum/issues?")))
             .andRespond(withSuccess("[" + ISSUE + "]", MediaType.APPLICATION_JSON));
 
-        assertThat(source.triggerType()).isEqualTo(TriggerType.GITHUB_NEW_ISSUE);
-        assertThat(source.fetchLatest(userId, Map.of("repoId", "123"))).isPresent();
-        assertErrorCode(() -> source.fetchLatest(userId, Map.of("repoId", "")),
+        assertThat(source.type()).isEqualTo(TriggerType.GITHUB_NEW_ISSUE);
+        assertThat(source.nodeTestMode()).isEqualTo(NodeTestMode.FETCH);
+        assertThat(source.fetchSample(userId, Map.of("repoId", "123"))).isPresent();
+        assertErrorCode(() -> source.fetchSample(userId, Map.of("repoId", "")),
             ErrorCode.INVALID_INPUT);
     }
 
