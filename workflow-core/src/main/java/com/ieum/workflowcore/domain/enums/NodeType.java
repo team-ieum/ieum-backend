@@ -12,8 +12,8 @@ public enum NodeType {
     /** 데이터 변환 노드 */
     TRANSFORM,
     /**
-     * 앱 도구 하나를 LLM 없이 실행하는 결정론적 노드. config 모양은 AI 노드의 {@code tools[0]}과 같다
-     * ({@code {"tools":[{"name":"<tool_key>","config":{...}}]}}). ieum-agent {@code /v1/actions/execute}에 위임한다.
+     * 앱 도구 하나를 LLM 없이 실행하는 결정론적 노드. 도구는 노드 {@code event}의 카탈로그 {@code tool_key},
+     * 입력은 평평한 {@code config.<칸>}이다. ieum-agent {@code /v1/actions/execute}에 위임한다.
      */
     ACTION,
     /**

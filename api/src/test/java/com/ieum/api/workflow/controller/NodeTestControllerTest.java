@@ -105,7 +105,18 @@ class NodeTestControllerTest {
     void invalidBodyNodeIs400() throws Exception {
         mockMvc.perform(post("/api/v1/workflows/{workflowId}/nodes/{nodeId}/test", workflowId, "node-1")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"node\":{\"id\":\"node-1\",\"type\":\"HTTP\"}}"))
+                .content("{\"node\":{\"id\":\"node-1\",\"event\":\"http.request\",\"type\":\"HTTP\"}}"))
+            .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    @DisplayName("body 노드에 event가 없으면 400 — 서비스 호출 없음 (IEUM-BE-92)")
+    void bodyNodeWithoutEventIs400() throws Exception {
+        mockMvc.perform(post("/api/v1/workflows/{workflowId}/nodes/{nodeId}/test", workflowId, "node-1")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"node\":{\"id\":\"node-1\",\"label\":\"x\",\"config\":{}}}"))
             .andExpect(status().isBadRequest());
 
         verifyNoInteractions(service);

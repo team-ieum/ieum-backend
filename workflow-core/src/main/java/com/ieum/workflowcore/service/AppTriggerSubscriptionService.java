@@ -2,6 +2,7 @@ package com.ieum.workflowcore.service;
 
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.catalog.EventCatalog;
 import com.ieum.workflowcore.domain.AppTriggerSubscription;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.enums.TriggerType;
@@ -32,13 +33,14 @@ public class AppTriggerSubscriptionService {
 
     private final AppTriggerSubscriptionRepository repository;
     private final AppTriggerAccessVerifier accessVerifier;
+    private final EventCatalog eventCatalog;
 
     /**
      * 저장될 정의·활성 상태에 구독 행을 맞춘다. {@code WorkflowCrudService}의 생성·수정·AI 저장·활성화·비활성화가
      * 같은 트랜잭션 안에서 부른다(Quartz와 달리 afterCommit이 아니다 — 같은 PG라 원자적으로 묶고, 검증 거부를 400으로 낸다).
      *
-     * <p>마지막 TRIGGER 노드(TriggerNodeSchedule.find와 같은 선택 — {@code config.triggerType} 없는 노드는 건너뜀)의
-     * {@code config.triggerType}이 앱 트리거이고 워크플로우가 활성이면 그 노드 id로 upsert, 아니면 그 워크플로우의 행을 전부
+     * <p>첫 TRIGGER 노드(저장 계산 {@code TriggerNodeSchedule}·실행 {@code SyncExecutionRuntime}·{@code includeRaw}와 같은 선택)의
+     * {@code event}가 카탈로그에서 앱 트리거이고 워크플로우가 활성이면 그 노드 id로 upsert, 아니면 그 워크플로우의 행을 전부
      * 지운다. 같은 노드 id면 행을 재사용해 재구성한다 — 지우고 같은 (workflow_id, node_id)로 다시 넣으면 Hibernate flush
      * 순서(insert가 delete보다 먼저)로 UNIQUE 위반이다.
      *
@@ -47,12 +49,6 @@ public class AppTriggerSubscriptionService {
     @Transactional
     public void sync(Workflow workflow, List<Map<String, Object>> nodes) {
         AppTrigger trigger = workflow.isActive() ? findAppTrigger(nodes) : null;
-        // 최상위 triggerType만 앱 트리거고 노드 선언이 없으면 활성인데 구독 행이 없어 영영 발화하지 않는다.
-        // 구독 config(query·repoId)는 노드에만 있으니 거부한다 — SCHEDULE이 cron 없으면 400인 것과 같은 기준.
-        if (trigger == null && workflow.isActive() && workflow.getTriggerType().isAppTrigger()) {
-            throw new CustomException(ErrorCode.INVALID_WORKFLOW,
-                "앱 트리거는 TRIGGER 노드의 config.triggerType으로 선언해야 합니다.");
-        }
         AppTriggerSubscription keep = null;
         for (AppTriggerSubscription row : repository.findByWorkflowId(workflow.getId())) {
             if (trigger != null && row.getNodeId().equals(trigger.nodeId())) {
@@ -124,17 +120,20 @@ public class AppTriggerSubscriptionService {
     private record AppTrigger(String nodeId, TriggerType type, Map<?, ?> config) {
     }
 
-    private static AppTrigger findAppTrigger(List<Map<String, Object>> nodes) {
-        AppTrigger found = null;
+    private AppTrigger findAppTrigger(List<Map<String, Object>> nodes) {
         for (Map<String, Object> node : nodes) {
-            if (!"TRIGGER".equals(node.get("type")) || !(node.get("config") instanceof Map<?, ?> config)
-                    || config.get("triggerType") == null) {
+            if (!"TRIGGER".equals(node.get("type"))) {
                 continue;
             }
-            TriggerType type = TriggerType.appTriggerOf(config.get("triggerType"));
-            found = type == null ? null : new AppTrigger(String.valueOf(node.get("id")), type, config);
+            TriggerType type = node.get("event") instanceof String event
+                ? eventCatalog.triggerTypeOf(event).orElse(null) : null;
+            if (type == null || !type.isAppTrigger()) {
+                return null;
+            }
+            Map<?, ?> config = node.get("config") instanceof Map<?, ?> c ? c : Map.of();
+            return new AppTrigger(String.valueOf(node.get("id")), type, config);
         }
-        return found;
+        return null;
     }
 
     /**

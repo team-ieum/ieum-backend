@@ -97,6 +97,7 @@ QueryDSL (openfeign 7.1), springdoc-openapi 2.8.4, Quartz, Spring @Async (MVP)
 - **`nullable = false` 컬럼을 기존 행이 있는 테이블에 추가할 때는 `@ColumnDefault`가 필수** — 없으면 PostgreSQL이 DDL을 거부하는데 `ddl-auto: update`는 그 오류를 경고로만 남기고 부팅을 계속해 **컬럼 없이 앱이 뜬다.** 운영은 `update`, 테스트는 `create-drop`(빈 스키마)이라 테스트가 이 사고를 잡아 주지 않는다
 - 변수 참조 문법: `{{nodes.<uuid>.output.<field>}}` (workflow-core에서 사용)
 - JWT 예외는 반드시 CustomException으로 변환 — ExpiredJwtException → TOKEN_EXPIRED, JwtException → TOKEN_INVALID
+- **`catalog/`는 서브모듈(ieum-node-catalog)** — clone·워크트리 생성 후 `git submodule update --init`을 먼저 실행한다. 비어 있으면 `:workflow-core:catalogIndex`가 실패해 빌드·테스트·bootJar가 전부 멈춘다(의도한 동작). 이벤트 정의는 BE 코드가 아니라 카탈로그 레포에서 고친다
 
 ## 빌드 & 실행
 ```bash

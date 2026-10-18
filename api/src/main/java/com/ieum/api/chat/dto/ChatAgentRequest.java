@@ -7,7 +7,8 @@ import lombok.Getter;
 /**
  * ieum-agent POST /v1/chat 요청 body.
  *
- * <p>ieum-backend가 FE 요청의 currentNodes/currentEdges를 그대로 전달하고(DB에서 다시 읽지 않는다),
+ * <p>ieum-backend가 FE 요청의 currentNodes를 NodeDerivation으로 파생한 결과(type·brand를 덮고 옛 키를 지움)와
+ * currentEdges를 전달하고(DB에서 다시 읽지 않는다),
  * 연동 서비스 상태를 available/unavailable 두 목록으로 분리하여 전달한다.
  */
 @Getter

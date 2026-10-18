@@ -171,17 +171,18 @@ class WorkflowCrudServiceScheduleTest {
     }
 
     @Test
-    @DisplayName("AI 저장에 트리거 정보가 없으면 트리거 타입·cron·Job을 건드리지 않는다")
-    void saveAgentVersion_noTrigger_leavesScheduleUntouched() {
+    @DisplayName("AI 저장에 트리거 정보가 null이면 MANUAL로 저장되고 기존 스케줄 Job이 해제된다 — 기존 값 유지 규칙 삭제(IEUM-BE-92)")
+    void saveAgentVersion_nullTrigger_becomesManualAndUnschedules() {
         stubDefinitionSave();
         Workflow stored = workflow(TriggerType.SCHEDULE, CRON);
         given(workflowRepository.findById(workflowId)).willReturn(Optional.of(stored));
 
         runInTransaction(() -> service.saveAgentVersion(workflowId, NODES_JSON, EDGES_JSON, null, null));
 
-        assertThat(stored.getTriggerType()).isEqualTo(TriggerType.SCHEDULE);
-        assertThat(stored.getCronExpression()).isEqualTo(CRON);
-        verifyNoInteractions(workflowScheduler);
+        assertThat(stored.getTriggerType()).isEqualTo(TriggerType.MANUAL);
+        assertThat(stored.getCronExpression()).isNull();
+        verify(workflowScheduler).deleteJob(stored.getId());
+        verify(workflowScheduler, never()).registerJob(any(), any());
     }
 
     @Test

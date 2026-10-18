@@ -24,6 +24,8 @@ import com.ieum.api.workflow.service.RawWebhookUrlGuard;
 import com.ieum.api.workflow.service.TriggerNodeSchedule;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.catalog.EventCatalog;
+import com.ieum.workflowcore.catalog.NodeDerivation;
 import com.ieum.workflowcore.chat.domain.ChatMessage;
 import com.ieum.workflowcore.chat.domain.ChatSession;
 import com.ieum.workflowcore.chat.domain.MessageType;
@@ -65,7 +67,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  *   <li>세션 찾기 or 신규 생성</li>
  *   <li>워크플로우 AI 노드 설정(credentialId, llmProvider, tools) 로드</li>
  *   <li>USER 메시지 DB 저장</li>
- *   <li>FE가 보낸 currentNodes/currentEdges를 그대로 전달(DB 재조회 없음)</li>
+ *   <li>FE가 보낸 currentNodes를 NodeDerivation으로 파생(type·brand 계산, 옛 키 제거)해 currentEdges와 함께 전달(DB 재조회 없음)</li>
  *   <li>연동 상태 분류 (availableIntegrations / unavailableIntegrations)</li>
  *   <li>Google 빌트인 도구 여부 판단 → Access Token 조회</li>
  *   <li>AgentClient.chat() 호출 (블로킹)</li>
@@ -96,6 +98,8 @@ public class ChatService {
     private final McpServerCatalogRepository mcpServerCatalogRepository;
     private final WebhookCredentialRepository webhookCredentialRepository;
     private final BetaPlatformProvider betaPlatformProvider;
+    private final NodeDerivation nodeDerivation;
+    private final EventCatalog eventCatalog;
 
     // ─────────────────────────────────────── REST 블로킹 ──────────────────────
 
@@ -139,6 +143,7 @@ public class ChatService {
         List<IntegrationInfo> agentUnavailable = filterAgentSupportedIntegrations(integrationContext.unavailable());
         List<AvailableMcpServer> availableMcpServers = resolveAvailableMcpServers(userId);
         List<AvailableWebhook> availableWebhooks = resolveAvailableWebhooks(userId);
+        List<Object> currentNodes = deriveCurrentNodes(request.getCurrentNodes());
         ChatAgentResponse agentResponse;
         String betaReservationKey = null;
         try {
@@ -150,7 +155,7 @@ public class ChatService {
             agentResponse = agentClient.chat(AgentClient.AgentChatCallParams.builder()
                 .workflowId(workflowId)
                 .prompt(request.getPrompt())
-                .currentNodes(request.getCurrentNodes())
+                .currentNodes(currentNodes)
                 .currentEdges(request.getCurrentEdges())
                 .availableIntegrations(agentAvailable)
                 .unavailableIntegrations(agentUnavailable)
@@ -176,9 +181,11 @@ public class ChatService {
 
         // 8. WORKFLOW_GENERATED/MODIFIED → DB에 새 버전으로 저장
         //    첫 생성 여부를 저장 전에 확인 (저장 후에는 version이 증가하므로)
+        List<Object> savedNodes = null;   // 저장했으면 파생 노드, 아니면 agent 응답 그대로
         if (agentResponse.isWorkflowResult()) {
             int maxVersionBeforeSave = workflowCrudService.findMaxVersionByWorkflowId(workflowId);
-            saveWorkflowVersion(workflowId, agentResponse, agentConfig, request.getCredentialId(), userId);
+            savedNodes = List.copyOf(
+                saveWorkflowVersion(workflowId, agentResponse, agentConfig, request.getCredentialId(), userId));
 
             if (maxVersionBeforeSave <= 1 && agentResponse.getWorkflowName() != null) {
                 workflowCrudService.updateWorkflowName(workflowId, agentResponse.getWorkflowName());
@@ -198,7 +205,7 @@ public class ChatService {
             agentResponse.getOutputTokens()
         );
 
-        return ChatResponse.from(agentMessage, session.getId(), agentResponse);
+        return ChatResponse.from(agentMessage, session.getId(), agentResponse, savedNodes);
     }
 
     // ─────────────────────────────────────── 히스토리 ─────────────────────────
@@ -519,6 +526,22 @@ public class ChatService {
     }
 
     /**
+     * FE가 보낸 캔버스 노드를 저장 경로와 같은 파생에 통과시킨다(IEUM-BE-92). null이면 null(신규 생성)이다.
+     * 모르는 event나 객체가 아닌 원소는 CustomException(INVALID_WORKFLOW)이다 — 호출부는 쿼터 예약·agent 호출보다 앞에서 부른다.
+     */
+    private List<Object> deriveCurrentNodes(List<Object> currentNodes) {
+        if (currentNodes == null) {
+            return null;
+        }
+        // 객체가 아닌 원소(문자열·null)는 변환·파생에서 500이 된다 — 400으로 먼저 막는다.
+        if (currentNodes.stream().anyMatch(node -> !(node instanceof Map))) {
+            throw new CustomException(ErrorCode.INVALID_WORKFLOW, "currentNodes의 원소는 노드 객체여야 합니다.");
+        }
+        return List.copyOf(nodeDerivation.deriveAll(objectMapper.convertValue(
+            currentNodes, new TypeReference<List<Map<String, Object>>>() {})));
+    }
+
+    /**
      * AI가 생성/수정한 노드/엣지를 JSON으로 직렬화하여 새 워크플로우 버전으로 저장한다.
      *
      * <p>agent가 생성한 AI 노드에는 credentialId가 없으므로,
@@ -527,13 +550,17 @@ public class ChatService {
      * <p>여기가 agent 경로의 유일한 저장 지점이다 — {@link #chat}(블로킹)과 {@link #finalizeStream}
      * (스트리밍) 둘 다 이 메서드를 거쳐 {@code WorkflowCrudService.saveAgentVersion}으로 간다. 그
      * 아래는 JSON 문자열만 받으므로 노드 단위 검사는 여기가 마지막 지점이다(IEUM-BE-62 Task 4).
+     *
+     * @return 저장한 파생 노드(type은 event가 정한 값)
      */
     @SuppressWarnings("unchecked")
-    private void saveWorkflowVersion(UUID workflowId, ChatAgentResponse agentResponse,
+    private List<Map<String, Object>> saveWorkflowVersion(UUID workflowId, ChatAgentResponse agentResponse,
             AgentConfig agentConfig, UUID fallbackCredentialId, UUID userId) {
         try {
-            List<Map<String, Object>> nodes = objectMapper.convertValue(
-                agentResponse.getNodes(), new TypeReference<>() {});
+            // agent 노드도 REST와 같은 파생을 거친다(IEUM-BE-92). 모르는 event면 CustomException이 나서 WS error·REST 400이 된다.
+            // 아래 주입·가드는 모두 파생된 Map(type은 event가 정한 값, config는 변경 가능한 사본)에 돈다.
+            List<Map<String, Object>> nodes = nodeDerivation.deriveAll(objectMapper.convertValue(
+                agentResponse.getNodes(), new TypeReference<>() {}));
 
             // 소유 크레덴셜 목록은 저장당 한 번만 조회한다(노드마다 부르면 N+1).
             Set<String> ownedCredentialIds = credentialService.getByUserId(userId).stream()
@@ -547,6 +574,7 @@ public class ChatService {
                 // 사용자가 프롬프트에 URL을 그대로 적으면 그 값이 노드 config로 돌아올 수 있다.
                 RawWebhookUrlGuard.rejectRawWebhookUrl(node.get("config"));
 
+                // 파생 type 기준 — agent가 보낸 type이 아니다
                 String nodeType = (String) node.get("type");
                 if ("AI".equals(nodeType)) {
                     Map<String, Object> config = (Map<String, Object>) node.get("config");
@@ -582,12 +610,14 @@ public class ChatService {
 
             String nodesJson = objectMapper.writeValueAsString(nodes);
             String edgesJson = objectMapper.writeValueAsString(fillEdgeIds(agentResponse.getEdges()));
-            // TRIGGER 노드가 없거나 triggerType이 없으면 null — 저장 쪽이 스케줄을 건드리지 않는다.
-            TriggerNodeSchedule schedule = TriggerNodeSchedule.find(nodes).orElse(null);
+            // 트리거는 저장할 노드에서 계산한다 — 트리거 노드가 없으면 MANUAL이라 기존 스케줄·Job이 해제된다(IEUM-BE-92).
+            TriggerNodeSchedule schedule = TriggerNodeSchedule.compute(nodes, eventCatalog);
+            schedule.assertCronPresent(nodes);   // REST와 같은 400 문구 — 저장 쪽 일반 문구보다 먼저
             workflowCrudService.saveAgentVersion(workflowId, nodesJson, edgesJson,
-                schedule != null ? schedule.triggerType() : null, schedule != null ? schedule.cron() : null);
+                schedule.triggerType(), schedule.cron());
             log.info("[ChatService] 워크플로우 버전 저장 완료 — workflowId: {}, type: {}",
                 workflowId, agentResponse.getType());
+            return nodes;
         } catch (JsonProcessingException e) {
             log.error("[ChatService] 노드/엣지 직렬화 실패 — workflowId: {}", workflowId, e);
             throw new CustomException(ErrorCode.INVALID_WORKFLOW);
@@ -744,11 +774,12 @@ public class ChatService {
             filterAgentSupportedIntegrations(integrationContext.unavailable())
         );
 
+        List<Object> currentNodes = deriveCurrentNodes(request.getCurrentNodes());
         return new StreamSetupResult(
             session.getId(),
             config,
             request.getPrompt(),
-            request.getCurrentNodes(),
+            currentNodes,
             request.getCurrentEdges(),
             agentContext,
             googleToken,
@@ -797,9 +828,11 @@ public class ChatService {
             ChatAgentResponse agentResponse, AgentConfig config, UUID fallbackCredentialId, UUID userId) {
         recordBetaTokensIfPresent(config, userId, agentResponse);
 
+        List<Object> savedNodes = null;   // 저장했으면 파생 노드, 아니면 agent 응답 그대로
         if (agentResponse.isWorkflowResult()) {
             int maxVersionBeforeSave = workflowCrudService.findMaxVersionByWorkflowId(workflowId);
-            saveWorkflowVersion(workflowId, agentResponse, config, fallbackCredentialId, userId);
+            savedNodes = List.copyOf(
+                saveWorkflowVersion(workflowId, agentResponse, config, fallbackCredentialId, userId));
 
             if (maxVersionBeforeSave <= 1 && agentResponse.getWorkflowName() != null) {
                 workflowCrudService.updateWorkflowName(workflowId, agentResponse.getWorkflowName());
@@ -817,7 +850,7 @@ public class ChatService {
             agentResponse.getOutputTokens()
         );
 
-        return ChatResponse.from(agentMessage, sessionId, agentResponse);
+        return ChatResponse.from(agentMessage, sessionId, agentResponse, savedNodes);
     }
 
     // ─────────────────────────────────────── 내부 DTO ─────────────────────────

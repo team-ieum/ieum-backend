@@ -144,8 +144,13 @@ public class AgentClient {
     /** agent 호출 실패를 ErrorCode로 옮긴다. {@code chat()}과 {@code getNodeCatalog()}가 공유한다. */
     private CustomException toAgentError(Exception e) {
         if (e instanceof WebClientResponseException we) {
-            log.error("[AgentClient] 에이전트 HTTP 오류 — status: {}, body: {}",
-                we.getStatusCode(), we.getResponseBodyAsString());
+            // 4xx 본문은 남기지 않는다 — agent 422 본문(pydantic input)에 노드 config·prompt가 그대로 실린다.
+            if (we.getStatusCode().is4xxClientError()) {
+                log.error("[AgentClient] 에이전트 HTTP 오류 — status: {}", we.getStatusCode());
+            } else {
+                log.error("[AgentClient] 에이전트 HTTP 오류 — status: {}, body: {}",
+                    we.getStatusCode(), we.getResponseBodyAsString());
+            }
             return new CustomException(we.getStatusCode().value() == 429
                 ? ErrorCode.PROVIDER_RATE_LIMITED : ErrorCode.PROVIDER_ERROR);
         }

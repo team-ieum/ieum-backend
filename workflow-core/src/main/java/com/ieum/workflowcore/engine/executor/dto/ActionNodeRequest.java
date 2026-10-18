@@ -19,10 +19,10 @@ import lombok.NoArgsConstructor;
 public class ActionNodeRequest {
 
     private String nodeId;
-    /** 실행할 도구 키 — ACTION 노드 {@code tools[0].name} (예: {@code builtin:github_create_issue}) */
+    /** 실행할 도구 키 — 노드 event의 카탈로그 {@code tool_key} (예: {@code builtin:github_create_issue}) */
     private String toolKey;
     /**
-     * {@code tools[0].config} — 참조식이 치환되고 slack·discord 웹훅 URL({@code webhook_url})이 주입된 복사본.
+     * 노드 config({@code brand} 제외)의 렌더 사본 — 참조식이 치환되고 slack·discord 웹훅 URL({@code webhook_url})이 주입된 복사본.
      * 함수 인자 밖의 키(웹훅 자격증명 ID, 표시 이름 등)도 섞여 있으며 agent가 시그니처로 거른다.
      */
     private Map<String, Object> config;

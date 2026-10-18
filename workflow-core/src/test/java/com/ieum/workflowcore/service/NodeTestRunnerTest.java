@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.catalog.EventCatalog;
 import com.ieum.workflowcore.config.RetryProperties;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.NodeTestSample;
@@ -67,7 +68,7 @@ class NodeTestRunnerTest {
     private final FakeExecutor http = new FakeExecutor(NodeType.HTTP);
     private final FakeExecutor ai = new FakeExecutor(NodeType.AI);
     private final NodeTestRunner runner = new NodeTestRunner(
-        List.of(http, ai, new TransformNodeExecutor(), new ConditionNodeExecutor(), new TriggerNodeExecutor()),
+        List.of(http, ai, new TransformNodeExecutor(), new ConditionNodeExecutor(), new TriggerNodeExecutor(EventCatalog.loadFromClasspath())),
         sampleRepository, crudService, new RetryProperties(), idempotencyStore, objectMapper);
 
     private final UUID userId = UUID.randomUUID();
@@ -238,15 +239,11 @@ class NodeTestRunnerTest {
             new RetryProperties(), idempotencyStore, objectMapper);
         seed(workflow, "list", SampleStatus.SUCCESS, "{\"issues\":[{\"title\":\"첫 이슈\"},{\"title\":\"둘째\"}]}");
         Node create = new Node("node-1", NodeType.ACTION, "이슈 만들기", new HashMap<>(Map.of(
-            "tools", List.of(Map.of("name", "builtin:github_create_issue",
-                "config", Map.of("title", "{{nodes.list.output.issues.0.title}}"))))));
+            "title", "{{nodes.list.output.issues.0.title}}")), "github.create_issue");
 
         withAction.run(workflow, create, Map.of());
 
-        @SuppressWarnings("unchecked")
-        Map<String, Object> toolConfig = (Map<String, Object>) ((Map<String, Object>)
-            ((List<Object>) action.calls.get(0).input().get("tools")).get(0)).get("config");
-        assertThat(toolConfig).containsEntry("title", "첫 이슈");
+        assertThat(action.calls.get(0).input()).containsEntry("title", "첫 이슈");
     }
 
     // ──────────────────────────── 저장·마스킹·실패 ────────────────────────────
@@ -480,38 +477,36 @@ class NodeTestRunnerTest {
 
     // ──────────────────────────── 트리거 (spec §5.4) ────────────────────────────
 
-    private Node trigger(Map<String, Object> config) {
-        return new Node("t", NodeType.TRIGGER, "트리거", new HashMap<>(config));
+    private Node trigger(String event, Map<String, Object> config) {
+        return new Node("t", NodeType.TRIGGER, "트리거", new HashMap<>(config), event);
     }
 
     @Test
     @DisplayName("manual — 샘플은 원 페이로드가 아니라 치환된 트리거 config다: 자기 참조 없으면 페이로드 필드가 안 남는다(런타임과 같다)")
     void manualSampleIsRenderedConfigNotRawPayload() {
-        NodeTestResult result = runner.run(workflow, trigger(Map.of("triggerType", "MANUAL")),
+        NodeTestResult result = runner.run(workflow, trigger("manual.run", Map.of("memo", "고정")),
             Map.of("score", 5));
 
         assertThat(result.status()).isEqualTo(SampleStatus.SUCCESS);
-        assertThat(result.output()).isEqualTo(Map.of("triggerType", "MANUAL"));
+        assertThat(result.output()).isEqualTo(Map.of("memo", "고정"));
     }
 
     @Test
     @DisplayName("manual — config가 {{nodes.t.output.X}}로 자기 참조하면 페이로드 필드가 문자열로 남고, 민감 키는 마스킹된다")
     void manualSelfReferenceBringsPayloadFields() {
-        NodeTestResult result = runner.run(workflow, trigger(Map.of(
-            "triggerType", "MANUAL",
+        NodeTestResult result = runner.run(workflow, trigger("manual.run", Map.of(
             "score", "{{nodes.t.output.score}}",
             "token", "{{nodes.t.output.token}}")),
             Map.of("score", 85, "token", "sk-raw"));
 
-        assertThat(result.output()).containsEntry("triggerType", "MANUAL")
-            .containsEntry("score", "85").containsEntry("token", "***");
+        assertThat(result.output()).containsEntry("score", "85").containsEntry("token", "***");
         assertThat(stored("t").getOutputJson()).doesNotContain("sk-raw");
     }
 
     @Test
     @DisplayName("input이 null이어도 빈 페이로드로 성공한다")
     void nullInputIsEmptyPayload() {
-        NodeTestResult result = runner.run(workflow, trigger(Map.of("triggerType", "MANUAL")), null);
+        NodeTestResult result = runner.run(workflow, trigger("manual.run", Map.of()), null);
 
         assertThat(result.status()).isEqualTo(SampleStatus.SUCCESS);
     }
@@ -520,7 +515,7 @@ class NodeTestRunnerTest {
     @DisplayName("schedule — {triggeredAt, cron}을 내고 요청 input은 무시한다")
     void scheduleEmitsTriggeredAtAndCron() {
         NodeTestResult result = runner.run(workflow,
-            trigger(Map.of("triggerType", "SCHEDULE", "cron", "0 0 9 * * ?")), Map.of("x", 1));
+            trigger("schedule.every", Map.of("cron", "0 0 9 * * ?")), Map.of("x", 1));
 
         assertThat(result.output()).containsKeys("triggeredAt", "cron").doesNotContainKey("x");
         assertThat(result.output()).containsEntry("cron", "0 0 9 * * ?");
@@ -529,7 +524,7 @@ class NodeTestRunnerTest {
     @Test
     @DisplayName("schedule에 cron이 없으면 500이 아니라 FAILED 샘플")
     void scheduleWithoutCronIsFailedSample() {
-        NodeTestResult result = runner.run(workflow, trigger(Map.of("triggerType", "SCHEDULE")), Map.of());
+        NodeTestResult result = runner.run(workflow, trigger("schedule.every", Map.of()), Map.of());
 
         assertThat(result.status()).isEqualTo(SampleStatus.FAILED);
         assertThat(result.error()).contains("cron");
@@ -539,8 +534,8 @@ class NodeTestRunnerTest {
     @Test
     @DisplayName("트리거는 앞 노드 샘플을 요구하지 않는다 — 다른 노드 참조는 런타임처럼 빈 문자열")
     void triggerDoesNotRequireOtherSamples() {
-        NodeTestResult result = runner.run(workflow, trigger(Map.of(
-            "triggerType", "MANUAL", "x", "{{nodes.other.output.x}}")), Map.of());
+        NodeTestResult result = runner.run(workflow, trigger("manual.run", Map.of(
+            "x", "{{nodes.other.output.x}}")), Map.of());
 
         assertThat(result.status()).isEqualTo(SampleStatus.SUCCESS);
         assertThat(result.output()).containsEntry("x", "");
@@ -558,8 +553,8 @@ class NodeTestRunnerTest {
     @Test
     @DisplayName("webhook 수신 — 저장된 트리거 노드로 실행하고 샘플은 받은 페이로드 그대로다(config는 섞이지 않는다)")
     void webhookSampleUsesSavedTriggerConfig() {
-        saveVersionWithNodes(List.of(Map.of("id", "t", "type", "TRIGGER", "label", "수신", "config",
-            Map.of("triggerType", "WEBHOOK", "orderId", "{{nodes.t.output.orderId}}"))));
+        saveVersionWithNodes(List.of(Map.of("id", "t", "type", "TRIGGER", "event", "webhook.catch", "label", "수신",
+            "config", Map.of("orderId", "{{nodes.t.output.orderId}}"))));
 
         NodeTestResult result = runner.recordWebhookSample(workflow, "t", Map.of("orderId", "ORD-1", "memo", "x"));
 
@@ -585,8 +580,8 @@ class NodeTestRunnerTest {
     @Test
     @DisplayName("webhook 샘플의 민감 페이로드는 저장 전에 마스킹된다")
     void webhookSampleIsMasked() {
-        saveVersionWithNodes(List.of(Map.of("id", "t", "type", "TRIGGER", "label", "수신", "config",
-            Map.of("triggerType", "WEBHOOK", "password", "{{nodes.t.output.password}}"))));
+        saveVersionWithNodes(List.of(Map.of("id", "t", "type", "TRIGGER", "event", "webhook.catch", "label", "수신",
+            "config", Map.of("password", "{{nodes.t.output.password}}"))));
 
         runner.recordWebhookSample(workflow, "t", Map.of("password", "pw-raw"));
 
@@ -611,7 +606,7 @@ class NodeTestRunnerTest {
     @DisplayName("앱 트리거 노드에 정규화 페이로드를 주면 샘플 = 페이로드 그대로(config 키 없음)")
     void appTriggerSampleIsPayload() {
         Node node = new Node("t1", NodeType.TRIGGER, "Gmail",
-            new HashMap<>(Map.of("triggerType", "GMAIL_NEW_EMAIL", "query", "from:x")));
+            new HashMap<>(Map.of("query", "from:x")), "gmail.new_email");
 
         NodeTestResult result = runner.run(workflow, node, Map.of("messageId", "m1", "subject", "s"));
 

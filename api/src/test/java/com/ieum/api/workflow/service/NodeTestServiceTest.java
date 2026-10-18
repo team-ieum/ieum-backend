@@ -19,6 +19,8 @@ import com.ieum.api.workflow.dto.NodeTestRequest;
 import com.ieum.api.workflow.dto.NodeTestResponse;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.catalog.EventCatalog;
+import com.ieum.workflowcore.catalog.NodeDerivation;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.domain.enums.SampleStatus;
@@ -40,6 +42,8 @@ import org.mockito.ArgumentCaptor;
 
 class NodeTestServiceTest {
 
+    private static final EventCatalog CATALOG = EventCatalog.loadFromClasspath();
+
     private final WorkflowCrudService crudService = mock(WorkflowCrudService.class);
     private final NodeTestRunner runner = mock(NodeTestRunner.class);
     private final CredentialService credentialService = mock(CredentialService.class);
@@ -51,7 +55,8 @@ class NodeTestServiceTest {
         given(tokenService.status(any())).willReturn(Optional.of(LocalDateTime.now()));
     }
     private final NodeTestService service = new NodeTestService(
-        crudService, runner, credentialService, listenStore, tokenService, List.of(gmailFetcher));
+        crudService, runner, credentialService, listenStore, tokenService, List.of(gmailFetcher),
+        new NodeDerivation(CATALOG), CATALOG);
     private final ObjectMapper json = new ObjectMapper();
 
     private final UUID userId = UUID.randomUUID();
@@ -115,7 +120,7 @@ class NodeTestServiceTest {
         String foreign = UUID.randomUUID().toString();
 
         assertThatThrownBy(() -> service.test(userId, workflowId, "node-1", request(
-            "{\"node\":{\"id\":\"node-1\",\"type\":\"AI\",\"label\":\"x\","
+            "{\"node\":{\"id\":\"node-1\",\"event\":\"ai.agent\",\"type\":\"AI\",\"label\":\"x\","
                 + "\"config\":{\"credentialId\":\"" + foreign + "\"}}}")))
             .satisfies(t -> assertErrorCode(t, ErrorCode.INVALID_WORKFLOW));
         verify(runner, never()).run(any(), any(), any());
@@ -128,7 +133,7 @@ class NodeTestServiceTest {
         given(credentialService.getByUserId(userId)).willReturn(List.of());
 
         assertThatThrownBy(() -> service.test(userId, workflowId, "node-1", request(
-            "{\"node\":{\"id\":\"node-1\",\"type\":\"HTTP\",\"label\":\"x\","
+            "{\"node\":{\"id\":\"node-1\",\"event\":\"http.request\",\"type\":\"HTTP\",\"label\":\"x\","
                 + "\"config\":{\"url\":\"https://hooks.slack.com/services/T0/B0/xyz\"}}}")))
             .satisfies(t -> assertErrorCode(t, ErrorCode.INVALID_WORKFLOW));
         verify(runner, never()).run(any(), any(), any());
@@ -141,7 +146,7 @@ class NodeTestServiceTest {
         given(credentialService.getByUserId(userId)).willReturn(List.of());
 
         assertThatThrownBy(() -> service.test(userId, workflowId, "node-1", request(
-            "{\"node\":{\"id\":\"node-1\",\"type\":\"AI\",\"label\":\"x\",\"config\":{\"apiKey\":\"sk-123\"}}}")))
+            "{\"node\":{\"id\":\"node-1\",\"event\":\"ai.agent\",\"type\":\"AI\",\"label\":\"x\",\"config\":{\"apiKey\":\"sk-123\"}}}")))
             .satisfies(t -> assertErrorCode(t, ErrorCode.INVALID_WORKFLOW));
         verify(runner, never()).run(any(), any(), any());
     }
@@ -158,13 +163,15 @@ class NodeTestServiceTest {
             new NodeTestResult(SampleStatus.SUCCESS, Map.of("ok", true), null, LocalDateTime.now()));
 
         NodeTestResponse response = service.test(userId, workflowId, "node-1", request(
-            "{\"node\":{\"id\":\"node-1\",\"type\":\"HTTP\",\"label\":\"호출\",\"config\":{\"method\":\"GET\"}}}"));
+            "{\"node\":{\"id\":\"node-1\",\"event\":\"http.request\",\"type\":\"HTTP\",\"label\":\"호출\","
+                + "\"config\":{\"method\":\"GET\"}}}"));
 
         ArgumentCaptor<Node> node = ArgumentCaptor.forClass(Node.class);
         verify(runner).run(eq(workflow), node.capture(), any());
         assertThat(node.getValue().getId()).isEqualTo("node-1");
         assertThat(node.getValue().getType()).isEqualTo(NodeType.HTTP);
-        assertThat(node.getValue().getConfig()).isEqualTo(Map.of("method", "GET"));
+        assertThat(node.getValue().getConfig()).containsEntry("method", "GET").containsKey("brand");
+        assertThat(node.getValue().getEvent()).isEqualTo("http.request");
         verify(runner, never()).findSavedNode(any(), any());
         assertThat(response.getStatus()).isEqualTo("SUCCESS");
         assertThat(response.getOutput()).isEqualTo(Map.of("ok", true));
@@ -201,8 +208,8 @@ class NodeTestServiceTest {
             new NodeTestResult(SampleStatus.SUCCESS, Map.of(), null, LocalDateTime.now()));
 
         service.test(userId, workflowId, "t", request(
-            "{\"node\":{\"id\":\"t\",\"type\":\"TRIGGER\",\"label\":\"트리거\","
-                + "\"config\":{\"triggerType\":\"MANUAL\"}},\"input\":{\"score\":5}}"));
+            "{\"node\":{\"id\":\"t\",\"event\":\"manual.run\",\"type\":\"TRIGGER\",\"label\":\"트리거\","
+                + "\"config\":{}},\"input\":{\"score\":5}}"));
 
         verify(runner).run(eq(workflow), any(Node.class), eq(Map.of("score", 5)));
         verifyNoInteractions(listenStore);
@@ -217,8 +224,8 @@ class NodeTestServiceTest {
         given(listenStore.start(workflowId, "t")).willReturn(expiresAt);
 
         NodeTestResponse response = service.test(userId, workflowId, "t", request(
-            "{\"node\":{\"id\":\"t\",\"type\":\"TRIGGER\",\"label\":\"수신\","
-                + "\"config\":{\"triggerType\":\"WEBHOOK\"}}}"));
+            "{\"node\":{\"id\":\"t\",\"event\":\"webhook.catch\",\"type\":\"TRIGGER\",\"label\":\"수신\","
+                + "\"config\":{}}}"));
 
         assertThat(response.getStatus()).isEqualTo("LISTENING");
         assertThat(response.getWebhookUrl()).isNull();
@@ -235,8 +242,8 @@ class NodeTestServiceTest {
         given(tokenService.status(workflowId)).willReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.test(userId, workflowId, "t", request(
-            "{\"node\":{\"id\":\"t\",\"type\":\"TRIGGER\",\"label\":\"수신\","
-                + "\"config\":{\"triggerType\":\"WEBHOOK\"}}}")))
+            "{\"node\":{\"id\":\"t\",\"event\":\"webhook.catch\",\"type\":\"TRIGGER\",\"label\":\"수신\","
+                + "\"config\":{}}}")))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WEBHOOK_TOKEN_NOT_ISSUED));
         verifyNoInteractions(listenStore);
@@ -244,21 +251,86 @@ class NodeTestServiceTest {
     }
 
     @Test
-    @DisplayName("노드 config에 triggerType이 없으면 워크플로우의 triggerType을 따른다")
-    void triggerWithoutTypeFollowsWorkflowTriggerType() throws Exception {
+    @DisplayName("event 없는 저장 TRIGGER 노드는 PG가 WEBHOOK이어도 listen하지 않고 실행한다 — PG triggerType 폴백 삭제")
+    void savedTriggerWithoutEventDoesNotFollowWorkflowTriggerType() throws Exception {
+        Node saved = new Node("t", NodeType.TRIGGER, "수신", new HashMap<>());
+        given(runner.findSavedNode(workflowId, "t")).willReturn(Optional.of(saved));
+        Workflow webhookWorkflow = workflow(TriggerType.WEBHOOK);
+        owns(webhookWorkflow);
+        given(runner.run(eq(webhookWorkflow), eq(saved), any())).willReturn(
+            new NodeTestResult(SampleStatus.SUCCESS, Map.of(), null, LocalDateTime.now()));
+
+        assertThat(service.test(userId, workflowId, "t", request("{}")).getStatus()).isEqualTo("SUCCESS");
+        verifyNoInteractions(listenStore);
+    }
+
+    @Test
+    @DisplayName("listen 판정은 노드 event만 본다 — PG가 WEBHOOK이어도 manual.run 노드는 실행, PG가 MANUAL이어도 저장된 webhook.catch(config {})는 listen")
+    void listenFollowsNodeEventNotWorkflowTriggerType() throws Exception {
         Workflow webhookWorkflow = workflow(TriggerType.WEBHOOK);
         owns(webhookWorkflow);
         given(credentialService.getByUserId(userId)).willReturn(List.of());
-        given(listenStore.start(workflowId, "t")).willReturn(LocalDateTime.now().plusMinutes(5));
-        String body = "{\"node\":{\"id\":\"t\",\"type\":\"TRIGGER\",\"label\":\"수신\",\"config\":{}}}";
-
-        assertThat(service.test(userId, workflowId, "t", request(body)).getStatus()).isEqualTo("LISTENING");
-
-        Workflow manualWorkflow = workflow(TriggerType.MANUAL);
-        owns(manualWorkflow);
-        given(runner.run(eq(manualWorkflow), any(Node.class), any())).willReturn(
+        given(runner.run(eq(webhookWorkflow), any(Node.class), any())).willReturn(
             new NodeTestResult(SampleStatus.SUCCESS, Map.of(), null, LocalDateTime.now()));
-        assertThat(service.test(userId, workflowId, "t", request(body)).getStatus()).isEqualTo("SUCCESS");
+
+        assertThat(service.test(userId, workflowId, "t", request(
+            "{\"node\":{\"id\":\"t\",\"event\":\"manual.run\",\"label\":\"수동\",\"config\":{}}}")).getStatus())
+            .isEqualTo("SUCCESS");
+        verifyNoInteractions(listenStore);
+
+        owns(workflow(TriggerType.MANUAL));
+        given(runner.findSavedNode(workflowId, "t")).willReturn(Optional.of(
+            new Node("t", NodeType.TRIGGER, "수신", new HashMap<>(), "webhook.catch")));
+        given(listenStore.start(workflowId, "t")).willReturn(LocalDateTime.now().plusMinutes(5));
+
+        assertThat(service.test(userId, workflowId, "t", request("{}")).getStatus()).isEqualTo("LISTENING");
+    }
+
+    @Test
+    @DisplayName("body 없이 저장된 gmail.new_email 노드도 앱 트리거로 판정해 최근 1건을 샘플로 넘긴다")
+    void savedGmailNodeSamplesLatest() throws Exception {
+        Workflow workflow = workflow(TriggerType.MANUAL);
+        owns(workflow);
+        Node saved = new Node("t1", NodeType.TRIGGER, "Gmail", new HashMap<>(Map.of("query", "from:x")),
+            "gmail.new_email");
+        given(runner.findSavedNode(workflowId, "t1")).willReturn(Optional.of(saved));
+        Map<String, Object> latest = Map.of("messageId", "m1");
+        given(gmailFetcher.fetchLatest(userId, saved.getConfig())).willReturn(Optional.of(latest));
+        given(runner.run(workflow, saved, latest))
+            .willReturn(new NodeTestResult(SampleStatus.SUCCESS, latest, null, LocalDateTime.now()));
+
+        assertThat(service.test(userId, workflowId, "t1", request("{}")).getStatus()).isEqualTo("SUCCESS");
+        verify(listenStore, never()).start(any(), any());
+    }
+
+    @Test
+    @DisplayName("body 노드의 event를 카탈로그가 모르면 400(INVALID_WORKFLOW) — 실행 없음")
+    void unknownEventInBodyNodeIsRejected() throws Exception {
+        owns(workflow(TriggerType.MANUAL));
+
+        assertThatThrownBy(() -> service.test(userId, workflowId, "node-1", request(
+            "{\"node\":{\"id\":\"node-1\",\"event\":\"http.nope\",\"type\":\"HTTP\",\"label\":\"x\",\"config\":{}}}")))
+            .satisfies(t -> assertErrorCode(t, ErrorCode.INVALID_WORKFLOW))
+            .hasMessageContaining("http.nope");
+        verify(runner, never()).run(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("body 노드의 type은 무시하고 event가 정한다 — 러너에 event도 실린다")
+    void bodyNodeTypeIsDerivedFromEvent() throws Exception {
+        Workflow workflow = workflow(TriggerType.MANUAL);
+        owns(workflow);
+        given(credentialService.getByUserId(userId)).willReturn(List.of());
+        given(runner.run(eq(workflow), any(Node.class), any())).willReturn(
+            new NodeTestResult(SampleStatus.SUCCESS, Map.of(), null, LocalDateTime.now()));
+
+        service.test(userId, workflowId, "node-1", request(
+            "{\"node\":{\"id\":\"node-1\",\"event\":\"transform.map\",\"type\":\"HTTP\",\"label\":\"x\",\"config\":{}}}"));
+
+        ArgumentCaptor<Node> node = ArgumentCaptor.forClass(Node.class);
+        verify(runner).run(eq(workflow), node.capture(), any());
+        assertThat(node.getValue().getType()).isEqualTo(NodeType.TRANSFORM);
+        assertThat(node.getValue().getEvent()).isEqualTo("transform.map");
     }
 
     // ──────────────────── 샘플 조회 ────────────────────
@@ -285,8 +357,7 @@ class NodeTestServiceTest {
 
     private NodeTestRequest gmailNodeRequest(String query) throws Exception {
         return request("""
-            {"node":{"id":"t1","type":"TRIGGER","label":"Gmail",
-              "config":{"triggerType":"GMAIL_NEW_EMAIL","serviceType":"GOOGLE","query":"%s"}}}""".formatted(query));
+            {"node":{"id":"t1","event":"gmail.new_email","type":"TRIGGER","label":"Gmail","config":{"query":"%s"}}}""".formatted(query));
     }
 
     @Test
@@ -349,7 +420,7 @@ class NodeTestServiceTest {
             .willReturn(new NodeTestResult(SampleStatus.FAILED, null, "x", LocalDateTime.now()));
 
         service.test(userId, workflowId, "t1", request("""
-            {"node":{"id":"t1","type":"TRIGGER","config":{"triggerType":"GITHUB_NEW_ISSUE","repoId":1}}}"""));
+            {"node":{"id":"t1","event":"github.new_issue","type":"TRIGGER","config":{"repoId":1}}}"""));
 
         verify(runner).recordFailure(workflow, "t1", "이 트리거는 아직 테스트할 수 없습니다");
         verify(gmailFetcher, never()).fetchLatest(any(), any());
@@ -360,7 +431,7 @@ class NodeTestServiceTest {
     @DisplayName("같은 triggerType 공급원 빈이 둘이면 생성 실패(조용히 덮지 않는다)")
     void duplicateFetcherFailsFast() {
         assertThatThrownBy(() -> new NodeTestService(crudService, runner, credentialService, listenStore,
-            tokenService, List.of(gmailFetcher, gmailFetcher)))
+            tokenService, List.of(gmailFetcher, gmailFetcher), new NodeDerivation(CATALOG), CATALOG))
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("GMAIL_NEW_EMAIL");
     }

@@ -20,6 +20,8 @@ import com.ieum.api.workflow.dto.NodeDto;
 import com.ieum.api.workflow.dto.NodeView;
 import com.ieum.api.workflow.dto.WorkflowResponse;
 import com.ieum.common.dto.PageResponse;
+import com.ieum.workflowcore.catalog.EventCatalog;
+import com.ieum.workflowcore.catalog.NodeDerivation;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowVersion;
@@ -50,6 +52,8 @@ import org.slf4j.LoggerFactory;
  */
 class WorkflowNodeResponseTest {
 
+    private static final EventCatalog CATALOG = EventCatalog.loadFromClasspath();
+
     private final WorkflowCrudService workflowCrudService = mock(WorkflowCrudService.class);
     private final WorkflowService workflowService = new WorkflowService(
         workflowCrudService,
@@ -58,7 +62,8 @@ class WorkflowNodeResponseTest {
         mock(ExecutionEventPublisher.class),
         new ObjectMapper(),
         mock(WebhookCredentialService.class),
-        mock(CredentialService.class));
+        mock(CredentialService.class),
+        new NodeDerivation(CATALOG), CATALOG);
 
     private final UUID userId = UUID.randomUUID();
     private final UUID workflowId = UUID.randomUUID();
@@ -223,7 +228,7 @@ class WorkflowNodeResponseTest {
     @DisplayName("NodeView·EdgeView의 응답 JSON 모양이 요청 DTO와 동일하다 (null 값 포함)")
     void responseJson_hasSameShapeAsRequestDto() throws Exception {
         String nodeJson = """
-            { "id": "node-1", "type": "AI", "label": "분류",
+            { "id": "node-1", "type": "AI", "label": "분류", "event": "ai.agent",
               "description": "AI가 문의를 유형별로 나눠요.",
               "position": { "x": 420.0, "y": 120.0 },
               "config": { "llmProvider": "GEMINI" } }""";
@@ -249,6 +254,10 @@ class WorkflowNodeResponseTest {
         assertThat(sparseTree.get("type").isNull()).isTrue();
         assertThat(sparseTree.has("label")).isTrue();
         assertThat(sparseTree.has("description")).isTrue();
+        // event는 응답에도 실린다 — 요청 DTO와 같은 키 (IEUM-BE-92)
+        assertThat(tree(nodeView).get("event").asText()).isEqualTo("ai.agent");
+        assertThat(sparseTree.has("event")).isTrue();
+        assertThat(sparseTree.get("event").isNull()).isTrue();
 
         for (String edge : List.of(edgeJson, bareEdgeJson)) {
             Map<String, Object> rawEdge =

@@ -8,6 +8,8 @@ import com.ieum.api.workflow.dto.NodeTestRequest;
 import com.ieum.api.workflow.dto.NodeTestResponse;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.catalog.EventCatalog;
+import com.ieum.workflowcore.catalog.NodeDerivation;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.domain.enums.TriggerType;
@@ -44,17 +46,22 @@ public class NodeTestService {
     private final CredentialService credentialService;
     private final WebhookListenStore webhookListenStore;
     private final WorkflowWebhookTokenService webhookTokenService;
+    private final NodeDerivation nodeDerivation;
+    private final EventCatalog eventCatalog;
     private final Map<TriggerType, AppTriggerSampleFetcher> sampleFetchers = new EnumMap<>(TriggerType.class);
 
     public NodeTestService(WorkflowCrudService workflowCrudService, NodeTestRunner nodeTestRunner,
                            CredentialService credentialService, WebhookListenStore webhookListenStore,
                            WorkflowWebhookTokenService webhookTokenService,
-                           List<AppTriggerSampleFetcher> sampleFetchers) {
+                           List<AppTriggerSampleFetcher> sampleFetchers,
+                           NodeDerivation nodeDerivation, EventCatalog eventCatalog) {
         this.workflowCrudService = workflowCrudService;
         this.nodeTestRunner = nodeTestRunner;
         this.credentialService = credentialService;
         this.webhookListenStore = webhookListenStore;
         this.webhookTokenService = webhookTokenService;
+        this.nodeDerivation = nodeDerivation;
+        this.eventCatalog = eventCatalog;
         // 같은 triggerType 공급원이 둘이면 부팅에서 막는다 — EnumMap.put이 한쪽을 조용히 덮는다
         sampleFetchers.forEach(f -> {
             if (this.sampleFetchers.put(f.triggerType(), f) != null) {
@@ -67,18 +74,17 @@ public class NodeTestService {
         // 소유자 검사가 무엇보다 먼저다 — 남의 워크플로우는 존재 여부도 드러내지 않는 404.
         Workflow workflow = workflowCrudService.getWorkflowByOwner(userId, workflowId);
         Node node = resolveNode(userId, workflowId, nodeId, request);
+        TriggerType trigger = triggerTypeOf(node);
 
-        if (listensForWebhook(workflow, node)) {
+        if (trigger == TriggerType.WEBHOOK) {
             // 수신 주소는 토큰 주소뿐이다 — 토큰이 없으면 listen해도 받을 길이 없다(R15)
             if (webhookTokenService.status(workflowId).isEmpty()) {
                 throw new CustomException(ErrorCode.WEBHOOK_TOKEN_NOT_ISSUED);
             }
             return NodeTestResponse.listening(webhookListenStore.start(workflowId, nodeId));
         }
-        TriggerType appTrigger = node.getType() == NodeType.TRIGGER && node.getConfig() != null
-            ? TriggerType.appTriggerOf(node.getConfig().get("triggerType")) : null;
-        if (appTrigger != null) {
-            return NodeTestResponse.from(testAppTrigger(workflow, node, appTrigger));
+        if (trigger != null && trigger.isAppTrigger()) {
+            return NodeTestResponse.from(testAppTrigger(workflow, node, trigger));
         }
         return NodeTestResponse.from(nodeTestRunner.run(workflow, node, request.getInput()));
     }
@@ -120,9 +126,17 @@ public class NodeTestService {
         if (!nodeId.equals(draft.getId())) {
             throw new CustomException(ErrorCode.INVALID_INPUT, "경로의 nodeId와 body의 node.id가 다릅니다.");
         }
-        Map<String, Object> config = draft.getConfig() == null ? new HashMap<>() : draft.getConfig();
+        // 저장 경로와 같은 파생이다 — 모르는 event는 400, type은 event가 정한다(요청 type 무시) (IEUM-BE-92).
+        Map<String, Object> raw = new HashMap<>();
+        raw.put("id", draft.getId());
+        raw.put("event", draft.getEvent());
+        raw.put("config", draft.getConfig());
+        Map<String, Object> derived = nodeDerivation.derive(raw);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> config = (Map<String, Object>) derived.get("config");
         rejectUnsafeConfig(userId, config);
-        return new Node(draft.getId(), draft.getType(), draft.getLabel(), config);
+        return new Node(draft.getId(), NodeType.valueOf((String) derived.get("type")), draft.getLabel(),
+            config, draft.getEvent());
     }
 
     /**
@@ -138,13 +152,8 @@ public class NodeTestService {
         RawWebhookUrlGuard.rejectRawWebhookUrl(config);
     }
 
-    /** 노드 config의 triggerType이 우선, 비어 있으면 워크플로우 최상위 triggerType(예: 노드 config가 {}인 WEBHOOK 워크플로우). */
-    private static boolean listensForWebhook(Workflow workflow, Node node) {
-        if (node.getType() != NodeType.TRIGGER) {
-            return false;
-        }
-        Object declared = node.getConfig() == null ? null : node.getConfig().get("triggerType");
-        String effective = declared instanceof String s && !s.isBlank() ? s : workflow.getTriggerType().name();
-        return "WEBHOOK".equalsIgnoreCase(effective);
+    /** 노드 event의 카탈로그 trigger_type. event가 없거나 트리거 event가 아니면 null — 워크플로우 PG triggerType으로 폴백하지 않는다. */
+    private TriggerType triggerTypeOf(Node node) {
+        return eventCatalog.triggerTypeOf(node.getEvent()).orElse(null);
     }
 }

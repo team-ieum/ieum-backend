@@ -61,7 +61,7 @@ public class WorkflowResponse {
             .triggerType(workflow.getTriggerType())
             .cronExpression(workflow.getCronExpression())
             .version(latestVersion != null ? latestVersion.getVersion() : null)
-            .services(WorkflowServiceType.extract(workflow.getTriggerType(), safeNodes))
+            .services(WorkflowServiceType.extract(safeNodes))
             .nodes(safeNodes)
             .edges(edges != null ? edges : Collections.emptyList())
             .webhookCredentialNames(
