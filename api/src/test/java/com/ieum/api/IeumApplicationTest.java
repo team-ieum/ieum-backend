@@ -63,6 +63,12 @@ class IeumApplicationTest {
     }
 
     @Test
+    @DisplayName("트리거 핸들러 레지스트리가 TriggerType 값을 전부 덮는다 (빠지면 그 트리거가 실행·구독·노드 테스트에서 IllegalStateException)")
+    void triggerHandlerRegistry_coversEveryTriggerType(@Autowired TriggerHandlerRegistry registry) {
+        assertThat(registry.types()).containsExactlyInAnyOrder(TriggerType.values());
+    }
+
+    @Test
     @DisplayName("@Scheduled는 WebSocket 브로커 스케줄러가 아니라 전용 scheduling- 풀(2)에서 돈다")
     void scheduledTasks_runOnDedicatedScheduler() {
         ScheduledTaskRegistrar registrar =

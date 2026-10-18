@@ -5,7 +5,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
@@ -22,9 +21,6 @@ import org.springframework.stereotype.Component;
 @Slf4j
 @Component
 public class ToolCallPreparer {
-
-    private static final String GOOGLE_BUILTIN_PREFIX = "builtin:google_";
-    private static final Set<String> WEBHOOK_TOOL_NAMES = Set.of("slack", "discord");
 
     private final GoogleTokenProvider googleTokenProvider;
     private final ToolAuthResolver toolAuthResolver;
@@ -105,7 +101,7 @@ public class ToolCallPreparer {
         boolean hasGoogleTool = tools.stream()
             .map(tool -> (String) tool.get("name"))
             .filter(name -> name != null)
-            .anyMatch(name -> name.startsWith(GOOGLE_BUILTIN_PREFIX));
+            .anyMatch(name -> name.startsWith(ToolAuthRule.GOOGLE_BUILTIN_PREFIX));
 
         if (!hasGoogleTool) {
             return null;
@@ -137,7 +133,7 @@ public class ToolCallPreparer {
         }
 
         for (Map<String, Object> tool : tools) {
-            if (!(tool.get("name") instanceof String name) || !WEBHOOK_TOOL_NAMES.contains(name)) {
+            if (!(tool.get("name") instanceof String name) || !ToolAuthRule.WEBHOOK_TOOL_NAMES.contains(name)) {
                 continue;
             }
             Object cfg = tool.get("config");
