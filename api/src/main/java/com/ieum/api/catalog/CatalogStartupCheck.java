@@ -8,6 +8,8 @@ import com.ieum.workflowcore.catalog.PresetDefinition;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.executor.ToolAuthRule;
+import com.ieum.workflowcore.trigger.NodeTestMode;
+import com.ieum.workflowcore.trigger.TriggerHandler;
 import com.ieum.workflowcore.trigger.TriggerHandlerRegistry;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,6 +33,7 @@ public class CatalogStartupCheck {
                                List<OptionSource> optionSources) {
         Set<String> keys = optionSources.stream().map(OptionSource::key).collect(Collectors.toSet());
         List<String> problems = problems(eventCatalog, triggerHandlers.types(), keys);
+        problems.addAll(handlerProblems(triggerHandlers));
         if (!problems.isEmpty()) {
             throw new IllegalStateException("카탈로그 기동 검사 실패:\n- " + String.join("\n- ", problems));
         }
@@ -69,6 +72,21 @@ public class CatalogStartupCheck {
             if (!Objects.equals(expected, appAuth)) {
                 problems.add("tool_key 인증 불일치: " + e.name() + " tool_key=" + e.toolKey()
                         + " 기대 auth=" + expected + " 앱 auth=" + appAuth);
+            }
+        }
+        return problems;
+    }
+
+    /**
+     * 구독형 핸들러가 노드 테스트 방식을 기본값 RUN으로 두면 노드 테스트가 요청 input을 SUCCESS 샘플로 저장한다 —
+     * 구독형은 LISTEN·FETCH를 선언해야 한다(PR #99 리뷰).
+     */
+    static List<String> handlerProblems(TriggerHandlerRegistry triggerHandlers) {
+        List<String> problems = new ArrayList<>();
+        for (TriggerType type : triggerHandlers.types()) {
+            TriggerHandler handler = triggerHandlers.get(type);
+            if (handler.subscribes() && handler.nodeTestMode() == NodeTestMode.RUN) {
+                problems.add("구독형 트리거의 노드 테스트 방식이 RUN: " + type);
             }
         }
         return problems;

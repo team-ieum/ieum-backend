@@ -6,6 +6,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.ieum.workflowcore.catalog.EventCatalog;
 import com.ieum.workflowcore.catalog.EventDefinition;
 import com.ieum.workflowcore.domain.enums.TriggerType;
+import com.ieum.workflowcore.trigger.NodeTestMode;
+import com.ieum.workflowcore.trigger.TriggerHandler;
 import com.ieum.workflowcore.trigger.TriggerHandlerRegistry;
 import java.io.IOException;
 import java.net.URL;
@@ -49,6 +51,41 @@ class CatalogStartupCheckTest {
 
         assertThat(CatalogStartupCheck.problems(CATALOG, handled, catalogSources(CATALOG)))
                 .containsExactly("트리거 핸들러 없음: GITHUB_NEW_ISSUE");
+    }
+
+    @Test
+    @DisplayName("구독형 핸들러가 노드 테스트 방식을 RUN(기본값)으로 두면 문제 — LISTEN·FETCH면 통과")
+    void subscribingHandlerMustNotRunNodeTest() {
+        TriggerHandler runDefault = new TriggerHandler() {
+            @Override
+            public TriggerType type() {
+                return TriggerType.GMAIL_NEW_EMAIL;
+            }
+
+            @Override
+            public boolean subscribes() {
+                return true;
+            }
+        };
+        TriggerHandler fetch = new TriggerHandler() {
+            @Override
+            public TriggerType type() {
+                return TriggerType.GITHUB_NEW_ISSUE;
+            }
+
+            @Override
+            public boolean subscribes() {
+                return true;
+            }
+
+            @Override
+            public NodeTestMode nodeTestMode() {
+                return NodeTestMode.FETCH;
+            }
+        };
+
+        assertThat(CatalogStartupCheck.handlerProblems(new TriggerHandlerRegistry(List.of(runDefault, fetch))))
+                .containsExactly("구독형 트리거의 노드 테스트 방식이 RUN: GMAIL_NEW_EMAIL");
     }
 
     @Test
