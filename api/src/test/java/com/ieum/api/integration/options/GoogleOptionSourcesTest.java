@@ -114,6 +114,15 @@ class GoogleOptionSourcesTest {
             StandardCharsets.UTF_8)).isEqualTo(expected);
     }
 
+    /** 쿼리 파라미터 name의 디코드된 값 전부를 순서대로 비교한다 — 기대값이 없으면 파라미터가 없어야 한다 */
+    private static RequestMatcher queryValues(String name, String... expected) {
+        return request -> assertThat(UriComponentsBuilder.fromUri(request.getURI()).build(true).getQueryParams()
+            .getOrDefault(name, List.of()).stream()
+            .map(v -> URLDecoder.decode(v, StandardCharsets.UTF_8))
+            .toList())
+            .containsExactly(expected);
+    }
+
     @Test
     @DisplayName("스프레드시트 목록 — Drive files를 스프레드시트·휴지통 제외·수정순으로 조회하고 다음 커서를 넘긴다")
     void spreadsheetsListsDriveFiles() {
@@ -331,7 +340,7 @@ class GoogleOptionSourcesTest {
     }
 
     @Test
-    @DisplayName("일정 목록 — 지금 이후·회차별·시작순 50개, 표시명은 제목 · 시작(시각/종일/제목 없음)")
+    @DisplayName("일정 목록 — 지금 이후·회차별·시작순 20개, 표시명은 제목 · 시작(시각/종일/제목 없음)")
     void eventsListsUpcomingWithDisplayNames() {
         connected(CALENDAR);
         server.expect(requestTo(startsWith(EVENTS_PREFIX + "primary/events?")))
@@ -343,7 +352,8 @@ class GoogleOptionSourcesTest {
                 StandardCharsets.UTF_8)).matches("\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ"))
             .andExpect(requestTo(containsString("singleEvents=true")))
             .andExpect(requestTo(containsString("orderBy=startTime")))
-            .andExpect(requestTo(containsString("maxResults=50")))
+            .andExpect(requestTo(containsString("maxResults=20")))
+            .andExpect(queryValues("q"))
             .andExpect(requestTo(not(containsString("pageToken"))))
             .andRespond(withSuccess("""
                 {"nextPageToken":"e-2","items":[
@@ -408,6 +418,65 @@ class GoogleOptionSourcesTest {
             .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
 
         events.fetch(userId, Map.of(), "a&q=x");
+    }
+
+    @Test
+    @DisplayName("일정 목록 — q가 있으면 앞뒤 공백을 떼어 전달하고, 검색해도 timeMin=지금·20개는 그대로")
+    void eventsPassSearchQuery() {
+        connected(CALENDAR);
+        server.expect(requestTo(startsWith(EVENTS_PREFIX + "primary/events?")))
+            .andExpect(queryValues("q", "주간 회의"))
+            .andExpect(request -> assertThat(UriComponentsBuilder.fromUri(request.getURI()).build(true)
+                .getQueryParams().get("timeMin")).singleElement().asString()
+                .matches("\\d{4}-\\d\\d-\\d\\dT\\d\\d(:|%3A)\\d\\d(:|%3A)\\d\\dZ"))
+            .andExpect(requestTo(containsString("singleEvents=true")))
+            .andExpect(requestTo(containsString("orderBy=startTime")))
+            .andExpect(requestTo(containsString("maxResults=20")))
+            .andRespond(withSuccess("""
+                {"items":[{"id":"evt1","summary":"주간 회의","start":{"dateTime":"2026-10-21T14:00:00+09:00"}}]}
+                """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = events.fetch(userId, Map.of("q", "  주간 회의  "), null);
+
+        assertThat(page.items()).containsExactly(new OptionItem("evt1", "주간 회의 · 2026-10-21 14:00"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "   ", "\t"})
+    @DisplayName("일정 목록 — 빈·공백뿐인 q는 없는 것으로 보고 q 파라미터를 붙이지 않는다")
+    void eventsIgnoreBlankQuery(String q) {
+        connected(CALENDAR);
+        server.expect(requestTo(startsWith(EVENTS_PREFIX + "primary/events?")))
+            .andExpect(queryValues("q"))
+            .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
+
+        events.fetch(userId, Map.of("q", q), null);
+    }
+
+    @Test
+    @DisplayName("검색어에 &·=·#가 섞여도 q 한 값으로만 가고 timeMin·pageToken을 덮지 않는다")
+    void eventsSearchQueryIsStrictlyEncoded() {
+        connected(CALENDAR);
+        server.expect(requestTo(startsWith(EVENTS_PREFIX + "primary/events?")))
+            .andExpect(queryValues("q", "a&timeMin=2000-01-01T00:00:00Z&pageToken=x#y"))
+            .andExpect(queryValues("pageToken"))
+            .andExpect(request -> assertThat(UriComponentsBuilder.fromUri(request.getURI()).build(true)
+                .getQueryParams().get("timeMin")).singleElement().asString().doesNotStartWith("2000"))
+            .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
+
+        events.fetch(userId, Map.of("q", "a&timeMin=2000-01-01T00:00:00Z&pageToken=x#y"), null);
+    }
+
+    @Test
+    @DisplayName("검색 결과 다음 페이지도 q를 다시 보낸다 — pageToken은 같은 쿼리로만 유효하다")
+    void eventsSearchKeepsQueryOnNextPage() {
+        connected(CALENDAR);
+        server.expect(requestTo(startsWith(EVENTS_PREFIX + "primary/events?")))
+            .andExpect(queryValues("q", "회의"))
+            .andExpect(queryValues("pageToken", "e-2"))
+            .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
+
+        assertThat(events.fetch(userId, Map.of("q", "회의"), "e-2").nextCursor()).isNull();
     }
 
     @Test

@@ -18,7 +18,7 @@ public interface IntegrationOptionControllerDocs {
         summary = "드롭다운 선택지 조회",
         description = "도구 필드 스키마의 optionsSource({app}.{resource})에 해당하는 선택지를 조회합니다. "
             + "지원: google/spreadsheets, google/worksheets(spreadsheet_id 필수), google/calendars, "
-            + "google/events(calendar_id 선택 — 비우면 기본 캘린더), google/files, google/folders, "
+            + "google/events(calendar_id 선택 — 비우면 기본 캘린더, q 선택 — 검색어, 공백이면 무시. 지금 이후 일정만 시작순 20개씩), google/files, google/folders, "
             + "notion/pages, notion/databases(값은 data source id), "
             + "ai/models·ieum/credentials(llmProvider 필수 — CLAUDE·OPENAI·GEMINI), "
             + "ieum/webhooks(전체, HTTP 노드용)·slack/webhooks·discord/webhooks, ieum/mcp_servers"
@@ -37,5 +37,5 @@ public interface IntegrationOptionControllerDocs {
         CustomUserDetails userDetails,
         @Parameter(description = "연동 앱", example = "google") String app,
         @Parameter(description = "리소스 종류", example = "worksheets") String resource,
-        @Parameter(description = "cursor(선택)와 optionsInputs 필드 값. 예: spreadsheet_id=1Bxi…, calendar_id=primary") Map<String, String> params);
+        @Parameter(description = "cursor(선택), 검색어 q(선택 — 지원하는 목록만 읽음), optionsInputs 필드 값. 예: spreadsheet_id=1Bxi…, calendar_id=primary, q=회의") Map<String, String> params);
 }
