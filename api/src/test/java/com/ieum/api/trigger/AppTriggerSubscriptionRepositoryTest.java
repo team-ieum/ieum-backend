@@ -3,10 +3,12 @@ package com.ieum.api.trigger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.ieum.api.NoRedisTestConfig;
+import com.ieum.api.trigger.gmail.GmailTriggerClient;
 import com.ieum.workflowcore.domain.AppTriggerSubscription;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.repository.AppTriggerSubscriptionRepository;
 import com.ieum.workflowcore.service.AppTriggerSubscriptionService;
+import com.ieum.workflowcore.trigger.PollStart;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -36,6 +38,7 @@ class AppTriggerSubscriptionRepositoryTest {
     @Autowired private AppTriggerSubscriptionRepository repository;
     @Autowired private AppTriggerSubscriptionService service;
     @Autowired private TransactionTemplate transactionTemplate;
+    @Autowired private GmailTriggerClient gmailTrigger;
 
     @AfterEach
     void clean() {
@@ -44,7 +47,7 @@ class AppTriggerSubscriptionRepositoryTest {
 
     private AppTriggerSubscription gmail(LocalDateTime createdAt) {
         return repository.save(AppTriggerSubscription.create(UUID.randomUUID(), "t1", UUID.randomUUID(),
-            TriggerType.GMAIL_NEW_EMAIL, null, Map.of("query", "from:x"), createdAt));
+            TriggerType.GMAIL_NEW_EMAIL, null, Map.of("query", "from:x"), gmailTrigger.pollStart(createdAt)));
     }
 
     @Test
@@ -70,7 +73,8 @@ class AppTriggerSubscriptionRepositoryTest {
         AppTriggerSubscription claimed =
             service.claimDue(TriggerType.GMAIL_NEW_EMAIL, now, 50, Duration.ofMinutes(5)).get(0);
         transactionTemplate.executeWithoutResult(tx -> repository.findById(claimed.getId()).orElseThrow()
-            .reconfigure(TriggerType.GMAIL_NEW_EMAIL, claimed.getUserId(), null, Map.of("query", "from:y"), now));
+            .reconfigure(TriggerType.GMAIL_NEW_EMAIL, claimed.getUserId(), null, Map.of("query", "from:y"),
+                gmailTrigger.pollStart(now)));
         Map<String, Object> reset = repository.findById(claimed.getId()).orElseThrow().getCursor();
 
         service.recordPoll(claimed.getId(), claimed.getConfig(),
@@ -93,7 +97,7 @@ class AppTriggerSubscriptionRepositoryTest {
         gmail(now.minusMinutes(1));
         gmail(now.plusMinutes(3));                      // 아직 아님
         repository.save(AppTriggerSubscription.create(UUID.randomUUID(), "t1", UUID.randomUUID(),
-            TriggerType.GITHUB_NEW_ISSUE, "1", Map.of("repoId", 1L), now.minusMinutes(10)));  // 폴링 없음
+            TriggerType.GITHUB_NEW_ISSUE, "1", Map.of("repoId", 1L), PollStart.NONE));  // 폴링 없음
 
         List<AppTriggerSubscription> first = service.claimDue(TriggerType.GMAIL_NEW_EMAIL, now, 50, Duration.ofMinutes(5));
         List<AppTriggerSubscription> second = service.claimDue(TriggerType.GMAIL_NEW_EMAIL, now, 50, Duration.ofMinutes(5));
@@ -152,9 +156,9 @@ class AppTriggerSubscriptionRepositoryTest {
     void lookupAndDelete() {
         UUID workflowId = UUID.randomUUID();
         repository.save(AppTriggerSubscription.create(workflowId, "t1", UUID.randomUUID(),
-            TriggerType.GITHUB_NEW_ISSUE, "42", Map.of("repoId", 42L), LocalDateTime.now()));
+            TriggerType.GITHUB_NEW_ISSUE, "42", Map.of("repoId", 42L), PollStart.NONE));
         repository.save(AppTriggerSubscription.create(UUID.randomUUID(), "t1", UUID.randomUUID(),
-            TriggerType.GITHUB_NEW_ISSUE, "43", Map.of("repoId", 43L), LocalDateTime.now()));
+            TriggerType.GITHUB_NEW_ISSUE, "43", Map.of("repoId", 43L), PollStart.NONE));
 
         assertThat(service.findByResource(TriggerType.GITHUB_NEW_ISSUE, "42"))
             .extracting(AppTriggerSubscription::getWorkflowId).containsExactly(workflowId);

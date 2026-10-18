@@ -14,8 +14,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.integration.options.GitHubApiReader;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.domain.enums.TriggerType;
+import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
+import com.ieum.workflowcore.trigger.NodeTestMode;
+import com.ieum.workflowcore.trigger.PollStart;
+import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -24,6 +30,8 @@ import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -221,41 +229,108 @@ class GitHubIssueSourceTest {
         assertThat(source.latestIssue(userId, 123)).isEmpty();
     }
 
-    // ──────────── AppTriggerAccessVerifier (BE-a 포트) ────────────
+    // ──────────── TriggerHandler — 구독 ────────────
+
+    private static Map<String, Object> repoConfig(Object repoId) {
+        Map<String, Object> config = new HashMap<>();
+        config.put("repoId", repoId);
+        return config;
+    }
 
     @Test
-    @DisplayName("GitHub 스냅샷 repoId는 검증한다 — 설치 범위 밖이면 400")
+    @DisplayName("[Review Focus] 구독 스냅샷·resource_key — 숫자 77과 \"77\"은 같은 스냅샷·같은 키, 미설정이면 {repoId: null}·키 없음, 폴링 없음")
+    void snapshotAndResourceKey() {
+        Map<String, Object> fromNumber = source.snapshot(repoConfig(77));
+        Map<String, Object> fromString = source.snapshot(repoConfig("77"));
+
+        assertThat(fromNumber).isEqualTo(Map.of("repoId", 77L)).isEqualTo(fromString);
+        assertThat(source.resourceKey(fromNumber)).isEqualTo("77");
+        assertThat(source.resourceKey(fromString)).isEqualTo("77");
+
+        Map<String, Object> unset = source.snapshot(repoConfig("  "));
+        assertThat(unset).hasSize(1).containsEntry("repoId", null);
+        assertThat(source.resourceKey(unset)).isNull();
+
+        assertThat(source.subscribes()).isTrue();
+        assertThat(source.pollStart(LocalDateTime.now())).isEqualTo(PollStart.NONE);
+        assertErrorCode(() -> source.snapshot(repoConfig("abc")), ErrorCode.INVALID_WORKFLOW);
+    }
+
+    @Test
+    @DisplayName("[Review Focus 4] 숫자 123과 문자열 \"123\"·\" 123 \"은 같은 repoId")
+    void numberAndDigitStringGiveSameKey() {
+        assertThat(GitHubIssueSource.repoId(repoConfig(123))).contains(123L);
+        assertThat(GitHubIssueSource.repoId(repoConfig(123L))).contains(123L);
+        assertThat(GitHubIssueSource.repoId(repoConfig("123"))).contains(123L);
+        assertThat(GitHubIssueSource.repoId(repoConfig(" 123 "))).contains(123L);
+    }
+
+    @Test
+    @DisplayName("repoId가 없거나 빈 문자열이면 미설정(empty) — 저장을 막지 않는다")
+    void missingIsEmpty() {
+        assertThat(GitHubIssueSource.repoId(repoConfig(null))).isEmpty();
+        assertThat(GitHubIssueSource.repoId(repoConfig("  "))).isEmpty();
+        assertThat(GitHubIssueSource.repoId(null)).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"0", "-1", "12a", "1.5", "99999999999999999999", "owner/name"})
+    @DisplayName("양의 정수 문자열이 아니면 INVALID_WORKFLOW")
+    void malformedIsRejected(String raw) {
+        assertErrorCode(() -> GitHubIssueSource.repoId(repoConfig(raw)), ErrorCode.INVALID_WORKFLOW);
+    }
+
+    @Test
+    @DisplayName("숫자형 0·음수·실수·불리언도 거부")
+    void malformedNonString() {
+        for (Object raw : new Object[] {0, -5L, 1.5d, true}) {
+            assertErrorCode(() -> GitHubIssueSource.repoId(repoConfig(raw)), ErrorCode.INVALID_WORKFLOW);
+        }
+    }
+
+    @Test
+    @DisplayName("verifyAccess — 스냅샷 repoId가 설치 범위 밖이면 400")
     void verifyChecksRepo() {
         connected();
         expectInstalled(456, "dobee/other");
-        Map<String, Object> snapshot = Map.of("repoId", 123L); // BE-a 스냅샷은 {repoId}만(F14)
+        Map<String, Object> snapshot = Map.of("repoId", 123L); // 구독 스냅샷은 {repoId}만(F14)
 
-        assertErrorCode(() -> source.verify(userId, TriggerType.GITHUB_NEW_ISSUE, snapshot), ErrorCode.INVALID_INPUT);
+        assertErrorCode(() -> source.verifyAccess(userId, snapshot), ErrorCode.INVALID_INPUT);
     }
 
     @Test
-    @DisplayName("Gmail이거나 repoId가 비면(작성 중) GitHub을 부르지 않는다")
+    @DisplayName("verifyAccess — repoId가 비면(작성 중) GitHub을 부르지 않는다")
     void verifySkips() {
-        source.verify(userId, TriggerType.GMAIL_NEW_EMAIL, Map.of("query", "x"));
-        Map<String, Object> blank = new java.util.HashMap<>();
+        Map<String, Object> blank = new HashMap<>();
         blank.put("repoId", null);
-        source.verify(userId, TriggerType.GITHUB_NEW_ISSUE, blank);
+        source.verifyAccess(userId, blank);
         // 기대 요청 0건 — 요청이 나갔으면 verifyRequests가 깨진다
     }
 
-    // ──────────── AppTriggerSampleFetcher (BE-a 포트) ────────────
+    // ──────────── TriggerHandler 노드 테스트(FETCH) ────────────
 
     @Test
-    @DisplayName("fetchLatest — 노드 config의 repoId(문자열)로 최근 이슈, repoId가 비면 400(→ BE-a가 FAILED 샘플)")
-    void fetchLatestUsesNodeConfig() {
+    @DisplayName("fetchSample — 노드 config의 repoId(문자열)로 설치 범위 확인 후 최근 이슈, repoId가 비면 400(→ NodeTestService가 FAILED 샘플)")
+    void fetchSampleUsesNodeConfig() {
         connected();
         expectInstalled(123, "dobee/ieum");
         server.expect(requestTo(startsWith(BASE + "/repos/dobee/ieum/issues?")))
             .andRespond(withSuccess("[" + ISSUE + "]", MediaType.APPLICATION_JSON));
 
-        assertThat(source.triggerType()).isEqualTo(TriggerType.GITHUB_NEW_ISSUE);
-        assertThat(source.fetchLatest(userId, Map.of("repoId", "123"))).isPresent();
-        assertErrorCode(() -> source.fetchLatest(userId, Map.of("repoId", "")),
+        assertThat(source.type()).isEqualTo(TriggerType.GITHUB_NEW_ISSUE);
+        assertThat(source.nodeTestMode()).isEqualTo(NodeTestMode.FETCH);
+        assertThat(source.fetchSample(userId, Map.of("repoId", "123"))).isPresent();
+        assertErrorCode(() -> source.fetchSample(userId, Map.of("repoId", "")),
             ErrorCode.INVALID_INPUT);
+    }
+
+    @Test
+    @DisplayName("TriggerHandler — type은 GITHUB_NEW_ISSUE, 실행 출력은 심어 둔 정규화 페이로드 그대로(config 미혼입)")
+    void triggerHandlerTypeAndOutput() {
+        Map<String, Object> planted = Map.of("issueNumber", 7, "title", "버그");
+        Node node = new Node("t1", NodeType.TRIGGER, "GitHub", Map.of("repoId", "123"), "github.new_issue");
+
+        assertThat(source.type()).isEqualTo(TriggerType.GITHUB_NEW_ISSUE);
+        assertThat(source.output(node, Map.of("repoId", "123"), planted)).isEqualTo(planted);
     }
 }

@@ -1,7 +1,6 @@
 package com.ieum.api.workflow.service;
 
 import com.ieum.api.credential.service.CredentialService;
-import com.ieum.api.trigger.AppTriggerSampleFetcher;
 import com.ieum.api.webhook.service.WebhookListenStore;
 import com.ieum.api.workflow.dto.NodeDto;
 import com.ieum.api.workflow.dto.NodeTestRequest;
@@ -18,90 +17,75 @@ import com.ieum.workflowcore.service.NodeTestResult;
 import com.ieum.workflowcore.service.NodeTestRunner;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowWebhookTokenService;
-import java.util.EnumMap;
+import com.ieum.workflowcore.trigger.NodeTestMode;
+import com.ieum.workflowcore.trigger.TriggerHandler;
+import com.ieum.workflowcore.trigger.TriggerHandlerRegistry;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 /**
- * 노드 단일 테스트의 API 계층 — 소유자 검사, body 노드 가드, webhook 대기 분기, 앱 트리거 즉시 샘플 분기
- * ({@link AppTriggerSampleFetcher}로 최근 항목 1건 조회)를 맡고 실행·샘플 저장은 workflow-core {@link NodeTestRunner}에 위임한다.
+ * 노드 단일 테스트의 API 계층 — 소유자 검사, body 노드 가드, 트리거 노드의 테스트 방식 분기를 맡고 실행·샘플 저장은
+ * workflow-core {@link NodeTestRunner}에 위임한다. 테스트 방식은 노드 event의 트리거 핸들러가 정한다
+ * ({@link TriggerHandler#nodeTestMode()}) — 새 트리거를 추가해도 이 클래스는 고치지 않는다.
  *
  * <p>{@code @Transactional}을 달지 않는다 — 에이전트·외부 API 호출을 하나의 트랜잭션에 묶지 않기 위해서다
  * (저장소 호출은 각자 트랜잭션). OSIV(기본 on)라 DB 커넥션 자체는 요청 끝까지 유지된다.
  */
 @Service
+@RequiredArgsConstructor
 public class NodeTestService {
 
     private static final String NO_RECENT_ITEM = "최근 항목이 없습니다";
-    private static final String UNSUPPORTED_APP_TRIGGER = "이 트리거는 아직 테스트할 수 없습니다";
 
+    // 필드 순서 = 생성자 인자 순서(@RequiredArgsConstructor) — 테스트가 직접 호출한다
     private final WorkflowCrudService workflowCrudService;
     private final NodeTestRunner nodeTestRunner;
     private final CredentialService credentialService;
     private final WebhookListenStore webhookListenStore;
     private final WorkflowWebhookTokenService webhookTokenService;
+    private final TriggerHandlerRegistry triggerHandlers;
     private final NodeDerivation nodeDerivation;
     private final EventCatalog eventCatalog;
-    private final Map<TriggerType, AppTriggerSampleFetcher> sampleFetchers = new EnumMap<>(TriggerType.class);
-
-    public NodeTestService(WorkflowCrudService workflowCrudService, NodeTestRunner nodeTestRunner,
-                           CredentialService credentialService, WebhookListenStore webhookListenStore,
-                           WorkflowWebhookTokenService webhookTokenService,
-                           List<AppTriggerSampleFetcher> sampleFetchers,
-                           NodeDerivation nodeDerivation, EventCatalog eventCatalog) {
-        this.workflowCrudService = workflowCrudService;
-        this.nodeTestRunner = nodeTestRunner;
-        this.credentialService = credentialService;
-        this.webhookListenStore = webhookListenStore;
-        this.webhookTokenService = webhookTokenService;
-        this.nodeDerivation = nodeDerivation;
-        this.eventCatalog = eventCatalog;
-        // 같은 triggerType 공급원이 둘이면 부팅에서 막는다 — EnumMap.put이 한쪽을 조용히 덮는다
-        sampleFetchers.forEach(f -> {
-            if (this.sampleFetchers.put(f.triggerType(), f) != null) {
-                throw new IllegalStateException("앱 트리거 샘플 공급원 중복: " + f.triggerType());
-            }
-        });
-    }
 
     public NodeTestResponse test(UUID userId, UUID workflowId, String nodeId, NodeTestRequest request) {
         // 소유자 검사가 무엇보다 먼저다 — 남의 워크플로우는 존재 여부도 드러내지 않는 404.
         Workflow workflow = workflowCrudService.getWorkflowByOwner(userId, workflowId);
         Node node = resolveNode(userId, workflowId, nodeId, request);
         TriggerType trigger = triggerTypeOf(node);
+        // event가 없거나 트리거 event가 아니면 러너로 바로 실행한다
+        TriggerHandler handler = trigger == null ? null : triggerHandlers.get(trigger);
+        NodeTestMode mode = handler == null ? NodeTestMode.RUN : handler.nodeTestMode();
 
-        if (trigger == TriggerType.WEBHOOK) {
-            // 수신 주소는 토큰 주소뿐이다 — 토큰이 없으면 listen해도 받을 길이 없다(R15)
-            if (webhookTokenService.status(workflowId).isEmpty()) {
-                throw new CustomException(ErrorCode.WEBHOOK_TOKEN_NOT_ISSUED);
-            }
-            return NodeTestResponse.listening(webhookListenStore.start(workflowId, nodeId));
+        return switch (mode) {
+            case LISTEN -> listen(workflowId, nodeId);
+            case FETCH -> NodeTestResponse.from(fetchSample(workflow, node, handler));
+            case RUN -> NodeTestResponse.from(nodeTestRunner.run(workflow, node, request.getInput()));
+        };
+    }
+
+    /** 실행하지 않고 토큰 주소 수신을 기다린다. 수신 주소는 토큰 주소뿐이다 — 토큰이 없으면 listen해도 받을 길이 없다(R15) */
+    private NodeTestResponse listen(UUID workflowId, String nodeId) {
+        if (webhookTokenService.status(workflowId).isEmpty()) {
+            throw new CustomException(ErrorCode.WEBHOOK_TOKEN_NOT_ISSUED);
         }
-        if (trigger != null && trigger.isAppTrigger()) {
-            return NodeTestResponse.from(testAppTrigger(workflow, node, trigger));
-        }
-        return NodeTestResponse.from(nodeTestRunner.run(workflow, node, request.getInput()));
+        return NodeTestResponse.listening(webhookListenStore.start(workflowId, nodeId));
     }
 
     /**
-     * 앱 트리거는 listen하지 않고 최근 항목 1건을 즉시 샘플로 만든다(spec §4.3). 그 1건을 러너에 페이로드로 넘기면
-     * 런타임과 같은 경로({@code TriggerNodeExecutor} 앱 분기)로 샘플 = 정규화 출력이 된다. 조회 거부는 HTTP 오류가 아니라
-     * FAILED 샘플이다(테스트는 수행됐다 — 다른 노드의 실패와 같은 규칙).
+     * listen하지 않고 최근 항목 1건을 즉시 샘플로 만든다(spec §4.3). 그 1건을 러너에 페이로드로 넘기면 런타임과 같은 경로
+     * (핸들러 {@code output})로 샘플 = 정규화 출력이 된다. 조회 거부는 HTTP 오류가 아니라 FAILED 샘플이다(테스트는 수행됐다 —
+     * 다른 노드의 실패와 같은 규칙).
      */
-    private NodeTestResult testAppTrigger(Workflow workflow, Node node, TriggerType type) {
-        AppTriggerSampleFetcher fetcher = sampleFetchers.get(type);
-        if (fetcher == null) {
-            return nodeTestRunner.recordFailure(workflow, node.getId(), UNSUPPORTED_APP_TRIGGER);
-        }
+    private NodeTestResult fetchSample(Workflow workflow, Node node, TriggerHandler handler) {
         Optional<Map<String, Object>> latest;
         try {
-            latest = fetcher.fetchLatest(workflow.getUserId(), node.getConfig());
+            latest = handler.fetchSample(workflow.getUserId(), node.getConfig());
         } catch (CustomException e) {
             return nodeTestRunner.recordFailure(workflow, node.getId(), e.getMessage());
         }

@@ -19,6 +19,7 @@ import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.AppTriggerSubscription;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.service.AppTriggerSubscriptionService;
+import com.ieum.workflowcore.trigger.PollStart;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -47,7 +48,7 @@ class GmailTriggerSweeperTest {
 
     private AppTriggerSubscription subscription(List<String> seenIds) {
         AppTriggerSubscription s = AppTriggerSubscription.create(workflowId, "t1", userId,
-            TriggerType.GMAIL_NEW_EMAIL, null, Map.of("query", "from:x"), LocalDateTime.now());
+            TriggerType.GMAIL_NEW_EMAIL, null, Map.of("query", "from:x"), PollStart.NONE);
         ReflectionTestUtils.setField(s, "id", UUID.randomUUID());
         Map<String, Object> seen = new java.util.LinkedHashMap<>();
         seenIds.forEach(id -> seen.put(id, (int) AFTER));
