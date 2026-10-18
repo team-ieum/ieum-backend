@@ -403,6 +403,27 @@ class ChatServiceTest {
         verify(workflowCrudService, never()).updateWorkflowName(any(), any());
     }
 
+    // ─────────────────── Google 토큰 판정 (ToolAuthRule) ────────────────────
+
+    @Test
+    @DisplayName("AI 노드에 builtin:google_ 도구가 있으면 스트림 준비에 Google 토큰을 싣는다")
+    void prepareStream_googleBuiltinTool_attachesGoogleToken() {
+        ChatSession session = buildSession(workflowId, userId);
+        WorkflowVersion version = buildVersionWithNodesJson(
+            "[{\"id\":\"n1\",\"type\":\"AI\",\"label\":\"ai\",\"config\":{\"llmProvider\":\"GEMINI\","
+                + "\"credentialId\":\"\",\"tools\":[{\"name\":\"builtin:google_gmail_send\"}]}}]");
+        given(sessionRepository.save(any())).willReturn(session);
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(integrationContextService.resolve(userId))
+            .willReturn(new IntegrationContext(List.of(), List.of()));
+        given(googleTokenProvider.getValidAccessToken(userId)).willReturn("google-token");
+
+        ChatService.StreamSetupResult result =
+            chatService.prepareStream(workflowId, userId, "ROLE_TESTER", buildRequest("안녕", null));
+
+        assertThat(result.googleToken()).isEqualTo("google-token");
+    }
+
     // ─────────────────── chat() 베타 platform 키 ───────────────────────────
 
     @Test

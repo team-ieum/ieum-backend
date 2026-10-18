@@ -1,7 +1,7 @@
 package com.ieum.workflowcore.domain.enums;
 
 /**
- * 워크플로우 트리거 종류. 종류별 동작(실행 출력·구독·노드 테스트)은 값마다 하나인
+ * 워크플로우 트리거 종류. 종류별 동작(실행 출력·구독·접근 검증·노드 테스트)은 값마다 하나인
  * {@link com.ieum.workflowcore.trigger.TriggerHandler} 구현이 맡는다 — 공통 코드에는 종류별 분기를 두지 않는다.
  *
  * <p>값 추가는 workflow-core/CLAUDE.md "트리거 추가 절차"를 따른다: 카탈로그 이벤트(trigger_type)와 같은 커밋, 이름 20자 이하

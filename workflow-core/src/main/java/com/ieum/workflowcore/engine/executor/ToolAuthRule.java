@@ -7,8 +7,9 @@ import java.util.Set;
  * {@link ToolCallPreparer}(Google 토큰·웹훅 URL)와 {@link ToolAuthResolver}(Notion·GitHub 헤더)가 이 상수로 판정하고,
  * api {@code CatalogStartupCheck}가 카탈로그 apps.json의 {@code auth}와 ACTION 이벤트 tool_key가 이 규칙으로 맞는지 기동 때 본다.
  *
- * <p>Google·Notion·GitHub는 접두사, slack·discord는 이름 정확 일치다. 채팅 안내({@code ChatService})·목록 아이콘
- * ({@code WorkflowServiceType})의 비슷한 표는 인증이 아니라 표시용이라 여기에 묶지 않는다.
+ * <p>Google·Notion·GitHub는 접두사, slack·discord는 이름 정확 일치다. 채팅의 Google 토큰 판정({@code ChatService})도
+ * {@link #GOOGLE_BUILTIN_PREFIX}를 쓴다. 목록 아이콘({@code WorkflowServiceType})의 비슷한 표는 인증이 아니라 표시용이라
+ * 여기에 묶지 않는다.
  */
 public final class ToolAuthRule {
 
