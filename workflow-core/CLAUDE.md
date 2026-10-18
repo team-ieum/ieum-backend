@@ -76,7 +76,7 @@
 3-인자 `execute(node, input, cursor)`가 기본이고, 외부 호출이 멱등 가드를 적용해야 하는 Executor(HTTP·AI·ACTION)만 4-인자 오버로드 `execute(node, input, cursor, NodeAttempt)`를 override한다. `NodeAttempt(attempt, idempotencyKey, policy)`가 회차·멱등성 키·재시도 정책을 실어 온다 — **`ExecutionCursor`/`ExecutionContext`에 attempt 정보를 넣지 말 것**(워커 스레드 간 공유 객체다).
 
 ### Provider 포트 + Stub 패턴
-workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능은 **포트 인터페이스**로 선언하고 api 모듈이 구현체를 제공한다. 포트마다 `@ConditionalOnMissingBean` Stub이 있어 workflow-core 단독 테스트가 가능하다 (현재 12개).
+workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능은 **포트 인터페이스**로 선언하고 api 모듈이 구현체를 제공한다. 포트마다 `@ConditionalOnMissingBean` Stub이 있어 workflow-core 단독 테스트가 가능하다 (현재 11개).
 
 | 포트 | 실구현 위치 |
 |------|------------|
@@ -91,7 +91,6 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 | `IdempotencyStore` | api (Redis SETNX in-flight 마커) |
 | `AlertNotifier` | api (실행 실패 Discord 알림) |
 | `ExecutionJobEnqueuer` | api (스케줄 실행을 Redis Stream 잡 큐에 투입) |
-| `AppTriggerAccessVerifier` | api `trigger/github/GitHubIssueSource` (앱 트리거 저장·활성화 시 리소스 접근 검증 — GitHub은 소유자 App 설치 범위에 repoId가 없으면 400, Gmail 통과) |
 
 새 포트 추가 시 Stub도 같이 만들 것 — 없으면 workflow-core 테스트 컨텍스트가 깨진다.
 `IdempotencyStore`·`AlertNotifier` 구현체는 **저장소·발신 장애를 삼켜야 한다** — 실행 종료 처리를 깨는 것보다 중복 호출·알림 유실을 감수한다(의도적 트레이드오프).
@@ -123,7 +122,7 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 | `WorkflowExecutionLog` | `node_runs` | nodeId, nodeType, status, input/output JSON(TEXT), errorMessage, durationMs, traceId, prompt/completion/total tokens(재시도 전 회차 합 — 실패 회차 포함), `attempt_count` |
 | `ChatMessage`/`ChatSession` | chat/ 하위 | 워크플로우 채팅 |
 | `NodeTestSample` | `node_test_samples` | 노드 단일 테스트의 최신 결과 1건(UNIQUE workflow_id+node_id). 출력은 `SensitiveDataMasker` 적용 후 TEXT JSON. 삭제는 `WorkflowCrudService.deleteWorkflowInternal`이 워크플로우 행보다 먼저 |
-| `AppTriggerSubscription` | `app_trigger_subscriptions` | 활성 앱 트리거 1건(UNIQUE workflow_id+node_id, FK 없음). 행 있음 = 켜짐. `AppTriggerSubscriptionService.sync`가 `WorkflowCrudService` 생성·수정·AI 저장·활성화·비활성화에서 **트랜잭션 안**으로 맞춘다(Quartz만 afterCommit). config는 스냅샷만(Gmail `{query}`, GitHub `{repoId}` = `resource_key` — 파싱은 public static `githubRepoId`(숫자·숫자 문자열, 형식 오류 400)이고 api `GitHubIssueSource`도 같이 쓴다. Gmail은 `gmailQuery`). Gmail 커서 `poll_cursor` — 리셋 시 `{afterSec: now}`만 쓰고 나머지 키(`floorSec`·`okSec`·`seen`)는 api `GmailCursor`가 채운다, query·triggerType 변경 시만 리셋. 앱 트리거 노드 = 첫 번째 TRIGGER 노드이고 그 event의 `trigger_type`이 앱 트리거일 때다(`findAppTrigger`, `EventCatalog` 주입). PG triggerType도 같은 노드에서 계산하므로 "노드 선언 없음" 400은 없다. 스윕 클레임은 `lockDue`(네이티브 `FOR UPDATE SKIP LOCKED`). 삭제는 `deleteWorkflowInternal` |
+| `AppTriggerSubscription` | `app_trigger_subscriptions` | 활성 앱 트리거 1건(UNIQUE workflow_id+node_id, FK 없음). 행 있음 = 켜짐. `AppTriggerSubscriptionService.sync`가 `WorkflowCrudService` 생성·수정·AI 저장·활성화·비활성화에서 **트랜잭션 안**으로 맞춘다(Quartz만 afterCommit). config는 스냅샷만(Gmail `{query}`, GitHub `{repoId}` = `resource_key` — 스냅샷·resource_key·접근 검증·폴링 시작 상태는 `TriggerHandlerRegistry`의 핸들러(api `GmailTriggerClient`·`GitHubIssueSource`)가 정하고 파서도 거기 있다: `GmailTriggerClient.query`, `GitHubIssueSource.repoId`(숫자·숫자 문자열, 형식 오류 400)). Gmail 커서 `poll_cursor` — 리셋 시 `{afterSec: now}`만 쓰고 나머지 키(`floorSec`·`okSec`·`seen`)는 api `GmailCursor`가 채운다, triggerType·스냅샷(config 전체) 변경 시만 핸들러 `pollStart`로 리셋. 앱 트리거 노드 = 첫 번째 TRIGGER 노드이고 그 event의 `trigger_type` 핸들러가 `subscribes()`일 때다(`findAppTrigger`, `EventCatalog`·`TriggerHandlerRegistry` 주입). PG triggerType도 같은 노드에서 계산하므로 "노드 선언 없음" 400은 없다. 스윕 클레임은 `lockDue`(네이티브 `FOR UPDATE SKIP LOCKED`). 삭제는 `deleteWorkflowInternal` |
 | `WorkflowWebhookToken` | `workflow_webhook_tokens` | 웹훅 수신 주소 토큰, 워크플로우당 1개(UNIQUE workflow_id, FK 없음). 평문 없이 SHA-256 hex만 저장, 재발급은 같은 행의 해시 교체. 수신 조회 `findWorkflowIdByToken`은 JDBC(OSIV 커넥션 점유 방지). 삭제는 `deleteWorkflowInternal` |
 | `WorkflowDefinitionDocument` | Mongo | nodes/edges 정의. PG `mongoDefinitionId`로 조인 |
 

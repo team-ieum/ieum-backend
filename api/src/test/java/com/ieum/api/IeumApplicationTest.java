@@ -5,9 +5,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.ieum.api.config.DefaultBetaPlatformProvider;
 import com.ieum.api.config.DefaultExecutionJobEnqueuer;
 import com.ieum.api.trigger.github.GitHubIssueSource;
-import com.ieum.workflowcore.engine.executor.AppTriggerAccessVerifier;
+import com.ieum.api.trigger.gmail.GmailTriggerClient;
+import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.executor.BetaPlatformProvider;
 import com.ieum.workflowcore.engine.executor.ExecutionJobEnqueuer;
+import com.ieum.workflowcore.trigger.TriggerHandlerRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,7 +36,7 @@ class IeumApplicationTest {
     private ScheduledAnnotationBeanPostProcessor scheduledProcessor;
 
     @Autowired
-    private AppTriggerAccessVerifier appTriggerAccessVerifier;
+    private TriggerHandlerRegistry triggerHandlers;
 
     @Test
     @DisplayName("스프링 부트 애플리케이션 컨텍스트가 정상적으로 로드된다")
@@ -54,9 +56,10 @@ class IeumApplicationTest {
     }
 
     @Test
-    @DisplayName("AppTriggerAccessVerifier는 단일 빈이며 GitHubIssueSource가 선택된다 (Stub이면 저장 검증이 전부 통과 = IDOR)")
-    void appTriggerAccessVerifier_singleBean_resolvesToGitHubIssueSource() {
-        assertThat(appTriggerAccessVerifier).isInstanceOf(GitHubIssueSource.class);
+    @DisplayName("앱 트리거 핸들러는 api 실구현으로 풀린다 — GITHUB_NEW_ISSUE는 GitHubIssueSource(아니면 저장 접근 검증이 빠져 IDOR), GMAIL_NEW_EMAIL은 GmailTriggerClient")
+    void appTriggerHandlers_resolveToApiImplementations() {
+        assertThat(triggerHandlers.get(TriggerType.GITHUB_NEW_ISSUE)).isInstanceOf(GitHubIssueSource.class);
+        assertThat(triggerHandlers.get(TriggerType.GMAIL_NEW_EMAIL)).isInstanceOf(GmailTriggerClient.class);
     }
 
     @Test

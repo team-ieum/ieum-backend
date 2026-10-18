@@ -6,9 +6,11 @@ import com.ieum.api.trigger.AppTriggerSampleFetcher;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.enums.TriggerType;
-import com.ieum.workflowcore.service.AppTriggerSubscriptionService;
+import com.ieum.workflowcore.trigger.PollStart;
 import com.ieum.workflowcore.trigger.TriggerHandler;
 import java.net.URI;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -20,9 +22,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.util.UriComponentsBuilder;
 
 /**
- * Gmail 트리거의 외부 호출 — 목록·단건 조회. 토큰·scope·오류 매핑은 {@link GoogleApiReader}가 한다.
- * 트랜잭션을 걸지 않는다(토큰 갱신 저장이 readOnly에 합류해 유실된다).
- * GMAIL_NEW_EMAIL의 {@link TriggerHandler}이기도 하다 — 실행 출력은 기본값(스윕러가 심은 정규화 페이로드).
+ * GMAIL_NEW_EMAIL 트리거 핸들러 + Gmail 외부 호출(목록·단건 조회). 토큰·scope·오류 매핑은 {@link GoogleApiReader}가 한다.
+ * 폴링 루프는 {@link GmailTriggerSweeper}가 따로 돈다. 트랜잭션을 걸지 않는다(토큰 갱신 저장이 readOnly에 합류해 유실된다).
  */
 @Component
 @RequiredArgsConstructor
@@ -40,13 +41,18 @@ public class GmailTriggerClient implements AppTriggerSampleFetcher, TriggerHandl
 
     private final GoogleApiReader reader;
 
+    /** Gmail 검색식 정규화 — trim, blank는 null. 구독 스냅샷({@link #snapshot})과 실제 검색식({@link #baseQuery})이 함께 쓴다 */
+    public static String query(Map<?, ?> config) {
+        return config != null && config.get("query") instanceof String q && !q.isBlank() ? q.trim() : null;
+    }
+
     /**
      * 노드 config(또는 구독 스냅샷)의 검색식. 비면 받은편지함에서 내가 보낸 메일을 뺀 전체, 있으면 그 식에서 내가 보낸 메일을 뺀다.
      * 보낸 메일이 검색식에 맞으면 "새 메일 → 메일 보내기" 워크플로우가 자기 발화로 끝없이 이어진다(PR #89 리뷰 결정 — 보낸 메일
      * 트리거는 지원하지 않는다). blank 판정은 구독 스냅샷과 같은 규칙을 쓴다 — 어긋나면 커서 리셋 판단과 실제 검색식이 달라진다.
      */
     public static String baseQuery(Map<?, ?> config) {
-        String query = AppTriggerSubscriptionService.gmailQuery(config);
+        String query = query(config);
         return query == null ? DEFAULT_QUERY : "(" + query + ") -in:sent";
     }
 
@@ -100,12 +106,37 @@ public class GmailTriggerClient implements AppTriggerSampleFetcher, TriggerHandl
     }
 
     @Override
-    public TriggerType triggerType() {
+    public TriggerType type() {
         return TriggerType.GMAIL_NEW_EMAIL;
     }
 
     @Override
-    public TriggerType type() {
+    public boolean subscribes() {
+        return true;
+    }
+
+    /**
+     * 구독 스냅샷 {@code {query?}} — 나머지(brand 등)는 저장하지 않는다. blank query는 키 생략과 같게 빠진다 — 다르게 보면 저장마다
+     * 커서가 리셋돼 메일이 유실된다({@code AppTriggerSubscription.reconfigure}가 스냅샷 전체를 비교한다).
+     */
+    @Override
+    public Map<String, Object> snapshot(Map<?, ?> config) {
+        Map<String, Object> snapshot = new HashMap<>();
+        String query = query(config);
+        if (query != null) {
+            snapshot.put("query", query);
+        }
+        return snapshot;
+    }
+
+    /** "지금 이후 메일만" — 나머지 커서 키(floorSec·seen)는 {@link GmailCursor}가 채운다(floorSec가 없으면 afterSec가 하한), 즉시 폴링 */
+    @Override
+    public PollStart pollStart(LocalDateTime now) {
+        return new PollStart(Map.of("afterSec", now.atZone(ZoneId.systemDefault()).toEpochSecond()), now);
+    }
+
+    @Override
+    public TriggerType triggerType() {
         return TriggerType.GMAIL_NEW_EMAIL;
     }
 

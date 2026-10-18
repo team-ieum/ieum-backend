@@ -130,6 +130,7 @@ class WorkflowCrudServiceAppTriggerTest {
     void activateSyncsLatestNodes() {
         Workflow w = workflow(false);
         given(workflowRepository.findByIdAndUserId(workflowId, userId)).willReturn(Optional.of(w));
+        given(appTriggerSubscriptionService.subscribes(TriggerType.GMAIL_NEW_EMAIL)).willReturn(true);
         WorkflowVersion version = WorkflowVersion.builder().workflow(w).version(1).mongoDefinitionId("m1").build();
         given(workflowVersionRepository.findFirstByWorkflowIdOrderByVersionDesc(workflowId)).willReturn(Optional.of(version));
         given(definitionRepository.findById("m1")).willReturn(Optional.of(WorkflowDefinitionDocument.builder()
@@ -153,6 +154,7 @@ class WorkflowCrudServiceAppTriggerTest {
         runInTransaction(() -> service.activateWorkflow(userId, workflowId));
 
         assertThat(w.isActive()).isTrue();
+        verify(appTriggerSubscriptionService).subscribes(TriggerType.SCHEDULE);
         verify(appTriggerSubscriptionService).sync(w, List.of());
         verify(workflowVersionRepository, never()).findFirstByWorkflowIdOrderByVersionDesc(any());
         verify(definitionRepository, never()).findById(any());
