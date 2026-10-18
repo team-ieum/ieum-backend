@@ -2,10 +2,10 @@ package com.ieum.api.trigger.gmail;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.ieum.api.integration.options.GoogleApiReader;
-import com.ieum.api.trigger.AppTriggerSampleFetcher;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.enums.TriggerType;
+import com.ieum.workflowcore.trigger.NodeTestMode;
 import com.ieum.workflowcore.trigger.PollStart;
 import com.ieum.workflowcore.trigger.TriggerHandler;
 import java.net.URI;
@@ -27,7 +27,7 @@ import org.springframework.web.util.UriComponentsBuilder;
  */
 @Component
 @RequiredArgsConstructor
-public class GmailTriggerClient implements AppTriggerSampleFetcher, TriggerHandler {
+public class GmailTriggerClient implements TriggerHandler {
 
     /** 기존 scope 그룹 {@code gmail}(application.yml). readonly도 읽기엔 충분하다 */
     static final String GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
@@ -135,13 +135,15 @@ public class GmailTriggerClient implements AppTriggerSampleFetcher, TriggerHandl
         return new PollStart(Map.of("afterSec", now.atZone(ZoneId.systemDefault()).toEpochSecond()), now);
     }
 
+    /** 노드 테스트는 listen하지 않고 최근 메일 1건을 즉시 샘플로 만든다 */
     @Override
-    public TriggerType triggerType() {
-        return TriggerType.GMAIL_NEW_EMAIL;
+    public NodeTestMode nodeTestMode() {
+        return NodeTestMode.FETCH;
     }
 
+    /** 노드 테스트 최근 1건 — 검색식은 폴링과 같은 {@link #baseQuery}, 정규화도 런타임과 같은 {@link GmailMessageNormalizer}. 0건이면 empty */
     @Override
-    public Optional<Map<String, Object>> fetchLatest(UUID userId, Map<String, Object> config) {
+    public Optional<Map<String, Object>> fetchSample(UUID userId, Map<String, Object> config) {
         List<String> ids = listMessageIds(userId, baseQuery(config), 1);
         if (ids.isEmpty()) {
             return Optional.empty();

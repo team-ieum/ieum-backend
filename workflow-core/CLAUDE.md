@@ -126,7 +126,7 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 | `WorkflowWebhookToken` | `workflow_webhook_tokens` | 웹훅 수신 주소 토큰, 워크플로우당 1개(UNIQUE workflow_id, FK 없음). 평문 없이 SHA-256 hex만 저장, 재발급은 같은 행의 해시 교체. 수신 조회 `findWorkflowIdByToken`은 JDBC(OSIV 커넥션 점유 방지). 삭제는 `deleteWorkflowInternal` |
 | `WorkflowDefinitionDocument` | Mongo | nodes/edges 정의. PG `mongoDefinitionId`로 조인 |
 
-enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROVAL, `ExecutionLogStatus`=SUCCESS/FAILED/SKIPPED, `TriggerType`=MANUAL/WEBHOOK/SCHEDULE/GMAIL_NEW_EMAIL/GITHUB_NEW_ISSUE(앱 트리거 — `isAppTrigger()`).
+enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROVAL, `ExecutionLogStatus`=SUCCESS/FAILED/SKIPPED, `TriggerType`=MANUAL/WEBHOOK/SCHEDULE/GMAIL_NEW_EMAIL/GITHUB_NEW_ISSUE(종류별 동작은 `trigger/TriggerHandler` — 구독형은 `subscribes()`).
 
 새 컬럼 (IEUM-BE-46):
 - `node_runs.attempt_count` — 결과가 나오기까지의 시도 횟수. 재시도 없이 끝나면 1, **`SKIPPED`(재처리 스킵)은 0**
