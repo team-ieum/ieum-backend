@@ -76,7 +76,7 @@
 3-인자 `execute(node, input, cursor)`가 기본이고, 외부 호출이 멱등 가드를 적용해야 하는 Executor(HTTP·AI·ACTION)만 4-인자 오버로드 `execute(node, input, cursor, NodeAttempt)`를 override한다. `NodeAttempt(attempt, idempotencyKey, policy)`가 회차·멱등성 키·재시도 정책을 실어 온다 — **`ExecutionCursor`/`ExecutionContext`에 attempt 정보를 넣지 말 것**(워커 스레드 간 공유 객체다).
 
 ### Provider 포트 + Stub 패턴
-workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능은 **포트 인터페이스**로 선언하고 api 모듈이 구현체를 제공한다. 포트마다 `@ConditionalOnMissingBean` Stub이 있어 workflow-core 단독 테스트가 가능하다 (현재 12개).
+workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능은 **포트 인터페이스**로 선언하고 api 모듈이 구현체를 제공한다. 포트마다 `@ConditionalOnMissingBean` Stub이 있어 workflow-core 단독 테스트가 가능하다 (현재 11개).
 
 | 포트 | 실구현 위치 |
 |------|------------|
@@ -91,7 +91,6 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 | `IdempotencyStore` | api (Redis SETNX in-flight 마커) |
 | `AlertNotifier` | api (실행 실패 Discord 알림) |
 | `ExecutionJobEnqueuer` | api (스케줄 실행을 Redis Stream 잡 큐에 투입) |
-| `AppTriggerAccessVerifier` | api `trigger/github/GitHubIssueSource` (앱 트리거 저장·활성화 시 리소스 접근 검증 — GitHub은 소유자 App 설치 범위에 repoId가 없으면 400, Gmail 통과) |
 
 새 포트 추가 시 Stub도 같이 만들 것 — 없으면 workflow-core 테스트 컨텍스트가 깨진다.
 `IdempotencyStore`·`AlertNotifier` 구현체는 **저장소·발신 장애를 삼켜야 한다** — 실행 종료 처리를 깨는 것보다 중복 호출·알림 유실을 감수한다(의도적 트레이드오프).
@@ -123,11 +122,11 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 | `WorkflowExecutionLog` | `node_runs` | nodeId, nodeType, status, input/output JSON(TEXT), errorMessage, durationMs, traceId, prompt/completion/total tokens(재시도 전 회차 합 — 실패 회차 포함), `attempt_count` |
 | `ChatMessage`/`ChatSession` | chat/ 하위 | 워크플로우 채팅 |
 | `NodeTestSample` | `node_test_samples` | 노드 단일 테스트의 최신 결과 1건(UNIQUE workflow_id+node_id). 출력은 `SensitiveDataMasker` 적용 후 TEXT JSON. 삭제는 `WorkflowCrudService.deleteWorkflowInternal`이 워크플로우 행보다 먼저 |
-| `AppTriggerSubscription` | `app_trigger_subscriptions` | 활성 앱 트리거 1건(UNIQUE workflow_id+node_id, FK 없음). 행 있음 = 켜짐. `AppTriggerSubscriptionService.sync`가 `WorkflowCrudService` 생성·수정·AI 저장·활성화·비활성화에서 **트랜잭션 안**으로 맞춘다(Quartz만 afterCommit). config는 스냅샷만(Gmail `{query}`, GitHub `{repoId}` = `resource_key` — 파싱은 public static `githubRepoId`(숫자·숫자 문자열, 형식 오류 400)이고 api `GitHubIssueSource`도 같이 쓴다. Gmail은 `gmailQuery`). Gmail 커서 `poll_cursor` — 리셋 시 `{afterSec: now}`만 쓰고 나머지 키(`floorSec`·`okSec`·`seen`)는 api `GmailCursor`가 채운다, query·triggerType 변경 시만 리셋. 앱 트리거 노드 = 첫 번째 TRIGGER 노드이고 그 event의 `trigger_type`이 앱 트리거일 때다(`findAppTrigger`, `EventCatalog` 주입). PG triggerType도 같은 노드에서 계산하므로 "노드 선언 없음" 400은 없다. 스윕 클레임은 `lockDue`(네이티브 `FOR UPDATE SKIP LOCKED`). 삭제는 `deleteWorkflowInternal` |
+| `AppTriggerSubscription` | `app_trigger_subscriptions` | 활성 앱 트리거 1건(UNIQUE workflow_id+node_id, FK 없음). 행 있음 = 켜짐. `AppTriggerSubscriptionService.sync`가 `WorkflowCrudService` 생성·수정·AI 저장·활성화·비활성화에서 **트랜잭션 안**으로 맞춘다(Quartz만 afterCommit). config는 스냅샷만(Gmail `{query}`, GitHub `{repoId}` = `resource_key` — 스냅샷·resource_key·접근 검증·폴링 시작 상태는 `TriggerHandlerRegistry`의 핸들러(api `GmailTriggerClient`·`GitHubIssueSource`)가 정하고 파서도 거기 있다: `GmailTriggerClient.query`, `GitHubIssueSource.repoId`(숫자·숫자 문자열, 형식 오류 400)). Gmail 커서 `poll_cursor` — 리셋 시 `{afterSec: now}`만 쓰고 나머지 키(`floorSec`·`okSec`·`seen`)는 api `GmailCursor`가 채운다, triggerType·스냅샷(config 전체) 변경 시만 핸들러 `pollStart`로 리셋. 앱 트리거 노드 = 첫 번째 TRIGGER 노드이고 그 event의 `trigger_type` 핸들러가 `subscribes()`일 때다(`findAppTrigger`, `EventCatalog`·`TriggerHandlerRegistry` 주입). PG triggerType도 같은 노드에서 계산하므로 "노드 선언 없음" 400은 없다. 스윕 클레임은 `lockDue`(네이티브 `FOR UPDATE SKIP LOCKED`). 삭제는 `deleteWorkflowInternal` |
 | `WorkflowWebhookToken` | `workflow_webhook_tokens` | 웹훅 수신 주소 토큰, 워크플로우당 1개(UNIQUE workflow_id, FK 없음). 평문 없이 SHA-256 hex만 저장, 재발급은 같은 행의 해시 교체. 수신 조회 `findWorkflowIdByToken`은 JDBC(OSIV 커넥션 점유 방지). 삭제는 `deleteWorkflowInternal` |
 | `WorkflowDefinitionDocument` | Mongo | nodes/edges 정의. PG `mongoDefinitionId`로 조인 |
 
-enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROVAL, `ExecutionLogStatus`=SUCCESS/FAILED/SKIPPED, `TriggerType`=MANUAL/WEBHOOK/SCHEDULE/GMAIL_NEW_EMAIL/GITHUB_NEW_ISSUE(앱 트리거 — `isAppTrigger()`).
+enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROVAL, `ExecutionLogStatus`=SUCCESS/FAILED/SKIPPED, `TriggerType`=MANUAL/WEBHOOK/SCHEDULE/GMAIL_NEW_EMAIL/GITHUB_NEW_ISSUE(종류별 동작은 `trigger/TriggerHandler` — 구독형은 `subscribes()`).
 
 새 컬럼 (IEUM-BE-46):
 - `node_runs.attempt_count` — 결과가 나오기까지의 시도 횟수. 재시도 없이 끝나면 1, **`SKIPPED`(재처리 스킵)은 0**
@@ -145,6 +144,34 @@ enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROV
 **DDL은 Flyway가 아니라 `ddl-auto: update`** — 마이그레이션 파일 없음. 컬럼 추가는 엔티티 필드만 넣으면 된다.
 단, **`nullable = false` 컬럼을 기존 행이 있는 테이블에 추가할 때는 `@ColumnDefault`가 반드시 필요하다.** 없으면 PostgreSQL이 DDL을 거부하는데 `ddl-auto: update`는 그 오류를 경고로만 남기고 부팅을 계속해 **컬럼 없이 앱이 뜬다.** 테스트는 `ddl-auto: create-drop`(빈 스키마)이라 이 사고를 잡지 못한다 — 이번에 `retry_exhausted`·`alert_target`이 걸릴 뻔했다.
 **enum 값을 추가하면 DB CHECK 제약도 손으로 고쳐야 한다.** Hibernate 6는 `@Enumerated(STRING)` 컬럼을 `CHECK (col IN (...))`와 함께 만드는데 `ddl-auto: update`는 이 제약을 갱신하지 않는다 — 새 값을 쓰는 순간 제약 위반이다. 테스트(`create-drop`)는 새 스키마라 못 잡는다. `docs/schema/V7`(connected_accounts.provider)·`V8`(workflow_runs.status·node_runs.node_type, IEUM-BE-45)·`V9`(node_runs.node_type에 `ACTION`)·`V10`(workflows·workflow_runs.trigger_type에 앱 트리거 2값)이 그 수동 DDL이다 — 배포 전에 대상 DB에 적용할 것. **`app_trigger_subscriptions.trigger_type`도 Hibernate가 CHECK를 만든다**(V10 시점 값으로 생성) — `TriggerType`에 값을 더하면 이 테이블 제약도 수동 DDL 대상이다.
+
+## 트리거 추가 절차 (IEUM-BE-93)
+새 트리거 종류는 아래만 손댄다. 실행기(`TriggerNodeExecutor`)·구독(`AppTriggerSubscriptionService`)·활성화(`WorkflowCrudService.activateWorkflow`)·노드 테스트(api `NodeTestService`)에는 종류별 분기가 없고 `TriggerHandlerRegistry.get(type)`에 위임한다. SCHEDULE(Quartz)·WEBHOOK(토큰 주소)·Gmail 폴링·GitHub 수신은 각 종류의 고유 수신 경로라 새 트리거가 고치지 않는다.
+
+1. **카탈로그 이벤트** — ieum-node-catalog에 `events/<앱>/<이벤트>.json`(`node_type: TRIGGER`, `trigger_type: <새 값>`)을 머지한다. BE는 **서브모듈 갱신과 enum 상수 추가를 같은 커밋**으로 한다. 카탈로그만 먼저 올리면 `EventCatalog` 로더가 모르는 trigger_type으로 기동을 막고, enum만 먼저 올리면 `EventCatalogTest.everyTriggerType_hasExactlyOneEvent`가 깨진다. agent 서브모듈도 같은 카탈로그 커밋이어야 한다. 다르면 기동 뒤 `AgentCatalogDiffReporter`가 `[CatalogDiff]` warn을 남긴다.
+   - agent는 **서브모듈 갱신과 `ieum-agent/api/schemas/generate_workflow.py`의 `TRIGGER_TYPES` 추가를 같은 커밋**으로 한다 — 빠지면 agent 로더(`core/template_registry.py` `validate_registry`)가 모르는 trigger_type으로 기동을 막는다.
+   - 카탈로그에 **새 auth 값이나 새 ACTION tool_key 접두사**를 올릴 땐 BE `ToolAuthRule`·실행기 변경을 먼저 머지·배포한다 — 순서가 뒤집히면 api `CatalogStartupCheck`가 dev 부팅을 막는다.
+2. **`TriggerType` 상수** — 이름은 **20자 이하**다. `workflows.trigger_type`이 `VARCHAR(20)`(`Workflow.java` `@Column(length = 20)`)이다. `app_trigger_subscriptions`는 30자, `workflow_runs`는 255자다.
+3. **`TriggerHandler` 구현 `@Component` 하나**(포트: `com.ieum.workflowcore.trigger`) — `type()`, `output()`(기본 = 런타임이 심은 페이로드 복사. 부작용 금지, 재처리 때 다시 불린다). 앱 이벤트형이면 `subscribes()=true`, `snapshot`, `resourceKey`(webhook 라우팅용), `pollStart`, `verifyAccess`(**외부 리소스를 고르는 트리거는 반드시 오버라이드** — 기본값은 검증 없음 = IDOR), `nodeTestMode`(LISTEN·FETCH — 구독형이 RUN이면 `CatalogStartupCheck`가 기동을 막는다), `fetchSample`(FETCH일 때)을 구현한다. **`verifyAccess`가 보는 외부 리소스는 `resourceKey`로도 내라** — 구독 동기화의 재검증 생략 키가 (type, resourceKey)라서, null로 두면 리소스를 바꿔 저장해도 재검증을 건너뛴다(잠재 IDOR). **폴링형 스냅샷의 값은 문자열로 둔다** — 구독 config는 JSON 칼럼이라 다시 읽으면 숫자가 Integer로 돌아와(`Long` 123 ≠ `Integer` 123) `reconfigure`가 저장마다 "바뀜"으로 보고 커서를 리셋한다(GitHub repoId는 커서가 없어 무해). 외부 API를 부르는 앱 핸들러는 api 모듈 클래스가 구현한다(Gmail = `GmailTriggerClient`, GitHub = `GitHubIssueSource`). 핸들러가 빠지면 api `CatalogStartupCheck`가 기동을 막고, 같은 type이 둘이면 `TriggerHandlerRegistry`가 막는다.
+4. **수신 경로** — 폴링 스위퍼나 webhook 컨트롤러를 새로 쓰고, 발화는 api `AppTriggerFirer.fire(workflowId, type, output)`로 한다. 웹훅형이면 auth `SecurityConfig`(`auth/src/main/java/com/ieum/auth/config/SecurityConfig.java`의 permitAll 목록)에 **그 경로 하나만** 추가하고, 서명·토큰 검증을 수신 서비스에 둔다(선례: `/api/v1/integrations/github/webhook` — HMAC).
+5. **PG CHECK 제약 수동 DDL** — `docs/schema/V<다음 번호>__add_<값 소문자>_trigger_type.sql`을 만들고 배포 전에 대상 DB(dev·운영)에 직접 적용한다. 테스트(`create-drop`)는 새 스키마라 이 문제를 잡지 못한다. 형식은 `V10`과 같다(IF EXISTS 없이, DROP·ADD를 한 문장으로). 예: 새 값 `NEW_TRIGGER`
+   ```sql
+   ALTER TABLE workflows
+       DROP CONSTRAINT workflows_trigger_type_check,
+       ADD CONSTRAINT workflows_trigger_type_check
+           CHECK (trigger_type IN ('MANUAL', 'WEBHOOK', 'SCHEDULE', 'GMAIL_NEW_EMAIL', 'GITHUB_NEW_ISSUE', 'NEW_TRIGGER'));
+
+   ALTER TABLE workflow_runs
+       DROP CONSTRAINT workflow_runs_trigger_type_check,
+       ADD CONSTRAINT workflow_runs_trigger_type_check
+           CHECK (trigger_type IN ('MANUAL', 'WEBHOOK', 'SCHEDULE', 'GMAIL_NEW_EMAIL', 'GITHUB_NEW_ISSUE', 'NEW_TRIGGER'));
+
+   ALTER TABLE app_trigger_subscriptions
+       DROP CONSTRAINT app_trigger_subscriptions_trigger_type_check,
+       ADD CONSTRAINT app_trigger_subscriptions_trigger_type_check
+           CHECK (trigger_type IN ('MANUAL', 'WEBHOOK', 'SCHEDULE', 'GMAIL_NEW_EMAIL', 'GITHUB_NEW_ISSUE', 'NEW_TRIGGER'));
+   ```
+   적용 전에 `\d workflows`·`\d workflow_runs`·`\d app_trigger_subscriptions`로 실제 제약 이름을 확인한다. 특히 `app_trigger_subscriptions`는 docs/schema에 DDL 선례가 없다. Hibernate가 만든 이름 없는 CHECK에 PG가 붙이는 기본 이름(`<테이블>_<컬럼>_check`)으로 추정한 이름이므로, 다르면 DROP 이름만 바꾼다.
 
 ## 스케줄러 (scheduler/, config/)
 Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `ScheduleJobRestorer`(부팅 시 복원), `WorkflowCleanupScheduler`, `JobKeyGenerator`.

@@ -6,7 +6,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 
 import com.ieum.common.exception.CustomException;
@@ -15,26 +17,97 @@ import com.ieum.workflowcore.catalog.EventCatalog;
 import com.ieum.workflowcore.domain.AppTriggerSubscription;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.enums.TriggerType;
-import com.ieum.workflowcore.engine.executor.AppTriggerAccessVerifier;
 import com.ieum.workflowcore.repository.AppTriggerSubscriptionRepository;
+import com.ieum.workflowcore.trigger.PollStart;
+import com.ieum.workflowcore.trigger.TriggerHandler;
+import com.ieum.workflowcore.trigger.TriggerHandlerRegistry;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 
+/**
+ * 구독 동기화의 일반 흐름 — 핸들러는 테스트 안의 가짜다. Gmail·GitHub 고유 규칙(blank query 생략, 커서 afterSec,
+ * repoId 정규화·거부, resource_key)은 api {@code GmailTriggerClientTest}·{@code GitHubIssueSourceTest}가 고정한다.
+ */
 class AppTriggerSubscriptionServiceTest {
 
-    private final AppTriggerSubscriptionRepository repository = org.mockito.Mockito.mock(AppTriggerSubscriptionRepository.class);
-    private final AppTriggerAccessVerifier verifier = org.mockito.Mockito.mock(AppTriggerAccessVerifier.class);
+    /** 폴링형 가짜(GMAIL_NEW_EMAIL 자리) — 스냅샷 {@code {query?}}, 시작 커서 {@code {startedAt}}, 즉시 폴링 */
+    static class FakePolling implements TriggerHandler {
+        @Override
+        public TriggerType type() {
+            return TriggerType.GMAIL_NEW_EMAIL;
+        }
+
+        @Override
+        public boolean subscribes() {
+            return true;
+        }
+
+        @Override
+        public Map<String, Object> snapshot(Map<?, ?> config) {
+            Map<String, Object> snapshot = new HashMap<>();
+            if (config.get("query") != null) {
+                snapshot.put("query", config.get("query"));
+            }
+            return snapshot;
+        }
+
+        @Override
+        public PollStart pollStart(LocalDateTime now) {
+            return new PollStart(Map.of("startedAt", now.toString()), now);
+        }
+    }
+
+    /** 수신형 가짜(GITHUB_NEW_ISSUE 자리) — 스냅샷 {@code {repoId}} 원본 그대로, resource_key = 문자열, 폴링 없음 */
+    static class FakeReceiving implements TriggerHandler {
+        @Override
+        public TriggerType type() {
+            return TriggerType.GITHUB_NEW_ISSUE;
+        }
+
+        @Override
+        public boolean subscribes() {
+            return true;
+        }
+
+        @Override
+        public Map<String, Object> snapshot(Map<?, ?> config) {
+            Map<String, Object> snapshot = new HashMap<>();
+            snapshot.put("repoId", config.get("repoId"));
+            return snapshot;
+        }
+
+        @Override
+        public String resourceKey(Map<String, Object> snapshot) {
+            Object repoId = snapshot.get("repoId");
+            return repoId == null ? null : String.valueOf(repoId);
+        }
+    }
+
+    /** 주어진 구독형 핸들러 + 나머지 TriggerType은 구독하지 않는 람다 — 레지스트리가 전 타입을 덮는다 */
+    private static List<TriggerHandler> handlers(TriggerHandler... subscribing) {
+        List<TriggerHandler> all = new ArrayList<>(List.of(subscribing));
+        for (TriggerType type : TriggerType.values()) {
+            if (all.stream().noneMatch(h -> h.type() == type)) {
+                all.add(() -> type);
+            }
+        }
+        return all;
+    }
+
     private static final EventCatalog CATALOG = EventCatalog.loadFromClasspath();
-    private final AppTriggerSubscriptionService service = new AppTriggerSubscriptionService(repository, verifier, CATALOG);
+    private final AppTriggerSubscriptionRepository repository = mock(AppTriggerSubscriptionRepository.class);
+    private final FakePolling polling = spy(new FakePolling());
+    private final FakeReceiving receiving = spy(new FakeReceiving());
+    private final AppTriggerSubscriptionService service = new AppTriggerSubscriptionService(
+        repository, new TriggerHandlerRegistry(handlers(polling, receiving)), CATALOG);
 
     private final UUID userId = UUID.randomUUID();
     private final UUID workflowId = UUID.randomUUID();
@@ -75,11 +148,22 @@ class AppTriggerSubscriptionServiceTest {
     }
 
     @Test
-    @DisplayName("활성 + Gmail 노드 → 새 행, query 스냅샷, 커서는 지금")
-    void newGmailRowStartsCursorAtNow() {
+    @DisplayName("subscribes(type) = 그 핸들러의 subscribes(), null이면 false")
+    void subscribesFollowsHandler() {
+        assertThat(service.subscribes(TriggerType.GMAIL_NEW_EMAIL)).isTrue();
+        assertThat(service.subscribes(TriggerType.GITHUB_NEW_ISSUE)).isTrue();
+        assertThat(service.subscribes(TriggerType.MANUAL)).isFalse();
+        assertThat(service.subscribes(TriggerType.WEBHOOK)).isFalse();
+        assertThat(service.subscribes(TriggerType.SCHEDULE)).isFalse();
+        assertThat(service.subscribes(null)).isFalse();
+    }
+
+    @Test
+    @DisplayName("활성 + 구독형 노드 → 새 행: 스냅샷·커서·다음 폴링은 핸들러가 정한다, 새 행은 접근 검증을 거친다")
+    void newRowUsesHandlerSnapshotAndPollStart() {
         given(repository.findByWorkflowId(workflowId)).willReturn(List.of());
 
-        service.sync(workflow(true), List.of(gmailNode("t1", "  from:boss@x.com ")));
+        service.sync(workflow(true), List.of(gmailNode("t1", "from:boss@x.com")));
 
         AppTriggerSubscription row = savedRow();
         assertThat(row.getWorkflowId()).isEqualTo(workflowId);
@@ -88,74 +172,70 @@ class AppTriggerSubscriptionServiceTest {
         assertThat(row.getTriggerType()).isEqualTo(TriggerType.GMAIL_NEW_EMAIL);
         assertThat(row.getConfig()).isEqualTo(Map.of("query", "from:boss@x.com"));
         assertThat(row.getResourceKey()).isNull();
-        assertThat(row.getNextPollAt()).isBeforeOrEqualTo(LocalDateTime.now());
-        assertThat(row.getCursor()).containsKey("afterSec");
+        assertThat(row.getCursor()).containsKey("startedAt");
+        assertThat(row.getNextPollAt()).isNotNull().isBeforeOrEqualTo(LocalDateTime.now());
+        verify(polling).verifyAccess(userId, Map.of("query", "from:boss@x.com"));
     }
 
     @Test
-    @DisplayName("빈 query는 스냅샷에서 빠진다(in:inbox는 질의 조립 시점에 붙는다)")
-    void blankQueryIsDropped() {
+    @DisplayName("수신형 노드 → resource_key = 핸들러 resourceKey(스냅샷), 폴링 없음, 검증기에 스냅샷 전달")
+    void receivingRowUsesResourceKey() {
         given(repository.findByWorkflowId(workflowId)).willReturn(List.of());
 
-        service.sync(workflow(true), List.of(gmailNode("t1", "   ")));
-
-        assertThat(savedRow().getConfig()).isEmpty();
-    }
-
-    @Test
-    @DisplayName("GitHub 노드 → resource_key = repoId 십진 문자열, 스냅샷 {repoId: Long}, 검증기에 스냅샷 전달")
-    void githubRowUsesRepoId() {
-        given(repository.findByWorkflowId(workflowId)).willReturn(List.of());
         service.sync(workflow(true), List.of(githubNode("t1", 123456)));
 
         AppTriggerSubscription row = savedRow();
         assertThat(row.getResourceKey()).isEqualTo("123456");
-        assertThat(row.getConfig()).isEqualTo(Map.of("repoId", 123456L));
+        assertThat(row.getConfig()).isEqualTo(Map.of("repoId", 123456));
+        assertThat(row.getCursor()).isNull();
         assertThat(row.getNextPollAt()).isNull();
-        verify(verifier).verify(userId, TriggerType.GITHUB_NEW_ISSUE, Map.of("repoId", 123456L));
+        verify(receiving).verifyAccess(userId, Map.of("repoId", 123456));
     }
 
     @Test
-    @DisplayName("같은 노드·같은 repoId 재저장은 검증기를 부르지 않는다(숫자·문자열 혼용 포함), repoId가 바뀌면 부른다")
+    @DisplayName("같은 노드·같은 resource_key 재저장은 검증하지 않는다, resource_key가 바뀌면 검증한다")
     void unchangedResourceIsNotRechecked() {
         AppTriggerSubscription existing = AppTriggerSubscription.create(workflowId, "t1", userId,
-            TriggerType.GITHUB_NEW_ISSUE, "123", Map.of("repoId", 123L), LocalDateTime.now());
+            TriggerType.GITHUB_NEW_ISSUE, "123", Map.of("repoId", 123L), PollStart.NONE);
         given(repository.findByWorkflowId(workflowId)).willReturn(List.of(existing));
 
         service.sync(workflow(true), List.of(githubNode("t1", "123")));
-        verify(verifier, never()).verify(any(), any(), any());
+        verify(receiving, never()).verifyAccess(any(), any());
 
         service.sync(workflow(true), List.of(githubNode("t1", "124")));
-        verify(verifier).verify(eq(userId), eq(TriggerType.GITHUB_NEW_ISSUE), any());
+        verify(receiving).verifyAccess(eq(userId), any());
+        assertThat(existing.getResourceKey()).isEqualTo("124");
     }
 
     @Test
-    @DisplayName("[Review Focus 4] repoId 숫자 77과 문자열 \"77\"은 같은 resource_key, 양의 정수가 아니면 400(INVALID_WORKFLOW)·행 없음")
-    void repoIdNormalization() {
+    @DisplayName("[Review Focus] 접근 검증 거부 → 그 예외가 그대로 나가고 새 행을 쓰지 않으며 기존 행도 바꾸지 않는다")
+    void accessRejectionPropagatesWithoutRow() {
+        CustomException rejection = new CustomException(ErrorCode.INVALID_INPUT, "레포 접근 불가");
+        willThrow(rejection).given(receiving).verifyAccess(eq(userId), any());
+
         given(repository.findByWorkflowId(workflowId)).willReturn(List.of());
-        service.sync(workflow(true), List.of(githubNode("t1", "77")));
-        assertThat(savedRow().getResourceKey()).isEqualTo("77");
+        assertThatThrownBy(() -> service.sync(workflow(true), List.of(githubNode("t1", 1)))).isSameAs(rejection);
+        verify(repository, never()).save(any());
 
-        org.mockito.Mockito.clearInvocations(repository);
-        service.sync(workflow(true), List.of(githubNode("t1", 77)));
-        assertThat(savedRow().getResourceKey()).isEqualTo("77");
-
-        org.mockito.Mockito.clearInvocations(repository);
-        assertThatThrownBy(() -> service.sync(workflow(true), List.of(githubNode("t1", "abc"))))
-            .isInstanceOfSatisfying(CustomException.class,
-                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
+        AppTriggerSubscription existing = AppTriggerSubscription.create(workflowId, "t1", userId,
+            TriggerType.GITHUB_NEW_ISSUE, "1", Map.of("repoId", 1), PollStart.NONE);
+        given(repository.findByWorkflowId(workflowId)).willReturn(List.of(existing));
+        assertThatThrownBy(() -> service.sync(workflow(true), List.of(githubNode("t1", 2)))).isSameAs(rejection);
+        assertThat(existing.getResourceKey()).isEqualTo("1");
+        assertThat(existing.getConfig()).isEqualTo(Map.of("repoId", 1));
         verify(repository, never()).save(any());
     }
 
     @Test
-    @DisplayName("검증기가 거부하면 예외가 그대로 나가고 행을 쓰지 않는다")
-    void verifierRejectionPropagates() {
+    @DisplayName("핸들러 스냅샷이 거부(형식 오류)하면 그 예외가 그대로 나가고 검증·행 쓰기가 없다")
+    void snapshotRejectionWritesNothing() {
+        CustomException malformed = new CustomException(ErrorCode.INVALID_WORKFLOW, "repoId 형식 오류");
+        willThrow(malformed).given(receiving).snapshot(any());
         given(repository.findByWorkflowId(workflowId)).willReturn(List.of());
-        willThrow(new CustomException(ErrorCode.INVALID_INPUT, "레포 접근 불가"))
-            .given(verifier).verify(eq(userId), eq(TriggerType.GITHUB_NEW_ISSUE), any());
 
-        assertThatThrownBy(() -> service.sync(workflow(true), List.of(githubNode("t1", 1))))
-            .isInstanceOf(CustomException.class);
+        assertThatThrownBy(() -> service.sync(workflow(true), List.of(githubNode("t1", "abc")))).isSameAs(malformed);
+
+        verify(receiving, never()).verifyAccess(any(), any());
         verify(repository, never()).save(any());
     }
 
@@ -165,35 +245,35 @@ class AppTriggerSubscriptionServiceTest {
         Workflow w = workflow(true);
         ReflectionTestUtils.setField(w, "triggerType", TriggerType.GMAIL_NEW_EMAIL);
         AppTriggerSubscription existing = AppTriggerSubscription.create(workflowId, "t1", userId,
-            TriggerType.GMAIL_NEW_EMAIL, null, Map.of(), LocalDateTime.now());
+            TriggerType.GMAIL_NEW_EMAIL, null, Map.of(), PollStart.NONE);
         given(repository.findByWorkflowId(workflowId)).willReturn(List.of(existing));
 
         service.sync(w, List.of(trigger("t1", "manual.run", new HashMap<>())));
 
         verify(repository).delete(existing);
         verify(repository, never()).save(any());
-        org.mockito.Mockito.verifyNoInteractions(verifier);
+        verify(polling, never()).verifyAccess(any(), any());
     }
 
     @Test
     @DisplayName("비활성 워크플로우 → 기존 행 삭제, 검증 안 함")
     void inactiveDeletes() {
         AppTriggerSubscription existing = AppTriggerSubscription.create(workflowId, "t1", userId,
-            TriggerType.GMAIL_NEW_EMAIL, null, Map.of(), LocalDateTime.now());
+            TriggerType.GMAIL_NEW_EMAIL, null, Map.of(), PollStart.NONE);
         given(repository.findByWorkflowId(workflowId)).willReturn(List.of(existing));
 
         service.sync(workflow(false), List.of(gmailNode("t1", null)));
 
         verify(repository).delete(existing);
         verify(repository, never()).save(any());
-        verify(verifier, never()).verify(any(), any(), any());
+        verify(polling, never()).verifyAccess(any(), any());
     }
 
     @Test
-    @DisplayName("트리거가 SCHEDULE로 바뀜 → 행 삭제")
+    @DisplayName("트리거가 SCHEDULE로 바뀜(구독하지 않는 핸들러) → 행 삭제")
     void nonAppTriggerDeletes() {
         AppTriggerSubscription existing = AppTriggerSubscription.create(workflowId, "t1", userId,
-            TriggerType.GMAIL_NEW_EMAIL, null, Map.of(), LocalDateTime.now());
+            TriggerType.GMAIL_NEW_EMAIL, null, Map.of(), PollStart.NONE);
         given(repository.findByWorkflowId(workflowId)).willReturn(List.of(existing));
 
         service.sync(workflow(true), List.of(trigger("t1", "schedule.every", new HashMap<>(Map.of("cron", "0 * * * *")))));
@@ -203,40 +283,47 @@ class AppTriggerSubscriptionServiceTest {
     }
 
     @Test
-    @DisplayName("같은 노드·같은 query 재저장 → 기존 행 유지(커서 유지), 새 행 없음")
-    void sameQueryKeepsCursor() {
+    @DisplayName("[Review Focus] 같은 노드·같은 스냅샷 재저장 → 기존 행 유지(커서·다음 폴링 유지), 새 행 없음")
+    void sameSnapshotKeepsCursor() {
+        LocalDateTime yesterday = LocalDateTime.now().minusDays(1);
         AppTriggerSubscription existing = AppTriggerSubscription.create(workflowId, "t1", userId,
-            TriggerType.GMAIL_NEW_EMAIL, null, Map.of("query", "from:x"), LocalDateTime.now().minusDays(1));
+            TriggerType.GMAIL_NEW_EMAIL, null, Map.of("query", "from:x"), new FakePolling().pollStart(yesterday));
         Object cursorBefore = existing.getCursor();
         given(repository.findByWorkflowId(workflowId)).willReturn(List.of(existing));
 
         service.sync(workflow(true), List.of(gmailNode("t1", "from:x")));
 
         assertThat(existing.getCursor()).isSameAs(cursorBefore);
+        assertThat(existing.getNextPollAt()).isEqualTo(yesterday);
         verify(repository, never()).save(any());
         verify(repository, never()).delete(any());
     }
 
     @Test
-    @DisplayName("같은 노드·query 변경 → 같은 행에서 커서 리셋(삭제·재삽입 아님 — UNIQUE 경합 회피)")
-    void changedQueryResetsCursor() {
+    @DisplayName("[Review Focus] 같은 노드·스냅샷 변경 → 같은 행에서 핸들러 pollStart로 리셋(삭제·재삽입 아님 — UNIQUE 경합 회피)")
+    void changedSnapshotResetsCursor() {
+        LocalDateTime yesterday = LocalDateTime.now().minusDays(1);
         AppTriggerSubscription existing = AppTriggerSubscription.create(workflowId, "t1", userId,
-            TriggerType.GMAIL_NEW_EMAIL, null, Map.of("query", "from:x"), LocalDateTime.now().minusDays(1));
-        long before = ((Number) existing.getCursor().get("afterSec")).longValue();
+            TriggerType.GMAIL_NEW_EMAIL, null, Map.of("query", "from:x"), new FakePolling().pollStart(yesterday));
+        existing.recordPoll(existing.getCursor(), "ERR", yesterday, yesterday.plusMinutes(5));
+        Object cursorBefore = existing.getCursor();
         given(repository.findByWorkflowId(workflowId)).willReturn(List.of(existing));
 
         service.sync(workflow(true), List.of(gmailNode("t1", "from:y")));
 
-        assertThat(((Number) existing.getCursor().get("afterSec")).longValue()).isGreaterThan(before);
         assertThat(existing.getConfig()).isEqualTo(Map.of("query", "from:y"));
+        assertThat(existing.getCursor()).containsKey("startedAt").isNotEqualTo(cursorBefore);
+        assertThat(existing.getNextPollAt()).isAfter(yesterday.plusMinutes(5));
+        assertThat(existing.getLastError()).isNull();
         verify(repository, never()).delete(any());
+        verify(repository, never()).save(any());
     }
 
     @Test
     @DisplayName("트리거 노드가 교체됨(id 변경) → 옛 행 삭제 + 새 행")
     void replacedNodeRecreates() {
         AppTriggerSubscription old = AppTriggerSubscription.create(workflowId, "old", userId,
-            TriggerType.GMAIL_NEW_EMAIL, null, Map.of(), LocalDateTime.now());
+            TriggerType.GMAIL_NEW_EMAIL, null, Map.of(), PollStart.NONE);
         given(repository.findByWorkflowId(workflowId)).willReturn(List.of(old));
 
         service.sync(workflow(true), List.of(gmailNode("new", null)));
@@ -249,7 +336,7 @@ class AppTriggerSubscriptionServiceTest {
     @DisplayName("첫 TRIGGER 노드만 본다 — 첫 번째가 schedule.every면 뒤의 Gmail 노드는 구독되지 않고 기존 행은 지워진다")
     void onlyFirstTriggerNodeCounts() {
         AppTriggerSubscription existing = AppTriggerSubscription.create(workflowId, "t2", userId,
-            TriggerType.GMAIL_NEW_EMAIL, null, Map.of(), LocalDateTime.now());
+            TriggerType.GMAIL_NEW_EMAIL, null, Map.of(), PollStart.NONE);
         given(repository.findByWorkflowId(workflowId)).willReturn(List.of(existing));
 
         service.sync(workflow(true), List.of(
@@ -280,61 +367,7 @@ class AppTriggerSubscriptionServiceTest {
         service.sync(workflow(true), List.of(trigger("t1", "nope.unknown", new HashMap<>(Map.of("query", "x")))));
 
         verify(repository, never()).save(any());
-        verify(verifier, never()).verify(any(), any(), any());
-    }
-
-    @Test
-    @DisplayName("query 생략 행에 빈 query로 재저장 → 같은 값으로 보고 커서 유지")
-    void blankQueryEqualsOmittedQuery() {
-        AppTriggerSubscription existing = AppTriggerSubscription.create(workflowId, "t1", userId,
-            TriggerType.GMAIL_NEW_EMAIL, null, Map.of(), LocalDateTime.now().minusDays(1));
-        Object cursorBefore = existing.getCursor();
-        given(repository.findByWorkflowId(workflowId)).willReturn(List.of(existing));
-
-        service.sync(workflow(true), List.of(gmailNode("t1", "  ")));
-
-        assertThat(existing.getCursor()).isSameAs(cursorBefore);
-        assertThat(existing.getConfig().get("query")).isNull();
-    }
-
-    private static Map<String, Object> repoConfig(Object repoId) {
-        Map<String, Object> config = new HashMap<>();
-        config.put("repoId", repoId);
-        return config;
-    }
-
-    @Test
-    @DisplayName("[Review Focus 4] 숫자 123과 문자열 \"123\"·\" 123 \"은 같은 repoId")
-    void numberAndDigitStringGiveSameKey() {
-        assertThat(AppTriggerSubscriptionService.githubRepoId(repoConfig(123))).contains(123L);
-        assertThat(AppTriggerSubscriptionService.githubRepoId(repoConfig(123L))).contains(123L);
-        assertThat(AppTriggerSubscriptionService.githubRepoId(repoConfig("123"))).contains(123L);
-        assertThat(AppTriggerSubscriptionService.githubRepoId(repoConfig(" 123 "))).contains(123L);
-    }
-
-    @Test
-    @DisplayName("repoId가 없거나 빈 문자열이면 미설정(empty) — 저장을 막지 않는다")
-    void missingIsEmpty() {
-        assertThat(AppTriggerSubscriptionService.githubRepoId(repoConfig(null))).isEmpty();
-        assertThat(AppTriggerSubscriptionService.githubRepoId(repoConfig("  "))).isEmpty();
-        assertThat(AppTriggerSubscriptionService.githubRepoId(null)).isEmpty();
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"0", "-1", "12a", "1.5", "99999999999999999999", "owner/name"})
-    @DisplayName("양의 정수 문자열이 아니면 INVALID_WORKFLOW")
-    void malformedIsRejected(String raw) {
-        assertThatThrownBy(() -> AppTriggerSubscriptionService.githubRepoId(repoConfig(raw)))
-            .isInstanceOfSatisfying(CustomException.class,
-                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
-    }
-
-    @Test
-    @DisplayName("숫자형 0·음수·실수·불리언도 거부")
-    void malformedNonString() {
-        for (Object raw : new Object[] {0, -5L, 1.5d, true}) {
-            assertThatThrownBy(() -> AppTriggerSubscriptionService.githubRepoId(repoConfig(raw)))
-                .isInstanceOf(CustomException.class);
-        }
+        verify(polling, never()).snapshot(any());
+        verify(receiving, never()).snapshot(any());
     }
 }

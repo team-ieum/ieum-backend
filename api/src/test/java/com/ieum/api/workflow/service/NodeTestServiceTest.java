@@ -13,7 +13,6 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.credential.domain.Credential;
 import com.ieum.api.credential.service.CredentialService;
-import com.ieum.api.trigger.AppTriggerSampleFetcher;
 import com.ieum.api.webhook.service.WebhookListenStore;
 import com.ieum.api.workflow.dto.NodeTestRequest;
 import com.ieum.api.workflow.dto.NodeTestResponse;
@@ -30,6 +29,12 @@ import com.ieum.workflowcore.service.NodeTestResult;
 import com.ieum.workflowcore.service.NodeTestRunner;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowWebhookTokenService;
+import com.ieum.workflowcore.trigger.ManualTriggerHandler;
+import com.ieum.workflowcore.trigger.NodeTestMode;
+import com.ieum.workflowcore.trigger.ScheduleTriggerHandler;
+import com.ieum.workflowcore.trigger.TriggerHandler;
+import com.ieum.workflowcore.trigger.TriggerHandlerRegistry;
+import com.ieum.workflowcore.trigger.WebhookTriggerHandler;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
@@ -49,14 +54,13 @@ class NodeTestServiceTest {
     private final CredentialService credentialService = mock(CredentialService.class);
     private final WebhookListenStore listenStore = mock(WebhookListenStore.class);
     private final WorkflowWebhookTokenService tokenService = mock(WorkflowWebhookTokenService.class);
-    private final AppTriggerSampleFetcher gmailFetcher = mock(AppTriggerSampleFetcher.class);
+    private final TriggerHandler gmailHandler = mock(TriggerHandler.class);
     {
-        given(gmailFetcher.triggerType()).willReturn(TriggerType.GMAIL_NEW_EMAIL);
+        given(gmailHandler.type()).willReturn(TriggerType.GMAIL_NEW_EMAIL);
+        given(gmailHandler.nodeTestMode()).willReturn(NodeTestMode.FETCH);
         given(tokenService.status(any())).willReturn(Optional.of(LocalDateTime.now()));
     }
-    private final NodeTestService service = new NodeTestService(
-        crudService, runner, credentialService, listenStore, tokenService, List.of(gmailFetcher),
-        new NodeDerivation(CATALOG), CATALOG);
+    private final NodeTestService service = service(gmailHandler);
     private final ObjectMapper json = new ObjectMapper();
 
     private final UUID userId = UUID.randomUUID();
@@ -77,6 +81,15 @@ class NodeTestServiceTest {
     private static void assertErrorCode(Throwable thrown, ErrorCode expected) {
         assertThat(thrown).isInstanceOfSatisfying(CustomException.class,
             e -> assertThat(e.getErrorCode()).isEqualTo(expected));
+    }
+
+    /** 내장 3개(실물) + 주어진 앱 핸들러로 레지스트리를 만든다 */
+    private NodeTestService service(TriggerHandler... appHandlers) {
+        List<TriggerHandler> handlers = new java.util.ArrayList<>(List.of(
+            new ManualTriggerHandler(), new ScheduleTriggerHandler(), new WebhookTriggerHandler()));
+        handlers.addAll(List.of(appHandlers));
+        return new NodeTestService(crudService, runner, credentialService, listenStore, tokenService,
+            new TriggerHandlerRegistry(handlers), new NodeDerivation(CATALOG), CATALOG);
     }
 
     // ──────────────────── 소유자·가드·경로 ────────────────────
@@ -295,7 +308,7 @@ class NodeTestServiceTest {
             "gmail.new_email");
         given(runner.findSavedNode(workflowId, "t1")).willReturn(Optional.of(saved));
         Map<String, Object> latest = Map.of("messageId", "m1");
-        given(gmailFetcher.fetchLatest(userId, saved.getConfig())).willReturn(Optional.of(latest));
+        given(gmailHandler.fetchSample(userId, saved.getConfig())).willReturn(Optional.of(latest));
         given(runner.run(workflow, saved, latest))
             .willReturn(new NodeTestResult(SampleStatus.SUCCESS, latest, null, LocalDateTime.now()));
 
@@ -367,7 +380,7 @@ class NodeTestServiceTest {
         Workflow workflow = workflow(TriggerType.GMAIL_NEW_EMAIL);
         owns(workflow);
         Map<String, Object> latest = Map.of("messageId", "m1", "subject", "s");
-        given(gmailFetcher.fetchLatest(eq(userId), any())).willReturn(Optional.of(latest));
+        given(gmailHandler.fetchSample(eq(userId), any())).willReturn(Optional.of(latest));
         given(runner.run(eq(workflow), any(Node.class), eq(latest)))
             .willReturn(new NodeTestResult(SampleStatus.SUCCESS, latest, null, LocalDateTime.now()));
 
@@ -375,7 +388,7 @@ class NodeTestServiceTest {
 
         assertThat(response.getStatus()).isEqualTo("SUCCESS");
         ArgumentCaptor<Map<String, Object>> config = ArgumentCaptor.forClass(Map.class);
-        verify(gmailFetcher).fetchLatest(eq(userId), config.capture());
+        verify(gmailHandler).fetchSample(eq(userId), config.capture());
         assertThat(config.getValue()).containsEntry("query", "from:x");
         verify(listenStore, never()).start(any(), any());
     }
@@ -385,7 +398,7 @@ class NodeTestServiceTest {
     void gmailTriggerNoItemsFails() throws Exception {
         Workflow workflow = workflow(TriggerType.GMAIL_NEW_EMAIL);
         owns(workflow);
-        given(gmailFetcher.fetchLatest(eq(userId), any())).willReturn(Optional.empty());
+        given(gmailHandler.fetchSample(eq(userId), any())).willReturn(Optional.empty());
         given(runner.recordFailure(any(), any(), any()))
             .willReturn(new NodeTestResult(SampleStatus.FAILED, null, "x", LocalDateTime.now()));
 
@@ -400,7 +413,7 @@ class NodeTestServiceTest {
     void gmailTriggerFetchErrorBecomesFailedSample() throws Exception {
         Workflow workflow = workflow(TriggerType.GMAIL_NEW_EMAIL);
         owns(workflow);
-        given(gmailFetcher.fetchLatest(eq(userId), any()))
+        given(gmailHandler.fetchSample(eq(userId), any()))
             .willThrow(new CustomException(ErrorCode.GOOGLE_SCOPE_REQUIRED));
         given(runner.recordFailure(any(), any(), any()))
             .willReturn(new NodeTestResult(SampleStatus.FAILED, null, "x", LocalDateTime.now()));
@@ -412,27 +425,25 @@ class NodeTestServiceTest {
     }
 
     @Test
-    @DisplayName("공급원이 없는 앱 트리거 — FAILED 안내, 외부 호출 없음")
-    void appTriggerWithoutFetcherFails() throws Exception {
-        Workflow workflow = workflow(TriggerType.GITHUB_NEW_ISSUE);
+    @DisplayName("테스트 방식은 핸들러 nodeTestMode가 정한다 — FETCH 핸들러면 type과 무관하게 fetchSample(새 트리거가 NodeTestService를 고치지 않는다)")
+    void testModeComesFromHandler() throws Exception {
+        TriggerHandler github = mock(TriggerHandler.class);
+        given(github.type()).willReturn(TriggerType.GITHUB_NEW_ISSUE);
+        given(github.nodeTestMode()).willReturn(NodeTestMode.FETCH);
+        Map<String, Object> latest = Map.of("number", 7);
+        given(github.fetchSample(eq(userId), any())).willReturn(Optional.of(latest));
+        NodeTestService withGitHub = service(gmailHandler, github);
+        Workflow workflow = workflow(TriggerType.MANUAL);
         owns(workflow);
-        given(runner.recordFailure(any(), any(), any()))
-            .willReturn(new NodeTestResult(SampleStatus.FAILED, null, "x", LocalDateTime.now()));
+        given(runner.run(eq(workflow), any(Node.class), eq(latest)))
+            .willReturn(new NodeTestResult(SampleStatus.SUCCESS, latest, null, LocalDateTime.now()));
 
-        service.test(userId, workflowId, "t1", request("""
+        NodeTestResponse response = withGitHub.test(userId, workflowId, "t1", request("""
             {"node":{"id":"t1","event":"github.new_issue","type":"TRIGGER","config":{"repoId":1}}}"""));
 
-        verify(runner).recordFailure(workflow, "t1", "이 트리거는 아직 테스트할 수 없습니다");
-        verify(gmailFetcher, never()).fetchLatest(any(), any());
-        verify(runner, never()).run(any(), any(), any());
-    }
-
-    @Test
-    @DisplayName("같은 triggerType 공급원 빈이 둘이면 생성 실패(조용히 덮지 않는다)")
-    void duplicateFetcherFailsFast() {
-        assertThatThrownBy(() -> new NodeTestService(crudService, runner, credentialService, listenStore,
-            tokenService, List.of(gmailFetcher, gmailFetcher), new NodeDerivation(CATALOG), CATALOG))
-            .isInstanceOf(IllegalStateException.class)
-            .hasMessageContaining("GMAIL_NEW_EMAIL");
+        assertThat(response.getStatus()).isEqualTo("SUCCESS");
+        verify(github).fetchSample(eq(userId), any());
+        verify(gmailHandler, never()).fetchSample(any(), any());
+        verifyNoInteractions(listenStore);
     }
 }

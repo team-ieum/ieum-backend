@@ -17,11 +17,9 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class ToolAuthResolver {
 
-    private static final String NOTION_BUILTIN_PREFIX = "builtin:notion_";
-    private static final String GITHUB_BUILTIN_PREFIX = "builtin:github_";
     private static final Map<String, String> HEADER_BY_TOOL_PREFIX = Map.of(
-        NOTION_BUILTIN_PREFIX, "X-Notion-Token",
-        GITHUB_BUILTIN_PREFIX, "X-GitHub-Token"
+        ToolAuthRule.NOTION_BUILTIN_PREFIX, "X-Notion-Token",
+        ToolAuthRule.GITHUB_BUILTIN_PREFIX, "X-GitHub-Token"
     );
 
     private final CredentialProvider credentialProvider;
@@ -99,14 +97,14 @@ public class ToolAuthResolver {
             });
         }
         // 2순위: OAuth connected_accounts 방식 (Notion 도구인 경우)
-        if (userId != null && toolName.startsWith(NOTION_BUILTIN_PREFIX)) {
+        if (userId != null && toolName.startsWith(ToolAuthRule.NOTION_BUILTIN_PREFIX)) {
             Optional<String> notionToken = notionTokenProvider.getAccessToken(userId);
             if (notionToken.isEmpty()) {
                 log.warn("[ToolAuthResolver] Notion OAuth 연동 없음 — userId: {}, toolName: {}", userId, toolName);
             }
             return notionToken;
         }
-        if (userId != null && toolName.startsWith(GITHUB_BUILTIN_PREFIX)) {
+        if (userId != null && toolName.startsWith(ToolAuthRule.GITHUB_BUILTIN_PREFIX)) {
             Optional<String> githubToken = gitHubTokenProvider.getAccessToken(userId);
             if (githubToken.isEmpty()) {
                 log.warn("[ToolAuthResolver] GitHub not connected — userId: {}, tool: {}",

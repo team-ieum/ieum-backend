@@ -21,6 +21,7 @@ import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.domain.enums.SampleStatus;
+import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.ExecutionCursor;
 import com.ieum.workflowcore.engine.ExecutorResult;
 import com.ieum.workflowcore.engine.Node;
@@ -30,6 +31,11 @@ import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.engine.executor.TransformNodeExecutor;
 import com.ieum.workflowcore.engine.executor.TriggerNodeExecutor;
 import com.ieum.workflowcore.repository.NodeTestSampleRepository;
+import com.ieum.workflowcore.trigger.ManualTriggerHandler;
+import com.ieum.workflowcore.trigger.ScheduleTriggerHandler;
+import com.ieum.workflowcore.trigger.TriggerHandler;
+import com.ieum.workflowcore.trigger.TriggerHandlerRegistry;
+import com.ieum.workflowcore.trigger.WebhookTriggerHandler;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -68,7 +74,10 @@ class NodeTestRunnerTest {
     private final FakeExecutor http = new FakeExecutor(NodeType.HTTP);
     private final FakeExecutor ai = new FakeExecutor(NodeType.AI);
     private final NodeTestRunner runner = new NodeTestRunner(
-        List.of(http, ai, new TransformNodeExecutor(), new ConditionNodeExecutor(), new TriggerNodeExecutor(EventCatalog.loadFromClasspath())),
+        List.of(http, ai, new TransformNodeExecutor(), new ConditionNodeExecutor(), new TriggerNodeExecutor(
+            EventCatalog.loadFromClasspath(),
+            new TriggerHandlerRegistry(List.<TriggerHandler>of(new ManualTriggerHandler(), new ScheduleTriggerHandler(),
+                new WebhookTriggerHandler(), () -> TriggerType.GMAIL_NEW_EMAIL)))),
         sampleRepository, crudService, new RetryProperties(), idempotencyStore, objectMapper);
 
     private final UUID userId = UUID.randomUUID();

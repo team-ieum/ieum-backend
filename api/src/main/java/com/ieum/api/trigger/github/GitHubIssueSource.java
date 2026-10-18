@@ -4,14 +4,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.ieum.api.integration.options.GitHubApiReader;
 import com.ieum.api.integration.options.OptionPage.OptionItem;
 import com.ieum.common.exception.CustomException;
-import com.ieum.api.trigger.AppTriggerSampleFetcher;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.enums.TriggerType;
-import com.ieum.workflowcore.engine.executor.AppTriggerAccessVerifier;
-import com.ieum.workflowcore.service.AppTriggerSubscriptionService;
+import com.ieum.workflowcore.trigger.NodeTestMode;
+import com.ieum.workflowcore.trigger.TriggerHandler;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,28 +19,26 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 /**
- * GITHUB_NEW_ISSUE 트리거의 GitHub 쪽 — 정규화(런타임 webhook과 노드 테스트가 공유), 레포 접근 검증(IDOR 방지), 최근 이슈 조회.
+ * GITHUB_NEW_ISSUE 트리거 핸들러 — 정규화(런타임 webhook과 노드 테스트가 공유), 구독 스냅샷·resource_key, 레포 접근 검증(IDOR 방지),
+ * 최근 이슈 조회. 수신은 {@link GitHubWebhookService}·{@link GitHubIssueDispatcher}가 한다.
  *
- * <p>트랜잭션을 걸지 않는다. {@link #verify}는 BE-a sync의 저장 트랜잭션 안에서 불리지만, 토큰 갱신은
+ * <p>트랜잭션을 걸지 않는다. {@link #verifyAccess}는 구독 sync의 저장 트랜잭션 안에서 불리지만, 토큰 갱신은
  * {@code GitHubTokenService.getValidAccessToken}이 {@code REQUIRES_NEW}로 따로 커밋한다 — 검증 거부(400)·장애(503)의
  * 롤백에 회전된 refresh token이 휩쓸리지 않는다.
- *
- * <p>{@code @Primary} — 스캔 순서와 무관하게 {@code StubAppTriggerAccessVerifier}를 이긴다(다른 포트 구현과 동일).
  */
 @Component
-@Primary
 @RequiredArgsConstructor
-public class GitHubIssueSource implements AppTriggerAccessVerifier, AppTriggerSampleFetcher {
+public class GitHubIssueSource implements TriggerHandler {
 
     static final String REPO_NOT_INSTALLED =
         "이 레포에 GitHub 앱 설치가 필요합니다. GitHub App 설치 범위에 저장소를 추가해 주세요.";
     // ponytail: 최근 20건이 전부 PR이면 "항목 없음" — 더 필요하면 페이지를 넘긴다
     static final int RECENT_SCAN = 20;
     private static final Pattern FULL_NAME = Pattern.compile("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+");
+    private static final Pattern REPO_ID = Pattern.compile("[1-9][0-9]{0,18}");
 
     private final GitHubApiReader gitHubApiReader;
 
@@ -107,31 +105,84 @@ public class GitHubIssueSource implements AppTriggerAccessVerifier, AppTriggerSa
         return out;
     }
 
+    @Override
+    public TriggerType type() {
+        return TriggerType.GITHUB_NEW_ISSUE;
+    }
+
+    @Override
+    public boolean subscribes() {
+        return true;
+    }
+
+    /** 구독 스냅샷 {@code {repoId: Long|null}} — repo 이름·label 등은 저장하지 않는다. HashMap: 작성 중이면 repoId가 null이다 */
+    @Override
+    public Map<String, Object> snapshot(Map<?, ?> config) {
+        Map<String, Object> snapshot = new HashMap<>();
+        snapshot.put("repoId", repoId(config).orElse(null));
+        return snapshot;
+    }
+
+    /** webhook 라우팅 키 — repoId 십진 문자열. 작성 중(null)이면 키 없음(행은 남고 어떤 webhook에도 걸리지 않는다) */
+    @Override
+    public String resourceKey(Map<String, Object> snapshot) {
+        Object repoId = snapshot.get("repoId");
+        return repoId == null ? null : String.valueOf(repoId);
+    }
+
     /**
-     * BE-a 포트 — 저장·활성화 시점 검증(spec §5). BE-a {@code AppTriggerSubscriptionService.sync}가 저장 트랜잭션 안에서 부르고,
-     * 같은 행·같은 repoId 재저장에는 부르지 않는다(GitHub 장애가 무관한 편집을 막지 않게). 거부 예외는 그대로 나가 저장 전체를
-     * 롤백한다. 수신 시점 재검증은 {@link GitHubIssueDispatcher}가 따로 한다.
+     * 저장·활성화 시점 검증(spec §5). 구독 sync가 저장 트랜잭션 안에서 부르고, 같은 행·같은 repoId 재저장에는 부르지 않는다
+     * (GitHub 장애가 무관한 편집을 막지 않게). 거부 예외는 그대로 나가 저장 전체를 롤백한다. 수신 시점 재검증은
+     * {@link GitHubIssueDispatcher}가 따로 한다.
      *
-     * @param snapshot BE-a 구독 스냅샷 {@code {repoId: Long|null}} — null이면 작성 중(검증 없음, 행은 resource_key null)
+     * @param snapshot {@link #snapshot} 결과 {@code {repoId: Long|null}} — null이면 작성 중(검증 없음, 행은 resource_key null)
      */
     @Override
-    public void verify(UUID userId, TriggerType triggerType, Map<String, Object> snapshot) {
-        if (triggerType == TriggerType.GITHUB_NEW_ISSUE && snapshot.get("repoId") instanceof Long repoId) {
+    public void verifyAccess(UUID userId, Map<String, Object> snapshot) {
+        if (snapshot.get("repoId") instanceof Long repoId) {
             resolveRepo(userId, repoId);
         }
     }
 
+    /** 노드 테스트는 listen하지 않고 최근 이슈 1건을 즉시 샘플로 만든다 */
     @Override
-    public TriggerType triggerType() {
-        return TriggerType.GITHUB_NEW_ISSUE;
+    public NodeTestMode nodeTestMode() {
+        return NodeTestMode.FETCH;
     }
 
-    /** BE-a 포트 — 노드 테스트 최근 1건. {@code config}는 노드 config 원본(repoId 문자열·숫자). */
+    /**
+     * 노드 테스트 최근 1건. {@code config}는 노드 config 원본(repoId 문자열·숫자). {@link #latestIssue}가 {@link #resolveRepo}로
+     * 설치 범위를 먼저 확인한다 — 저장 검증({@link #verifyAccess})을 거치지 않는 body 노드도 남의 레포를 읽지 못한다.
+     */
     @Override
-    public Optional<Map<String, Object>> fetchLatest(UUID userId, Map<String, Object> config) {
-        long repoId = AppTriggerSubscriptionService.githubRepoId(config)
+    public Optional<Map<String, Object>> fetchSample(UUID userId, Map<String, Object> config) {
+        long repoId = repoId(config)
             .orElseThrow(() -> new CustomException(ErrorCode.INVALID_INPUT, "GitHub 저장소를 먼저 선택해 주세요."));
         return latestIssue(userId, repoId);
+    }
+
+    /**
+     * GitHub 트리거 config의 {@code repoId} — 라우팅({@code resource_key})과 접근 검증의 키. FE 드롭다운은 문자열("123"),
+     * agent·Swagger는 숫자(123)로 저장하므로 둘 다 받는다. 구독 스냅샷과 노드 테스트({@link #fetchSample})가 함께 쓴다.
+     *
+     * @return 미설정(없음·blank)이면 empty. 양의 정수가 아니면 {@code INVALID_WORKFLOW}(400)
+     */
+    public static Optional<Long> repoId(Map<?, ?> config) {
+        Object value = config == null ? null : config.get("repoId");
+        if (value == null || value instanceof String s && s.isBlank()) {
+            return Optional.empty();
+        }
+        if ((value instanceof Integer || value instanceof Long) && ((Number) value).longValue() > 0) {
+            return Optional.of(((Number) value).longValue());
+        }
+        if (value instanceof String s && REPO_ID.matcher(s.strip()).matches()) {
+            try {
+                return Optional.of(Long.parseLong(s.strip()));
+            } catch (NumberFormatException ignored) {
+                // 19자리지만 Long 범위 밖 — 아래와 같은 오류
+            }
+        }
+        throw new CustomException(ErrorCode.INVALID_WORKFLOW, "GitHub 트리거의 repoId가 올바르지 않습니다.");
     }
 
     private static String toUtc(String raw) {

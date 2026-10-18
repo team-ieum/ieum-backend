@@ -178,9 +178,9 @@ public class WorkflowCrudService {
     public Workflow activateWorkflow(UUID userId, UUID workflowId) {
         Workflow workflow = getWorkflowByOwner(userId, workflowId);
         workflow.activate();
-        // 앱 트리거일 때만 정의를 읽는다 — Mongo 문서가 없는 기존 MANUAL/SCHEDULE 워크플로우의 활성화를 깨지 않게.
+        // 구독형 트리거일 때만 정의를 읽는다 — Mongo 문서가 없는 기존 MANUAL/SCHEDULE 워크플로우의 활성화를 깨지 않게.
         appTriggerSubscriptionService.sync(workflow,
-            workflow.getTriggerType().isAppTrigger() ? latestNodes(workflowId) : List.of());
+            appTriggerSubscriptionService.subscribes(workflow.getTriggerType()) ? latestNodes(workflowId) : List.of());
         final Workflow activatedWorkflow = workflow;
         afterCommit(() -> syncScheduleJob(activatedWorkflow));
         log.info("[WorkflowCrudService] 워크플로우 활성화 — workflowId: {}", workflowId);

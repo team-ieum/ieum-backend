@@ -13,7 +13,13 @@ import com.ieum.auth.domain.AuthProvider;
 import com.ieum.auth.domain.ConnectedAccount;
 import com.ieum.auth.repository.ConnectedAccountRepository;
 import com.ieum.auth.service.GoogleTokenService;
+import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.domain.enums.TriggerType;
+import com.ieum.workflowcore.engine.Node;
+import com.ieum.workflowcore.trigger.NodeTestMode;
+import com.ieum.workflowcore.trigger.PollStart;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -102,8 +108,8 @@ class GmailTriggerClientTest {
     }
 
     @Test
-    @DisplayName("fetchLatest — 최신 1건을 정규화, 0건이면 empty")
-    void fetchLatest() {
+    @DisplayName("노드 테스트 — FETCH 방식, fetchSample은 최신 1건을 정규화하고 0건이면 empty")
+    void fetchSample() {
         connected();
         server.expect(requestTo(LIST + "?q=%28label%3Awork%29%20-in%3Asent&maxResults=1"))
             .andRespond(withSuccess("{\"messages\":[{\"id\":\"m9\"}]}", MediaType.APPLICATION_JSON));
@@ -113,9 +119,41 @@ class GmailTriggerClientTest {
         server.expect(requestTo(LIST + "?q=in%3Ainbox%20-in%3Asent&maxResults=1"))
             .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
 
-        assertThat(client.triggerType()).isEqualTo(TriggerType.GMAIL_NEW_EMAIL);
-        assertThat(client.fetchLatest(userId, Map.of("query", "label:work")))
+        assertThat(client.type()).isEqualTo(TriggerType.GMAIL_NEW_EMAIL);
+        assertThat(client.nodeTestMode()).isEqualTo(NodeTestMode.FETCH);
+        assertThat(client.fetchSample(userId, Map.of("query", "label:work")))
             .hasValueSatisfying(out -> assertThat(out).containsEntry("messageId", "m9"));
-        assertThat(client.fetchLatest(userId, Map.of())).isEmpty();
+        assertThat(client.fetchSample(userId, Map.of())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("TriggerHandler — type은 GMAIL_NEW_EMAIL, 실행 출력은 심어 둔 정규화 페이로드 그대로(config 미혼입)")
+    void triggerHandlerTypeAndOutput() {
+        Map<String, Object> planted = Map.of("messageId", "m1", "subject", "s");
+        Node node = new Node("t1", NodeType.TRIGGER, "Gmail", Map.of("query", "from:x"), "gmail.new_email");
+
+        assertThat(client.type()).isEqualTo(TriggerType.GMAIL_NEW_EMAIL);
+        assertThat(client.output(node, Map.of("query", "from:x"), planted)).isEqualTo(planted);
+    }
+
+    @Test
+    @DisplayName("구독 스냅샷 — query는 trim, blank·생략은 같은 빈 스냅샷(다르면 저장마다 커서가 리셋돼 메일 유실), resource_key 없음")
+    void snapshotDropsBlankQuery() {
+        assertThat(client.subscribes()).isTrue();
+        assertThat(client.snapshot(Map.of("query", "  from:boss@x.com "))).isEqualTo(Map.of("query", "from:boss@x.com"));
+        assertThat(client.snapshot(Map.of("query", "   "))).isEmpty();
+        assertThat(client.snapshot(Map.of("query", "   "))).isEqualTo(client.snapshot(Map.of()));
+        assertThat(client.resourceKey(Map.of("query", "from:x"))).isNull();
+        assertThat(GmailTriggerClient.query(null)).isNull();
+        assertThat(GmailTriggerClient.query(Map.of("query", 3))).isNull();
+    }
+
+    @Test
+    @DisplayName("폴링 시작 — 커서 {afterSec: 시작 시각(초)}, 즉시 폴링(나머지 커서 키는 GmailCursor가 채운다)")
+    void pollStartsAtNow() {
+        LocalDateTime t0 = LocalDateTime.of(2026, 10, 11, 9, 0, 0);
+
+        assertThat(client.pollStart(t0)).isEqualTo(
+            new PollStart(Map.of("afterSec", t0.atZone(ZoneId.systemDefault()).toEpochSecond()), t0));
     }
 }
