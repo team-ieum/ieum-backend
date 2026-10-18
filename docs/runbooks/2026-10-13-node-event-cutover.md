@@ -91,7 +91,10 @@ orca terminal read --environment "$ENV" --terminal <h> --json # result.terminal.
 
 **bash에서 실행한다**(`for t in $1`·`$TABLES_DEL`이 bash 단어 분할에 기대다). `echo $0`로 확인하고 zsh면 `bash`로 들어간다.
 
+먼저 서버인지 확인한다. 로컬 docker-compose도 컨테이너 이름(`ieum-postgres`·`ieum-redis`·`ieum-mongo`)과 env 이름이 같아서 아래 함수가 노트북에서도 성공한다 — `on-server`가 나와야 진행한다. 서버 hostname은 §2로 접속한 뒤 `hostname -s`로 확인하고, `kwungserver`와 다르면 이 런북의 `kwungserver` 조건(§3·§5·§8)을 그 값으로 고친다.
+
 ```bash
+[ "$(hostname -s)" = kwungserver ] && echo on-server
 D=$(date +%F)                       # 예: 2026-10-14. 노트북에서도 같은 값으로 쓴다
 B=~/ieum-dev-backup-$D
 mkdir -p "$B" && chmod 700 "$B"
@@ -110,6 +113,7 @@ counts() { for t in $1; do echo "SELECT '$t', count(*) FROM $t;"; done | psqlq -
 **먼저 노트북(BE 레포 루트)에서 §1-1·§1-2의 읽기 블록(카탈로그 커밋, 원격 PR 브랜치 서브모듈 `같음`, 두 PR checks pass·state OPEN·reviewDecision이 CHANGES_REQUESTED 아님)을 돌린다.** 하나라도 실패하면 §5 이후(정지·삭제)로 가지 않는다 — 데이터를 지운 뒤에 머지가 막히면 dev가 빈 채로 멈춘다.
 
 ```bash
+# (서버) — §3 셸에서
 docker exec ieum-postgres pg_dump --version
 docker exec ieum-mongo mongoexport --version
 docker exec ieum-mongo sh -c 'test -n "$MONGO_INITDB_ROOT_USERNAME" && echo mongo-root-env-ok'
@@ -152,8 +156,10 @@ docker exec ieum-redis redis-cli --scan --pattern 'webhook:listen:*'
 
 ## 5. 옛 서비스 멈춤 (쓰기 — 확인 후, 머지·배포 전)
 
+시작 전에 두 레포(ieum-backend·ieum-agent) dev 머지를 동결한다 — 팀에 공지한 뒤 시작하고 §10이 끝나면 해제한다(dev push가 옛 코드 BE·agent를 자동 재기동한다).
+
 ```bash
-docker stop ieum-backend ieum-agent
+[ "$(hostname -s)" = kwungserver ] && docker stop ieum-backend ieum-agent || echo "NOT-SERVER 또는 stop 실패 — 멈추고 확인"
 docker ps --format '{{.Names}}' | grep -E '^ieum-(backend|agent)$' || echo stopped
 docker ps -a --filter name=ieum-backend --filter name=ieum-agent --format '{{.Names}}\t{{.Status}}'   # 둘 다 Exited
 ```
@@ -383,7 +389,7 @@ OUT="$HOME/Documents/ObsidianVault/프로젝트/진행중/IEUM/90-작업노트/d
 
 §7 직후, **옛 BE·agent 컨테이너가 멈춘 상태(§5)에서, 머지·배포(§1-1~3) 전에** 실행한다. 컨테이너는 따로 멈추거나 띄우지 않지만 사용자 확인은 받는다. 멈춘 상태라 지우는 동안 Quartz·잡 워커·Gmail 폴링이 돌지 않는다. 지운 잡 스트림(`ieum:exec:jobs`)과 그룹 `runners`는 새 BE가 기동할 때 `ExecutionJobQueueBootstrap`이 새로 만들고, `ScheduleJobRestorer`는 빈 `workflows`라 복구할 Job이 없다(§9에서 확인). §3 셸 변수(`B`·`psqlq`·`mongojs`·`MDB_*`)가 그 사이 셸을 닫아 사라졌다면 §3 블록과 §4-4의 `MDB_WF`·`MDB_AG` 대입을 다시 실행한다. 다시 실행할 때 §3 첫 줄은 `D=<백업 날짜>`로 고정한다(`date +%F`를 다시 계산하면 자정을 넘긴 경우 빈 폴더를 가리킨다).
 
-먼저 백업 폴더를 확인한다. `backup-ok`가 나와야 진행한다(없으면 멈춘다 — `$B` 폴더가 없으면 `delete.sql`을 만들지 못해 아래 삭제 체인이 PG 단계에서 멈추고, 폴더만 있고 비었으면(자정 넘겨 D 재계산) 체인 맨 앞 검사에서 멈춘다. 어느 쪽이든 Mongo·Redis는 지우지 않는다):
+먼저 백업 폴더를 확인한다. `backup-ok`가 나와야 진행한다(없으면 멈춘다 — `$B` 폴더가 없거나 비었으면(자정 넘겨 D 재계산) 아래 삭제 체인이 맨 앞 검사에서 멈춘다. 어느 쪽이든 PG·Mongo·Redis는 지우지 않는다):
 ```bash
 [ -d "$B" ] && [ -s "$B/counts_before_keep.txt" ] && echo backup-ok
 ```
@@ -404,6 +410,10 @@ cat > "$B/delete_ag.js" <<'DEL_AG_JS'
 print("agent_sessions deleted\t" + db.agent_sessions.deleteMany({}).deletedCount);
 DEL_AG_JS
 # PG → Mongo → Redis. 앞 단계가 실패하면 뒤(특히 Redis DEL)는 돌지 않는다
+[ "$(hostname -s)" = kwungserver ] &&           # 노트북이면 여기서 멈춘다
+[ -n "$MDB_WF" ] && [ -n "$MDB_AG" ] &&                 # §4-4 대입이 없으면 멈춘다
+[ "$(for t in $TABLES_DEL; do [ -s "$B/pg_$t.sql" ] && echo y; done | wc -l)" -eq "$(echo $TABLES_DEL | wc -w)" ] &&   # 삭제 대상 테이블마다 PG 백업 파일이 있어야 한다
+[ -z "$(grep -L '^COPY public\.' "$B"/pg_*.sql)" ] &&   # COPY 블록 없는 PG 백업이 있으면 멈춘다
 [ -s "$B/counts_before_keep.txt" ] &&   # 빈 새 폴더(자정 넘겨 D 재계산)면 여기서 멈춘다
 psqlq < "$B/delete.sql" &&
 mongojs "$MDB_WF" "$B/delete_wf.js" &&  # 숫자 = wc -l mongo_workflow_definitions.jsonl
@@ -454,7 +464,7 @@ body() {  # 사용: body <이름> <트리거 event> <트리거 config JSON> [최
   - event 누락: 트리거 노드에서 `"event"` 키를 뺀 본문 → `INVALID_INPUT`, "노드 event는 필수입니다."
   - 메시지의 event·노드 id는 제어·서식·줄 구분 문자(`[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]`)를 `?`로 바꾸고 64자에서 자른 값이다. 실행 가능 판정은 ACTION이면 `builder`, 그 밖은 `builder || generation`이다.
   - (채팅) `currentNodes` 원소가 객체가 아니면 400 `INVALID_WORKFLOW` "currentNodes의 원소는 노드 객체여야 합니다." — 쿼터 예약·agent 호출 전에 막는다.
-- [ ] **E4 채팅 생성**: `curl -sS "${H[@]}" -X POST $BASE/workflows/$WF_EMPTY/chat -d '{"prompt":"매일 오전 9시에 hello라는 값을 만드는 워크플로우를 만들어줘"}'` → 성공. 이어서 `echo "SELECT trigger_type, cron_expression FROM workflows WHERE id='$WF_EMPTY';" | psqlq`(서버) → 생성된 첫 트리거와 일치한다. 트리거가 없으면 `MANUAL`·null이다. 그다음 아래 **불변식 점검**에서 0건이어야 한다.
+- [ ] **E4 채팅 생성**: `curl -sS "${H[@]}" -X POST $BASE/workflows/$WF_EMPTY/chat -d '{"prompt":"매일 오전 9시에 hello라는 값을 만드는 워크플로우를 만들어줘"}'` → 성공. 이어서 `echo "SELECT trigger_type, cron_expression FROM workflows WHERE id='$WF_EMPTY';" | psqlq`(서버) → 생성된 첫 트리거와 일치한다. 트리거가 없으면 `MANUAL`·null이다. 그다음 아래 **불변식 점검**에서 0건이어야 한다. 끝나면 `curl -sS "${H[@]}" -X POST $BASE/workflows/$WF_EMPTY/deactivate`로 끈다(생성된 SCHEDULE 트리거가 계속 발화하지 않게).
 - [ ] **E5 스케줄**: `body e2e-schedule schedule.every '{"cron":"*/5 * * * *"}'`로 생성 → `data.triggerType=SCHEDULE`, `data.cronExpression`은 Quartz 형식. 같은 본문에 `'"cronExpression":"0 9 * * *"'`를 붙이면 400이다. 5분 안에 `executions`에 trigger_type `SCHEDULE` 실행이 SUCCESS로 생긴다. 확인한 뒤 `POST $BASE/workflows/<id>/deactivate`.
 - [ ] **E6 ACTION 합성 도구(슬랙 웹훅 주입)**: 등록된 Slack 웹훅이 있을 때만 한다. `GET $BASE/integrations/slack/options/webhooks`에서 값을 고른다. 트리거 `manual.run` + 두 번째 노드를 `{"event":"slack.send_message","config":{"webhookCredentialId":"<값>","message":"ieum e2e"}}`로 바꿔 생성·실행 → Slack 채널에 메시지가 오고, `node_runs`의 ACTION 행이 SUCCESS다. 응답 노드 config에 `tools`가 없어야 한다.
 - [ ] **E7 웹훅**: `body e2e-webhook webhook.catch '{}'`로 생성(`WF_HOOK`) → `POST $BASE/workflows/$WF_HOOK/webhook-token` → `data.path`(`/api/v1/hooks/<token>`). 노드 테스트 `POST $BASE/workflows/$WF_HOOK/nodes/$T1/test` → `data.status=LISTENING`. `curl -sS -X POST https://green.kiacms.co.kr<path> -H 'Content-Type: application/json' -d '{"hi":1}'` → 활성 WEBHOOK 워크플로우는 listen 중이어도 **첫 요청도 실행한다**(`WebhookService`: 샘플을 남기고, 활성·triggerType 일치면 이어서 실행). 첫 응답이 `{ok:true, executionId:"…"}`, `GET $BASE/workflows/$WF_HOOK/nodes/$T1/sample`의 출력이 `{"hi":1}`, 그 실행의 트리거 출력도 `{"hi":1}`이다. 샘플만 확인하려면 `POST $BASE/workflows/$WF_HOOK/deactivate` 뒤 다시 listen하고 보낸다 → 응답 `executionId: null`(샘플만 저장, 실행 없음).
@@ -516,7 +526,7 @@ body() {  # 사용: body <이름> <트리거 event> <트리거 config JSON> [최
    scp -r ~/Backups/ieum-dev-$D "kwung@kwungserver:ieum-dev-backup-$D"
 
    # 서버 — 체크섬이 전부 OK여야 다음으로 간다
-   (cd ~/ieum-dev-backup-<백업 날짜> && shasum -a 256 -c SHA256SUMS)
+   (cd ~/ieum-dev-backup-<백업 날짜> && sha256sum -c SHA256SUMS)
    # §3 블록을 다시 실행한다(D·B·TABLES_*·psqlq·mongojs·counts). 단 첫 줄은 D=<백업 날짜>로 바꿔 B가 올린 폴더를 가리키게 한다
    # §4-4 블록을 다시 실행해 MDB_WF·MDB_AG를 정한다
 
@@ -528,6 +538,7 @@ body() {  # 사용: body <이름> <트리거 event> <트리거 config JSON> [최
    docker exec -e MDB="$MDB_WF" ieum-mongo sh -c 'mongoimport --quiet -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin -d "$MDB" -c workflow_definitions --file /tmp/wd.jsonl'
    docker cp "$B/mongo_agent_sessions.jsonl" ieum-mongo:/tmp/as.jsonl
    docker exec -e MDB="$MDB_AG" ieum-mongo sh -c 'mongoimport --quiet -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin -d "$MDB" -c agent_sessions --file /tmp/as.jsonl'
+   docker exec ieum-mongo rm -f /tmp/wd.jsonl /tmp/as.jsonl
    ```
    복원한 뒤 BE를 재기동해야 `ScheduleJobRestorer`가 스케줄 Job을 다시 만든다.
 

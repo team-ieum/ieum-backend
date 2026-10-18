@@ -67,7 +67,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  *   <li>세션 찾기 or 신규 생성</li>
  *   <li>워크플로우 AI 노드 설정(credentialId, llmProvider, tools) 로드</li>
  *   <li>USER 메시지 DB 저장</li>
- *   <li>FE가 보낸 currentNodes/currentEdges를 그대로 전달(DB 재조회 없음)</li>
+ *   <li>FE가 보낸 currentNodes를 NodeDerivation으로 파생(type·brand 계산, 옛 키 제거)해 currentEdges와 함께 전달(DB 재조회 없음)</li>
  *   <li>연동 상태 분류 (availableIntegrations / unavailableIntegrations)</li>
  *   <li>Google 빌트인 도구 여부 판단 → Access Token 조회</li>
  *   <li>AgentClient.chat() 호출 (블로킹)</li>
