@@ -42,9 +42,9 @@ public class TriggerNodeExecutor implements NodeExecutor {
 
         try {
             TriggerType triggerType = eventCatalog.triggerTypeOf(node.getEvent()).orElse(TriggerType.MANUAL);
-            Map<String, Object> planted = cursor.getContext().getNodeOutput(node.getId());
+            // getNodeOutput은 심은 값이 없으면 빈 Map이다(null 아님)
             Map<String, Object> output = triggerHandlers.get(triggerType).output(
-                node, input == null ? Map.of() : input, planted == null ? Map.of() : planted);
+                node, input == null ? Map.of() : input, cursor.getContext().getNodeOutput(node.getId()));
             log.debug("[TriggerExecutor] {} 트리거 — outputKeys: {}", triggerType, output.keySet());
             return ExecutorResult.success(output, System.currentTimeMillis() - startTime);
 
