@@ -17,7 +17,8 @@ public interface IntegrationOptionControllerDocs {
     @Operation(
         summary = "드롭다운 선택지 조회",
         description = "도구 필드 스키마의 optionsSource({app}.{resource})에 해당하는 선택지를 조회합니다. "
-            + "지원: google/spreadsheets, google/worksheets(spreadsheet_id 필수), google/calendars, "
+            + "지원: google/spreadsheets, google/worksheets(spreadsheet_id 필수), google/calendars(읽기 전용 포함 — 이름 뒤 (읽기 전용)), "
+            + "google/writable_calendars(일정을 쓸 수 있는 캘린더만 — accessRole writerWithoutPrivateAccess·writer·owner, 꼬리표 없음. 걸러진 페이지는 items가 비어도 nextCursor가 있을 수 있음), "
             + "google/events(calendar_id 선택 — 비우면 기본 캘린더, q 선택 — 검색어, 공백이면 무시. 지금 이후 일정만 시작순 20개씩), google/files, google/folders, "
             + "notion/pages, notion/databases(값은 data source id), "
             + "ai/models·ieum/credentials(llmProvider 필수 — CLAUDE·OPENAI·GEMINI), "
@@ -27,7 +28,7 @@ public interface IntegrationOptionControllerDocs {
             + "github/installed_repos(입력 없음, 값은 숫자 repo id 문자열·이름은 owner/name, 설치 범위 전체를 한 번에 — nextCursor 항상 null), "
             + "nextCursor가 있으면 cursor로 다음 페이지를 조회하고, null이면 마지막 페이지입니다. "
             + "오류 code: GOOGLE_SCOPE_REQUIRED(403, Google 권한 증분 동의 필요 — scope_groups는 "
-            + "spreadsheets·worksheets=sheets, files·folders=drive, calendars·events=calendar. "
+            + "spreadsheets·worksheets=sheets, files·folders=drive, calendars·writable_calendars·events=calendar. "
             + "sheets 그룹은 drive를 포함해 파일·폴더도 충족), "
             + "ACCOUNT_NOT_CONNECTED(400), "
             + "AUTHENTICATION_REQUIRED(401, 재연동 필요), GOOGLE_RESOURCE_NOT_FOUND(404), "
