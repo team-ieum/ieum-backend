@@ -15,20 +15,23 @@
 
 ## 1. 진행 순서 (spec §8)
 
-- [ ] 1. **BE PR 1(드롭다운) 머지·배포**(⏸ 사용자 확인 — 머지 = dev 자동 배포). 배포 뒤 dev에서 `GET /api/v1/integrations/google/options/writable_calendars`가 404 `NOT_FOUND`("지원하지 않는 옵션 목록")가 아닌지 본다(200 또는 `GOOGLE_SCOPE_REQUIRED`/`ACCOUNT_NOT_CONNECTED`면 빈이 있다).
+- [ ] 1. **BE PR 1(드롭다운) 머지·배포**(⏸ 사용자 확인 — 머지 = dev 자동 배포). 배포 뒤 dev에서 `GET /api/v1/integrations/google/options/writable_calendars`를 **Bearer 토큰을 붙여**(전환 런북 §10의 `AT`. 토큰 없이 부르면 401이라 이 확인이 거짓으로 통과한다) 부르고 404 `NOT_FOUND`("지원하지 않는 옵션 목록")가 아닌지 본다(200 또는 `GOOGLE_SCOPE_REQUIRED`/`ACCOUNT_NOT_CONNECTED`면 빈이 있다).
 - [ ] 2. **카탈로그 PR 머지**(⏸ 사용자 확인). 노트북 BE 레포 루트에서 커밋을 적는다:
   ```bash
   git -C catalog fetch origin && CAT_SHA=$(git -C catalog rev-parse origin/main) && echo "$CAT_SHA"
   ```
-- [ ] 3. **agent PR·BE PR 2의 서브모듈이 `$CAT_SHA`인지**(읽기). `같음`이 안 나오면 머지하지 않는다.
+- [ ] 3. **agent PR·BE PR 2의 서브모듈이 `$CAT_SHA`인지, agent PR에 새 도구 이름이 있는지**(읽기). `같음`·`tool-ok`가 나오고, 두 PR의 checks가 전부 pass + state OPEN + reviewDecision이 CHANGES_REQUESTED가 아닐 때만 4 이후(정지·삭제·교체)로 간다. 하나라도 아니면 멈춘다 — 데이터를 지운 뒤에 머지가 막히면 dev가 BE·agent 정지 상태로 멈춘다.
   ```bash
   AGENT_BR=<agent PR 브랜치>; BE_BR=<BE PR 2 브랜치>
   git fetch origin && git -C ../ieum-agent fetch origin
   test -n "$CAT_SHA" &&
   test "$(git -C ../ieum-agent rev-parse "origin/$AGENT_BR:catalog")" = "$CAT_SHA" &&
   test "$(git rev-parse "origin/$BE_BR:catalog")" = "$CAT_SHA" && echo 같음
+  git -C ../ieum-agent grep -q '"builtin:google_calendar_find"' "origin/$AGENT_BR" -- tools/__init__.py && echo tool-ok   # §7이 바꿀 이름
   gh pr checks "$AGENT_BR" --repo team-ieum/ieum-agent
   gh pr checks "$BE_BR"    --repo team-ieum/ieum-backend
+  gh pr view "$AGENT_BR" --repo team-ieum/ieum-agent   --json state,reviewDecision
+  gh pr view "$BE_BR"    --repo team-ieum/ieum-backend --json state,reviewDecision
   ```
 - [ ] 4. 두 레포 dev 머지 동결을 공지한다. **§2 셸 → §3 정지 → §4 백업 → §5 지표 → §6 삭제 → §7 교체**. 정지는 아래 5·6의 배포가 새 컨테이너를 띄울 때까지 유지한다.
 - [ ] 5. **agent PR 머지**(⏸ 사용자 확인) → 배포 Health check 초록 뒤 서버에서:
@@ -39,14 +42,21 @@
 - [ ] 6. **BE PR 2(서브모듈) 머지**(⏸ 사용자 확인) → 배포 뒤 서버에서:
   ```bash
   for i in $(seq 1 30); do curl -fsS http://10.10.10.11:8080/actuator/health/readiness >/dev/null 2>&1 && { echo be-ready; break; }; sleep 2; done
-  docker logs ieum-backend 2>&1 | grep '\[CatalogDiff\]' || echo no-catalog-diff
+  sleep 10   # 대조는 기동 뒤 별도 스레드에서 돌고, 일치하면 로그를 남기지 않는다 — 끝나기 전에 grep하면 거짓 no-catalog-diff
+  docker logs ieum-backend 2>&1 | grep '\[CatalogDiff\]' || echo no-catalog-diff   # 배포는 컨테이너를 새로 만드므로 전체 로그 = 이번 기동
   ```
-  `no-catalog-diff`가 나와야 한다. BE는 기동 때 **한 번만** agent와 대조한다 — warn이 있으면 agent가 새 카탈로그로 떠 있는지(5) 확인한 뒤 `docker restart ieum-backend`(⏸ 사용자 확인)하고 다시 본다. be-ready가 안 나오고 로그에 `optionsSource 공급원 없음: google.writable_calendars`가 있으면 1이 배포되지 않은 것이다.
+  `no-catalog-diff`가 나와야 한다. BE는 기동 때 **한 번만** agent와 대조한다 — warn이 있으면 agent가 새 카탈로그로 떠 있는지(5) 확인한 뒤 재시작하고(⏸ 사용자 확인) 다시 본다. `docker restart`는 같은 컨테이너라 이전 기동의 warn이 로그에 남으므로 재시작 시각 이후만 본다:
+  ```bash
+  T=$(date -u +%Y-%m-%dT%H:%M:%SZ); docker restart ieum-backend
+  for i in $(seq 1 30); do curl -fsS http://10.10.10.11:8080/actuator/health/readiness >/dev/null 2>&1 && { echo be-ready; break; }; sleep 2; done
+  sleep 10; docker logs --since "$T" ieum-backend 2>&1 | grep '\[CatalogDiff\]' || echo no-catalog-diff
+  ```
+  be-ready가 안 나오고 로그에 `optionsSource 공급원 없음: google.writable_calendars`가 있으면 BE PR 2 브랜치에 PR 1(드롭다운)이 들어 있지 않은 것이다.
 - [ ] 7. spec §9 dev e2e(실계정). 끝나면 머지 동결 해제, §8 정리.
 
 ## 2. 셸 준비 (서버)
 
-전환 런북 §2로 접속하고 §3 블록을 실행하되 **두 줄만 바꾼다**: `B=~/ieum-dev-backup-cal-$D`, `TABLES_KEEP`은 쓰지 않는다. `on-server`가 나와야 진행한다(로컬 docker-compose도 컨테이너·env 이름이 같다).
+전환 런북 §2로 접속하고 §3 블록 대신 **아래 블록을 그대로 실행한다**(`B` 폴더 이름이 다르고, `TABLES_KEEP`은 없고, `set -o pipefail`이 더 있다). `on-server`가 나와야 진행한다(로컬 docker-compose도 컨테이너·env 이름이 같다).
 
 ```bash
 [ "$(hostname -s)" = kwungserver ] && echo on-server
@@ -79,9 +89,9 @@ done
 docker exec -e MDB="$MDB_WF" ieum-mongo sh -c 'mongoexport --quiet -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin -d "$MDB" -c workflow_definitions --jsonFormat=canonical' > "$B/mongo_workflow_definitions.jsonl"
 grep -L '^COPY public\.' "$B"/pg_*.sql      # 출력 없어야 한다
 wc -l "$B/mongo_workflow_definitions.jsonl"  # = countDocuments
-cd "$B" && sha256sum * > SHA256SUMS && cd -
+(cd "$B" && sha256sum pg_*.sql mongo_workflow_definitions.jsonl counts_before.txt > SHA256SUMS)   # 자기 자신은 넣지 않는다
 ```
-노트북으로 옮기는 방법은 전환 런북 §7-4 첫 블록과 같다(폴더 이름만 `ieum-dev-backup-cal-$D`). 백업은 레포에 넣지 않는다.
+노트북으로 옮기는 방법은 전환 런북 §7-4 첫 블록과 같다(폴더 이름만 `ieum-dev-backup-cal-$D`). 단 그 블록의 `# 서버` 줄(`sha256sum * > SHA256SUMS`)은 **건너뛴다** — 위에서 이미 만들었고, 다시 돌리면 SHA256SUMS가 자기 자신을 담아 노트북 검증이 `SHA256SUMS: FAILED`를 낸다. 백업은 레포에 넣지 않는다.
 
 ## 5. 대상 지표 (읽기)
 
@@ -140,10 +150,12 @@ cat "$B/target_wf.sql" "$B/target_counts.sql" | psqlq -At | tee "$B/target_count
 { printf 'const raw = ['; sed 's/.*/"&",/' "$B/delete_defs.txt" | tr -d '\n'; printf '];\n'
   echo 'const ids = raw.map(s => ObjectId(s)).concat(raw);'
   echo 'print("AI\t" + db.workflow_definitions.countDocuments({"nodes.config.tools.name": "builtin:google_calendar_list", _id: {$nin: ids}}));'
+  echo 'print("AI_STR\t" + db.workflow_definitions.countDocuments({"nodes.config.tools": "builtin:google_calendar_list", _id: {$nin: ids}}));'
 } > "$B/q_ai.js"
 mongojs "$MDB_WF" "$B/q_ai.js" | tee "$B/targets_ai.txt"
 ```
-⏸ **사용자 확인**: `target_counts.txt`(테이블별 지울 행 수, 활성 워크플로우 수), `delete_defs.txt` 줄 수, `AI` 수를 사용자에게 보이고 진행 여부를 받는다.
+`AI_STR`이 0이 아니면 멈추고 사용자에게 묻는다 — `config.tools`가 `["builtin:google_calendar_list"]` 같은 문자열 배열인 문서다(BE `ToolCallPreparer`·agent `get_tools_for_request`가 정식으로 받는 모양). §7은 `{name: …}` 객체 모양만 바꾸므로 이 문서는 교체에서 빠지고, 배포 뒤 agent가 모르는 이름으로 조용히 버린다.
+⏸ **사용자 확인**: `target_counts.txt`(테이블별 지울 행 수, 활성 워크플로우 수), `delete_defs.txt` 줄 수, `AI`·`AI_STR` 수를 사용자에게 보이고 진행 여부를 받는다.
 
 ## 6. 삭제 (⏸ 사용자 확인 후, §4 백업 검증 뒤)
 
@@ -167,7 +179,8 @@ DELETE_SQL
 
 [ "$(hostname -s)" = kwungserver ] &&                                   # 노트북이면 멈춘다
 [ -n "$MDB_WF" ] && [ -s "$B/target_wf.txt" ] &&
-[ -z "$(grep -L '^COPY public\.' "$B"/pg_*.sql)" ] && [ -s "$B/mongo_workflow_definitions.jsonl" ] &&
+[ "$(for t in $TABLES_DEL; do grep -q '^COPY public\.' "$B/pg_$t.sql" 2>/dev/null && echo y; done | wc -l)" -eq 9 ] &&   # 9개 테이블 백업마다 COPY 블록. 리터럴 9라 TABLES_DEL이 비어도(0=0) 통과하지 않는다
+[ -s "$B/mongo_workflow_definitions.jsonl" ] &&
 { echo 'BEGIN;'; cat "$B/target_wf.sql" "$B/delete_body.sql"; } | psqlq | tee "$B/delete_pg.txt" &&
 mongojs "$MDB_WF" "$B/delete_defs.js" | tee "$B/delete_mongo.txt" &&
 echo delete-done                  # 안 나오면 멈추고 어느 단계가 실패했는지 사용자에게 보인다
@@ -192,7 +205,7 @@ const r = db.workflow_definitions.updateMany(
   {$set: {"nodes.$[n].config.tools.$[t].name": NEW}},
   {arrayFilters: [{"n.config.tools.name": OLD}, {"t.name": OLD}]});
 print("matched\t" + r.matchedCount + "\tmodified\t" + r.modifiedCount);
-print("remaining\t" + db.workflow_definitions.countDocuments({"nodes.config.tools.name": OLD}));
+print("remaining\t" + db.workflow_definitions.countDocuments({$or: [{"nodes.config.tools.name": OLD}, {"nodes.config.tools": OLD}]}));   // 문자열 배열 모양도 센다
 RENAME_JS
 [ "$(hostname -s)" = kwungserver ] && mongojs "$MDB_WF" "$B/rename.js" | tee "$B/rename.txt"
 ```
@@ -204,18 +217,25 @@ RENAME_JS
 
 ## 9. 롤백 (agent·BE 새 배포 전, 아직 §3 정지 중일 때만)
 
-새 코드가 뜬 뒤엔 `list` 도구가 없어 옛 데이터로 되돌릴 이유가 없다. 정지 중 처리를 되돌릴 때만(⏸ 사용자 확인):
+새 코드가 뜬 뒤엔 `list` 도구가 없어 옛 데이터로 되돌릴 이유가 없다. 정지 중 처리를 되돌릴 때만(⏸ 사용자 확인). 여기는 **전체 사용자**의 9개 테이블과 `workflow_definitions` 전체를 비우고 복원하므로 가드를 건 한 체인으로만 돌린다. 새 셸이면 §2 블록을 `D=<백업 날짜>`로 고정해 다시 실행하고(`date +%F` 재계산은 자정을 넘기면 빈 폴더를 가리킨다) 전환 런북 §4-4로 `MDB_WF`를 다시 대입한다.
 ```bash
-# PG — 백업 이후 바뀐 건 §6 삭제뿐이므로 9개를 비우고 통째 복원한다
-echo "BEGIN; TRUNCATE TABLE node_runs, workflow_runs, node_test_samples, app_trigger_subscriptions, workflow_webhook_tokens, chat_messages, chat_sessions, workflow_versions, workflows; COMMIT;" | psqlq
+# PG — 백업 이후 바뀐 건 §6 삭제뿐이므로 9개를 비우고 통째 복원한다. 루프 종료 코드는 믿지 않고 개수 diff를 관문으로 쓴다
+# Mongo — 삭제와 교체를 함께 되돌린다
+[ "$(hostname -s)" = kwungserver ] &&                                   # 노트북이면 멈춘다
+[ -n "$MDB_WF" ] &&
+[ "$(for t in $TABLES_DEL; do grep -q '^COPY public\.' "$B/pg_$t.sql" 2>/dev/null && echo y; done | wc -l)" -eq 9 ] &&   # 리터럴 9 — 빈 $B·빈 TABLES_DEL이면 멈춘다
+[ -s "$B/mongo_workflow_definitions.jsonl" ] && [ -s "$B/counts_before.txt" ] &&
+echo "BEGIN; TRUNCATE TABLE node_runs, workflow_runs, node_test_samples, app_trigger_subscriptions, workflow_webhook_tokens, chat_messages, chat_sessions, workflow_versions, workflows; COMMIT;" | psqlq &&
 for t in workflows workflow_versions workflow_runs node_runs node_test_samples app_trigger_subscriptions workflow_webhook_tokens chat_sessions chat_messages; do
   psqlq < "$B/pg_$t.sql"
-done
-counts "$TABLES_DEL" | diff "$B/counts_before.txt" - && echo pg-restored
-# Mongo — 삭제와 교체를 함께 되돌린다
-echo 'print(db.workflow_definitions.deleteMany({}).deletedCount);' > "$B/wipe.js" && mongojs "$MDB_WF" "$B/wipe.js"
-docker cp "$B/mongo_workflow_definitions.jsonl" ieum-mongo:/tmp/wd.jsonl
-docker exec -e MDB="$MDB_WF" ieum-mongo sh -c 'mongoimport --quiet -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin -d "$MDB" -c workflow_definitions --file /tmp/wd.jsonl'
-docker exec ieum-mongo rm -f /tmp/wd.jsonl
+done &&
+counts "$TABLES_DEL" | diff "$B/counts_before.txt" - && echo pg-restored &&
+echo 'print(db.workflow_definitions.deleteMany({}).deletedCount);' > "$B/wipe.js" &&
+docker cp "$B/mongo_workflow_definitions.jsonl" ieum-mongo:/tmp/wd.jsonl &&
+mongojs "$MDB_WF" "$B/wipe.js" &&
+docker exec -e MDB="$MDB_WF" ieum-mongo sh -c 'mongoimport --quiet -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin -d "$MDB" -c workflow_definitions --file /tmp/wd.jsonl' &&
+docker exec ieum-mongo rm -f /tmp/wd.jsonl &&
+echo rollback-done                # 안 나오면 멈추고 어느 단계가 실패했는지 사용자에게 보인다
 ```
+`pg-restored`가 나왔는데 `rollback-done`이 안 나오면 Mongo 단계에서 멈춘 것이다 — PG는 복원됐으니 Mongo 단계만 사용자에게 보이고 묻는다.
 복원 뒤 `docker start ieum-backend ieum-agent`(옛 이미지 그대로)로 다시 띄운다.
