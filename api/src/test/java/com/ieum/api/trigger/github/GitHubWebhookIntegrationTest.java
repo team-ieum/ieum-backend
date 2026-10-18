@@ -21,9 +21,9 @@ import com.ieum.auth.service.GitHubTokenService;
 import com.ieum.workflowcore.domain.AppTriggerSubscription;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.repository.AppTriggerSubscriptionRepository;
+import com.ieum.workflowcore.trigger.PollStart;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
@@ -103,9 +103,9 @@ class GitHubWebhookIntegrationTest {
         UUID inWorkflow = UUID.randomUUID();
         // sync·검증기를 거치지 않는 직접 저장 = BE-80 배포 후 Stub 검증기로 들어온 행
         repository.save(AppTriggerSubscription.create(outWorkflow, "t1", outsider, TriggerType.GITHUB_NEW_ISSUE,
-            "123", Map.of("repoId", 123L), LocalDateTime.now()));
+            "123", Map.of("repoId", 123L), PollStart.NONE));
         repository.save(AppTriggerSubscription.create(inWorkflow, "t1", member, TriggerType.GITHUB_NEW_ISSUE,
-            "123", Map.of("repoId", 123L), LocalDateTime.now()));
+            "123", Map.of("repoId", 123L), PollStart.NONE));
         given(gitHubTokenService.getValidAccessToken(outsider)).willReturn("t-out");
         given(gitHubTokenService.getValidAccessToken(member)).willReturn("t-in");
         MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).ignoreExpectOrder(true).build();

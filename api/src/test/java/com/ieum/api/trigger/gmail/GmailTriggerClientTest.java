@@ -16,6 +16,9 @@ import com.ieum.auth.service.GoogleTokenService;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.Node;
+import com.ieum.workflowcore.trigger.PollStart;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -129,5 +132,26 @@ class GmailTriggerClientTest {
 
         assertThat(client.type()).isEqualTo(TriggerType.GMAIL_NEW_EMAIL);
         assertThat(client.output(node, Map.of("query", "from:x"), planted)).isEqualTo(planted);
+    }
+
+    @Test
+    @DisplayName("구독 스냅샷 — query는 trim, blank·생략은 같은 빈 스냅샷(다르면 저장마다 커서가 리셋돼 메일 유실), resource_key 없음")
+    void snapshotDropsBlankQuery() {
+        assertThat(client.subscribes()).isTrue();
+        assertThat(client.snapshot(Map.of("query", "  from:boss@x.com "))).isEqualTo(Map.of("query", "from:boss@x.com"));
+        assertThat(client.snapshot(Map.of("query", "   "))).isEmpty();
+        assertThat(client.snapshot(Map.of("query", "   "))).isEqualTo(client.snapshot(Map.of()));
+        assertThat(client.resourceKey(Map.of("query", "from:x"))).isNull();
+        assertThat(GmailTriggerClient.query(null)).isNull();
+        assertThat(GmailTriggerClient.query(Map.of("query", 3))).isNull();
+    }
+
+    @Test
+    @DisplayName("폴링 시작 — 커서 {afterSec: 시작 시각(초)}, 즉시 폴링(나머지 커서 키는 GmailCursor가 채운다)")
+    void pollStartsAtNow() {
+        LocalDateTime t0 = LocalDateTime.of(2026, 10, 11, 9, 0, 0);
+
+        assertThat(client.pollStart(t0)).isEqualTo(
+            new PollStart(Map.of("afterSec", t0.atZone(ZoneId.systemDefault()).toEpochSecond()), t0));
     }
 }

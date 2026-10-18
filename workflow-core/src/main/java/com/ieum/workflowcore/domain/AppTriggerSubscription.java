@@ -2,6 +2,7 @@ package com.ieum.workflowcore.domain;
 
 import com.ieum.common.entity.BaseEntity;
 import com.ieum.workflowcore.domain.enums.TriggerType;
+import com.ieum.workflowcore.trigger.PollStart;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -13,7 +14,6 @@ import jakarta.persistence.Index;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -89,8 +89,9 @@ public class AppTriggerSubscription extends BaseEntity {
     @Column(name = "last_polled_at")
     private LocalDateTime lastPolledAt;
 
+    /** @param start 핸들러 {@code pollStart(now)} — 폴링형은 시작 커서·즉시 폴링, 수신형은 {@link PollStart#NONE} */
     public static AppTriggerSubscription create(UUID workflowId, String nodeId, UUID userId, TriggerType type,
-                                                String resourceKey, Map<String, Object> config, LocalDateTime now) {
+                                                String resourceKey, Map<String, Object> config, PollStart start) {
         AppTriggerSubscription s = new AppTriggerSubscription();
         s.workflowId = workflowId;
         s.nodeId = nodeId;
@@ -98,24 +99,24 @@ public class AppTriggerSubscription extends BaseEntity {
         s.triggerType = type;
         s.resourceKey = resourceKey;
         s.config = config;
-        s.resetPolling(now);
+        s.resetPolling(start);
         return s;
     }
 
     /**
-     * 저장·활성화 때의 재구성. triggerType이나 {@code query}가 바뀌었을 때만 폴링 상태를 리셋한다 — 리셋은 "지금 이후 메일만"이라
-     * 매 저장마다 리셋하면 마지막 폴링~저장 사이 메일이 유실되고, 바뀐 query를 옛 커서로 돌리면 과거 메일이 한꺼번에 발화한다.
+     * 저장·활성화 때의 재구성. triggerType이나 스냅샷(config 전체)이 바뀌었을 때만 폴링 상태를 {@code start}로 리셋한다 — Gmail
+     * 리셋은 "지금 이후 메일만"이라 매 저장마다 리셋하면 마지막 폴링~저장 사이 메일이 유실되고, 바뀐 query를 옛 커서로 돌리면 과거
+     * 메일이 한꺼번에 발화한다. 스냅샷에는 핸들러가 고른 키만 있으므로(Gmail {@code {query?}}) 전체 비교 = 그 키 비교다.
      */
     public void reconfigure(TriggerType type, UUID userId, String resourceKey, Map<String, Object> config,
-                            LocalDateTime now) {
-        boolean changed = type != this.triggerType
-            || !Objects.equals(this.config.get("query"), config.get("query"));
+                            PollStart start) {
+        boolean changed = type != this.triggerType || !Objects.equals(this.config, config);
         this.triggerType = type;
         this.userId = userId;
         this.resourceKey = resourceKey;
         this.config = config;
         if (changed) {
-            resetPolling(now);
+            resetPolling(start);
         }
     }
 
@@ -131,15 +132,9 @@ public class AppTriggerSubscription extends BaseEntity {
         this.nextPollAt = nextPollAt;
     }
 
-    private void resetPolling(LocalDateTime now) {
+    private void resetPolling(PollStart start) {
         this.lastError = null;
-        if (triggerType == TriggerType.GMAIL_NEW_EMAIL) {
-            // 나머지 키(floorSec·seen)는 api GmailCursor가 채운다 — floorSec가 없으면 afterSec(=지금)가 하한이다
-            this.cursor = Map.of("afterSec", now.atZone(ZoneId.systemDefault()).toEpochSecond());
-            this.nextPollAt = now;
-        } else {
-            this.cursor = null;
-            this.nextPollAt = null;
-        }
+        this.cursor = start.cursor();
+        this.nextPollAt = start.nextPollAt();
     }
 }
