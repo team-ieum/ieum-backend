@@ -14,7 +14,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.integration.options.GitHubApiReader;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.domain.enums.TriggerType;
+import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
 import java.util.List;
 import java.util.Map;
@@ -257,5 +259,15 @@ class GitHubIssueSourceTest {
         assertThat(source.fetchLatest(userId, Map.of("repoId", "123"))).isPresent();
         assertErrorCode(() -> source.fetchLatest(userId, Map.of("repoId", "")),
             ErrorCode.INVALID_INPUT);
+    }
+
+    @Test
+    @DisplayName("TriggerHandler — type은 GITHUB_NEW_ISSUE, 실행 출력은 심어 둔 정규화 페이로드 그대로(config 미혼입)")
+    void triggerHandlerTypeAndOutput() {
+        Map<String, Object> planted = Map.of("issueNumber", 7, "title", "버그");
+        Node node = new Node("t1", NodeType.TRIGGER, "GitHub", Map.of("repoId", "123"), "github.new_issue");
+
+        assertThat(source.type()).isEqualTo(TriggerType.GITHUB_NEW_ISSUE);
+        assertThat(source.output(node, Map.of("repoId", "123"), planted)).isEqualTo(planted);
     }
 }

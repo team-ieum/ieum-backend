@@ -13,7 +13,9 @@ import com.ieum.auth.domain.AuthProvider;
 import com.ieum.auth.domain.ConnectedAccount;
 import com.ieum.auth.repository.ConnectedAccountRepository;
 import com.ieum.auth.service.GoogleTokenService;
+import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.domain.enums.TriggerType;
+import com.ieum.workflowcore.engine.Node;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -117,5 +119,15 @@ class GmailTriggerClientTest {
         assertThat(client.fetchLatest(userId, Map.of("query", "label:work")))
             .hasValueSatisfying(out -> assertThat(out).containsEntry("messageId", "m9"));
         assertThat(client.fetchLatest(userId, Map.of())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("TriggerHandler — type은 GMAIL_NEW_EMAIL, 실행 출력은 심어 둔 정규화 페이로드 그대로(config 미혼입)")
+    void triggerHandlerTypeAndOutput() {
+        Map<String, Object> planted = Map.of("messageId", "m1", "subject", "s");
+        Node node = new Node("t1", NodeType.TRIGGER, "Gmail", Map.of("query", "from:x"), "gmail.new_email");
+
+        assertThat(client.type()).isEqualTo(TriggerType.GMAIL_NEW_EMAIL);
+        assertThat(client.output(node, Map.of("query", "from:x"), planted)).isEqualTo(planted);
     }
 }

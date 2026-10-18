@@ -7,6 +7,7 @@ import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.service.AppTriggerSubscriptionService;
+import com.ieum.workflowcore.trigger.TriggerHandler;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -21,10 +22,11 @@ import org.springframework.web.util.UriComponentsBuilder;
 /**
  * Gmail 트리거의 외부 호출 — 목록·단건 조회. 토큰·scope·오류 매핑은 {@link GoogleApiReader}가 한다.
  * 트랜잭션을 걸지 않는다(토큰 갱신 저장이 readOnly에 합류해 유실된다).
+ * GMAIL_NEW_EMAIL의 {@link TriggerHandler}이기도 하다 — 실행 출력은 기본값(스윕러가 심은 정규화 페이로드).
  */
 @Component
 @RequiredArgsConstructor
-public class GmailTriggerClient implements AppTriggerSampleFetcher {
+public class GmailTriggerClient implements AppTriggerSampleFetcher, TriggerHandler {
 
     /** 기존 scope 그룹 {@code gmail}(application.yml). readonly도 읽기엔 충분하다 */
     static final String GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
@@ -99,6 +101,11 @@ public class GmailTriggerClient implements AppTriggerSampleFetcher {
 
     @Override
     public TriggerType triggerType() {
+        return TriggerType.GMAIL_NEW_EMAIL;
+    }
+
+    @Override
+    public TriggerType type() {
         return TriggerType.GMAIL_NEW_EMAIL;
     }
 

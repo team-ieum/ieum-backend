@@ -36,6 +36,10 @@ import com.ieum.workflowcore.engine.executor.StubWebhookCredentialProvider;
 import com.ieum.workflowcore.engine.executor.ToolAuthResolver;
 import com.ieum.workflowcore.engine.executor.ToolCallPreparer;
 import com.ieum.workflowcore.engine.executor.TriggerNodeExecutor;
+import com.ieum.workflowcore.trigger.ManualTriggerHandler;
+import com.ieum.workflowcore.trigger.ScheduleTriggerHandler;
+import com.ieum.workflowcore.trigger.TriggerHandlerRegistry;
+import com.ieum.workflowcore.trigger.WebhookTriggerHandler;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.service.WorkflowCrudService;
@@ -114,7 +118,8 @@ class ActionNodeRuntimeTest {
             30,
             CATALOG);
 
-        List<NodeExecutor> executors = List.of(new TriggerNodeExecutor(CATALOG), action);
+        List<NodeExecutor> executors = List.of(new TriggerNodeExecutor(CATALOG, new TriggerHandlerRegistry(List.of(
+            new ManualTriggerHandler(), new ScheduleTriggerHandler(), new WebhookTriggerHandler()))), action);
         runtime = new SyncExecutionRuntime(objectMapper, logRepository, executionRepository, crudService,
             mock(ExecutionEventPublisher.class), executors, new RetryProperties(), idempotencyStore,
             alertNotifier, mock(WorkflowValidationClient.class));

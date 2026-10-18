@@ -9,6 +9,7 @@ import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.executor.AppTriggerAccessVerifier;
 import com.ieum.workflowcore.service.AppTriggerSubscriptionService;
+import com.ieum.workflowcore.trigger.TriggerHandler;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
@@ -34,7 +35,7 @@ import org.springframework.stereotype.Component;
 @Component
 @Primary
 @RequiredArgsConstructor
-public class GitHubIssueSource implements AppTriggerAccessVerifier, AppTriggerSampleFetcher {
+public class GitHubIssueSource implements AppTriggerAccessVerifier, AppTriggerSampleFetcher, TriggerHandler {
 
     static final String REPO_NOT_INSTALLED =
         "이 레포에 GitHub 앱 설치가 필요합니다. GitHub App 설치 범위에 저장소를 추가해 주세요.";
@@ -123,6 +124,11 @@ public class GitHubIssueSource implements AppTriggerAccessVerifier, AppTriggerSa
 
     @Override
     public TriggerType triggerType() {
+        return TriggerType.GITHUB_NEW_ISSUE;
+    }
+
+    @Override
+    public TriggerType type() {
         return TriggerType.GITHUB_NEW_ISSUE;
     }
 
