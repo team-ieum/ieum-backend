@@ -39,6 +39,7 @@ import com.ieum.workflowcore.engine.executor.CredentialProvider;
 import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
 import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
 import com.ieum.workflowcore.engine.executor.NotionTokenProvider;
+import com.ieum.workflowcore.engine.executor.ToolAuthRule;
 import com.ieum.workflowcore.engine.executor.UserRoleProvider;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import java.util.List;
@@ -82,7 +83,6 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 public class ChatService {
 
     private static final int MAX_TITLE_LENGTH = 50;
-    private static final String GOOGLE_BUILTIN_PREFIX = "builtin:google_";
 
     private final ChatSessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
@@ -728,7 +728,7 @@ public class ChatService {
         boolean hasGoogleTool = tools.stream()
             .map(t -> (String) t.get("name"))
             .filter(Objects::nonNull)
-            .anyMatch(name -> name.startsWith(GOOGLE_BUILTIN_PREFIX));
+            .anyMatch(name -> name.startsWith(ToolAuthRule.GOOGLE_BUILTIN_PREFIX));
         if (!hasGoogleTool) {
             return null;
         }
