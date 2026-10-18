@@ -37,6 +37,10 @@ import com.ieum.workflowcore.engine.validation.WorkflowValidationResult;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.engine.executor.TriggerNodeExecutor;
+import com.ieum.workflowcore.trigger.ManualTriggerHandler;
+import com.ieum.workflowcore.trigger.ScheduleTriggerHandler;
+import com.ieum.workflowcore.trigger.TriggerHandlerRegistry;
+import com.ieum.workflowcore.trigger.WebhookTriggerHandler;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowQueryRepository;
@@ -293,7 +297,9 @@ class ExecutionRetryQueueIntegrationTest {
         SyncExecutionRuntime runtime = new SyncExecutionRuntime(
             objectMapper, logRepository, executionRepository, crudService,
             Mockito.mock(ExecutionEventPublisher.class),
-            List.of(new TriggerNodeExecutor(EventCatalog.loadFromClasspath()), new RecordingAiExecutor()),
+            List.of(new TriggerNodeExecutor(EventCatalog.loadFromClasspath(), new TriggerHandlerRegistry(List.of(
+                new ManualTriggerHandler(), new ScheduleTriggerHandler(), new WebhookTriggerHandler()))),
+                new RecordingAiExecutor()),
             retryProperties, Mockito.mock(IdempotencyStore.class),
             Mockito.mock(AlertNotifier.class), validationClient);
         ReflectionTestUtils.invokeMethod(runtime, "initExecutorMap");

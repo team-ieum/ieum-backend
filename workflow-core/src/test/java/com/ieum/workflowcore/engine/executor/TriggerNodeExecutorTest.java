@@ -4,10 +4,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.ieum.workflowcore.catalog.EventCatalog;
 import com.ieum.workflowcore.domain.enums.NodeType;
+import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.ExecutionContext;
 import com.ieum.workflowcore.engine.ExecutionCursor;
 import com.ieum.workflowcore.engine.ExecutorResult;
 import com.ieum.workflowcore.engine.Node;
+import com.ieum.workflowcore.trigger.ManualTriggerHandler;
+import com.ieum.workflowcore.trigger.ScheduleTriggerHandler;
+import com.ieum.workflowcore.trigger.TriggerHandler;
+import com.ieum.workflowcore.trigger.TriggerHandlerRegistry;
+import com.ieum.workflowcore.trigger.WebhookTriggerHandler;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -21,7 +27,12 @@ class TriggerNodeExecutorTest {
 
     private static final EventCatalog CATALOG = EventCatalog.loadFromClasspath();
 
-    private final TriggerNodeExecutor executor = new TriggerNodeExecutor(CATALOG);
+    /** 내장 3개 + 앱 트리거 대역 — 앱 핸들러(api)는 output 기본값(planted 복사)이라 type만 다른 람다로 충분하다. */
+    private static final TriggerHandlerRegistry HANDLERS = new TriggerHandlerRegistry(List.<TriggerHandler>of(
+        new ManualTriggerHandler(), new ScheduleTriggerHandler(), new WebhookTriggerHandler(),
+        () -> TriggerType.GMAIL_NEW_EMAIL, () -> TriggerType.GITHUB_NEW_ISSUE));
+
+    private final TriggerNodeExecutor executor = new TriggerNodeExecutor(CATALOG, HANDLERS);
 
     private static ExecutionCursor cursorWith(String nodeId, Map<String, Object> planted) {
         ExecutionContext context = new ExecutionContext();
@@ -96,5 +107,17 @@ class TriggerNodeExecutorTest {
 
         assertThat(result.isSuccess()).isTrue();
         assertThat(result.getOutput()).isEqualTo(input);
+    }
+
+    @Test
+    @DisplayName("핸들러가 등록되지 않은 트리거 종류 → 실패 결과(예외가 새지 않고, 페이로드·config로 대신 출력하지 않는다)")
+    void missingHandlerFailsClosed() {
+        TriggerNodeExecutor bare = new TriggerNodeExecutor(CATALOG, new TriggerHandlerRegistry(List.of()));
+        Node node = new Node("t1", NodeType.TRIGGER, "트리거", new HashMap<>(), "webhook.catch");
+
+        ExecutorResult result = bare.execute(node, Map.of(), cursorWith("t1", Map.of("a", 1)));
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getErrorMessage()).isEqualTo("트리거 핸들러 없음: WEBHOOK");
     }
 }
