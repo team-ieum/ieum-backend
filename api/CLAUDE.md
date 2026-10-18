@@ -31,7 +31,7 @@
 | `mcp` | McpServerCatalogController | MCP 서버 카탈로그 |
 | `prompt` | PromptTemplateController | 프롬프트 템플릿 CRUD·테스트 실행 |
 | `beta` | BetaUsageController | 베타 플랫폼 키 사용량(%) 조회 |
-| `catalog` | (Controller 없음) | 카탈로그 기동 검사·agent 대조 — `CatalogStartupCheck`: 생성자 검사 4종(전 TriggerType 핸들러, 이벤트·프리셋 optionsSource ⊆ `OptionSource` 키, apps.json auth ∈ `ToolAuthRule.KNOWN_AUTHS`, builder ACTION tool_key 규칙 인증 = 앱 auth) — 하나라도 어긋나면 컨텍스트 로드 실패. `AgentCatalogDiffReporter`: `ApplicationReadyEvent` 뒤 가상 스레드에서 agent 카탈로그 id 대조, warn만, `ieum.catalog.agent-diff-check`(기본 true, 테스트 false) |
+| `catalog` | (Controller 없음) | 카탈로그 기동 검사·agent 대조 — `CatalogStartupCheck`: 생성자 검사 5종(구독형 핸들러의 노드 테스트 방식 ≠ RUN, 전 TriggerType 핸들러, 이벤트·프리셋 optionsSource ⊆ `OptionSource` 키, apps.json auth ∈ `ToolAuthRule.KNOWN_AUTHS`, builder ACTION tool_key 규칙 인증 = 앱 auth) — 하나라도 어긋나면 컨텍스트 로드 실패. `AgentCatalogDiffReporter`: `ApplicationReadyEvent` 뒤 가상 스레드에서 agent 카탈로그 id 대조, warn만, `ieum.catalog.agent-diff-check`(기본 true, 테스트 false) |
 | `node` | NodeCatalogController | 노드 카탈로그(`GET /api/v1/nodes/catalog`, IEUM-BE-75) — agent `GET /v1/nodes/catalog`를 `AgentClient`로 그대로 전달, 캐시 없음. 옛 도구 스키마 API(BE-71)를 대체 |
 
 ## 실행 트리거
