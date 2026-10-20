@@ -1,5 +1,6 @@
 package com.ieum.api.oauth.controller;
 
+import com.ieum.api.oauth.service.SlackDisconnectService;
 import com.ieum.api.oauth.service.SlackOAuthService;
 import com.ieum.auth.security.CustomUserDetails;
 import com.ieum.common.dto.ApiResponse;
@@ -12,6 +13,7 @@ import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.CookieValue;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -27,6 +29,7 @@ public class SlackOAuthController implements SlackOAuthControllerDocs {
     private static final String COOKIE_PATH = "/api/v1/slack/oauth2";
 
     private final SlackOAuthService slackOAuthService;
+    private final SlackDisconnectService slackDisconnectService;
 
     @Value("${slack.oauth.frontend-redirect-uri}")
     private String frontendRedirectUri;
@@ -54,6 +57,12 @@ public class SlackOAuthController implements SlackOAuthControllerDocs {
             .header(HttpHeaders.LOCATION, frontendRedirectUri + "?" + result)
             .header(HttpHeaders.SET_COOKIE, nonceCookie("", 0))
             .build();
+    }
+
+    @DeleteMapping("/connection")
+    public ResponseEntity<Void> disconnect(@AuthenticationPrincipal CustomUserDetails userDetails) {
+        slackDisconnectService.disconnect(userDetails.getId());
+        return ResponseEntity.noContent().build();
     }
 
     private static String nonceCookie(String value, long maxAgeSeconds) {

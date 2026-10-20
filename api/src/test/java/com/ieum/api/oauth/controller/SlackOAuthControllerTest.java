@@ -3,12 +3,15 @@ package com.ieum.api.oauth.controller;
 import static org.hamcrest.Matchers.allOf;
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.verify;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.ieum.api.common.GlobalExceptionHandler;
+import com.ieum.api.oauth.service.SlackDisconnectService;
 import com.ieum.api.oauth.service.SlackOAuthService;
 import com.ieum.auth.security.CustomUserDetails;
 import jakarta.servlet.http.Cookie;
@@ -31,6 +34,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 class SlackOAuthControllerTest {
 
     @Mock private SlackOAuthService slackOAuthService;
+    @Mock private SlackDisconnectService slackDisconnectService;
     @InjectMocks private SlackOAuthController slackOAuthController;
 
     private MockMvc mockMvc;
@@ -81,5 +85,14 @@ class SlackOAuthControllerTest {
                 containsString("slack_oauth_nonce="),
                 containsString("Path=/api/v1/slack/oauth2"),
                 containsString("Max-Age=0"))));
+    }
+
+    @Test
+    @DisplayName("DELETE /connection — 본인 링크 해제를 부르고 204")
+    void disconnectReturns204() throws Exception {
+        mockMvc.perform(delete("/api/v1/slack/oauth2/connection"))
+            .andExpect(status().isNoContent());
+
+        verify(slackDisconnectService).disconnect(userId);
     }
 }

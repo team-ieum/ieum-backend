@@ -50,8 +50,12 @@ public class SlackTokenService {
     @Value("${slack.oauth.client-secret}")
     private String clientSecret;
 
-    /** refresh 교환 결과(전부 평문). expiresIn은 초 */
+    /** refresh 교환 결과(전부 평문). expiresIn은 초. toString은 토큰 값을 싣지 않는다 */
     public record RefreshedTokens(String accessToken, String refreshToken, long expiresIn) {
+        @Override
+        public String toString() {
+            return "RefreshedTokens[expiresIn=" + expiresIn + "]";
+        }
     }
 
     /**
@@ -94,7 +98,7 @@ public class SlackTokenService {
         try {
             body = slackApiClient.call("oauth.v2.access", form, null);
         } catch (RestClientException e) {
-            // HTTP 429·5xx·네트워크 — 저장 토큰은 그대로 두고 다음 호출에서 다시 시도한다
+            // HTTP 429·5xx·네트워크 — 일시 장애로 분류한다(재시도 여부는 호출자 몫)
             log.warn("[SlackTokenService] 갱신 호출 실패 — {}", e.getClass().getSimpleName());
             throw new CustomException(ErrorCode.TOKEN_REFRESH_FAILED);
         }

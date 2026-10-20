@@ -229,6 +229,13 @@ class SlackTokenServiceTest {
     }
 
     @Test
+    @DisplayName("RefreshedTokens.toString은 토큰 값을 싣지 않는다(로그·예외 메시지 유출 방지)")
+    void refreshedTokensToStringHidesTokens() {
+        assertThat(new SlackTokenService.RefreshedTokens("xoxe.xoxb-new", "xoxe-1-new", 43200L).toString())
+            .isEqualTo("RefreshedTokens[expiresIn=43200]");
+    }
+
+    @Test
     @DisplayName("exchangeRefreshToken — 재연결 거절은 같은 분류(AUTHENTICATION_REQUIRED)")
     void exchangeClassifiesRejection() {
         expectRefresh(withSuccess("{\"ok\":false,\"error\":\"token_revoked\"}", MediaType.APPLICATION_JSON));

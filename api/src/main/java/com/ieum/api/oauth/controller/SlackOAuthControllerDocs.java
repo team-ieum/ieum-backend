@@ -34,4 +34,16 @@ public interface SlackOAuthControllerDocs {
         @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "302", description = "프런트로 리다이렉트(성공·실패 모두)")
     })
     ResponseEntity<Void> callback(String state, String code, String error, String nonce);
+
+    @Operation(summary = "Slack 연결 해제",
+        description = "내 연결만 지운다(경로에 ID 없음, 없어도 204). 같은 워크스페이스를 쓰는 다른 사용자가 없으면 설치를 지우고 "
+            + "봇 토큰을 폐기(auth.revoke)한다 — 봇 비활성화이지 Slack 앱 제거가 아니다. 다시 연결하면 봇이 살아나지만 "
+            + "비공개 채널은 봇을 다시 초대해야 한다. 해제 뒤 Slack 봇 노드는 SLACK_NOT_CONNECTED로 실패한다.")
+    @SecurityRequirement(name = "BearerAuth")
+    @PreAuthorize("hasRole('USER')")
+    @ApiResponses({
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "204", description = "해제 완료(연결이 없어도)"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "인증 필요")
+    })
+    ResponseEntity<Void> disconnect(CustomUserDetails userDetails);
 }
