@@ -18,7 +18,8 @@ import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.web.util.UriUtils;
 
 /**
- * 캘린더의 다가오는 일정 — 지금 이후, 시작순. 반복 일정은 회차별 항목이라 고르면 그 회차만 수정된다.
+ * 캘린더의 다가오는 일정 — 지금 이후, 시작순 20개씩. 반복 일정은 회차별 항목이라 고르면 그 회차만 수정된다.
+ * 검색어 {@code q}(공백뿐이면 없음)가 있어도 지금 이후만 본다 — 지난 일정은 ID 직접 입력·참조식으로.
  * {@code calendar_id}는 agent 도구 {@code _calendar_segment}와 같게 정규화한다 — strip, 비면 {@code primary}, 아니면 한 번 디코드.
  */
 @Component
@@ -43,13 +44,18 @@ public class GoogleEventsOptionSource implements OptionSource {
             .queryParam("timeMin", "{timeMin}")
             .queryParam("singleEvents", true)
             .queryParam("orderBy", "startTime")
-            .queryParam("maxResults", 50);
+            .queryParam("maxResults", 20);
         Map<String, Object> vars = new HashMap<>(Map.of(
             "calendarId", calendarId,
             "timeMin", Instant.now().truncatedTo(ChronoUnit.SECONDS).toString()));
         if (cursor != null) {
             uri.queryParam("pageToken", "{cursor}");
             vars.put("cursor", cursor);
+        }
+        String q = inputs.get("q");
+        if (q != null && !q.isBlank()) {
+            uri.queryParam("q", "{q}");
+            vars.put("q", q.strip());
         }
 
         JsonNode body = googleApiReader.get(userId, uri.encode().buildAndExpand(vars).toUri(),

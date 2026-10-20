@@ -71,7 +71,9 @@ class GoogleOptionSourcesTest {
     private final GoogleApiReader reader = new GoogleApiReader(tokenService, accounts, restTemplate);
     private final GoogleSpreadsheetsOptionSource spreadsheets = new GoogleSpreadsheetsOptionSource(reader);
     private final GoogleWorksheetsOptionSource worksheets = new GoogleWorksheetsOptionSource(reader);
-    private final GoogleCalendarsOptionSource calendars = new GoogleCalendarsOptionSource(reader);
+    private final OptionSource calendars = new GoogleCalendarOptionSourceConfig().googleCalendarsOptionSource(reader);
+    private final OptionSource writableCalendars =
+        new GoogleCalendarOptionSourceConfig().googleWritableCalendarsOptionSource(reader);
     private final GoogleEventsOptionSource events = new GoogleEventsOptionSource(reader);
     private final GoogleFilesOptionSource files = new GoogleFilesOptionSource(reader);
     private final GoogleFoldersOptionSource folders = new GoogleFoldersOptionSource(reader);
@@ -112,6 +114,15 @@ class GoogleOptionSourcesTest {
         return request -> assertThat(URLDecoder.decode(
             UriComponentsBuilder.fromUri(request.getURI()).build(true).getQueryParams().getFirst("q"),
             StandardCharsets.UTF_8)).isEqualTo(expected);
+    }
+
+    /** 쿼리 파라미터 name의 디코드된 값 전부를 순서대로 비교한다 — 기대값이 없으면 파라미터가 없어야 한다 */
+    private static RequestMatcher queryValues(String name, String... expected) {
+        return request -> assertThat(UriComponentsBuilder.fromUri(request.getURI()).build(true).getQueryParams()
+            .getOrDefault(name, List.of()).stream()
+            .map(v -> URLDecoder.decode(v, StandardCharsets.UTF_8))
+            .toList())
+            .containsExactly(expected);
     }
 
     @Test
@@ -321,17 +332,73 @@ class GoogleOptionSourcesTest {
     }
 
     @Test
-    @DisplayName("calendar scope가 없으면 캘린더·일정 둘 다 토큰·Google 호출 없이 GOOGLE_SCOPE_REQUIRED")
+    @DisplayName("쓰기 캘린더 목록 — reader까지 받아 accessRole owner·writer·writerWithoutPrivateAccess만, 꼬리표 없음")
+    void writableCalendarsKeepWritableRolesOnly() {
+        connected(CALENDAR);
+        server.expect(requestTo(CALENDAR_LIST_URL + "?maxResults=250&minAccessRole=reader"))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Authorization", "Bearer g-token"))
+            .andRespond(withSuccess("""
+                {"nextPageToken":"c-2","items":[
+                  {"id":"me@example.com","summary":"me@example.com","summaryOverride":"내 일정","accessRole":"owner"},
+                  {"id":"team@group.calendar.google.com","summary":"팀 일정","accessRole":"writer"},
+                  {"id":"shared@group.calendar.google.com","summary":"공유 일정","accessRole":"writerWithoutPrivateAccess"},
+                  {"id":"ko.south_korea#holiday@group.v.calendar.google.com","summary":"대한민국의 휴일",
+                   "summaryOverride":"","accessRole":"reader"}]}
+                """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = writableCalendars.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(
+            new OptionItem("me@example.com", "내 일정"),
+            new OptionItem("team@group.calendar.google.com", "팀 일정"),
+            new OptionItem("shared@group.calendar.google.com", "공유 일정"));
+        assertThat(page.nextCursor()).isEqualTo("c-2");
+    }
+
+    @Test
+    @DisplayName("쓰기 캘린더 목록 — accessRole이 없거나 모르는 값(freeBusyReader·대소문자 다름)이면 뺀다")
+    void writableCalendarsDropUnknownRoles() {
+        connected(CALENDAR);
+        server.expect(requestTo(CALENDAR_LIST_URL + "?maxResults=250&minAccessRole=reader"))
+            .andRespond(withSuccess("""
+                {"items":[
+                  {"id":"a","summary":"A","accessRole":"freeBusyReader"},
+                  {"id":"b","summary":"B"},
+                  {"id":"c","summary":"C","accessRole":"OWNER"}]}
+                """, MediaType.APPLICATION_JSON));
+
+        assertThat(writableCalendars.fetch(userId, Map.of(), null).items()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("쓰기 캘린더 목록 — 한 페이지가 전부 걸러져도 nextCursor를 넘긴다, cursor는 pageToken으로")
+    void writableCalendarsKeepCursorWhenPageFiltered() {
+        connected(CALENDAR);
+        server.expect(requestTo(CALENDAR_LIST_URL + "?maxResults=250&minAccessRole=reader&pageToken=c-2"))
+            .andRespond(withSuccess("""
+                {"nextPageToken":"c-3","items":[{"id":"h","summary":"휴일","accessRole":"reader"}]}
+                """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = writableCalendars.fetch(userId, Map.of(), "c-2");
+
+        assertThat(page.items()).isEmpty();
+        assertThat(page.nextCursor()).isEqualTo("c-3");
+    }
+
+    @Test
+    @DisplayName("calendar scope가 없으면 캘린더·쓰기 캘린더·일정 모두 토큰·Google 호출 없이 GOOGLE_SCOPE_REQUIRED")
     void calendarSourcesRequireCalendarScope() {
         connected("openid " + SHEETS + " " + DRIVE);
 
         assertErrorCode(() -> calendars.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
+        assertErrorCode(() -> writableCalendars.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
         assertErrorCode(() -> events.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
         verify(tokenService, never()).getValidAccessToken(any());
     }
 
     @Test
-    @DisplayName("일정 목록 — 지금 이후·회차별·시작순 50개, 표시명은 제목 · 시작(시각/종일/제목 없음)")
+    @DisplayName("일정 목록 — 지금 이후·회차별·시작순 20개, 표시명은 제목 · 시작(시각/종일/제목 없음)")
     void eventsListsUpcomingWithDisplayNames() {
         connected(CALENDAR);
         server.expect(requestTo(startsWith(EVENTS_PREFIX + "primary/events?")))
@@ -343,7 +410,8 @@ class GoogleOptionSourcesTest {
                 StandardCharsets.UTF_8)).matches("\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ"))
             .andExpect(requestTo(containsString("singleEvents=true")))
             .andExpect(requestTo(containsString("orderBy=startTime")))
-            .andExpect(requestTo(containsString("maxResults=50")))
+            .andExpect(requestTo(containsString("maxResults=20")))
+            .andExpect(queryValues("q"))
             .andExpect(requestTo(not(containsString("pageToken"))))
             .andRespond(withSuccess("""
                 {"nextPageToken":"e-2","items":[
@@ -411,6 +479,67 @@ class GoogleOptionSourcesTest {
     }
 
     @Test
+    @DisplayName("일정 목록 — q가 있으면 앞뒤 공백을 떼어 전달하고, 검색해도 timeMin=지금·20개는 그대로")
+    void eventsPassSearchQuery() {
+        connected(CALENDAR);
+        server.expect(requestTo(startsWith(EVENTS_PREFIX + "primary/events?")))
+            .andExpect(queryValues("q", "주간 회의"))
+            .andExpect(request -> assertThat(UriComponentsBuilder.fromUri(request.getURI()).build(true)
+                .getQueryParams().get("timeMin")).singleElement().asString()
+                .matches("\\d{4}-\\d\\d-\\d\\dT\\d\\d(:|%3A)\\d\\d(:|%3A)\\d\\dZ"))
+            .andExpect(requestTo(containsString("singleEvents=true")))
+            .andExpect(requestTo(containsString("orderBy=startTime")))
+            .andExpect(requestTo(containsString("maxResults=20")))
+            .andRespond(withSuccess("""
+                {"items":[{"id":"evt1","summary":"주간 회의","start":{"dateTime":"2026-10-21T14:00:00+09:00"}}]}
+                """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = events.fetch(userId, Map.of("q", "  주간 회의  "), null);
+
+        assertThat(page.items()).containsExactly(new OptionItem("evt1", "주간 회의 · 2026-10-21 14:00"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "   ", "\t"})
+    @DisplayName("일정 목록 — 빈·공백뿐인 q는 없는 것으로 보고 q 파라미터를 붙이지 않는다")
+    void eventsIgnoreBlankQuery(String q) {
+        connected(CALENDAR);
+        server.expect(requestTo(startsWith(EVENTS_PREFIX + "primary/events?")))
+            .andExpect(queryValues("q"))
+            .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
+
+        events.fetch(userId, Map.of("q", q), null);
+    }
+
+    @Test
+    @DisplayName("검색어에 &·=·#가 섞여도 q 한 값으로만 가고 timeMin·pageToken을 덮지 않는다")
+    void eventsSearchQueryIsStrictlyEncoded() {
+        connected(CALENDAR);
+        server.expect(requestTo(startsWith(EVENTS_PREFIX + "primary/events?")))
+            .andExpect(queryValues("q", "{x}a&timeMin=2000-01-01T00:00:00Z&pageToken=x#y"))
+            .andExpect(request -> assertThat(request.getURI().getRawQuery())
+                .contains("q=%7Bx%7Da%26timeMin%3D2000-01-01T00%3A00%3A00Z%26pageToken%3Dx%23y"))
+            .andExpect(queryValues("pageToken"))
+            .andExpect(request -> assertThat(UriComponentsBuilder.fromUri(request.getURI()).build(true)
+                .getQueryParams().get("timeMin")).singleElement().asString().doesNotStartWith("2000"))
+            .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
+
+        events.fetch(userId, Map.of("q", "{x}a&timeMin=2000-01-01T00:00:00Z&pageToken=x#y"), null);
+    }
+
+    @Test
+    @DisplayName("검색 결과 다음 페이지도 q를 다시 보낸다 — pageToken은 같은 쿼리로만 유효하다")
+    void eventsSearchKeepsQueryOnNextPage() {
+        connected(CALENDAR);
+        server.expect(requestTo(startsWith(EVENTS_PREFIX + "primary/events?")))
+            .andExpect(queryValues("q", "회의"))
+            .andExpect(queryValues("pageToken", "e-2"))
+            .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
+
+        assertThat(events.fetch(userId, Map.of("q", "회의"), "e-2").nextCursor()).isNull();
+    }
+
+    @Test
     @DisplayName("파일 목록 — agent google_drive_read가 읽는 형식만, Drive 공용 조회 옵션 그대로")
     void filesListsReadableFiles() {
         connected(DRIVE);
@@ -459,11 +588,11 @@ class GoogleOptionSourcesTest {
     }
 
     @Test
-    @DisplayName("공급원 키는 agent FIELD_META의 optionsSource와 1:1 계약")
+    @DisplayName("공급원 키는 카탈로그 optionsSource와 1:1 계약")
     void keysMatchAgentOptionsSource() {
-        assertThat(List.of(spreadsheets.key(), worksheets.key(), calendars.key(), events.key(),
-                files.key(), folders.key()))
-            .containsExactly("google.spreadsheets", "google.worksheets", "google.calendars", "google.events",
-                "google.files", "google.folders");
+        assertThat(List.of(spreadsheets.key(), worksheets.key(), calendars.key(), writableCalendars.key(),
+                events.key(), files.key(), folders.key()))
+            .containsExactly("google.spreadsheets", "google.worksheets", "google.calendars",
+                "google.writable_calendars", "google.events", "google.files", "google.folders");
     }
 }
