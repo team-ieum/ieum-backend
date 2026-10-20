@@ -6,12 +6,15 @@ import com.ieum.auth.domain.ConnectedAccount;
 import com.ieum.auth.repository.ConnectedAccountRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.common.util.AesEncryptor;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Slf4j
 @Service
@@ -20,6 +23,8 @@ import org.springframework.transaction.annotation.Transactional;
 public class OAuthConnectionService {
 
     private final ConnectedAccountRepository connectedAccountRepository;
+    private final AesEncryptor aesEncryptor;
+    private final OAuthTokenRevoker tokenRevoker;
 
     /**
      * 사용자의 연동된 OAuth 계정 목록을 조회한다.
@@ -48,7 +53,32 @@ public class OAuthConnectionService {
         ConnectedAccount account = connectedAccountRepository.findByUserIdAndProvider(userId, provider)
             .orElseThrow(() -> new CustomException(ErrorCode.ACCOUNT_NOT_CONNECTED));
 
+        // 행을 지우면 토큰을 잃으므로 먼저 복호화해 둔다. 외부 폐기는 커밋 후 best-effort —
+        // 외부 장애로 해제가 롤백되면 사용자가 토큰을 지울 방법이 없어진다.
+        String accessToken = decryptOrNull(account.getAccessToken());
+        String refreshToken = decryptOrNull(account.getRefreshToken());
         connectedAccountRepository.delete(account);
         log.info("[OAuthConnectionService] OAuth 연동 해제 — userId: {}, provider: {}", userId, provider);
+
+        // ponytail: 커밋 후 동기 호출이라 외부 응답이 늦으면 해제 응답도 그만큼(최대 read timeout 30초) 늦어진다. 문제가 되면 @Async로
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                tokenRevoker.revoke(provider, accessToken, refreshToken);
+            }
+        });
+    }
+
+    /** 복호화 실패(키 교체 등)는 외부 폐기만 건너뛰고 해제는 진행한다. */
+    private String decryptOrNull(String encrypted) {
+        if (encrypted == null) {
+            return null;
+        }
+        try {
+            return aesEncryptor.decrypt(encrypted);
+        } catch (Exception e) {
+            log.warn("[OAuthConnectionService] 토큰 복호화 실패 — 외부 폐기 생략: {}", e.getClass().getSimpleName());
+            return null;
+        }
     }
 }
