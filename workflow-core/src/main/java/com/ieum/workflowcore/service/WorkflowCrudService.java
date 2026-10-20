@@ -159,6 +159,19 @@ public class WorkflowCrudService {
         log.info("[WorkflowCrudService] 스케줄러 자동 정리로 워크플로우 완전 삭제 — workflowId: {}", workflowId);
     }
 
+    /**
+     * 회원 탈퇴 전용 — 사용자의 워크플로우를 전부 완전 삭제한다. 호출자 트랜잭션에 합류하고,
+     * MongoDB 정의·Quartz 잡은 워크플로우별로 커밋 후 정리된다.
+     */
+    @Transactional
+    public void deleteAllByUserId(UUID userId) {
+        // ponytail: 페이징 없이 한 번에 조회 — 사용자당 워크플로우 수가 많아지면 배치 삭제로 전환
+        List<Workflow> workflows = workflowRepository.findByUserId(userId, Pageable.unpaged());
+        workflows.forEach(this::deleteWorkflowInternal);
+        log.info("[WorkflowCrudService] 회원 탈퇴로 워크플로우 일괄 삭제 — userId: {}, count: {}",
+            userId, workflows.size());
+    }
+
     /** AI 생성 워크플로우 이름 자동 업데이트 */
     @Transactional
     public void updateWorkflowName(UUID workflowId, String name) {
