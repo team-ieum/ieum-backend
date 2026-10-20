@@ -26,6 +26,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.mail.MailSendException;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
@@ -36,6 +38,7 @@ class EmailVerificationServiceTest {
     private static final String EMAIL = "user@example.com";
     private static final String SIGNUP_KEY = "SIGNUP:" + EMAIL;
     private static final String RESET_KEY = "PASSWORD_RESET:" + EMAIL;
+    private static final String SIGNUP_BLOCK_KEY = "verify:block:" + SIGNUP_KEY;
 
     @Mock
     private EmailVerificationCodeRepository codeRepository;
@@ -45,6 +48,10 @@ class EmailVerificationServiceTest {
     private UserRepository userRepository;
     @Mock
     private JavaMailSender mailSender;
+    @Mock
+    private StringRedisTemplate redisTemplate;
+    @Mock
+    private ValueOperations<String, String> valueOps;
 
     @InjectMocks
     private EmailVerificationService service;
@@ -188,14 +195,59 @@ class EmailVerificationServiceTest {
     }
 
     @Test
-    void 다섯번째로_틀리면_코드를_폐기한다() {
+    void 다섯번째로_틀리면_코드를_폐기하고_12시간_차단한다() {
         given(codeRepository.findById(SIGNUP_KEY)).willReturn(Optional.of(savedCode("123456", 4, 0)));
+        given(redisTemplate.opsForValue()).willReturn(valueOps);
 
         assertThatThrownBy(() -> service.verifyCode(EMAIL, "000000", VerificationPurpose.SIGNUP))
             .extracting(e -> ((CustomException) e).getErrorCode())
             .isEqualTo(ErrorCode.VERIFICATION_ATTEMPTS_EXCEEDED);
         verify(codeRepository).deleteById(SIGNUP_KEY);
         verify(codeRepository, never()).save(any());
+        verify(valueOps).set(SIGNUP_BLOCK_KEY, "1", EmailVerificationService.BLOCK_DURATION);
+    }
+
+    @Test
+    void 네번째까지_틀리면_차단하지_않는다() {
+        given(codeRepository.findById(SIGNUP_KEY)).willReturn(Optional.of(savedCode("123456", 3, 0)));
+
+        assertThatThrownBy(() -> service.verifyCode(EMAIL, "000000", VerificationPurpose.SIGNUP))
+            .extracting(e -> ((CustomException) e).getErrorCode())
+            .isEqualTo(ErrorCode.VERIFICATION_CODE_INVALID);
+        verify(redisTemplate, never()).opsForValue();
+    }
+
+    @Test
+    void 차단_중에는_검증하지_않고_429() {
+        given(redisTemplate.hasKey(SIGNUP_BLOCK_KEY)).willReturn(true);
+
+        assertThatThrownBy(() -> service.verifyCode(EMAIL, "123456", VerificationPurpose.SIGNUP))
+            .extracting(e -> ((CustomException) e).getErrorCode())
+            .isEqualTo(ErrorCode.VERIFICATION_BLOCKED);
+        verify(codeRepository, never()).findById(any());
+    }
+
+    @Test
+    void 차단_중에는_코드를_발송하지_않고_429() {
+        given(redisTemplate.hasKey(SIGNUP_BLOCK_KEY)).willReturn(true);
+
+        assertThatThrownBy(() -> service.sendCode(EMAIL, VerificationPurpose.SIGNUP))
+            .extracting(e -> ((CustomException) e).getErrorCode())
+            .isEqualTo(ErrorCode.VERIFICATION_BLOCKED);
+        verify(mailSender, never()).send(any(SimpleMailMessage.class));
+        verify(codeRepository, never()).save(any());
+    }
+
+    @Test
+    void 회원가입_차단은_비밀번호_재설정에_영향이_없다() {
+        given(redisTemplate.hasKey("verify:block:" + RESET_KEY)).willReturn(false);
+        given(userRepository.findByEmail(EMAIL)).willReturn(Optional.of(user(AuthProvider.LOCAL)));
+        given(codeRepository.findById(RESET_KEY)).willReturn(Optional.empty());
+
+        service.sendCode(EMAIL, VerificationPurpose.PASSWORD_RESET);
+
+        verify(redisTemplate, never()).hasKey(SIGNUP_BLOCK_KEY);
+        verify(mailSender).send(any(SimpleMailMessage.class));
     }
 
     @Test

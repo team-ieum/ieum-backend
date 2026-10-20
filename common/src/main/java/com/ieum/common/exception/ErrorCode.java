@@ -30,6 +30,7 @@ public enum ErrorCode {
     VERIFICATION_CODE_EXPIRED(HttpStatus.BAD_REQUEST, "인증코드가 만료되었거나 발송되지 않았습니다. 인증코드를 다시 요청해주세요."),
     VERIFICATION_ATTEMPTS_EXCEEDED(HttpStatus.BAD_REQUEST, "인증코드 입력 횟수를 초과했습니다. 인증코드를 다시 요청해주세요."),
     VERIFICATION_RESEND_TOO_SOON(HttpStatus.TOO_MANY_REQUESTS, "잠시 후 다시 요청해주세요."),
+    VERIFICATION_BLOCKED(HttpStatus.TOO_MANY_REQUESTS, "인증 시도 횟수를 초과했습니다. 12시간 후 다시 시도해주세요."),
     MAIL_SEND_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "메일 발송에 실패했습니다. 잠시 후 다시 시도해주세요."),
 
     // 비밀번호 변경 (로그인 상태) — 불일치도 400: 401이면 FE가 토큰 만료로 보고 로그아웃시킨다
