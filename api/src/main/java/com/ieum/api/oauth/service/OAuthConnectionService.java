@@ -2,8 +2,10 @@ package com.ieum.api.oauth.service;
 
 import com.ieum.api.oauth.dto.OAuthConnectionResponse;
 import com.ieum.auth.repository.ConnectedAccountRepository;
+import com.ieum.auth.repository.SlackUserLinkRepository;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Stream;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -16,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class OAuthConnectionService {
 
     private final ConnectedAccountRepository connectedAccountRepository;
+    private final SlackUserLinkRepository slackUserLinkRepository;
 
     /**
      * 사용자의 연동된 OAuth 계정 목록을 조회한다.
@@ -25,8 +28,9 @@ public class OAuthConnectionService {
      */
     public List<OAuthConnectionResponse> getConnections(UUID userId) {
         log.debug("[OAuthConnectionService] OAuth 연동 목록 조회 — userId: {}", userId);
-        return connectedAccountRepository.findByUserId(userId).stream()
-            .map(OAuthConnectionResponse::from)
+        return Stream.concat(
+                connectedAccountRepository.findByUserId(userId).stream().map(OAuthConnectionResponse::from),
+                slackUserLinkRepository.findByUserId(userId).map(OAuthConnectionResponse::fromSlack).stream())
             .toList();
     }
 }
