@@ -26,13 +26,17 @@ public interface IntegrationOptionControllerDocs {
             + "(웹훅·MCP는 활성 항목만, 모두 요청자 소유만). "
             + "github/owners(본인 login + 소속 org), github/repos(owner 필수 — owners의 값. 목록은 GitHub App 설치 범위 안만), "
             + "github/installed_repos(입력 없음, 값은 숫자 repo id 문자열·이름은 owner/name, 설치 범위 전체를 한 번에 — nextCursor 항상 null), "
+            + "slack/channels(연결한 Slack 워크스페이스의 공개 채널, 보관 제외 — 값은 채널 ID·이름은 #이름. q 없으면 20개씩이고 "
+            + "items가 비어도 nextCursor가 있을 수 있음. q 선택 — 이름 부분 일치(대소문자·앞의 # 무시), 최대 1,000개 중 20개, nextCursor 항상 null. "
+            + "못 찾으면 items=[] — 채널 ID 직접 입력으로 안내), "
             + "nextCursor가 있으면 cursor로 다음 페이지를 조회하고, null이면 마지막 페이지입니다. "
             + "오류 code: GOOGLE_SCOPE_REQUIRED(403, Google 권한 증분 동의 필요 — scope_groups는 "
             + "spreadsheets·worksheets=sheets, files·folders=drive, calendars·writable_calendars·events=calendar. "
             + "sheets 그룹은 drive를 포함해 파일·폴더도 충족), "
-            + "ACCOUNT_NOT_CONNECTED(400), "
+            + "ACCOUNT_NOT_CONNECTED(400), SLACK_NOT_CONNECTED(400), "
             + "AUTHENTICATION_REQUIRED(401, 재연동 필요), GOOGLE_RESOURCE_NOT_FOUND(404), "
-            + "GOOGLE_API_UNAVAILABLE(503), NOTION_API_UNAVAILABLE(503), GITHUB_API_UNAVAILABLE(503), INVALID_INPUT(400), NOT_FOUND(404, 알 수 없는 목록)")
+            + "GOOGLE_API_UNAVAILABLE(503), NOTION_API_UNAVAILABLE(503), GITHUB_API_UNAVAILABLE(503), SLACK_API_UNAVAILABLE(503), "
+            + "INVALID_INPUT(400), NOT_FOUND(404, 알 수 없는 목록)")
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<OptionPage>> getOptions(
         CustomUserDetails userDetails,

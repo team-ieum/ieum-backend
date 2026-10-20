@@ -4,11 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.ieum.api.config.DefaultBetaPlatformProvider;
 import com.ieum.api.config.DefaultExecutionJobEnqueuer;
+import com.ieum.api.config.DefaultSlackTokenProvider;
 import com.ieum.api.trigger.github.GitHubIssueSource;
 import com.ieum.api.trigger.gmail.GmailTriggerClient;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.executor.BetaPlatformProvider;
 import com.ieum.workflowcore.engine.executor.ExecutionJobEnqueuer;
+import com.ieum.workflowcore.engine.executor.SlackTokenProvider;
 import com.ieum.workflowcore.trigger.TriggerHandlerRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -53,6 +55,12 @@ class IeumApplicationTest {
     @DisplayName("ExecutionJobEnqueuer는 단일 빈이며 DefaultExecutionJobEnqueuer가 선택된다 (Stub이면 조용히 내구성을 잃는다)")
     void executionJobEnqueuer_singleBean_resolvesToDefault() {
         assertThat(executionJobEnqueuer).isInstanceOf(DefaultExecutionJobEnqueuer.class);
+    }
+
+    @Test
+    @DisplayName("SlackTokenProvider는 DefaultSlackTokenProvider로 풀린다 (Stub이면 모든 Slack 노드가 미연결로 실패)")
+    void slackTokenProvider_resolvesToDefault(@Autowired SlackTokenProvider slackTokenProvider) {
+        assertThat(slackTokenProvider).isInstanceOf(DefaultSlackTokenProvider.class);
     }
 
     @Test

@@ -70,13 +70,13 @@
 
 **`AgentNodeExecutor`**(`AI`) — `/v1/execute` body `workflowContext` = `{nodes:{<id>:{output, status:"COMPLETED", type}}, trigger:<TRIGGER 노드 출력>}`(agent `tools/workflow_context.py` 계약, 평평한 `{<id>:output}` 아님). `nodeOutputs`를 감싼 것이라 성공·재사용 노드만 있고, trigger는 원 페이로드가 아니라 트리거 노드 출력이다. 노드 테스트에선 직접 참조한 샘플만 들어가 type은 null, trigger는 없다. 요청에 `outputFields`(노드 `config.outputFields` 원값 — 캐스트·검사 없음, 검사는 agent `INVALID_OUTPUT_FIELDS`)를 싣는다. 응답 `output`은 `Object`: Map이면 그 칸이 곧 노드 출력(`{output, metadata}` 래퍼 없음), 문자열이면 `{output: 문자열}`, null이면 `{output: null}`. 칸 선언 노드(비어 있지 않은 목록)인데 문자열·null이면 CLIENT_ERROR(재시도 없음 — 옛 agent는 결정적이고 멱등 캐시로 같은 응답을 되풀이한다) — 롤백된 agent의 문장이 하류에서 `""`로 조용히 분기하는 걸 막는다. 배열·숫자·불은 agent 계약 버그라 CLIENT_ERROR. 가드 실패는 agent 실패 응답과 같이 베타 일일 호출 환불·토큰 차감 없음. 실패 응답 usage도 `ExecutorResult`에 실린다.
 **`ActionNodeExecutor`**(`ACTION`) — 노드 `event` → `EventCatalog`의 `tool_key`로 합성 도구 `{name: tool_key, config: 노드 config에서 brand 제외}` 하나를 만들어 `ToolCallPreparer`로 전처리(Google 토큰·Notion/GitHub 헤더·slack/discord `webhookCredentialId` → `webhook_url`)한 뒤 ieum-agent `POST ${ieum.agent.url}/v1/actions/execute`에 위임한다(body `{nodeId, toolKey, config}` = `ActionNodeRequest`, 응답 `ActionExecutionResult{success, output(dict), errorMessage, errorCode}`). 노드 출력은 agent `output` dict 그대로(AI 노드 객체 출력과 같은 모양). LLM 헤더(`X-LLM-*`·`X-Key-Mode`)·쿼터·토큰 차감·모델 fallback이 **없다**(과금 0). 헤더는 `X-User-Id`·`X-User-Role`·`X-Node-Id`·`X-Trace-Id`·`X-Idempotency-Key`(HEADER이고 재시도가 켜졌을 때)·`X-Google-Access-Token`·도구 인증 헤더. 실패 분류: `ACTION_TOOL_FAILED`→CLIENT_ERROR(재시도 안 함), 알 수 없는 toolKey(HTTP 400)→`AGENT_BAD_REQUEST`→CLIENT_ERROR, 5xx·429·타임아웃은 재시도 대상. 쓸 수 없는 정의(event 없음·카탈로그에 없음·ACTION 아님·tool_key 없음)는 agent 호출 없이 CLIENT_ERROR "ACTION 노드에 카탈로그 ACTION event가 필요합니다.". ACTION BYOK(`tools[].auth`·`credentialId`)는 없다.
-**`ToolCallPreparer`**(AI·ACTION 공유) — `tools` 참조식 치환(`renderDeep` 복사본)·Google 토큰·`ToolAuthResolver` 인증 헤더·slack/discord 웹훅 URL 주입. 웹훅 URL 원문은 이 복사본에만 있고 노드 원본·`node_runs` 입력에 남지 않는다. MCP 서버 해석은 AI 노드 전용이라 `AgentNodeExecutor`에 남아 있다. HTTP 상태→errorCode 합성은 `FailureClassifier.agentServiceErrorCode`.
+**`ToolCallPreparer`**(AI·ACTION 공유) — `tools` 참조식 치환(`renderDeep` 복사본)·Google 토큰·`ToolAuthResolver` 인증 헤더(Slack 봇 도구 `builtin:slack_*`는 BYOK 분기 없이 `X-Slack-Token` — 웹훅 도구 `slack`은 해당 없음)·slack/discord 웹훅 URL 주입. 웹훅 URL 원문은 이 복사본에만 있고 노드 원본·`node_runs` 입력에 남지 않는다. MCP 서버 해석은 AI 노드 전용이라 `AgentNodeExecutor`에 남아 있다. HTTP 상태→errorCode 합성은 `FailureClassifier.agentServiceErrorCode`.
 **`ConditionNodeExecutor`**(`CONDITION`) — `equals`·`notEquals`는 문자열 비교다(둘 다 null이면 같음, 한쪽만 null이면 다름, 그 밖은 `String.valueOf` 일치). 참조식 치환 결과는 항상 문자열이라 우변을 JSON `true`·`4`로 저장해도 `"true"`·`"4"`와 같다. 대소문자·숫자 표기(`4`≠`4.0`)는 구분한다 — AI 구조화 출력의 number 칸은 agent가 정수값을 `int`로 정규화해 보낸다.
 
 3-인자 `execute(node, input, cursor)`가 기본이고, 외부 호출이 멱등 가드를 적용해야 하는 Executor(HTTP·AI·ACTION)만 4-인자 오버로드 `execute(node, input, cursor, NodeAttempt)`를 override한다. `NodeAttempt(attempt, idempotencyKey, policy)`가 회차·멱등성 키·재시도 정책을 실어 온다 — **`ExecutionCursor`/`ExecutionContext`에 attempt 정보를 넣지 말 것**(워커 스레드 간 공유 객체다).
 
 ### Provider 포트 + Stub 패턴
-workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능은 **포트 인터페이스**로 선언하고 api 모듈이 구현체를 제공한다. 포트마다 `@ConditionalOnMissingBean` Stub이 있어 workflow-core 단독 테스트가 가능하다 (현재 11개).
+workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능은 **포트 인터페이스**로 선언하고 api 모듈이 구현체를 제공한다. 포트마다 `@ConditionalOnMissingBean` Stub이 있어 workflow-core 단독 테스트가 가능하다 (현재 12개).
 
 | 포트 | 실구현 위치 |
 |------|------------|
@@ -84,6 +84,7 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 | `GoogleTokenProvider` | api (OAuth 토큰) |
 | `NotionTokenProvider` | api (OAuth 토큰) |
 | `GitHubTokenProvider` | api (OAuth 토큰) |
+| `SlackTokenProvider` | api (Slack 봇 토큰 — 미연결이면 `SLACK_NOT_CONNECTED` 예외) |
 | `WebhookCredentialProvider` | api (송신 웹훅 URL + 실패 알림 대상 웹훅) |
 | `McpCatalogProvider` | api (MCP 서버 카탈로그) |
 | `UserRoleProvider` | api (self-hosted LLM 라우팅 판정) |

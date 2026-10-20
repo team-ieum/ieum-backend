@@ -110,6 +110,8 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/notion/**").authenticated()
                 .requestMatchers("/api/v1/github/oauth2/callback").permitAll()
                 .requestMatchers("/api/v1/github/**").authenticated()
+                .requestMatchers("/api/v1/slack/oauth2/callback").permitAll()
+                .requestMatchers("/api/v1/slack/**").authenticated()
                 .anyRequest().authenticated())
             .oauth2Login(oauth2 -> oauth2
                 .authorizationEndpoint(auth -> auth
