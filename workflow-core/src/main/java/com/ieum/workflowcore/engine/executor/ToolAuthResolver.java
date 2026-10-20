@@ -21,10 +21,12 @@ public class ToolAuthResolver {
         ToolAuthRule.NOTION_BUILTIN_PREFIX, "X-Notion-Token",
         ToolAuthRule.GITHUB_BUILTIN_PREFIX, "X-GitHub-Token"
     );
+    private static final String SLACK_HEADER = "X-Slack-Token";
 
     private final CredentialProvider credentialProvider;
     private final NotionTokenProvider notionTokenProvider;
     private final GitHubTokenProvider gitHubTokenProvider;
+    private final SlackTokenProvider slackTokenProvider;
 
     public Map<String, String> resolveHeaders(List<Map<String, Object>> tools, UUID userId) {
         if (tools == null || tools.isEmpty()) {
@@ -35,6 +37,13 @@ public class ToolAuthResolver {
         for (Map<String, Object> tool : tools) {
             String toolName = getString(tool, "name").orElse(null);
             if (toolName == null) {
+                continue;
+            }
+            // Slack 봇 도구는 BYOK 분기(tool.auth·credentialId)를 타지 않는다 — 잘못 붙은 credentialId면 사용자 LLM 키가
+            // X-Slack-Token으로 slack.com까지 나간다(spec §7). 그래서 HEADER_BY_TOOL_PREFIX에 넣지 않고 여기서 먼저 끊는다.
+            // 미연결이면 SLACK_NOT_CONNECTED가 그대로 올라가 노드 실패가 된다. 도구가 여럿이어도 토큰 조회는 한 번.
+            if (toolName.startsWith(ToolAuthRule.SLACK_BUILTIN_PREFIX)) {
+                headers.computeIfAbsent(SLACK_HEADER, header -> slackTokenProvider.getValidBotToken(userId));
                 continue;
             }
 

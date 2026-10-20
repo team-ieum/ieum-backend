@@ -1,8 +1,14 @@
 package com.ieum.workflowcore.engine.executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.ieum.common.exception.CustomException;
+import com.ieum.common.exception.ErrorCode;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -22,6 +28,9 @@ class ToolAuthResolverTest {
 
     @Mock
     private NotionTokenProvider notionTokenProvider;
+
+    @Mock
+    private SlackTokenProvider slackTokenProvider;
 
     @InjectMocks
     private ToolAuthResolver toolAuthResolver;
@@ -65,5 +74,58 @@ class ToolAuthResolverTest {
 
         // then
         assertThat(headers).containsEntry("X-Notion-Token", byokKey);
+    }
+
+    @Test
+    @DisplayName("Slack 봇 도구 → X-Slack-Token에 봇 토큰. 웹훅 도구 slack은 헤더도 토큰 조회도 없다")
+    void slackBotTool_putsBotTokenHeader() {
+        UUID userId = UUID.randomUUID();
+        when(slackTokenProvider.getValidBotToken(userId)).thenReturn("xoxb-bot");
+
+        Map<String, String> headers = toolAuthResolver.resolveHeaders(List.of(
+            Map.of("name", "builtin:slack_send_channel_message"),
+            Map.of("name", "slack")), userId);
+
+        assertThat(headers).containsExactly(Map.entry("X-Slack-Token", "xoxb-bot"));
+    }
+
+    @Test
+    @DisplayName("Slack 봇 도구에 credentialId·tool.auth가 붙어 있어도 무시한다 — LLM 키가 slack.com으로 나가지 않게")
+    void slackBotTool_ignoresByokCredential() {
+        UUID userId = UUID.randomUUID();
+        when(slackTokenProvider.getValidBotToken(userId)).thenReturn("xoxb-bot");
+
+        Map<String, String> headers = toolAuthResolver.resolveHeaders(List.of(
+            Map.of("name", "builtin:slack_send_channel_message", "credentialId", "llm-cred-id",
+                "auth", Map.of("type", "plain", "value", "sk-llm-key"))), userId);
+
+        assertThat(headers).containsEntry("X-Slack-Token", "xoxb-bot");
+        verifyNoInteractions(credentialProvider);
+    }
+
+    @Test
+    @DisplayName("[Review Focus 2] Slack 봇 도구가 여럿이어도 토큰 조회는 한 번")
+    void slackToolsShareOneTokenLookup() {
+        UUID userId = UUID.randomUUID();
+        when(slackTokenProvider.getValidBotToken(userId)).thenReturn("xoxb-bot");
+
+        toolAuthResolver.resolveHeaders(List.of(
+            Map.of("name", "builtin:slack_send_channel_message"),
+            Map.of("name", "builtin:slack_add_reaction")), userId);
+
+        verify(slackTokenProvider, times(1)).getValidBotToken(userId);
+    }
+
+    @Test
+    @DisplayName("Slack 미연결 → SLACK_NOT_CONNECTED가 그대로 올라간다(노드 실패)")
+    void slackNotConnected_propagates() {
+        UUID userId = UUID.randomUUID();
+        when(slackTokenProvider.getValidBotToken(userId)).thenThrow(new CustomException(ErrorCode.SLACK_NOT_CONNECTED));
+
+        assertThatThrownBy(() -> toolAuthResolver.resolveHeaders(
+                List.of(Map.of("name", "builtin:slack_send_channel_message")), userId))
+            .isInstanceOf(CustomException.class)
+            .extracting(e -> ((CustomException) e).getErrorCode())
+            .isEqualTo(ErrorCode.SLACK_NOT_CONNECTED);
     }
 }
