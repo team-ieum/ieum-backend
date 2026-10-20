@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -148,6 +149,126 @@ class ExecutionRecoveryRedisIntegrationTest {
             assertThat(redis.opsForStream().consumers(STREAM_KEY, GROUP).stream()
                 .map(StreamInfo.XInfoConsumer::consumerName)).contains(live).doesNotContain(dead);
         } finally { redis.delete("ieum:deployment:alive:" + live); }
+    }
+
+    @Test
+    void pendingPoisonEntryDoesNotGainDuplicatesWhenOldMarkerExpires() {
+        redis.opsForStream().createGroup(STREAM_KEY, ReadOffset.from("0"), GROUP);
+        UUID id = UUID.randomUUID();
+        String marker = "ieum:exec:published:" + id;
+        String attempts = "ieum:exec:recovery-attempts:" + id;
+        var queue = distributedQueue();
+        try {
+            queue.enqueue(id);
+            redis.opsForStream().read(Consumer.from(GROUP, control.consumerName()),
+                StreamReadOptions.empty().count(1), StreamOffset.create(STREAM_KEY, ReadOffset.lastConsumed()));
+            redis.delete(marker); // Previous protocol's two-minute TTL expired, entry is still pending.
+            for (int i = 0; i < 20; i++) {
+                assertThat(queue.requeuePending(id, 3)).isEqualTo(ExecutionJobQueue.RecoveryResult.ALREADY_QUEUED);
+            }
+            assertThat(redis.opsForStream().size(STREAM_KEY)).isEqualTo(1L);
+            assertThat(redis.opsForStream().pending(STREAM_KEY, GROUP).getTotalPendingMessages()).isEqualTo(1L);
+            assertThat(redis.getExpire(marker, TimeUnit.SECONDS)).isEqualTo(-1L);
+            assertThat(redis.hasKey(attempts)).isFalse();
+        } finally { redis.delete(List.of(marker, attempts)); }
+    }
+
+    @Test
+    void missingStreamEntryRecoveryStopsAtConfiguredAttemptBudgetWithoutFailingRows() {
+        UUID id = UUID.randomUUID();
+        String marker = "ieum:exec:published:" + id;
+        String attempts = "ieum:exec:recovery-attempts:" + id;
+        var queue = distributedQueue();
+        try {
+            for (int i = 0; i < 3; i++) {
+                assertThat(queue.requeuePending(id, 3)).isEqualTo(ExecutionJobQueue.RecoveryResult.PUBLISHED);
+                redis.opsForStream().delete(STREAM_KEY, RecordId.of(redis.opsForValue().get(marker)));
+            }
+            assertThat(queue.requeuePending(id, 3)).isEqualTo(ExecutionJobQueue.RecoveryResult.ATTEMPTS_EXHAUSTED);
+            assertThat(redis.opsForValue().get(attempts)).isEqualTo("3");
+            assertThat(redis.opsForStream().size(STREAM_KEY)).isZero();
+        } finally { redis.delete(List.of(marker, attempts)); }
+    }
+
+    @Test
+    void boundedLegacyScanProgressesPastThousandPoisonEntriesToPublishAMissingExecution() {
+        var queue = distributedQueue();
+        for (int i = 0; i < 1001; i++)
+            redis.opsForStream().add(STREAM_KEY, Map.of(FIELD_EXECUTION_ID, UUID.randomUUID().toString()));
+        UUID missing = UUID.randomUUID();
+        assertThat(queue.requeuePending(missing, 3)).isEqualTo(ExecutionJobQueue.RecoveryResult.DEFERRED);
+        assertThat(redis.opsForStream().size(STREAM_KEY)).isEqualTo(1001L);
+        try {
+            // New traffic must not move this recovery's original upper bound forever.
+            for (int i = 0; i < 100; i++)
+                redis.opsForStream().add(STREAM_KEY, Map.of(FIELD_EXECUTION_ID, UUID.randomUUID().toString()));
+            assertThat(queue.requeuePending(missing, 3)).isEqualTo(ExecutionJobQueue.RecoveryResult.PUBLISHED);
+            assertThat(redis.opsForStream().size(STREAM_KEY)).isEqualTo(1102L);
+            assertThat(redis.hasKey("ieum:exec:recovery-scan:" + missing)).isFalse();
+        } finally {
+            redis.delete(List.of("ieum:exec:published:" + missing, "ieum:exec:recovery-attempts:" + missing,
+                "ieum:exec:recovery-scan:" + missing));
+        }
+    }
+
+    @Test
+    void boundedLegacyScanFindsAnExistingExecutionBeyondFirstThousandWithoutDuplicatingIt() {
+        var queue = distributedQueue();
+        for (int i = 0; i < 1000; i++)
+            redis.opsForStream().add(STREAM_KEY, Map.of(FIELD_EXECUTION_ID, UUID.randomUUID().toString()));
+        UUID id = UUID.randomUUID();
+        var existing = redis.opsForStream().add(STREAM_KEY, Map.of(FIELD_EXECUTION_ID, id.toString()));
+        try {
+            assertThat(queue.requeuePending(id, 3)).isEqualTo(ExecutionJobQueue.RecoveryResult.DEFERRED);
+            assertThat(queue.requeuePending(id, 3)).isEqualTo(ExecutionJobQueue.RecoveryResult.ALREADY_QUEUED);
+            assertThat(redis.opsForValue().get("ieum:exec:published:" + id)).isEqualTo(existing.getValue());
+            assertThat(redis.opsForStream().size(STREAM_KEY)).isEqualTo(1001L);
+        } finally {
+            redis.delete(List.of("ieum:exec:published:" + id, "ieum:exec:recovery-scan:" + id));
+        }
+    }
+
+    @Test
+    void terminalWorkerAtomicallyAcknowledgesDeletesAndClearsRecoveryMetadata() {
+        redis.opsForStream().createGroup(STREAM_KEY, ReadOffset.from("0"), GROUP);
+        UUID id = UUID.randomUUID();
+        var queue = distributedQueue();
+        assertThat(queue.requeuePending(id, 3)).isEqualTo(ExecutionJobQueue.RecoveryResult.PUBLISHED);
+        var records = redis.<String, String>opsForStream().read(Consumer.from(GROUP, control.consumerName()),
+            StreamReadOptions.empty().count(1), StreamOffset.create(STREAM_KEY, ReadOffset.lastConsumed()));
+        redis.opsForHash().put("ieum:exec:recovery-scan:" + id, "cursor", "0-0");
+        var repository = mock(com.ieum.workflowcore.repository.WorkflowExecutionRepository.class);
+        var execution = mock(com.ieum.workflowcore.domain.WorkflowExecution.class);
+        when(execution.getStatus()).thenReturn(com.ieum.workflowcore.domain.enums.ExecutionStatus.SUCCESS);
+        when(repository.findWithVersionById(id)).thenReturn(java.util.Optional.of(execution));
+        var worker = new ExecutionJobWorker(redis, repository,
+            mock(com.ieum.workflowcore.service.WorkflowExecutionService.class),
+            mock(com.ieum.api.workflow.WorkflowExecutionRunner.class), Runnable::run);
+        var newer = redis.opsForStream().add(STREAM_KEY, Map.of(FIELD_EXECUTION_ID, id.toString()));
+        redis.opsForValue().set("ieum:exec:published:" + id, newer.getValue());
+        worker.onMessage(records.getFirst());
+        // Finishing an older duplicate must not clear a newer entry's index/budget/scan.
+        assertThat(redis.opsForStream().size(STREAM_KEY)).isEqualTo(1L);
+        assertThat(redis.opsForValue().get("ieum:exec:published:" + id)).isEqualTo(newer.getValue());
+        assertThat(redis.opsForValue().get("ieum:exec:recovery-attempts:" + id)).isEqualTo("1");
+        assertThat(redis.hasKey("ieum:exec:recovery-scan:" + id)).isTrue();
+        var remaining = redis.<String, String>opsForStream().read(Consumer.from(GROUP, control.consumerName()),
+            StreamReadOptions.empty().count(1), StreamOffset.create(STREAM_KEY, ReadOffset.lastConsumed()));
+        worker.onMessage(remaining.getFirst());
+        assertThat(redis.opsForStream().size(STREAM_KEY)).isZero();
+        assertThat(redis.opsForStream().pending(STREAM_KEY, GROUP).getTotalPendingMessages()).isZero();
+        assertThat(redis.hasKey("ieum:exec:published:" + id)).isFalse();
+        assertThat(redis.hasKey("ieum:exec:recovery-attempts:" + id)).isFalse();
+        assertThat(redis.hasKey("ieum:exec:recovery-scan:" + id)).isFalse();
+    }
+
+    @SuppressWarnings("unchecked")
+    private ExecutionJobQueue distributedQueue() {
+        var listener = (StreamMessageListenerContainer<String, MapRecord<String, String, String>>)
+            mock(StreamMessageListenerContainer.class);
+        var queue = new ExecutionJobQueue(redis, listener);
+        ReflectionTestUtils.setField(queue, "distributed", true);
+        return queue;
     }
 
     @SuppressWarnings("unchecked")

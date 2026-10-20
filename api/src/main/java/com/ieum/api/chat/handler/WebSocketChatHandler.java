@@ -74,7 +74,13 @@ public class WebSocketChatHandler {
     ) {
         DeploymentWorkTracker.Lease deploymentLease = deploymentWorkTracker == null
             ? null : deploymentWorkTracker.tryBegin();
-        if (deploymentWorkTracker != null && deploymentLease == null) return;
+        if (deploymentWorkTracker != null && deploymentLease == null) {
+            if (principal != null) {
+                sendToUser(principal.getName(), ChatStreamResponse.error(
+                    "서버가 전환 중이에요. 잠시 후 다시 연결해 요청해 주세요."));
+            }
+            return;
+        }
         boolean handedOff = false;
         try {
             if (principal == null) {

@@ -129,7 +129,7 @@ class ExecutionJobQueueTest {
         assertThat(queue.enqueue(id)).isTrue();
         verify(redisTemplate).execute(any(org.springframework.data.redis.core.script.RedisScript.class),
             org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.eq(id.toString()),
-            org.mockito.ArgumentMatchers.eq("120000"));
+            org.mockito.ArgumentMatchers.eq("0"));
         verify(streamOperations, never()).add(any(MapRecord.class));
     }
 

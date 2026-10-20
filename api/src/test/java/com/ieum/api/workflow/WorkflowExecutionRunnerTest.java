@@ -175,4 +175,13 @@ class WorkflowExecutionRunnerTest {
         verify(lease).close();
         assertThat(runner.activeCount()).isZero();
     }
+
+    @Test
+    void uncertainOwnershipSafelyDefersWithoutPermanentlyFailingExecution() throws Exception {
+        doThrow(new com.ieum.workflowcore.engine.ExecutionOwnershipGuard.OwnershipUncertainException(
+                "both observations timed out", new java.sql.SQLTimeoutException()))
+            .when(syncExecutionRuntime).execute(any(), any(), any(), any());
+        assertThat(runner.executeNow(version, executionId, triggerData)).isFalse();
+        verify(workflowExecutionService, never()).markAsFailed(any(), any());
+    }
 }

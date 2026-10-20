@@ -110,6 +110,21 @@ class WebSocketChatHandlerTest {
 
     // ─────────────────── handleChat (전체 흐름) ─────────────────────────────
 
+    @Test
+    void retiredChatReturnsExistingErrorFrameWithoutStartingAgentWork() {
+        var connections = new DeploymentConnections(new ExecutionEventPublisher());
+        var tracker = new DeploymentWorkTracker(connections);
+        ReflectionTestUtils.setField(handler, "deploymentWorkTracker", tracker);
+        connections.retire();
+        handler.handleChat(workflowId, request, principal);
+        var sent = captureSent(1);
+        assertThat(sent.getFirst().getType()).isEqualTo(StreamType.ERROR);
+        assertThat(sent.getFirst().getContent()).contains("다시 연결");
+        verify(chatService, never()).prepareStream(any(), any(), any(), any());
+        verify(agentClient, never()).chatStream(any());
+        assertThat(tracker.activeCount()).isZero();
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void deploymentTrackingCoversStreamLifetimeAndPreparationFailure(boolean error) throws Exception {

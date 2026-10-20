@@ -3,6 +3,7 @@ package com.ieum.api.workflow;
 import com.ieum.api.workflow.queue.ExecutionJobQueue;
 import com.ieum.api.deployment.ExecutionAdvisoryLocks;
 import com.ieum.workflowcore.engine.ExecutionOwnershipGuard.OwnershipLostException;
+import com.ieum.workflowcore.engine.ExecutionOwnershipGuard.OwnershipUncertainException;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.domain.WorkflowVersion;
@@ -99,6 +100,9 @@ public class WorkflowExecutionRunner {
                 workflowExecutionService.loadReusableNodeOutputs(executionId));
             if (lease != null) lease.assertHeld();
             return true;
+        } catch (OwnershipUncertainException e) {
+            log.warn("[Runner] 실행 소유권 확인 불가 — 안전 중단, pending 유지: {}", executionId, e);
+            return false;
         } catch (OwnershipLostException e) {
             log.warn("[Runner] 실행 소유권 상실 — 신규 부수 효과/종료 기록 중단, pending 유지: {}", executionId, e);
             return false;

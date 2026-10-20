@@ -6,6 +6,7 @@ import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.event.ExecutionEventRelay;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,6 +15,7 @@ import org.springframework.data.redis.connection.Message;
 import org.springframework.data.redis.connection.MessageListener;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.scheduling.annotation.Scheduled;
 
 @Slf4j
 @Component
@@ -25,6 +27,8 @@ public class RedisExecutionEventRelay implements ExecutionEventRelay, MessageLis
     private final ObjectMapper mapper;
     private final ObjectProvider<ExecutionEventPublisher> publisher;
     private final String origin;
+    private final AtomicLong droppedDeliveries = new AtomicLong();
+    private final AtomicLong unreportedDrops = new AtomicLong();
 
     public RedisExecutionEventRelay(StringRedisTemplate redis, ObjectMapper mapper,
             ObjectProvider<ExecutionEventPublisher> publisher,
@@ -41,6 +45,24 @@ public class RedisExecutionEventRelay implements ExecutionEventRelay, MessageLis
 
     public void complete(UUID executionId) {
         send(new Envelope(origin, executionId, null, true));
+    }
+
+    /** Nonblocking overflow callback: no Redis, logging, subscriber callbacks, or queue waits here. */
+    public void recordDroppedDelivery() {
+        droppedDeliveries.incrementAndGet();
+        unreportedDrops.incrementAndGet();
+    }
+
+    public long droppedDeliveryCount() { return droppedDeliveries.get(); }
+
+    @Scheduled(fixedDelayString = "${ieum.deployment.event-relay.overflow-report-interval:PT10S}")
+    void reportDroppedDeliveries() {
+        long dropped = unreportedDrops.getAndSet(0);
+        if (dropped != 0) {
+            log.warn("Dropped {} saturated execution relay deliveries (total {}). "
+                + "DB reconciliation repairs terminal status; reconnect snapshots recover persisted logs only.",
+                dropped, droppedDeliveries.get());
+        }
     }
 
     private void send(Envelope message) {

@@ -42,14 +42,84 @@ public class ExecutionJobQueue {
     @Value("${ieum.deployment.distributed.enabled:false}")
     private boolean distributed;
 
-    // The script is atomic: a timeout cannot lead to a second local/direct execution. A short-lived
-    // marker also bounds duplicate publication by the durable PENDING recovery sweep.
+    // Keep the index while its stream entry exists: pending/poison/backlogged jobs must not gain
+    // another entry every two minutes. Recovery also indexes unmarked older entries with a bounded
+    // scan; an incomplete scan defers publication rather than risking another external execution.
     private static final DefaultRedisScript<Long> PUBLISH_ONCE = new DefaultRedisScript<>("""
-        if redis.call('EXISTS', KEYS[2]) == 1 then return 1 end
+        local prior = redis.call('GET', KEYS[2])
+        if prior and #redis.call('XRANGE', KEYS[1], prior, prior, 'COUNT', 1) > 0 then
+          redis.call('DEL', KEYS[4])
+          return 0
+        end
+        local recoveryLimit = tonumber(ARGV[2])
+        if recoveryLimit > 0 then
+          local cursor = redis.call('HGET', KEYS[4], 'cursor') or '-'
+          local scanEnd = redis.call('HGET', KEYS[4], 'end')
+          if not scanEnd then
+            local last = redis.call('XREVRANGE', KEYS[1], '+', '-', 'COUNT', 1)
+            scanEnd = #last > 0 and last[1][1] or '0-0'
+          end
+          local complete = false
+          for page = 1, 10 do
+            local rows = redis.call('XRANGE', KEYS[1], cursor, scanEnd, 'COUNT', 100)
+            for _, row in ipairs(rows) do
+              for i = 1, #row[2], 2 do
+                if row[2][i] == 'executionId' and row[2][i + 1] == ARGV[1] then
+                  redis.call('SET', KEYS[2], row[1])
+                  redis.call('DEL', KEYS[4])
+                  return 0
+                end
+              end
+            end
+            if #rows < 100 or rows[#rows][1] == scanEnd then complete = true; break end
+            cursor = '(' .. rows[#rows][1]
+          end
+          if not complete then
+            redis.call('HSET', KEYS[4], 'cursor', cursor, 'end', scanEnd)
+            redis.call('EXPIRE', KEYS[4], 3600)
+            return -2
+          end
+          redis.call('DEL', KEYS[4])
+          local attempts = tonumber(redis.call('GET', KEYS[3]) or '0')
+          if attempts >= recoveryLimit then return -1 end
+        end
         local id = redis.call('XADD', KEYS[1], '*', 'executionId', ARGV[1])
-        redis.call('SET', KEYS[2], id, 'PX', ARGV[2])
+        redis.call('SET', KEYS[2], id)
+        if recoveryLimit > 0 then redis.call('INCR', KEYS[3]) end
         return 1
         """, Long.class);
+
+    static final DefaultRedisScript<Long> ACKNOWLEDGE_AND_DELETE = new DefaultRedisScript<>("""
+        local published = redis.call('GET', KEYS[2])
+        local acked = redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
+        redis.call('XDEL', KEYS[1], ARGV[2])
+        if not published or published == ARGV[2] then redis.call('DEL', KEYS[2], KEYS[3], KEYS[4]) end
+        return acked
+        """, Long.class);
+
+    public enum RecoveryResult { PUBLISHED, ALREADY_QUEUED, ATTEMPTS_EXHAUSTED, DEFERRED }
+
+    public RecoveryResult requeuePending(UUID executionId, int maxAttempts) {
+        if (maxAttempts < 1 || maxAttempts > 100)
+            throw new IllegalArgumentException("Pending recovery attempt limit must be between 1 and 100");
+        try {
+            Long result = publish(executionId, maxAttempts);
+            if (Long.valueOf(1).equals(result)) return RecoveryResult.PUBLISHED;
+            if (Long.valueOf(0).equals(result)) return RecoveryResult.ALREADY_QUEUED;
+            if (Long.valueOf(-1).equals(result)) return RecoveryResult.ATTEMPTS_EXHAUSTED;
+            log.warn("[ExecutionJobQueue] 기존 stream 검사 미완료 — 자동 재발행 보류: {}", executionId);
+        } catch (Exception e) {
+            log.warn("[ExecutionJobQueue] 자동 복구 발행 불명 — 다음 주기에 재확인: {}", executionId, e);
+        }
+        return RecoveryResult.DEFERRED;
+    }
+
+    private Long publish(UUID executionId, int maxRecoveryAttempts) {
+        return redisTemplate.execute(PUBLISH_ONCE,
+            java.util.List.of(STREAM_KEY, "ieum:exec:published:" + executionId,
+                "ieum:exec:recovery-attempts:" + executionId, "ieum:exec:recovery-scan:" + executionId),
+            executionId.toString(), Integer.toString(maxRecoveryAttempts));
+    }
 
     public static final String STREAM_KEY = "ieum:exec:jobs";
     public static final String GROUP = "runners";
@@ -79,9 +149,7 @@ public class ExecutionJobQueue {
     public boolean enqueue(UUID executionId) {
         if (distributed) {
             try {
-                redisTemplate.execute(PUBLISH_ONCE,
-                    java.util.List.of(STREAM_KEY, "ieum:exec:published:" + executionId),
-                    executionId.toString(), "120000");
+                publish(executionId, 0);
             } catch (Exception e) {
                 log.warn("[ExecutionJobQueue] 발행 결과 불명 — DB PENDING 복구 주기에 재시도: {}, {}",
                     executionId, e.toString());

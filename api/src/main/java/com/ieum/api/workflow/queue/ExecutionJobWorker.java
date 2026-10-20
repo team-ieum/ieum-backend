@@ -176,20 +176,19 @@ public class ExecutionJobWorker implements StreamListener<String, MapRecord<Stri
 
     private void acknowledge(MapRecord<String, String, String> record) {
         try {
-            redisTemplate.opsForStream().acknowledge(STREAM_KEY, GROUP, record.getId());
+            String identity;
+            try { identity = UUID.fromString(record.getValue().get(FIELD_EXECUTION_ID)).toString(); }
+            catch (Exception malformed) { identity = record.getId().getValue(); }
+            // The server completes ACK, entry deletion and index cleanup as one operation, even if
+            // the connection drops after accepting the script. Never delete a newer entry's index.
+            redisTemplate.execute(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE,
+                java.util.List.of(STREAM_KEY, "ieum:exec:published:" + identity,
+                    "ieum:exec:recovery-attempts:" + identity, "ieum:exec:recovery-scan:" + identity),
+                GROUP, record.getId().getValue());
         } catch (Exception e) {
-            // ack 실패는 실행 결과를 뒤집지 않는다. 재배달돼도 종료 상태 검사에서 걸러진다.
-            // 엔트리도 지우지 않는다 — pending에 남아야 회수·재배달로 정리된다.
-            log.warn("[ExecutionJobWorker] ack 실패 — recordId: {}, error: {}",
-                record.getId(), e.toString());
-            return;
-        }
-        try {
-            // 스트림에 트리밍이 없으므로(ExecutionJobQueue) 끝난 엔트리는 여기서 지운다.
-            redisTemplate.opsForStream().delete(STREAM_KEY, record.getId());
-        } catch (Exception e) {
-            // 이미 ack돼 재배달되지 않는다. 남은 엔트리는 자리만 차지한다.
-            log.warn("[ExecutionJobWorker] 엔트리 삭제 실패 — recordId: {}, error: {}",
+            // An unknown response does not change a terminal execution. If Redis did not run the
+            // script, pending recovery can run it again without repeating terminal workflow effects.
+            log.warn("[ExecutionJobWorker] 원자적 ack/정리 결과 불명 — recordId: {}, error: {}",
                 record.getId(), e.toString());
         }
     }

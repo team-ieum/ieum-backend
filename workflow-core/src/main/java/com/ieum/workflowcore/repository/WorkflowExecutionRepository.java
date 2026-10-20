@@ -22,8 +22,9 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
 
     @Query("SELECT e.id FROM WorkflowExecution e WHERE "
         + "e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.PENDING "
-        + "AND e.startedAt < :threshold ORDER BY e.startedAt, e.id")
-    List<UUID> findPendingIdsBefore(@Param("threshold") LocalDateTime threshold, Pageable pageable);
+        + "AND e.startedAt >= :notBefore AND e.startedAt < :threshold ORDER BY e.startedAt, e.id")
+    List<UUID> findPendingIdsBetween(@Param("notBefore") LocalDateTime notBefore,
+        @Param("threshold") LocalDateTime threshold, Pageable pageable);
 
     @Query("SELECT e FROM WorkflowExecution e JOIN FETCH e.workflow WHERE e.id = :id")
     Optional<WorkflowExecution> findWithWorkflowById(@Param("id") UUID id);

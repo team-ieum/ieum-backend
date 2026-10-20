@@ -8,33 +8,26 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.TimeUnit;
+import org.springframework.beans.factory.annotation.Value;
 
 @Configuration
 @ConditionalOnProperty(name = "ieum.deployment.distributed.enabled", havingValue = "true")
 public class DeploymentConfiguration {
     @Bean
-    ThreadPoolTaskExecutor executionEventRelayExecutor() {
+    ThreadPoolTaskExecutor executionEventRelayExecutor(RedisExecutionEventRelay relay,
+            @Value("${ieum.deployment.event-relay.queue-capacity:10000}") int queueCapacity) {
+        if (queueCapacity < 1) throw new IllegalArgumentException("Event relay queue capacity must be positive");
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(1);
         executor.setMaxPoolSize(1);
-        executor.setQueueCapacity(10000);
+        executor.setQueueCapacity(queueCapacity);
         executor.setThreadNamePrefix("execution-relay-");
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);
-        // Do not discard completion when the bounded queue fills, or run it out of order on
-        // the Redis subscription thread. Backpressure preserves the single-consumer ordering.
-        executor.setRejectedExecutionHandler((task, pool) -> {
-            try {
-                while (!pool.isShutdown()) {
-                    if (pool.getQueue().offer(task, 100, TimeUnit.MILLISECONDS)) return;
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-            throw new RejectedExecutionException("Execution relay is stopping");
-        });
+        // Lettuce can submit from its I/O thread: never block, run inline, or grow this queue.
+        // Drop the newest delivery while accepted tasks keep FIFO order. Pub/Sub progress is best
+        // effort; DB terminal reconciliation closes streams even if completion was dropped.
+        executor.setRejectedExecutionHandler((task, pool) -> relay.recordDroppedDelivery());
         return executor;
     }
 

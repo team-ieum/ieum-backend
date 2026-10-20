@@ -95,14 +95,14 @@ class ExecutionJobWorkerTest {
 
         worker.onMessage(jobRecord(executionId.toString()));
 
-        InOrder inOrder = Mockito.inOrder(syncExecutionRuntime, streamOperations);
+        InOrder inOrder = Mockito.inOrder(syncExecutionRuntime, redisTemplate);
         inOrder.verify(syncExecutionRuntime).execute(version, executionId, Map.of("name", "홍길동"), Map.of());
-        inOrder.verify(streamOperations).acknowledge(
-            ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
+        inOrder.verify(redisTemplate).execute(eq(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE),
+            org.mockito.ArgumentMatchers.anyList(), eq(ExecutionJobQueue.GROUP), eq(RECORD_ID.getValue()));
     }
 
     @Test
-    @DisplayName("ack한 뒤 스트림에서 엔트리를 지운다 — 스트림에는 끝나지 않은 잡만 남는다")
+    @DisplayName("ACK·entry 삭제·index 정리를 단일 원자 명령으로 요청한다")
     void onMessage_acknowledgesThenDeletesEntry() throws Exception {
         WorkflowExecution execution = execution(ExecutionStatus.PENDING);
         when(execution.getWorkflowVersion()).thenReturn(version);
@@ -112,20 +112,26 @@ class ExecutionJobWorkerTest {
 
         worker.onMessage(jobRecord(executionId.toString()));
 
-        InOrder inOrder = Mockito.inOrder(streamOperations);
-        inOrder.verify(streamOperations).acknowledge(
-            ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
-        inOrder.verify(streamOperations).delete(ExecutionJobQueue.STREAM_KEY, RECORD_ID);
+        verify(redisTemplate).execute(eq(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE),
+            eq(java.util.List.of(ExecutionJobQueue.STREAM_KEY, "ieum:exec:published:" + executionId,
+                "ieum:exec:recovery-attempts:" + executionId, "ieum:exec:recovery-scan:" + executionId)),
+            eq(ExecutionJobQueue.GROUP), eq(RECORD_ID.getValue()));
+        verify(streamOperations, never()).acknowledge(any(), any(), any(RecordId.class));
+        verify(streamOperations, never()).delete(any(), any(RecordId.class));
     }
 
     @Test
     @DisplayName("ack에 실패하면 엔트리를 지우지 않는다 — 남겨 둬야 회수·재배달로 정리된다")
     void onMessage_ackFailure_keepsEntry() {
-        when(streamOperations.acknowledge(ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID))
+        when(redisTemplate.execute(eq(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE),
+                org.mockito.ArgumentMatchers.anyList(), eq(ExecutionJobQueue.GROUP), eq(RECORD_ID.getValue())))
             .thenThrow(new RuntimeException("redis down"));
 
         worker.onMessage(jobRecord("not-a-uuid"));
 
+        verify(redisTemplate).execute(eq(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE),
+            org.mockito.ArgumentMatchers.anyList(), eq(ExecutionJobQueue.GROUP), eq(RECORD_ID.getValue()));
+        verify(streamOperations, never()).acknowledge(any(), any(), any(RecordId.class));
         verify(streamOperations, never()).delete(ExecutionJobQueue.STREAM_KEY, RECORD_ID);
     }
 
@@ -139,8 +145,8 @@ class ExecutionJobWorkerTest {
         worker.onMessage(jobRecord(executionId.toString()));
 
         verify(syncExecutionRuntime, never()).execute(any(), any(), any(), any());
-        verify(streamOperations).acknowledge(
-            ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
+        verify(redisTemplate).execute(eq(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE),
+            org.mockito.ArgumentMatchers.anyList(), eq(ExecutionJobQueue.GROUP), eq(RECORD_ID.getValue()));
     }
 
     @Test
@@ -153,8 +159,8 @@ class ExecutionJobWorkerTest {
         worker.onMessage(jobRecord(executionId.toString()));
 
         verify(syncExecutionRuntime, never()).execute(any(), any(), any(), any());
-        verify(streamOperations).acknowledge(
-            ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
+        verify(redisTemplate).execute(eq(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE),
+            org.mockito.ArgumentMatchers.anyList(), eq(ExecutionJobQueue.GROUP), eq(RECORD_ID.getValue()));
     }
 
     @Test
@@ -167,8 +173,8 @@ class ExecutionJobWorkerTest {
         worker.onMessage(jobRecord(executionId.toString()));
 
         verify(syncExecutionRuntime, never()).execute(any(), any(), any(), any());
-        verify(streamOperations).acknowledge(
-            ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
+        verify(redisTemplate).execute(eq(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE),
+            org.mockito.ArgumentMatchers.anyList(), eq(ExecutionJobQueue.GROUP), eq(RECORD_ID.getValue()));
     }
 
     @Test
@@ -180,8 +186,8 @@ class ExecutionJobWorkerTest {
         worker.onMessage(jobRecord(executionId.toString()));
 
         verify(syncExecutionRuntime, never()).execute(any(), any(), any(), any());
-        verify(streamOperations).acknowledge(
-            ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
+        verify(redisTemplate).execute(eq(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE),
+            org.mockito.ArgumentMatchers.anyList(), eq(ExecutionJobQueue.GROUP), eq(RECORD_ID.getValue()));
     }
 
     @Test
@@ -197,8 +203,8 @@ class ExecutionJobWorkerTest {
 
         verify(syncExecutionRuntime, never()).execute(any(), any(), any(), any());
         verify(workflowExecutionService).markAsFailed(eq(executionId), any());
-        verify(streamOperations).acknowledge(
-            ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
+        verify(redisTemplate).execute(eq(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE),
+            org.mockito.ArgumentMatchers.anyList(), eq(ExecutionJobQueue.GROUP), eq(RECORD_ID.getValue()));
     }
 
     @Test
@@ -221,8 +227,8 @@ class ExecutionJobWorkerTest {
         worker.onMessage(record);
 
         verify(syncExecutionRuntime, Mockito.times(1)).execute(version, executionId, Map.of(), Map.of());
-        verify(streamOperations, Mockito.times(1)).acknowledge(
-            ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
+        verify(redisTemplate, Mockito.times(1)).execute(eq(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE),
+            org.mockito.ArgumentMatchers.anyList(), eq(ExecutionJobQueue.GROUP), eq(RECORD_ID.getValue()));
     }
 
     @Test
@@ -280,8 +286,8 @@ class ExecutionJobWorkerTest {
         worker.onMessage(jobRecord(executionId.toString()));
 
         verify(syncExecutionRuntime).execute(version, executionId, Map.of(), Map.of());
-        verify(streamOperations).acknowledge(
-            ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
+        verify(redisTemplate).execute(eq(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE),
+            org.mockito.ArgumentMatchers.anyList(), eq(ExecutionJobQueue.GROUP), eq(RECORD_ID.getValue()));
     }
 
     @Test
@@ -290,8 +296,8 @@ class ExecutionJobWorkerTest {
         worker.onMessage(jobRecord("not-a-uuid"));
 
         verify(workflowExecutionRepository, never()).findWithVersionById(any());
-        verify(streamOperations).acknowledge(
-            ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
+        verify(redisTemplate).execute(eq(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE),
+            org.mockito.ArgumentMatchers.anyList(), eq(ExecutionJobQueue.GROUP), eq(RECORD_ID.getValue()));
     }
     @Test
     void anotherInstanceOwnsExecution_doesNotExecuteOrAcknowledge() throws Exception {
@@ -303,7 +309,8 @@ class ExecutionJobWorkerTest {
         when(locks.tryAcquire(executionId)).thenReturn(null);
         worker.onMessage(jobRecord(executionId.toString()));
         verify(syncExecutionRuntime, never()).execute(any(), any(), any(), any());
-        verify(streamOperations, never()).acknowledge(any(), any(), any(RecordId.class));
+        verify(redisTemplate, never()).execute(eq(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE),
+            org.mockito.ArgumentMatchers.anyList(), any(String.class), any(String.class));
         assertThat(worker.activeCount()).isZero();
     }
 
@@ -313,7 +320,8 @@ class ExecutionJobWorkerTest {
             .thenThrow(new IllegalStateException("database temporarily down"));
         worker.onMessage(jobRecord(executionId.toString()));
         verify(workflowExecutionService, never()).markAsFailed(any(), any());
-        verify(streamOperations, never()).acknowledge(any(), any(), any(RecordId.class));
+        verify(redisTemplate, never()).execute(eq(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE),
+            org.mockito.ArgumentMatchers.anyList(), any(String.class), any(String.class));
         assertThat(worker.activeCount()).isZero();
     }
 
@@ -337,7 +345,8 @@ class ExecutionJobWorkerTest {
         worker.pauseConsuming();
         worker.onMessage(jobRecord(executionId.toString()));
         verify(workflowExecutionRepository, never()).findWithVersionById(any());
-        verify(streamOperations, never()).acknowledge(any(), any(), any(RecordId.class));
+        verify(redisTemplate, never()).execute(eq(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE),
+            org.mockito.ArgumentMatchers.anyList(), any(String.class), any(String.class));
         assertThat(worker.activeCount()).isZero();
         worker.resumeConsuming();
         worker.onMessage(jobRecord(executionId.toString()));
