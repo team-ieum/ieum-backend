@@ -11,10 +11,14 @@ import static org.mockito.Mockito.when;
 import com.ieum.api.oauth.dto.OAuthConnectionResponse;
 import com.ieum.auth.domain.AuthProvider;
 import com.ieum.auth.domain.ConnectedAccount;
+import com.ieum.auth.domain.SlackInstallation;
+import com.ieum.auth.domain.SlackUserLink;
 import com.ieum.auth.repository.ConnectedAccountRepository;
+import com.ieum.auth.repository.SlackUserLinkRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.common.util.AesEncryptor;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -27,6 +31,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.test.util.ReflectionTestUtils;
 
 @ExtendWith(MockitoExtension.class)
 class OAuthConnectionServiceTest {
@@ -39,6 +44,9 @@ class OAuthConnectionServiceTest {
 
     @Mock
     private OAuthTokenRevoker tokenRevoker;
+
+    @Mock
+    private SlackUserLinkRepository slackUserLinkRepository;
 
     @InjectMocks
     private OAuthConnectionService oauthConnectionService;
@@ -66,6 +74,34 @@ class OAuthConnectionServiceTest {
         assertThat(response.getProvider()).isEqualTo("GOOGLE");
         assertThat(response.getProviderAccountId()).isEqualTo("google-sub-id");
         assertThat(response.getScopes()).containsExactly("email", "profile");
+        assertThat(response.getDisplayName()).isNull();
+    }
+
+    @Test
+    @DisplayName("Slack 링크가 있으면 SLACK 항목 — id=링크 id, providerAccountId=team_id, displayName=워크스페이스 이름, scopes=설치 scope")
+    void getConnections_IncludesSlack() {
+        UUID userId = UUID.randomUUID();
+        UUID linkId = UUID.randomUUID();
+        SlackInstallation installation = new SlackInstallation("T0123");
+        installation.applyInstall("enc", null, null, "chat:write,channels:read", "이음 팀", "UBOT", "A1");
+        SlackUserLink link = new SlackUserLink(userId, installation, "U1");
+        ReflectionTestUtils.setField(link, "id", linkId);
+        LocalDateTime linkedAt = LocalDateTime.of(2026, 10, 20, 9, 0);
+        ReflectionTestUtils.setField(link, "createdAt", linkedAt);
+        ReflectionTestUtils.setField(installation, "createdAt", LocalDateTime.of(2026, 1, 1, 0, 0)); // 다른 사람이 먼저 설치
+        when(connectedAccountRepository.findByUserId(userId)).thenReturn(List.of());
+        when(slackUserLinkRepository.findByUserId(userId)).thenReturn(Optional.of(link));
+
+        List<OAuthConnectionResponse> responses = oauthConnectionService.getConnections(userId);
+
+        assertThat(responses).singleElement().satisfies(r -> {
+            assertThat(r.getId()).isEqualTo(linkId);
+            assertThat(r.getProvider()).isEqualTo("SLACK");
+            assertThat(r.getProviderAccountId()).isEqualTo("T0123");
+            assertThat(r.getDisplayName()).isEqualTo("이음 팀");
+            assertThat(r.getScopes()).containsExactly("chat:write", "channels:read");
+            assertThat(r.getCreatedAt()).isEqualTo(linkedAt); // 내가 연결한 시각 — 설치 시각이 아니다
+        });
     }
 
     @Test

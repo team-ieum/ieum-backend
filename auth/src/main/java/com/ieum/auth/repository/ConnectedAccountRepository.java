@@ -6,6 +6,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 public interface ConnectedAccountRepository extends JpaRepository<ConnectedAccount, UUID> {
 
@@ -17,4 +20,9 @@ public interface ConnectedAccountRepository extends JpaRepository<ConnectedAccou
     List<ConnectedAccount> findByUserId(UUID userId);
 
     boolean existsByUserIdAndProvider(UUID userId, AuthProvider provider);
+
+    /** 회원 탈퇴 시 호출자 트랜잭션 안에서 부른다. */
+    @Modifying(clearAutomatically = true)
+    @Query("DELETE FROM ConnectedAccount e WHERE e.userId = :userId")
+    void deleteByUserId(@Param("userId") UUID userId);
 }

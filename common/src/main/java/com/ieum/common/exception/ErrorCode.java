@@ -22,6 +22,7 @@ public enum ErrorCode {
     SOCIAL_LOGIN_EMAIL_CONFLICT(HttpStatus.CONFLICT, "동일한 이메일로 가입된 계정이 있습니다. 이메일/비밀번호로 로그인해주세요."),
     TOKEN_EXPIRED(HttpStatus.UNAUTHORIZED, "만료된 토큰입니다."),
     TOKEN_INVALID(HttpStatus.UNAUTHORIZED, "유효하지 않은 토큰입니다."),
+    LOGIN_LOCKED(HttpStatus.TOO_MANY_REQUESTS, "로그인 시도 횟수를 초과했습니다. 24시간 후 다시 시도하거나 비밀번호를 재설정해주세요."),
 
     // 이메일 인증
     EMAIL_NOT_VERIFIED(HttpStatus.BAD_REQUEST, "이메일 인증이 완료되지 않았습니다."),
@@ -29,7 +30,13 @@ public enum ErrorCode {
     VERIFICATION_CODE_EXPIRED(HttpStatus.BAD_REQUEST, "인증코드가 만료되었거나 발송되지 않았습니다. 인증코드를 다시 요청해주세요."),
     VERIFICATION_ATTEMPTS_EXCEEDED(HttpStatus.BAD_REQUEST, "인증코드 입력 횟수를 초과했습니다. 인증코드를 다시 요청해주세요."),
     VERIFICATION_RESEND_TOO_SOON(HttpStatus.TOO_MANY_REQUESTS, "잠시 후 다시 요청해주세요."),
+    VERIFICATION_BLOCKED(HttpStatus.TOO_MANY_REQUESTS, "인증 시도 횟수를 초과했습니다. 12시간 후 다시 시도해주세요."),
     MAIL_SEND_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "메일 발송에 실패했습니다. 잠시 후 다시 시도해주세요."),
+
+    // 비밀번호 변경 (로그인 상태) — 불일치도 400: 401이면 FE가 토큰 만료로 보고 로그아웃시킨다
+    CURRENT_PASSWORD_MISMATCH(HttpStatus.BAD_REQUEST, "현재 비밀번호가 일치하지 않습니다."),
+    PASSWORD_SAME_AS_CURRENT(HttpStatus.BAD_REQUEST, "현재 비밀번호와 다른 비밀번호를 입력해주세요."),
+    PASSWORD_CHANGE_NOT_SUPPORTED(HttpStatus.BAD_REQUEST, "소셜 로그인 계정은 비밀번호를 변경할 수 없습니다."),
 
     // 크레덴셜 (BYOK)
     INVALID_API_KEY(HttpStatus.BAD_REQUEST, "프로바이더 API 키 검증에 실패했습니다."),
@@ -110,6 +117,8 @@ public enum ErrorCode {
     GOOGLE_API_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "Google 서비스에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도해주세요."),
     NOTION_API_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "Notion 서비스에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도해주세요."),
     GITHUB_API_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "GitHub 서비스에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도해주세요."),
+    SLACK_NOT_CONNECTED(HttpStatus.BAD_REQUEST, "Slack이 연결되어 있지 않아요. 연동 화면에서 Slack을 연결해 주세요"),
+    SLACK_API_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "Slack이 잠시 응답하지 않아요. 잠시 뒤 다시 시도해 주세요"),
 
     // 채팅
     CHAT_SESSION_NOT_FOUND(HttpStatus.NOT_FOUND, "채팅 세션을 찾을 수 없습니다."),

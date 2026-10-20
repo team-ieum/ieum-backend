@@ -41,7 +41,8 @@ class ToolCallPreparerTest {
         webhookCredentialProvider = mock(WebhookCredentialProvider.class);
         preparer = new ToolCallPreparer(
             googleTokenProvider,
-            new ToolAuthResolver(mock(CredentialProvider.class), notionTokenProvider, gitHubTokenProvider),
+            new ToolAuthResolver(mock(CredentialProvider.class), notionTokenProvider, gitHubTokenProvider,
+                mock(SlackTokenProvider.class)),
             webhookCredentialProvider);
     }
 

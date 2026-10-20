@@ -5,6 +5,8 @@ import com.ieum.api.common.GlobalExceptionHandler;
 import com.ieum.api.user.dto.UserResponse;
 import com.ieum.api.user.service.UserService;
 import com.ieum.auth.security.CustomUserDetails;
+import com.ieum.auth.service.AuthService;
+import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,6 +36,9 @@ class UserControllerTest {
 
     @Mock
     private UserService userService;
+
+    @Mock
+    private AuthService authService;
 
     @InjectMocks
     private UserController userController;
@@ -111,6 +116,93 @@ class UserControllerTest {
                 .andExpect(jsonPath("$.code").value(ErrorCode.INVALID_INPUT.name()));
     }
 
+    // ===== PATCH /api/v1/users/me/password =====
+
+    @Test
+    void changePassword_success_returns200() throws Exception {
+        mockMvc.perform(patch("/api/v1/users/me/password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(passwordBody("Password1!", "NewPassword1!")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        then(authService).should().changePassword(userId, "Password1!", "NewPassword1!");
+    }
+
+    @Test
+    void changePassword_currentMismatch_returns400NotUnauthorized() throws Exception {
+        willThrow(new CustomException(ErrorCode.CURRENT_PASSWORD_MISMATCH))
+                .given(authService).changePassword(userId, "WrongPass1!", "NewPassword1!");
+
+        mockMvc.perform(patch("/api/v1/users/me/password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(passwordBody("WrongPass1!", "NewPassword1!")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.CURRENT_PASSWORD_MISMATCH.name()));
+    }
+
+    @Test
+    void changePassword_weakNewPassword_returns400() throws Exception {
+        mockMvc.perform(patch("/api/v1/users/me/password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(passwordBody("Password1!", "weakpass")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.INVALID_INPUT.name()));
+
+        then(authService).should(never()).changePassword(any(), anyString(), anyString());
+    }
+
+    @Test
+    void changePassword_currentPasswordOver72_returns400() throws Exception {
+        mockMvc.perform(patch("/api/v1/users/me/password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(passwordBody("Aa1!" + "x".repeat(69), "NewPassword1!")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.INVALID_INPUT.name()));
+
+        then(authService).should(never()).changePassword(any(), anyString(), anyString());
+    }
+
+    @Test
+    void changePassword_newPasswordOver72_returns400() throws Exception {
+        // BCrypt는 72바이트 초과 입력을 encode하지 못해 500이 났다 — 검증 단계에서 막는다.
+        mockMvc.perform(patch("/api/v1/users/me/password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(passwordBody("Password1!", "Aa1!" + "x".repeat(69))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.INVALID_INPUT.name()));
+
+        then(authService).should(never()).changePassword(any(), anyString(), anyString());
+    }
+
+    @Test
+    void changePassword_newPasswordWithKorean_returns400() throws Exception {
+        mockMvc.perform(patch("/api/v1/users/me/password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(passwordBody("Password1!", "Password1!비밀번호")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.INVALID_INPUT.name()));
+
+        then(authService).should(never()).changePassword(any(), anyString(), anyString());
+    }
+
+    @Test
+    void changePassword_newPassword72_passes() throws Exception {
+        mockMvc.perform(patch("/api/v1/users/me/password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(passwordBody("Password1!", "Aa1!" + "x".repeat(68))))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void changePassword_blankCurrent_returns400() throws Exception {
+        mockMvc.perform(patch("/api/v1/users/me/password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(passwordBody("", "NewPassword1!")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.INVALID_INPUT.name()));
+    }
+
     // ===== DELETE /api/v1/users/me =====
 
     @Test
@@ -123,6 +215,10 @@ class UserControllerTest {
     }
 
     // ===== 헬퍼 =====
+
+    private String passwordBody(String current, String next) throws Exception {
+        return objectMapper.writeValueAsString(Map.of("currentPassword", current, "newPassword", next));
+    }
 
     private UserResponse buildUserResponse(String name) {
         return UserResponse.builder()
