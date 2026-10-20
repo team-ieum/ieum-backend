@@ -4,6 +4,7 @@ import static com.ieum.api.oauth.SlackOAuthConfigTest.D3;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
@@ -18,6 +19,7 @@ import com.ieum.api.NoRedisTestConfig;
 import com.ieum.auth.domain.SlackInstallation;
 import com.ieum.auth.domain.SlackOAuthState;
 import com.ieum.auth.domain.SlackUserLink;
+import com.ieum.auth.domain.User;
 import com.ieum.auth.repository.SlackInstallationRepository;
 import com.ieum.auth.repository.SlackOAuthStateRepository;
 import com.ieum.auth.repository.SlackUserLinkRepository;
@@ -82,7 +84,7 @@ class SlackOAuthServiceIntegrationTest {
     @BeforeEach
     void bindServer() {
         server = MockRestServiceServer.bindTo(restTemplate).build();
-        given(userRepository.existsById(any())).willReturn(true); // state의 사용자는 기본으로 살아 있다
+        given(userRepository.findByIdForUpdate(any())).willReturn(Optional.of(mock(User.class))); // state의 사용자는 기본으로 살아 있다
     }
 
     @AfterEach
@@ -308,7 +310,7 @@ class SlackOAuthServiceIntegrationTest {
     void callbackAfterWithdrawalRevokesWithoutSaving() throws Exception {
         UUID gone = UUID.randomUUID();
         givenState("s1", gone);
-        given(userRepository.existsById(gone)).willReturn(false);
+        given(userRepository.findByIdForUpdate(gone)).willReturn(Optional.empty());
         expectExchange(installed("T1", ""));
         expectRevoke("xoxb-new");
 
@@ -316,6 +318,23 @@ class SlackOAuthServiceIntegrationTest {
 
         assertThat(installationRepository.count()).isZero();
         assertThat(linkRepository.count()).isZero();
+    }
+
+    @Test
+    @DisplayName("state를 만든 사용자가 그새 탈퇴 + 그 팀 설치 있음 → 링크 없이 그 팀 토큰만 갱신, revoke 없음, slack_state_expired")
+    void callbackAfterWithdrawalUpdatesExistingInstallation() throws Exception {
+        UUID gone = UUID.randomUUID();
+        SlackInstallation t1 = linkedTo("T1", UUID.randomUUID());
+        linkRepository.deleteAll(); // 그 팀 설치만 남긴다(다른 사용자가 해제했어도 설치는 남을 수 있다)
+        givenState("s1", gone);
+        given(userRepository.findByIdForUpdate(gone)).willReturn(Optional.empty());
+        expectExchange(installed("T1", ""));
+
+        callback("s1", NONCE).andExpect(header().string("Location", FRONT + "error=slack_state_expired"));
+
+        assertThat(linkRepository.count()).isZero();
+        assertThat(aesEncryptor.decrypt(installationRepository.findById(t1.getId()).orElseThrow().getBotToken()))
+            .isEqualTo("xoxb-new");
     }
 
     @Test

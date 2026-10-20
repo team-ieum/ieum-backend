@@ -9,6 +9,7 @@ import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.common.util.AesEncryptor;
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.EntityNotFoundException;
 import jakarta.persistence.LockModeType;
 import java.time.LocalDateTime;
 import java.util.Set;
@@ -70,11 +71,16 @@ public class SlackTokenService {
         SlackInstallation installation = slackUserLinkRepository.findByUserId(userId)
             .map(SlackUserLink::getInstallation)
             .orElseThrow(() -> new CustomException(ErrorCode.SLACK_NOT_CONNECTED));
-        if (!installation.needsRefresh(LocalDateTime.now())) {
-            return aesEncryptor.decrypt(installation.getBotToken());
+        try {
+            if (!installation.needsRefresh(LocalDateTime.now())) { // 첫 호출이 지연 프록시를 초기화한다
+                return aesEncryptor.decrypt(installation.getBotToken());
+            }
+            // 락과 최신 상태를 함께 얻는다 — 같은 설치를 공유하는 다른 요청이 먼저 갱신했으면 그 토큰을 쓴다(refresh 1회용)
+            entityManager.refresh(installation, LockModeType.PESSIMISTIC_WRITE);
+        } catch (EntityNotFoundException e) {
+            // 링크 조회 뒤 동시 해제로 설치 행이 지워졌다
+            throw new CustomException(ErrorCode.SLACK_NOT_CONNECTED);
         }
-        // 락과 최신 상태를 함께 얻는다 — 같은 설치를 공유하는 다른 요청이 먼저 갱신했으면 그 토큰을 쓴다(refresh 1회용)
-        entityManager.refresh(installation, LockModeType.PESSIMISTIC_WRITE);
         if (!installation.needsRefresh(LocalDateTime.now())) {
             return aesEncryptor.decrypt(installation.getBotToken());
         }

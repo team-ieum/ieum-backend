@@ -33,7 +33,9 @@ public class UserService {
 
     @Transactional
     public void deleteMyAccount(UUID userId) {
-        User user = findUserById(userId);
+        // users 행 락을 해제보다 먼저 — 설치 콜백(SlackOAuthService.save)과 같은 락 순서(users → slack_installations)로 교착·고아 설치를 막는다
+        User user = userRepository.findByIdForUpdate(userId)
+            .orElseThrow(() -> new CustomException(ErrorCode.NOT_FOUND));
         // Slack 링크가 남으면 "남은 링크 0"에 못 닿아 봇 토큰이 영구 잔존한다(spec §3). revoke는 이 트랜잭션 커밋 뒤에 나간다
         slackDisconnectService.disconnect(userId);
         userRepository.delete(user);

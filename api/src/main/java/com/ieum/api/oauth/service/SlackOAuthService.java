@@ -169,10 +169,12 @@ public class SlackOAuthService {
     private enum Outcome { CONNECTED, OTHER_TEAM_KEPT, OTHER_TEAM_UNUSED, USER_GONE_KEPT, USER_GONE_UNUSED }
 
     private Outcome save(UUID userId, String teamId, JsonNode body, String accessToken) {
-        // state를 만든 사용자가 그새 탈퇴했다 — 주인 없는 링크·설치를 만들지 않는다. 그 팀 설치가 있으면 토큰이 공유 봇 토큰일 수 있어 revoke하지 않는다
-        if (!userRepository.existsById(userId)) {
-            return slackInstallationRepository.findByTeamIdForUpdate(teamId).isPresent()
-                ? Outcome.USER_GONE_KEPT : Outcome.USER_GONE_UNUSED;
+        // state를 만든 사용자가 그새 탈퇴했다 — 주인 없는 링크·설치를 만들지 않는다. users 행 락은 탈퇴와 같은 순서(users → slack_installations).
+        // 그 팀 설치가 있으면 받은 토큰을 반영한다(2-6과 같다 — 재설치로 옛 토큰이 무효일 수 있고, 공유 봇 토큰이라 revoke하지 않는다)
+        if (userRepository.findByIdForUpdate(userId).isEmpty()) {
+            Optional<SlackInstallation> locked = slackInstallationRepository.findByTeamIdForUpdate(teamId);
+            locked.ifPresent(installation -> apply(installation, body, accessToken));
+            return locked.isPresent() ? Outcome.USER_GONE_KEPT : Outcome.USER_GONE_UNUSED;
         }
         Optional<SlackUserLink> link = slackUserLinkRepository.findByUserId(userId);
         Optional<SlackInstallation> locked = slackInstallationRepository.findByTeamIdForUpdate(teamId);
@@ -224,6 +226,7 @@ public class SlackOAuthService {
             return HexFormat.of().formatHex(
                 MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException e) {
+            // SHA-256은 모든 JDK 구현체가 필수 제공 — 발생하지 않는다
             throw new IllegalStateException("SHA-256 없음", e);
         }
     }

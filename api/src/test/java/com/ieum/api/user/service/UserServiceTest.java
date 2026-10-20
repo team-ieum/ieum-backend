@@ -33,11 +33,12 @@ class UserServiceTest {
     void deleteMyAccountDisconnectsSlackFirst() {
         UUID userId = UUID.randomUUID();
         User user = mock(User.class);
-        given(userRepository.findById(userId)).willReturn(Optional.of(user));
+        given(userRepository.findByIdForUpdate(userId)).willReturn(Optional.of(user));
 
         userService.deleteMyAccount(userId);
 
         InOrder order = inOrder(slackDisconnectService, userRepository);
+        order.verify(userRepository).findByIdForUpdate(userId); // users 행 락을 먼저 — 설치 콜백과 락 순서(users → slack_installations)를 맞춘다
         order.verify(slackDisconnectService).disconnect(userId);
         order.verify(userRepository).delete(user);
     }
@@ -46,7 +47,7 @@ class UserServiceTest {
     @DisplayName("없는 사용자면 NOT_FOUND이고 Slack 해제도 부르지 않는다")
     void deleteUnknownUser() {
         UUID userId = UUID.randomUUID();
-        given(userRepository.findById(userId)).willReturn(Optional.empty());
+        given(userRepository.findByIdForUpdate(userId)).willReturn(Optional.empty());
 
         assertThatThrownBy(() -> userService.deleteMyAccount(userId))
             .isInstanceOf(CustomException.class)

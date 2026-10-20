@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -25,6 +26,7 @@ import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.common.util.AesEncryptor;
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.EntityNotFoundException;
 import jakarta.persistence.LockModeType;
 import java.net.SocketTimeoutException;
 import java.time.LocalDateTime;
@@ -165,6 +167,15 @@ class SlackTokenServiceTest {
 
         assertThat(service.getValidBotToken(userId)).isEqualTo("xoxe.xoxb-other");
         verify(installationRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("락 재조회 직전 설치가 지워졌으면(동시 해제) EntityNotFoundException이 아니라 SLACK_NOT_CONNECTED")
+    void installationDeletedBeforeLock() {
+        SlackInstallation installation = linked(LocalDateTime.now().plusMinutes(1), "xoxe-1-old");
+        doThrow(new EntityNotFoundException()).when(entityManager).refresh(installation, LockModeType.PESSIMISTIC_WRITE);
+
+        assertErrorCode(() -> service.getValidBotToken(userId), ErrorCode.SLACK_NOT_CONNECTED);
     }
 
     @ParameterizedTest
