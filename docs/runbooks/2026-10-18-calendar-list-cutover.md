@@ -103,12 +103,13 @@ const hex = id => (typeof id === "string" ? id : id.toHexString());
 db.workflow_definitions.find({"nodes.event": "google_calendar.list"}, {_id: 1}).toArray()
   .forEach(d => print("DEL\t" + hex(d._id)));
 TARGETS_JS
-mongojs "$MDB_WF" "$B/q_targets.js" > "$B/targets_mongo.txt"
+[ -n "$MDB_WF" ] && [ -s "$B/mongo_workflow_definitions.jsonl" ] &&   # 빈 MDB_WF·DB 이름 오타면 0건이 "대상 없음"처럼 보인다 — §4 백업이 비어 있지 않아야 이름이 맞다
+mongojs "$MDB_WF" "$B/q_targets.js" > "$B/targets_mongo.txt" || echo "조회 실패 — 멈춤"
 grep '^DEL' "$B/targets_mongo.txt" | cut -f2 > "$B/match_defs.txt"
 grep -vE '^[0-9a-f]{24}$' "$B/match_defs.txt" && echo "형식 이상 — 멈춤"   # 아무것도 안 나와야 한다
 wc -l < "$B/match_defs.txt"
 ```
-`match_defs.txt`가 비었으면 삭제할 워크플로우가 없다 — `: > "$B/delete_defs.txt"`로 빈 파일을 만들고 §5-2·§6을 건너뛰어 §5-3 → §7로 간다.
+위 체인이 성공했고(`조회 실패 — 멈춤`이 안 나왔고) `match_defs.txt`가 비었으면 삭제할 워크플로우가 없다 — `: > "$B/delete_defs.txt"`로 빈 파일을 만들고 §5-2·§6을 건너뛰어 §5-3 → §7로 간다.
 
 ### 5-2 PG: 대상 워크플로우·버전 문서·행 수
 
@@ -152,7 +153,8 @@ cat "$B/target_wf.sql" "$B/target_counts.sql" | psqlq -At | tee "$B/target_count
   echo 'print("AI\t" + db.workflow_definitions.countDocuments({"nodes.config.tools.name": "builtin:google_calendar_list", _id: {$nin: ids}}));'
   echo 'print("AI_STR\t" + db.workflow_definitions.countDocuments({"nodes.config.tools": "builtin:google_calendar_list", _id: {$nin: ids}}));'
 } > "$B/q_ai.js"
-mongojs "$MDB_WF" "$B/q_ai.js" | tee "$B/targets_ai.txt"
+[ -n "$MDB_WF" ] && [ -s "$B/mongo_workflow_definitions.jsonl" ] &&
+mongojs "$MDB_WF" "$B/q_ai.js" | tee "$B/targets_ai.txt"   # AI·AI_STR 두 줄이 안 나오면 멈춘다
 ```
 `AI_STR`이 0이 아니면 멈추고 사용자에게 묻는다 — `config.tools`가 `["builtin:google_calendar_list"]` 같은 문자열 배열인 문서다(BE `ToolCallPreparer`·agent `get_tools_for_request`가 정식으로 받는 모양). §7은 `{name: …}` 객체 모양만 바꾸므로 이 문서는 교체에서 빠지고, 배포 뒤 agent가 모르는 이름으로 조용히 버린다.
 ⏸ **사용자 확인**: `target_counts.txt`(테이블별 지울 행 수, 활성 워크플로우 수), `delete_defs.txt` 줄 수, `AI`·`AI_STR` 수를 사용자에게 보이고 진행 여부를 받는다.
@@ -207,7 +209,9 @@ const r = db.workflow_definitions.updateMany(
 print("matched\t" + r.matchedCount + "\tmodified\t" + r.modifiedCount);
 print("remaining\t" + db.workflow_definitions.countDocuments({$or: [{"nodes.config.tools.name": OLD}, {"nodes.config.tools": OLD}]}));   // 문자열 배열 모양도 센다
 RENAME_JS
-[ "$(hostname -s)" = kwungserver ] && mongojs "$MDB_WF" "$B/rename.js" | tee "$B/rename.txt"
+[ "$(hostname -s)" = kwungserver ] &&                                   # 노트북이면 멈춘다
+[ -n "$MDB_WF" ] && [ -s "$B/mongo_workflow_definitions.jsonl" ] &&      # 빈 MDB_WF면 matched 0·remaining 0이 정상처럼 보인다
+mongojs "$MDB_WF" "$B/rename.js" | tee "$B/rename.txt"
 ```
 `matched` = `modified` = §5-3 `AI` 수, `remaining 0`. 같은 노드의 다른 도구·`config`는 그대로다(`$[t]`는 이름이 일치하는 원소만).
 
@@ -222,6 +226,7 @@ RENAME_JS
 # PG — 백업 이후 바뀐 건 §6 삭제뿐이므로 9개를 비우고 통째 복원한다. 루프 종료 코드는 믿지 않고 개수 diff를 관문으로 쓴다
 # Mongo — 삭제와 교체를 함께 되돌린다
 [ "$(hostname -s)" = kwungserver ] &&                                   # 노트북이면 멈춘다
+[ -z "$(docker ps -q -f name=^ieum-backend$ -f name=^ieum-agent$)" ] &&   # BE·agent가 떠 있으면 멈춘다(§3 정지 중일 때만). 이름 필터 둘은 OR
 [ -n "$MDB_WF" ] &&
 [ "$(for t in $TABLES_DEL; do grep -q '^COPY public\.' "$B/pg_$t.sql" 2>/dev/null && echo y; done | wc -l)" -eq 9 ] &&   # 리터럴 9 — 빈 $B·빈 TABLES_DEL이면 멈춘다
 [ -s "$B/mongo_workflow_definitions.jsonl" ] && [ -s "$B/counts_before.txt" ] &&
