@@ -91,6 +91,14 @@ github:
     webhook-secret: test-github-webhook-secret
     slug: test-app
 
+slack:
+  oauth:
+    client-id: test-slack-client-id
+    client-secret: test-slack-client-secret
+    redirect-uri: http://localhost/api/v1/slack/oauth2/callback
+    frontend-redirect-uri: http://localhost/settings/integrations
+    bot-scopes: "chat:write,chat:write.public,channels:read,groups:read,im:read,mpim:read,channels:history,groups:history,channels:manage,groups:write,im:write,reactions:read,reactions:write,users:read,users:read.email,files:write,canvases:write,emoji:read"
+
 management:
   health:
     redis:
