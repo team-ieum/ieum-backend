@@ -322,6 +322,9 @@ public class WorkflowCrudService {
         chatMessageRepository.deleteByWorkflowId(workflowId);
         chatSessionRepository.deleteByWorkflowId(workflowId);
         workflowRepository.delete(workflow);
+        // 바로 flush한다 — 이어지는 bulk DELETE(clearAutomatically)가 영속성 컨텍스트를 비우면 flush 전의 이 삭제가 버려진다.
+        // 한 트랜잭션에서 여러 워크플로우를 지우는 회원 탈퇴(deleteAllByUserId)에서 실제로 행이 남았다.
+        workflowRepository.flush();
 
         afterCommit(() -> {
             mongoIds.forEach(id -> {

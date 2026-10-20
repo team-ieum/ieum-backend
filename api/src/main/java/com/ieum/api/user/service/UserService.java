@@ -59,6 +59,8 @@ public class UserService {
             .orElseThrow(() -> new CustomException(ErrorCode.NOT_FOUND));
         // Slack 링크가 남으면 "남은 링크 0"에 못 닿아 봇 토큰이 영구 잔존한다(spec §3). revoke는 이 트랜잭션 커밋 뒤에 나간다
         slackDisconnectService.disconnect(userId);
+        // Slack 링크·설치 삭제를 먼저 반영한다 — 아래 bulk DELETE(clearAutomatically)가 flush 전 삭제를 버리면 설치 행이 남는다
+        userRepository.flush();
 
         workflowCrudService.deleteAllByUserId(userId);
         credentialRepository.deleteByUserId(userId);
