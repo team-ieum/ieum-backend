@@ -8,10 +8,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
 import org.springframework.core.io.FileSystemResource;
 
-class SlackOAuthConfigTest {
+public class SlackOAuthConfigTest {
 
     /** spec D3 — scope를 더하면 기존 설치 전원이 재설치해야 하므로 바뀌면 이 테스트가 먼저 깨져야 한다 */
-    static final String D3 = "chat:write,chat:write.public,channels:read,groups:read,im:read,mpim:read,"
+    public static final String D3 = "chat:write,chat:write.public,channels:read,groups:read,im:read,mpim:read,"
         + "channels:history,groups:history,channels:manage,groups:write,im:write,reactions:read,reactions:write,"
         + "users:read,users:read.email,files:write,canvases:write,emoji:read";
 
