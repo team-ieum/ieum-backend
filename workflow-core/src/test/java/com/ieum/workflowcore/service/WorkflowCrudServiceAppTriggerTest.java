@@ -11,6 +11,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.workflowcore.chat.repository.ChatMessageRepository;
+import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
@@ -57,6 +59,8 @@ class WorkflowCrudServiceAppTriggerTest {
     @Mock private WorkflowDefinitionRepository definitionRepository;
     @Mock private AppTriggerSubscriptionService appTriggerSubscriptionService;
     @Mock private WorkflowWebhookTokenRepository webhookTokenRepository;
+    @Mock private ChatSessionRepository chatSessionRepository;
+    @Mock private ChatMessageRepository chatMessageRepository;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
     @InjectMocks private WorkflowCrudService service;
 
