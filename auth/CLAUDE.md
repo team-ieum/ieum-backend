@@ -22,14 +22,17 @@ OAuth 로그인은 Google만, Notion·GitHub는 연동(커넥터 토큰) 용도�
 - `UserRole` enum — ROLE_USER, ROLE_ADMIN, **ROLE_TESTER** (ADMIN·TESTER는 self-hosted LLM 라우팅 대상)
 - `AuthProvider` enum — LOCAL, GOOGLE, NOTION, GITHUB
 - `ConnectedAccount` — 연동 계정별 OAuth 토큰 (AES-256 암호화)
+- `SlackInstallation` / `SlackUserLink` — Slack 워크스페이스 설치(팀당 1행, 봇 토큰 AES-256) / 사용자↔설치 링크(사용자당 1개, 여럿이 한 설치 공유)
 - `RefreshToken` — Redis Hash 저장 객체
-- `OAuthAuthorizationCode` / `OAuthLinkToken` / `NotionOAuthState` / `GitHubOAuthState` — OAuth 플로우 단기 상태
+- `OAuthAuthorizationCode` / `OAuthLinkToken` / `NotionOAuthState` / `GitHubOAuthState` / `SlackOAuthState` — OAuth 플로우 단기 상태
 - `TokenInfo` DTO — accessToken, refreshToken 쌍
 - `AuthService` — 회원가입, 로그인, 토큰 갱신 로직
 - `GoogleOAuthService` / `GoogleTokenService` / `GitHubTokenService` — OAuth 인증·토큰 갱신
+- `SlackTokenService` / `SlackApiClient` — Slack 봇 토큰 조회·갱신(REQUIRES_NEW, 만료 임박이면 설치 행 락 뒤 회전) / Slack Web API 호출·revoke
 - `UserRepository` — JpaRepository (커맨드용)
 - `UserRepositoryCustom` / `UserRepositoryImpl` — QueryDSL 기반 조회용
 - `RefreshTokenRepository` — Redis CrudRepository
+- `SlackInstallationRepository`(`findByTeamIdForUpdate`·`findByIdForUpdate` 행 락) / `SlackUserLinkRepository` / `SlackOAuthStateRepository`
 
 ## 공개 경로 (인증 불필요)
 - `/api/v1/auth/**`, `/api/v1/providers`

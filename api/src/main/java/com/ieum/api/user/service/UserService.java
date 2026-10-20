@@ -2,6 +2,7 @@ package com.ieum.api.user.service;
 
 import com.ieum.api.credential.repository.CredentialRepository;
 import com.ieum.api.mcp.repository.McpServerCatalogRepository;
+import com.ieum.api.oauth.service.SlackDisconnectService;
 import com.ieum.api.prompt.repository.PromptTemplateRepository;
 import com.ieum.api.user.dto.UserResponse;
 import com.ieum.api.webhookcredential.repository.WebhookCredentialRepository;
@@ -23,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class UserService {
 
     private final UserRepository userRepository;
+    private final SlackDisconnectService slackDisconnectService;
     private final WorkflowCrudService workflowCrudService;
     private final CredentialRepository credentialRepository;
     private final WebhookCredentialRepository webhookCredentialRepository;
@@ -47,11 +49,16 @@ public class UserService {
      * 회원 탈퇴 — 사용자 데이터를 한 트랜잭션에서 하드 삭제한다. 중간에 DB 오류가 나면 users 행까지 롤백된다.
      *
      * <p>워크플로우 삭제가 실행 이력·채팅·스케줄(커밋 후)·Mongo 정의(커밋 후)까지 정리한다.
+     * Slack 연결도 해제한다 — 같은 워크스페이스를 쓰는 다른 사용자가 없으면 커밋 뒤 봇 토큰을 폐기한다.
      * 이미 발급된 Access Token은 만료(30분)까지 유효하다 — FE가 탈퇴 직후 토큰을 버린다.
      */
     @Transactional
     public void deleteMyAccount(UUID userId) {
-        User user = findUserById(userId);
+        // users 행 락을 해제보다 먼저 — 설치 콜백(SlackOAuthService.save)과 같은 락 순서(users → slack_installations)로 교착·고아 설치를 막는다
+        User user = userRepository.findByIdForUpdate(userId)
+            .orElseThrow(() -> new CustomException(ErrorCode.NOT_FOUND));
+        // Slack 링크가 남으면 "남은 링크 0"에 못 닿아 봇 토큰이 영구 잔존한다(spec §3). revoke는 이 트랜잭션 커밋 뒤에 나간다
+        slackDisconnectService.disconnect(userId);
 
         workflowCrudService.deleteAllByUserId(userId);
         credentialRepository.deleteByUserId(userId);

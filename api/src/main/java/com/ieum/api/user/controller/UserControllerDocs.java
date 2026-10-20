@@ -27,10 +27,11 @@ public interface UserControllerDocs {
 
         삭제 대상: 워크플로우 전체(버전·실행 이력·채팅·스케줄·노드 테스트 샘플·웹훅 수신 주소), AI API Key,
         웹훅 자격증명, MCP 서버, 프롬프트 템플릿, OAuth 연동(Google·Notion·GitHub 토큰), Refresh Token.
+        Slack 연결도 같이 해제한다 — 같은 워크스페이스를 쓰는 다른 사용자가 없으면 탈퇴가 커밋된 뒤 봇 토큰을 폐기한다.
         정리 중 오류가 나면 전부 롤백되어 계정도 그대로 남는다.
 
         이미 발급된 Access Token은 만료(30분)까지 서명상 유효하다. **FE는 성공 즉시 토큰을 버리고 로그인 화면으로 보낸다.**
-        OAuth 제공자 쪽 권한(Google 계정의 앱 연결 등)은 해제하지 않는다.
+        Google·Notion·GitHub 제공자 쪽 권한(Google 계정의 앱 연결 등)은 해제하지 않는다.
         """)
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<Void>> deleteMyAccount(CustomUserDetails userDetails);

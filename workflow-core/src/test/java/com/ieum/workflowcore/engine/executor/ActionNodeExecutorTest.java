@@ -81,7 +81,8 @@ class ActionNodeExecutorTest {
             baseUrl,
             new ToolCallPreparer(
                 googleTokenProvider,
-                new ToolAuthResolver(mock(CredentialProvider.class), notionTokenProvider, gitHubTokenProvider),
+                new ToolAuthResolver(mock(CredentialProvider.class), notionTokenProvider, gitHubTokenProvider,
+                    mock(SlackTokenProvider.class)),
                 webhookCredentialProvider),
             uid -> "ROLE_USER",
             idempotencyStore,

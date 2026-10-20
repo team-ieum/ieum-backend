@@ -79,6 +79,16 @@ class WorkflowServiceTypeTest {
     }
 
     @Test
+    void slack_bot_ACTION과_AI_봇도구는_SLACK이다() {
+        assertThat(WorkflowServiceType.extract(List.of(
+            node(NodeType.ACTION, "slack_bot.send_channel_message", Map.of()))))
+            .containsExactly(SLACK);
+        assertThat(WorkflowServiceType.extract(List.of(
+            node(NodeType.AI, "ai.agent", Map.of("tools", List.of(Map.of("name", "builtin:slack_send_channel_message")))))))
+            .containsExactly(SLACK);
+    }
+
+    @Test
     void event가_없거나_점이_없으면_아이콘_없음() {
         assertThat(WorkflowServiceType.extract(List.of(
             node(null, null, Map.of("tools", List.of("slack"))),

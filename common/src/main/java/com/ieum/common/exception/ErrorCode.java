@@ -110,6 +110,8 @@ public enum ErrorCode {
     GOOGLE_API_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "Google 서비스에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도해주세요."),
     NOTION_API_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "Notion 서비스에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도해주세요."),
     GITHUB_API_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "GitHub 서비스에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도해주세요."),
+    SLACK_NOT_CONNECTED(HttpStatus.BAD_REQUEST, "Slack이 연결되어 있지 않아요. 연동 화면에서 Slack을 연결해 주세요"),
+    SLACK_API_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "Slack이 잠시 응답하지 않아요. 잠시 뒤 다시 시도해 주세요"),
 
     // 채팅
     CHAT_SESSION_NOT_FOUND(HttpStatus.NOT_FOUND, "채팅 세션을 찾을 수 없습니다."),
