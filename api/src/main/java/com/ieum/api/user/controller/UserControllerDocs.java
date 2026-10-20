@@ -34,7 +34,7 @@ public interface UserControllerDocs {
         - `CURRENT_PASSWORD_MISMATCH`(400) — 현재 비밀번호 불일치
         - `PASSWORD_SAME_AS_CURRENT`(400) — 새 비밀번호가 현재와 같음
         - `PASSWORD_CHANGE_NOT_SUPPORTED`(400) — Google 등 소셜 가입 계정
-        - `INVALID_INPUT`(400) — 새 비밀번호 규칙 위반
+        - `INVALID_INPUT`(400) — 새 비밀번호 규칙 위반 (8~72자, 영문 대소문자·숫자·특수문자 각 1자 이상, 한글 등 사용 불가)
         """)
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<Void>> changePassword(CustomUserDetails userDetails, ChangePasswordRequest request);

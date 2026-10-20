@@ -153,6 +153,17 @@ class UserControllerTest {
     }
 
     @Test
+    void changePassword_currentPasswordOver72_returns400() throws Exception {
+        mockMvc.perform(patch("/api/v1/users/me/password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(passwordBody("Aa1!" + "x".repeat(69), "NewPassword1!")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.INVALID_INPUT.name()));
+
+        then(authService).should(never()).changePassword(any(), anyString(), anyString());
+    }
+
+    @Test
     void changePassword_newPasswordOver72_returns400() throws Exception {
         // BCrypt는 72바이트 초과 입력을 encode하지 못해 500이 났다 — 검증 단계에서 막는다.
         mockMvc.perform(patch("/api/v1/users/me/password")
