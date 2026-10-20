@@ -22,6 +22,7 @@ public enum ErrorCode {
     SOCIAL_LOGIN_EMAIL_CONFLICT(HttpStatus.CONFLICT, "동일한 이메일로 가입된 계정이 있습니다. 이메일/비밀번호로 로그인해주세요."),
     TOKEN_EXPIRED(HttpStatus.UNAUTHORIZED, "만료된 토큰입니다."),
     TOKEN_INVALID(HttpStatus.UNAUTHORIZED, "유효하지 않은 토큰입니다."),
+    LOGIN_LOCKED(HttpStatus.TOO_MANY_REQUESTS, "로그인 시도 횟수를 초과했습니다. 24시간 후 다시 시도하거나 비밀번호를 재설정해주세요."),
 
     // 이메일 인증
     EMAIL_NOT_VERIFIED(HttpStatus.BAD_REQUEST, "이메일 인증이 완료되지 않았습니다."),
