@@ -43,6 +43,7 @@ class ExecutionJobWorkerTest {
     private WorkflowExecutionService workflowExecutionService;
     private SyncExecutionRuntime syncExecutionRuntime;
     private ExecutionJobWorker worker;
+    private WorkflowExecutionRunner runner;
 
     private final UUID executionId = UUID.randomUUID();
     private final WorkflowVersion version = Mockito.mock(WorkflowVersion.class);
@@ -63,7 +64,7 @@ class ExecutionJobWorkerTest {
 
     private ExecutionJobWorker newWorker(Executor executor) {
         // 러너는 실물을 쓴다 — 큐 → 워커 → SyncExecutionRuntime.execute 경로를 통째로 검증하기 위함.
-        WorkflowExecutionRunner runner = new WorkflowExecutionRunner(
+        runner = new WorkflowExecutionRunner(
             syncExecutionRuntime, workflowExecutionService, Mockito.mock(ExecutionJobQueue.class));
         return new ExecutionJobWorker(redisTemplate, workflowExecutionRepository,
             workflowExecutionService, runner, executor);
@@ -295,11 +296,52 @@ class ExecutionJobWorkerTest {
     @Test
     void anotherInstanceOwnsExecution_doesNotExecuteOrAcknowledge() throws Exception {
         var locks = Mockito.mock(com.ieum.api.deployment.ExecutionAdvisoryLocks.class);
-        org.springframework.test.util.ReflectionTestUtils.setField(worker, "advisoryLocks", locks);
+        org.springframework.test.util.ReflectionTestUtils.setField(runner, "advisoryLocks", locks);
+        var pending = execution(ExecutionStatus.PENDING);
+        when(workflowExecutionRepository.findWithVersionById(executionId))
+            .thenReturn(Optional.of(pending));
         when(locks.tryAcquire(executionId)).thenReturn(null);
+        worker.onMessage(jobRecord(executionId.toString()));
+        verify(syncExecutionRuntime, never()).execute(any(), any(), any(), any());
+        verify(streamOperations, never()).acknowledge(any(), any(), any(RecordId.class));
+        assertThat(worker.activeCount()).isZero();
+    }
+
+    @Test
+    void databaseLookupFailureKeepsPendingInsteadOfFailingExecution() {
+        when(workflowExecutionRepository.findWithVersionById(executionId))
+            .thenThrow(new IllegalStateException("database temporarily down"));
+        worker.onMessage(jobRecord(executionId.toString()));
+        verify(workflowExecutionService, never()).markAsFailed(any(), any());
+        verify(streamOperations, never()).acknowledge(any(), any(), any(RecordId.class));
+        assertThat(worker.activeCount()).isZero();
+    }
+
+    @Test
+    void reserveInFlightBeforeExecutorSubmission() {
+        var tasks = new java.util.ArrayList<Runnable>();
+        worker = newWorker(tasks::add);
+        var record = jobRecord(executionId.toString());
+        worker.onMessage(record);
+        worker.onMessage(record);
+        assertThat(tasks).hasSize(1);
+        assertThat(worker.activeCount()).isEqualTo(1);
+        assertThat(worker.isInFlight(RECORD_ID)).isTrue();
+        tasks.getFirst().run();
+        assertThat(worker.activeCount()).isZero();
+        assertThat(worker.isInFlight(RECORD_ID)).isFalse();
+    }
+
+    @Test
+    void latePollingBatchAfterDrainRemainsPendingUntilResume() {
+        worker.pauseConsuming();
         worker.onMessage(jobRecord(executionId.toString()));
         verify(workflowExecutionRepository, never()).findWithVersionById(any());
         verify(streamOperations, never()).acknowledge(any(), any(), any(RecordId.class));
+        assertThat(worker.activeCount()).isZero();
+        worker.resumeConsuming();
+        worker.onMessage(jobRecord(executionId.toString()));
+        verify(workflowExecutionRepository).findWithVersionById(executionId);
     }
 
 }

@@ -22,7 +22,8 @@ class DistributedInfrastructureIntegrationTest {
     @Test
     @EnabledIfEnvironmentVariable(named = "IEUM_TEST_REDIS_HOST", matches = ".+")
     void realRedisDeliversEventsAndCompletionAcrossInstances() throws Exception {
-        var factory = new LettuceConnectionFactory(System.getenv("IEUM_TEST_REDIS_HOST"), 6379);
+        int port = Integer.parseInt(System.getenv().getOrDefault("IEUM_TEST_REDIS_PORT", "6379"));
+        var factory = new LettuceConnectionFactory(System.getenv("IEUM_TEST_REDIS_HOST"), port);
         factory.afterPropertiesSet(); factory.start();
         var redis = new StringRedisTemplate(factory);
         var green = new ExecutionEventPublisher();

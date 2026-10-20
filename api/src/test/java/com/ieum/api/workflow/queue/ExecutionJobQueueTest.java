@@ -119,4 +119,26 @@ class ExecutionJobQueueTest {
 
         assertThat(queue.enqueue(UUID.randomUUID())).isTrue();
     }
+
+    @Test
+    void distributedProducerWorksWhenLocalConsumerIsDraining() {
+        org.springframework.test.util.ReflectionTestUtils.setField(queue, "distributed", true);
+        when(container.isRunning()).thenReturn(false);
+        queue.markConsumerUnhealthy(new IllegalStateException("draining"));
+        UUID id = UUID.randomUUID();
+        assertThat(queue.enqueue(id)).isTrue();
+        verify(redisTemplate).execute(any(org.springframework.data.redis.core.script.RedisScript.class),
+            org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.eq(id.toString()),
+            org.mockito.ArgumentMatchers.eq("120000"));
+        verify(streamOperations, never()).add(any(MapRecord.class));
+    }
+
+    @Test
+    void ambiguousDistributedPublishNeverEnablesDirectFallback() {
+        org.springframework.test.util.ReflectionTestUtils.setField(queue, "distributed", true);
+        when(redisTemplate.execute(any(org.springframework.data.redis.core.script.RedisScript.class),
+                org.mockito.ArgumentMatchers.anyList(), any(String.class), any(String.class)))
+            .thenThrow(new org.springframework.data.redis.RedisSystemException("timeout after XADD", new RuntimeException()));
+        assertThat(queue.enqueue(UUID.randomUUID())).isTrue();
+    }
 }

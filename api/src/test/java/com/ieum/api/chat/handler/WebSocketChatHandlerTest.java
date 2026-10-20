@@ -25,6 +25,12 @@ import com.ieum.api.chat.service.ChatService.StreamSetupResult;
 import com.ieum.api.chat.service.IntegrationContextService.IntegrationContext;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.api.deployment.DeploymentConnections;
+import com.ieum.api.deployment.DeploymentWorkTracker;
+import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
+import reactor.core.publisher.Sinks;
+import java.time.Duration;
 import java.security.Principal;
 import java.util.List;
 import java.util.UUID;
@@ -32,6 +38,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -101,6 +109,36 @@ class WebSocketChatHandlerTest {
     }
 
     // ─────────────────── handleChat (전체 흐름) ─────────────────────────────
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void deploymentTrackingCoversStreamLifetimeAndPreparationFailure(boolean error) throws Exception {
+        var connections = new DeploymentConnections(new ExecutionEventPublisher());
+        var tracker = new DeploymentWorkTracker(connections);
+        ReflectionTestUtils.setField(handler, "deploymentWorkTracker", tracker);
+        mockPrepareStream();
+        var source = Sinks.many().unicast().<ChatStreamEvent>onBackpressureBuffer();
+        given(agentClient.chatStream(any())).willReturn(source.asFlux());
+        handler.handleChat(workflowId, request, principal);
+        assertThat(tracker.activeCount()).isEqualTo(1);
+        connections.retire();
+        assertThat(tracker.activeCount()).isEqualTo(1);
+        // A second frame on a closing transport cannot create fresh background work.
+        handler.handleChat(workflowId, request, principal);
+        verify(chatService, times(1)).prepareStream(any(), any(), any(), any());
+        if (error) source.tryEmitError(new IllegalStateException("Agent offline"));
+        else source.tryEmitComplete();
+        org.awaitility.Awaitility.await().atMost(Duration.ofSeconds(2))
+            .untilAsserted(() -> assertThat(tracker.activeCount()).isZero());
+        assertThat(tracker.activeCount()).isZero();
+        connections.resume();
+        handler.handleChat(workflowId, request, null);
+        assertThat(tracker.activeCount()).isZero();
+        given(chatService.prepareStream(any(), any(), any(), any()))
+            .willThrow(new IllegalStateException("Preparation failed"));
+        handler.handleChat(workflowId, request, principal);
+        assertThat(tracker.activeCount()).isZero();
+    }
 
     @Test
     @DisplayName("stage → done 흐름: 진행 프레임 전달 후 done 시 finalizeStream으로 저장하고 최종 프레임 전달")

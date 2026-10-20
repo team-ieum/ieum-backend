@@ -62,6 +62,11 @@ aes:
   secret-key: test-aes-key-32bytes-padding!!!!
 
 ieum:
+  deployment:
+    mode-guard:
+      # These standalone context fixtures deliberately have no Redis. The guard's
+      # production fail-closed behavior is covered by DeploymentModeGuardTest.
+      enabled: false
   agent:
     url: http://localhost:8000
   trigger:

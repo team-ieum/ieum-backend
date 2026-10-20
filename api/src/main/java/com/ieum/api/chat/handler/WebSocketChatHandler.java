@@ -9,6 +9,8 @@ import com.ieum.api.chat.service.AgentClient.AgentChatCallParams;
 import com.ieum.api.chat.service.ChatService;
 import com.ieum.api.chat.service.ChatService.StreamSetupResult;
 import com.ieum.common.exception.CustomException;
+import com.ieum.api.deployment.DeploymentWorkTracker;
+import org.springframework.beans.factory.annotation.Autowired;
 import java.security.Principal;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -54,6 +56,8 @@ public class WebSocketChatHandler {
     private final ChatService chatService;
     private final AgentClient agentClient;
     private final SimpMessageSendingOperations messagingTemplate;
+    @Autowired(required = false)
+    private DeploymentWorkTracker deploymentWorkTracker;
 
     /**
      * 채팅 메시지를 수신하고 AI 응답을 스트리밍으로 전송한다.
@@ -68,84 +72,95 @@ public class WebSocketChatHandler {
         @Payload ChatRequest request,
         Principal principal
     ) {
-        if (principal == null) {
-            log.warn("[WS] 인증 정보(principal)가 없어 메시지를 처리할 수 없습니다 — workflowId: {}", workflowId);
-            return;
-        }
-        String userName = principal.getName();  // userId.toString()
-        UUID userId = UUID.fromString(userName);
-        // WebSocketAuthInterceptor가 setUser(Authentication)로 role을 authorities에 담아둔다.
-        String userRole = (principal instanceof Authentication auth && !auth.getAuthorities().isEmpty())
-            ? auth.getAuthorities().iterator().next().getAuthority()
-            : null;
-
-        log.info("[WS] 채팅 메시지 수신 — workflowId: {}, userId: {}", workflowId, userId);
-
-        // 1. 트랜잭션 처리 (세션/메시지 저장, 에이전트 설정 로드)
-        StreamSetupResult setup;
+        DeploymentWorkTracker.Lease deploymentLease = deploymentWorkTracker == null
+            ? null : deploymentWorkTracker.tryBegin();
+        if (deploymentWorkTracker != null && deploymentLease == null) return;
+        boolean handedOff = false;
         try {
-            setup = chatService.prepareStream(workflowId, userId, userRole, request);
-        } catch (CustomException e) {
-            log.warn("[WS] prepareStream 실패 — userId: {}, error: {}", userId, e.getMessage());
-            sendToUser(userName, ChatStreamResponse.error(e.getMessage()));
-            return;
-        } catch (Exception e) {
-            log.error("[WS] prepareStream 예외 — userId: {}", userId, e);
-            sendToUser(userName, ChatStreamResponse.error("서버 오류가 발생했습니다."));
-            return;
+            if (principal == null) {
+                log.warn("[WS] 인증 정보(principal)가 없어 메시지를 처리할 수 없습니다 — workflowId: {}", workflowId);
+                return;
+            }
+            String userName = principal.getName();  // userId.toString()
+            UUID userId = UUID.fromString(userName);
+            // WebSocketAuthInterceptor가 setUser(Authentication)로 role을 authorities에 담아둔다.
+            String userRole = (principal instanceof Authentication auth && !auth.getAuthorities().isEmpty())
+                ? auth.getAuthorities().iterator().next().getAuthority()
+                : null;
+
+            log.info("[WS] 채팅 메시지 수신 — workflowId: {}, userId: {}", workflowId, userId);
+
+            // 1. 트랜잭션 처리 (세션/메시지 저장, 에이전트 설정 로드)
+            StreamSetupResult setup;
+            try {
+                setup = chatService.prepareStream(workflowId, userId, userRole, request);
+            } catch (CustomException e) {
+                log.warn("[WS] prepareStream 실패 — userId: {}, error: {}", userId, e.getMessage());
+                sendToUser(userName, ChatStreamResponse.error(e.getMessage()));
+                return;
+            } catch (Exception e) {
+                log.error("[WS] prepareStream 예외 — userId: {}", userId, e);
+                sendToUser(userName, ChatStreamResponse.error("서버 오류가 발생했습니다."));
+                return;
+            }
+
+            // 2. 베타 platform 키 쿼터 예약 — subscribe 바로 직전(사전작업은 이미 끝났으므로 그 앞 실패는 환불 대상이 아니다).
+            //    쿼터 초과(CustomException)는 예외가 그대로 전파되며 BetaQuotaService가 스스로 카운터를 원복하므로
+            //    별도 환불이 불필요하다. Redis 다운 등 infra RuntimeException도 마찬가지로 INCR 자체가 실패했을
+            //    것이므로(키를 반환받지 못했으므로) 환불할 예약이 없다 — 두 경우 모두 여기서 잡아 error 프레임을
+            //    보내지 않으면 클라이언트가 @MessageMapping 밖으로 탈출한 예외 때문에 응답을 영영 못 받고 멈춘다.
+            String betaReservationKey;
+            try {
+                betaReservationKey = chatService.reserveBetaQuota(setup.config(), userId);
+            } catch (CustomException e) {
+                log.warn("[WS] 베타 쿼터 예약 실패 — userId: {}, error: {}", userId, e.getMessage());
+                sendToUser(userName, ChatStreamResponse.error(e.getMessage()));
+                return;
+            } catch (Exception e) {
+                log.error("[WS] 베타 쿼터 예약 예외 — userId: {}", userId, e);
+                sendToUser(userName, ChatStreamResponse.error("서버 오류가 발생했습니다."));
+                return;
+            }
+
+            // 3. 스트리밍 구독 (비동기) — agent SSE 이벤트를 STAGE/DONE/ERROR로 분기 전달.
+            //    withBetaQuotaRefund가 doFinally로 error/cancel(클라 disconnect)/비성공-complete를
+            //    전부 잡아 정확히 1회 환불한다(§#1~3 강건화).
+            Flux<ChatStreamEvent> chatStream = agentClient.chatStream(AgentChatCallParams.builder()
+                .workflowId(workflowId)
+                .prompt(setup.prompt())
+                .currentNodes(setup.currentNodes())
+                .currentEdges(setup.currentEdges())
+                .availableIntegrations(setup.integrationContext().available())
+                .unavailableIntegrations(setup.integrationContext().unavailable())
+                .llmProvider(setup.config().llmProvider())
+                .apiKey(setup.config().decryptedApiKey())
+                .googleAccessToken(setup.googleToken())
+                .githubToken(setup.githubToken())
+                .notionToken(setup.notionToken())
+                .availableMcpServers(setup.availableMcpServers())
+                .availableWebhooks(setup.availableWebhooks())
+                .userId(userId)
+                .userRole(userRole)
+                .useBetaPlatformKey(setup.config().useBetaPlatformKey())
+                .build());
+
+            withBetaQuotaRefund(chatStream, betaReservationKey)
+                // finalizeStream은 동기 blocking(JPA) 작업이므로 Netty EventLoop 스레드에서 실행되면
+                // Thread Starvation을 유발한다. boundedElastic로 전환해 별도 스레드 풀에서 처리한다.
+                .publishOn(Schedulers.boundedElastic())
+                .doFinally(signal -> { if (deploymentLease != null) deploymentLease.close(); })
+                .subscribe(
+                    event -> handleStreamEvent(userName, workflowId, request, setup, event),
+                    error -> {
+                        log.error("[WS] 스트리밍 오류 — sessionId: {}", setup.sessionId(), error);
+                        sendToUser(userName, ChatStreamResponse.error("AI 응답 중 오류가 발생했습니다."));
+                    }
+                );
+            handedOff = true;
+        } finally {
+            // Preparation failures return before subscribe; asynchronous completion owns the lease afterwards.
+            if (!handedOff && deploymentLease != null) deploymentLease.close();
         }
-
-        // 2. 베타 platform 키 쿼터 예약 — subscribe 바로 직전(사전작업은 이미 끝났으므로 그 앞 실패는 환불 대상이 아니다).
-        //    쿼터 초과(CustomException)는 예외가 그대로 전파되며 BetaQuotaService가 스스로 카운터를 원복하므로
-        //    별도 환불이 불필요하다. Redis 다운 등 infra RuntimeException도 마찬가지로 INCR 자체가 실패했을
-        //    것이므로(키를 반환받지 못했으므로) 환불할 예약이 없다 — 두 경우 모두 여기서 잡아 error 프레임을
-        //    보내지 않으면 클라이언트가 @MessageMapping 밖으로 탈출한 예외 때문에 응답을 영영 못 받고 멈춘다.
-        String betaReservationKey;
-        try {
-            betaReservationKey = chatService.reserveBetaQuota(setup.config(), userId);
-        } catch (CustomException e) {
-            log.warn("[WS] 베타 쿼터 예약 실패 — userId: {}, error: {}", userId, e.getMessage());
-            sendToUser(userName, ChatStreamResponse.error(e.getMessage()));
-            return;
-        } catch (Exception e) {
-            log.error("[WS] 베타 쿼터 예약 예외 — userId: {}", userId, e);
-            sendToUser(userName, ChatStreamResponse.error("서버 오류가 발생했습니다."));
-            return;
-        }
-
-        // 3. 스트리밍 구독 (비동기) — agent SSE 이벤트를 STAGE/DONE/ERROR로 분기 전달.
-        //    withBetaQuotaRefund가 doFinally로 error/cancel(클라 disconnect)/비성공-complete를
-        //    전부 잡아 정확히 1회 환불한다(§#1~3 강건화).
-        Flux<ChatStreamEvent> chatStream = agentClient.chatStream(AgentChatCallParams.builder()
-            .workflowId(workflowId)
-            .prompt(setup.prompt())
-            .currentNodes(setup.currentNodes())
-            .currentEdges(setup.currentEdges())
-            .availableIntegrations(setup.integrationContext().available())
-            .unavailableIntegrations(setup.integrationContext().unavailable())
-            .llmProvider(setup.config().llmProvider())
-            .apiKey(setup.config().decryptedApiKey())
-            .googleAccessToken(setup.googleToken())
-            .githubToken(setup.githubToken())
-            .notionToken(setup.notionToken())
-            .availableMcpServers(setup.availableMcpServers())
-            .availableWebhooks(setup.availableWebhooks())
-            .userId(userId)
-            .userRole(userRole)
-            .useBetaPlatformKey(setup.config().useBetaPlatformKey())
-            .build());
-
-        withBetaQuotaRefund(chatStream, betaReservationKey)
-            // finalizeStream은 동기 blocking(JPA) 작업이므로 Netty EventLoop 스레드에서 실행되면
-            // Thread Starvation을 유발한다. boundedElastic로 전환해 별도 스레드 풀에서 처리한다.
-            .publishOn(Schedulers.boundedElastic())
-            .subscribe(
-                event -> handleStreamEvent(userName, workflowId, request, setup, event),
-                error -> {
-                    log.error("[WS] 스트리밍 오류 — sessionId: {}", setup.sessionId(), error);
-                    sendToUser(userName, ChatStreamResponse.error("AI 응답 중 오류가 발생했습니다."));
-                }
-            );
     }
 
     /**

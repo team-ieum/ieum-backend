@@ -40,7 +40,8 @@ public class SchedulerConfig {
     ) {
         SchedulerFactoryBean factory = new SchedulerFactoryBean();
         factory.setJobFactory(jobFactory);
-        factory.setWaitForJobsToCompleteOnShutdown(true);
+        // Deployment drains and observes jobs before stop; never add an unbounded shutdown wait.
+        factory.setWaitForJobsToCompleteOnShutdown(false);
         factory.setOverwriteExistingJobs(false);
         factory.setAutoStartup(autoStartup);
 

@@ -1,106 +1,134 @@
 package com.ieum.workflowcore.engine.event;
 
-import org.springframework.beans.factory.annotation.Autowired;
+import java.time.Duration;
+import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 
-/**
- * 워크플로우 실행 진행 이벤트를 executionId 단위로 발행/구독하는 in-memory 허브.
- *
- * <p>워크플로우 실행은 {@code @Async} 백그라운드 스레드에서 수행되고, SSE 구독은 별도 HTTP
- * 스레드에서 일어난다. 둘을 executionId 키의 멀티캐스트 {@link Sinks.Many}로 연결한다.
- *
- * <p>분산 배포는 ExecutionEventRelay로 Redis를 통해 인스턴스 사이에 전달한다.
- * <p><b>Relay 미설정 시 단일 인스턴스 전제.</b> 다중 인스턴스로 확장하면 실행 스레드와 SSE 요청이 서로 다른
- * 인스턴스에 분산될 수 있어 in-memory Sink로는 전달되지 않는다. 그 경우 Redis Pub/Sub 등으로
- * 교체해야 한다.
- *
- * <p>늦게 구독한 클라이언트가 이미 종료된 노드의 이벤트를 놓치는 문제는 구독 측에서
- * {@code WorkflowExecutionLog} 스냅샷을 먼저 흘려 보완한다(이 클래스는 라이브 스트림만 담당).
+/** Local live stream hub, optionally relayed between deployment processes.
+ * Terminal tombstones close the snapshot/subscribe race. Idle channels are bounded and expired;
+ * a completion before subscribe must never create a fresh, permanently open stream.
  */
 @Slf4j
 @Component
 public class ExecutionEventPublisher {
-
+    private static final Duration STREAM_LIFETIME = Duration.ofMinutes(10);
+    private static final long RETENTION_MILLIS = Duration.ofMinutes(10).toMillis();
+    private static final int MAX_IDLE_CHANNELS = 4096;
     @Autowired(required = false)
     private ExecutionEventRelay relay;
+    private final Map<UUID, Channel> channels = new HashMap<>();
+    private final Map<UUID, Long> completed = new HashMap<>();
+    private boolean retired;
+    private long lastPruned;
 
-    private final Map<UUID, Sinks.Many<ExecutionEvent>> sinks = new ConcurrentHashMap<>();
+    private record Channel(Sinks.Many<ExecutionEvent> sink, long createdAt) {}
 
-    /**
-     * executionId 스트림에 이벤트를 발행한다.
-     * 구독자가 아직 없으면 첫 구독 전까지 버퍼링된다.
-     */
     public void publish(UUID executionId, ExecutionEvent event) {
-        emit(executionId, event);
-        if (relay != null) {
-            relay.publish(executionId, event);
+        synchronized (this) {
+            prune();
+            if (!completed.containsKey(executionId)) emit(channel(executionId), event, executionId);
+            if (terminal(event)) completeLocal(executionId);
         }
+        if (relay != null) relay.publish(executionId, event);
     }
 
-    private void emit(UUID executionId, ExecutionEvent event) {
-        Sinks.Many<ExecutionEvent> sink = sinks.computeIfAbsent(executionId, k -> newSink());
-        Sinks.EmitResult result;
-        synchronized (sink) {
-            result = sink.tryEmitNext(event);
-        }
-        if (result.isFailure()) {
-            log.warn("[ExecutionEvent] 발행 실패 — executionId: {}, type: {}, result: {}",
-                executionId, event.type(), result);
-        }
+    /** Capture the channel before the caller loads its DB snapshot, retaining a bounded event tail. */
+    public synchronized Flux<ExecutionEvent> subscribe(UUID executionId) {
+        prune();
+        if (retired || completed.containsKey(executionId)) return Flux.empty();
+        Channel channel = channel(executionId);
+        return channel.sink().asFlux().take(STREAM_LIFETIME)
+            .doFinally(signal -> cleanUpIfNoSubscribers(executionId));
     }
 
-    /** executionId의 라이브 이벤트 스트림을 구독한다. */
-    public Flux<ExecutionEvent> subscribe(UUID executionId) {
-        return sinks.computeIfAbsent(executionId, k -> newSink()).asFlux();
-    }
-
-    /** 실행 종료 시 스트림을 완료시키고 Sink를 정리한다. */
     public void complete(UUID executionId) {
         completeLocal(executionId);
-        if (relay != null) {
-            relay.complete(executionId);
-        }
+        if (relay != null) relay.complete(executionId);
     }
 
-    /** Deliver only to existing local subscribers, without rebroadcasting or retaining remote runs. */
-    public void acceptRemote(UUID executionId, ExecutionEvent event) {
-        Sinks.Many<ExecutionEvent> sink = sinks.get(executionId);
-        if (sink != null) {
-            synchronized (sink) {
-                sink.tryEmitNext(event);
-            }
-        }
+    /** Remote ordinary events do not retain runs which have no local channel. */
+    public synchronized void acceptRemote(UUID executionId, ExecutionEvent event) {
+        if (event == null) return;
+        Channel channel = channels.get(executionId);
+        if (channel != null) emit(channel, event, executionId);
+        // The terminal event itself closes the stream even if its separate complete message is lost.
+        if (terminal(event)) completeLocal(executionId);
     }
 
-    public void completeLocal(UUID executionId) {
-        Sinks.Many<ExecutionEvent> sink = sinks.remove(executionId);
-        if (sink != null) {
-            synchronized (sink) { sink.tryEmitComplete(); }
-        }
+    public synchronized void completeLocal(UUID executionId) {
+        prune();
+        completed.put(executionId, System.currentTimeMillis());
+        Channel channel = channels.remove(executionId);
+        if (channel != null) channel.sink().tryEmitComplete();
     }
 
-    /**
-     * 구독자가 없는 경우에만 안전하게 Sink를 정리한다.
-     *
-     * <p>구독 측에서 검증 실패·이미 종료된 실행을 감지했을 때, 다른 활성 구독자(실제 소유자의
-     * 라이브 스트림)까지 끊지 않도록 {@link #complete} 대신 사용한다.
+    /** A zero-subscriber channel may already have been returned before snapshot loading.
+     * Keep it for a bounded grace instead of detaching a concurrent, not-yet-subscribed Flux.
      */
-    public void cleanUpIfNoSubscribers(UUID executionId) {
-        sinks.computeIfPresent(executionId, (key, sink) ->
-            sink.currentSubscriberCount() == 0 ? null : sink);
+    public synchronized void cleanUpIfNoSubscribers(UUID executionId) { prune(); }
+
+    public synchronized int subscriberCount() {
+        return channels.values().stream().mapToInt(channel -> channel.sink().currentSubscriberCount()).sum();
     }
 
-    public int subscriberCount() {
-        return sinks.values().stream().mapToInt(Sinks.Many::currentSubscriberCount).sum();
+    public synchronized Set<UUID> observedExecutionIds() {
+        prune();
+        return channels.entrySet().stream()
+            .filter(entry -> entry.getValue().sink().currentSubscriberCount() > 0)
+            .map(Map.Entry::getKey).collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
-    private Sinks.Many<ExecutionEvent> newSink() {
-        return Sinks.many().multicast().onBackpressureBuffer();
+    /** Deployment retirement closes transports; it does not mark workflow executions terminal. */
+    public synchronized void retireLocal() {
+        retired = true;
+        var retiring = channels.values().stream().toList();
+        channels.clear();
+        retiring.forEach(channel -> channel.sink().tryEmitComplete());
+    }
+
+    public synchronized void resumeLocal() { retired = false; }
+
+    private Channel channel(UUID executionId) {
+        return channels.computeIfAbsent(executionId, id -> new Channel(
+            Sinks.many().replay().limit(256), System.currentTimeMillis()));
+    }
+
+    private void emit(Channel channel, ExecutionEvent event, UUID id) {
+        Sinks.EmitResult result = channel.sink().tryEmitNext(event);
+        if (result.isFailure()) log.warn("Execution event delivery failed: id={}, result={}", id, result);
+    }
+
+    private boolean terminal(ExecutionEvent event) {
+        return event != null && event.type() == ExecutionEventType.EXECUTION_COMPLETED;
+    }
+
+    private void prune() {
+        long now = System.currentTimeMillis();
+        if (now - lastPruned < 1000 && channels.size() <= MAX_IDLE_CHANNELS
+                && completed.size() <= MAX_IDLE_CHANNELS) return;
+        lastPruned = now;
+        long cutoff = now - RETENTION_MILLIS;
+        completed.entrySet().removeIf(entry -> entry.getValue() < cutoff);
+        channels.entrySet().removeIf(entry -> entry.getValue().sink().currentSubscriberCount() == 0
+            && entry.getValue().createdAt() < cutoff);
+        while (channels.size() > MAX_IDLE_CHANNELS) {
+            var idle = channels.entrySet().stream()
+                .filter(entry -> entry.getValue().sink().currentSubscriberCount() == 0)
+                .min(java.util.Comparator.comparingLong(entry -> entry.getValue().createdAt()));
+            if (idle.isEmpty()) break;
+            Channel removed = channels.remove(idle.get().getKey());
+            removed.sink().tryEmitComplete();
+        }
+        while (completed.size() > MAX_IDLE_CHANNELS) {
+            completed.remove(completed.entrySet().stream()
+                .min(Map.Entry.comparingByValue()).orElseThrow().getKey());
+        }
     }
 }

@@ -145,4 +145,34 @@ class WorkflowExecutionRunnerTest {
         assertThat(appender.list.get(0).getLevel()).isEqualTo(Level.ERROR);
         assertThat(appender.list.get(0).getThrowableProxy()).isNotNull();
     }
+
+    @Test
+    void lockAcquisitionFailureDefersWithoutPermanentlyFailingExecution() throws Exception {
+        var locks = Mockito.mock(com.ieum.api.deployment.ExecutionAdvisoryLocks.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(runner, "advisoryLocks", locks);
+        when(locks.tryAcquire(executionId)).thenThrow(new java.sql.SQLException("pool temporarily exhausted"));
+        assertThat(runner.executeNow(version, executionId, triggerData)).isFalse();
+        verify(syncExecutionRuntime, never()).execute(any(), any(), any(), any());
+        verify(workflowExecutionService, never()).markAsFailed(any(), any());
+        assertThat(runner.activeCount()).isZero();
+    }
+
+    @Test
+    void lockLossDuringExecutionDefersWithoutAcknowledgingOrMarkingFailed() throws Exception {
+        var locks = Mockito.mock(com.ieum.api.deployment.ExecutionAdvisoryLocks.class);
+        var lease = Mockito.mock(com.ieum.api.deployment.ExecutionAdvisoryLocks.Lease.class);
+        var repository = Mockito.mock(com.ieum.workflowcore.repository.WorkflowExecutionRepository.class);
+        var execution = Mockito.mock(com.ieum.workflowcore.domain.WorkflowExecution.class);
+        when(execution.getStatus()).thenReturn(com.ieum.workflowcore.domain.enums.ExecutionStatus.PENDING);
+        when(repository.findById(executionId)).thenReturn(java.util.Optional.of(execution));
+        when(locks.tryAcquire(executionId)).thenReturn(lease);
+        org.springframework.test.util.ReflectionTestUtils.setField(runner, "advisoryLocks", locks);
+        org.springframework.test.util.ReflectionTestUtils.setField(runner, "executionRepository", repository);
+        doThrow(new com.ieum.workflowcore.engine.ExecutionOwnershipGuard.OwnershipLostException("session killed"))
+            .when(syncExecutionRuntime).execute(any(), any(), any(), any());
+        assertThat(runner.executeNow(version, executionId, triggerData)).isFalse();
+        verify(workflowExecutionService, never()).markAsFailed(any(), any());
+        verify(lease).close();
+        assertThat(runner.activeCount()).isZero();
+    }
 }

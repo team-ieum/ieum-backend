@@ -8,6 +8,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 
 @Configuration
 @ConditionalOnProperty(name = "ieum.deployment.distributed.enabled", havingValue = "true")
@@ -21,6 +23,18 @@ public class DeploymentConfiguration {
         executor.setThreadNamePrefix("execution-relay-");
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);
+        // Do not discard completion when the bounded queue fills, or run it out of order on
+        // the Redis subscription thread. Backpressure preserves the single-consumer ordering.
+        executor.setRejectedExecutionHandler((task, pool) -> {
+            try {
+                while (!pool.isShutdown()) {
+                    if (pool.getQueue().offer(task, 100, TimeUnit.MILLISECONDS)) return;
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            throw new RejectedExecutionException("Execution relay is stopping");
+        });
         return executor;
     }
 

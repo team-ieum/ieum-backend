@@ -239,8 +239,75 @@ class ExecutionJobQueueBootstrapTest {
         RecordId id = RecordId.of("5-0");
         givenPending(id);
         when(control.consumerAlive(anyString())).thenReturn(true);
+        when(control.consumerName()).thenReturn("blue-new-boot");
         bootstrap.reclaimOrphanedJobs();
         verify(streamOperations, never()).claim(anyString(), anyString(), anyString(), any(XClaimOptions.class));
+    }
+
+    @Test
+    void ownPendingIsRetriedAfterLockFailureEvenWithLiveHeartbeat() {
+        var control = Mockito.mock(com.ieum.api.deployment.DeploymentControl.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(bootstrap, "deploymentControl", control);
+        when(control.consumerName()).thenReturn(ExecutionJobQueue.CONSUMER);
+        when(control.consumerAlive(anyString())).thenReturn(true);
+        when(container.isRunning()).thenReturn(true);
+        RecordId id = RecordId.of("5-0");
+        givenPending(id);
+        var claimed = jobRecord(id);
+        when(streamOperations.claim(anyString(), anyString(), anyString(), any(XClaimOptions.class)))
+            .thenReturn(List.of(claimed));
+        bootstrap.reclaimOrphanedJobs();
+        verify(worker).onMessage(claimed);
+    }
+
+    @Test
+    void inFlightIncludesQueuedTasksAndIsNeverClaimed() {
+        when(container.isRunning()).thenReturn(true);
+        RecordId id = RecordId.of("5-0");
+        givenPending(id);
+        when(worker.isInFlight(id)).thenReturn(true);
+        bootstrap.reclaimOrphanedJobs();
+        verify(streamOperations, never()).claim(anyString(), anyString(), anyString(), any(XClaimOptions.class));
+    }
+
+    @Test
+    void pendingCursorProgressesPastFirstThousandLiveEntries() {
+        var control = Mockito.mock(com.ieum.api.deployment.DeploymentControl.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(bootstrap, "deploymentControl", control);
+        when(control.consumerName()).thenReturn("blue-current");
+        when(control.consumerAlive("green-live")).thenReturn(true);
+        when(container.isRunning()).thenReturn(true);
+        var firstPage = java.util.stream.IntStream.rangeClosed(1, 1000)
+            .mapToObj(i -> new PendingMessage(RecordId.of(i + "-0"),
+                Consumer.from(ExecutionJobQueue.GROUP, "green-live"), MIN_IDLE, 1L)).toList();
+        var orphan = new PendingMessage(RecordId.of("1001-0"),
+            Consumer.from(ExecutionJobQueue.GROUP, "blue-dead"), MIN_IDLE, 1L);
+        when(streamOperations.pending(anyString(), anyString(), any(Range.class), anyLong()))
+            .thenReturn(new PendingMessages("runners", firstPage),
+                new PendingMessages("runners", List.of(orphan)));
+        var claimed = jobRecord(orphan.getId());
+        when(streamOperations.claim(anyString(), anyString(), anyString(), any(XClaimOptions.class)))
+            .thenReturn(List.of(claimed));
+        bootstrap.reclaimOrphanedJobs();
+        bootstrap.reclaimOrphanedJobs();
+        ArgumentCaptor<Range> ranges = ArgumentCaptor.forClass(Range.class);
+        verify(streamOperations, Mockito.times(2)).pending(anyString(), anyString(), ranges.capture(), anyLong());
+        assertThat(ranges.getAllValues().get(1).getLowerBound())
+            .isEqualTo(Range.Bound.exclusive("1000-0"));
+        verify(worker).onMessage(claimed);
+    }
+
+    @Test
+    void drainThenResumeRegistersFreshSubscription() {
+        var subscription = Mockito.mock(org.springframework.data.redis.stream.Subscription.class);
+        when(container.register(any(StreamReadRequest.class), eq(worker))).thenReturn(subscription);
+        bootstrap.run(null);
+        bootstrap.stopConsuming();
+        bootstrap.resumeConsuming();
+        verify(container).remove(subscription);
+        verify(container, Mockito.times(2)).register(any(StreamReadRequest.class), eq(worker));
+        verify(container, Mockito.times(2)).start();
+        assertThat(bootstrap.isDraining()).isFalse();
     }
 
 }

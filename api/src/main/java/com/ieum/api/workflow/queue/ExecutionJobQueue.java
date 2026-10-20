@@ -10,6 +10,8 @@ import org.springframework.data.redis.connection.stream.StreamRecords;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.stream.StreamMessageListenerContainer;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 
 /**
  * 워크플로우 실행 잡을 Redis Stream에 발행한다(발행 전담 — 소비는 {@link ExecutionJobWorker},
@@ -19,9 +21,9 @@ import org.springframework.stereotype.Component;
  * AES-256으로 암호화 저장되므로 평문을 Redis에 실으면 DB에서 닫은 노출을 큐로 다시 여는 셈이다.
  * 워커가 executionId로 DB를 읽고 거기서 복호한다 — 진실의 원본은 DB 하나로 유지된다.
  *
- * <p><b>Redis는 SPOF가 아니다.</b> 발행 실패는 예외로 전파하지 않고 {@code false}를 돌려
- * 호출자({@code WorkflowExecutionRunner})가 기존 {@code @Async} 직접 실행으로 폴백하게 한다.
- * 내구성(재시작 복구)은 잃지만 실행 자체는 성공한다.
+ * <p>단일 모드는 발행 실패에 {@code false}를 반환해 기존 직접 실행 폴백을 유지한다.
+ * 분산 모드는 결과가 불명인 XADD를 직접 실행하지 않는다. DB의 PENDING 행을
+ * {@link PendingExecutionRequeuer}가 재발행하므로 Redis 장애 동안 실행이 지연된다.
  */
 @Slf4j
 @Component
@@ -37,6 +39,17 @@ public class ExecutionJobQueue {
      * 주기 회수의 {@code XPENDING} 성공 시 올린다(복구 프로브가 실패해도 최대 회수 주기 안에 되돌아온다).
      */
     private final AtomicBoolean consumerHealthy = new AtomicBoolean(false);
+    @Value("${ieum.deployment.distributed.enabled:false}")
+    private boolean distributed;
+
+    // The script is atomic: a timeout cannot lead to a second local/direct execution. A short-lived
+    // marker also bounds duplicate publication by the durable PENDING recovery sweep.
+    private static final DefaultRedisScript<Long> PUBLISH_ONCE = new DefaultRedisScript<>("""
+        if redis.call('EXISTS', KEYS[2]) == 1 then return 1 end
+        local id = redis.call('XADD', KEYS[1], '*', 'executionId', ARGV[1])
+        redis.call('SET', KEYS[2], id, 'PX', ARGV[2])
+        return 1
+        """, Long.class);
 
     public static final String STREAM_KEY = "ieum:exec:jobs";
     public static final String GROUP = "runners";
@@ -55,15 +68,28 @@ public class ExecutionJobQueue {
         }
     }
 
-    /** 소비가 멈췄음을 표시해 이후 발행이 폴백을 타게 한다. */
+    /** Local consumption health; distributed publishing is independent of local drain/health. */
     void markConsumerUnhealthy(Throwable cause) {
         if (consumerHealthy.compareAndSet(true, false)) {
-            log.error("[ExecutionJobQueue] 소비 중단 — 큐 우회(직접 실행)로 전환한다: {}", cause.toString());
+            log.warn("[ExecutionJobQueue] 로컬 소비 중단 — 분산 모드는 발행/내구 복구를 유지한다: {}", cause.toString());
         }
     }
 
-    /** @return 발행 성공 여부. false면 호출자가 직접 실행해야 한다(잡이 유실되지 않게). */
+    /** @return 큐/내구 복구 경로가 실행을 맡으면 true. false는 단일 모드 직접 실행 전용이다. */
     public boolean enqueue(UUID executionId) {
+        if (distributed) {
+            try {
+                redisTemplate.execute(PUBLISH_ONCE,
+                    java.util.List.of(STREAM_KEY, "ieum:exec:published:" + executionId),
+                    executionId.toString(), "120000");
+            } catch (Exception e) {
+                log.warn("[ExecutionJobQueue] 발행 결과 불명 — DB PENDING 복구 주기에 재시도: {}, {}",
+                    executionId, e.toString());
+            }
+            // The committed PENDING row is durable. True means accepted for queued recovery, not
+            // necessarily that Redis confirmed XADD. Includes callers in workflow-core Quartz.
+            return true;
+        }
         // 소비자가 없거나 폴링이 죽어 있으면 넣어도 아무도 못 꺼낸다 — 넣지 않고 폴백시킨다.
         if (!executionJobListenerContainer.isRunning() || !consumerHealthy.get()) {
             log.warn("[ExecutionJobQueue] 소비 불가 — 큐 우회. executionId: {}", executionId);

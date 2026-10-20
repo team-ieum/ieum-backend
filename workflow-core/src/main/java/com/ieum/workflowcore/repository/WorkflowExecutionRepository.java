@@ -16,8 +16,14 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.data.domain.Pageable;
 
 public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecution, UUID> {
+
+    @Query("SELECT e.id FROM WorkflowExecution e WHERE "
+        + "e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.PENDING "
+        + "AND e.startedAt < :threshold ORDER BY e.startedAt, e.id")
+    List<UUID> findPendingIdsBefore(@Param("threshold") LocalDateTime threshold, Pageable pageable);
 
     @Query("SELECT e FROM WorkflowExecution e JOIN FETCH e.workflow WHERE e.id = :id")
     Optional<WorkflowExecution> findWithWorkflowById(@Param("id") UUID id);

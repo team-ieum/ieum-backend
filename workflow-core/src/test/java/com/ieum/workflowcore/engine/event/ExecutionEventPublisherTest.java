@@ -10,6 +10,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import reactor.test.StepVerifier;
 
 class ExecutionEventPublisherTest {
 
@@ -56,5 +57,42 @@ class ExecutionEventPublisherTest {
             ExecutionEvent.nodeStarted(b, UUID.randomUUID(), "node-1", NodeType.AI));
 
         assertThat(receivedA).isEmpty();
+    }
+
+    @Test
+    void completionBeforeChannelCreationDoesNotLeaveNewStreamOpen() {
+        UUID id = UUID.randomUUID();
+        publisher.completeLocal(id);
+        StepVerifier.create(publisher.subscribe(id)).verifyComplete();
+    }
+
+    @Test
+    void terminalEventClosesStreamWhenSeparateCompletionMessageWasLost() {
+        UUID id = UUID.randomUUID();
+        var event = ExecutionEvent.executionCompleted(id, UUID.randomUUID(), ExecutionStatus.SUCCESS);
+        StepVerifier.create(publisher.subscribe(id))
+            .then(() -> publisher.acceptRemote(id, event))
+            .expectNext(event).verifyComplete();
+    }
+
+    @Test
+    void snapshotCleanupCannotDetachAnAlreadyReturnedLiveFlux() {
+        UUID id = UUID.randomUUID();
+        var live = publisher.subscribe(id);
+        publisher.cleanUpIfNoSubscribers(id);
+        var event = ExecutionEvent.nodeStarted(id, UUID.randomUUID(), "node", NodeType.AI);
+        publisher.acceptRemote(id, event);
+        publisher.completeLocal(id);
+        StepVerifier.create(live).expectNext(event).verifyComplete();
+    }
+
+    @Test
+    void retiringClosesStreamsAndResumeAllowsReconnectionWithoutTerminalTombstone() {
+        UUID id = UUID.randomUUID();
+        StepVerifier.create(publisher.subscribe(id)).then(publisher::retireLocal).verifyComplete();
+        StepVerifier.create(publisher.subscribe(id)).verifyComplete();
+        publisher.resumeLocal();
+        StepVerifier.create(publisher.subscribe(id))
+            .then(() -> publisher.completeLocal(id)).verifyComplete();
     }
 }
