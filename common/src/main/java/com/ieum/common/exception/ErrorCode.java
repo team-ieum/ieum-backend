@@ -31,6 +31,11 @@ public enum ErrorCode {
     VERIFICATION_RESEND_TOO_SOON(HttpStatus.TOO_MANY_REQUESTS, "잠시 후 다시 요청해주세요."),
     MAIL_SEND_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "메일 발송에 실패했습니다. 잠시 후 다시 시도해주세요."),
 
+    // 비밀번호 변경 (로그인 상태) — 불일치도 400: 401이면 FE가 토큰 만료로 보고 로그아웃시킨다
+    CURRENT_PASSWORD_MISMATCH(HttpStatus.BAD_REQUEST, "현재 비밀번호가 일치하지 않습니다."),
+    PASSWORD_SAME_AS_CURRENT(HttpStatus.BAD_REQUEST, "현재 비밀번호와 다른 비밀번호를 입력해주세요."),
+    PASSWORD_CHANGE_NOT_SUPPORTED(HttpStatus.BAD_REQUEST, "소셜 로그인 계정은 비밀번호를 변경할 수 없습니다."),
+
     // 크레덴셜 (BYOK)
     INVALID_API_KEY(HttpStatus.BAD_REQUEST, "프로바이더 API 키 검증에 실패했습니다."),
     INVALID_API_KEY_FORMAT(HttpStatus.BAD_REQUEST, "API 키 형식이 올바르지 않습니다. 프로바이더별 키 형식을 확인해주세요."),
