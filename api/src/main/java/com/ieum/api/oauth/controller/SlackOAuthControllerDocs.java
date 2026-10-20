@@ -14,8 +14,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 public interface SlackOAuthControllerDocs {
 
     @Operation(summary = "Slack 설치 URL 반환",
-        description = "Slack 설치(봇 토큰) 인가 URL을 돌려준다. 응답에 HttpOnly 쿠키 slack_oauth_nonce"
-            + "(Path=/api/v1/slack/oauth2, Secure, SameSite=Lax, 300초)를 심는다 — 콜백은 이 쿠키가 있는 같은 브라우저에서만 완료된다. "
+        description = "Slack 설치(봇 토큰) 인가 URL을 돌려준다. 응답에 HttpOnly 쿠키 __Host-slack_oauth_nonce"
+            + "(Path=/, Domain 없음, Secure, SameSite=Lax, 300초)를 심는다 — 콜백은 이 쿠키가 있는 같은 브라우저에서만 완료된다. "
             + "프런트는 이 요청을 같은 출처로 보내거나 credentials: 'include'로 보내야 쿠키가 저장된다. 5분 안에 설치를 끝내야 한다.")
     @SecurityRequirement(name = "BearerAuth")
     @PreAuthorize("hasRole('USER')")

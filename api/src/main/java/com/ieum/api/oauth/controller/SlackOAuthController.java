@@ -24,9 +24,9 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class SlackOAuthController implements SlackOAuthControllerDocs {
 
-    static final String NONCE_COOKIE = "slack_oauth_nonce";
-    /** 콜백 경로에만 실린다 — 다른 API 요청엔 붙지 않는다 */
-    private static final String COOKIE_PATH = "/api/v1/slack/oauth2";
+    /** __Host- 접두사: Secure·Path=/·Domain 없음을 브라우저가 강제 — 형제 서브도메인이 같은 이름 쿠키를 심지 못한다 */
+    static final String NONCE_COOKIE = "__Host-slack_oauth_nonce";
+    private static final String COOKIE_PATH = "/";
 
     private final SlackOAuthService slackOAuthService;
     private final SlackDisconnectService slackDisconnectService;

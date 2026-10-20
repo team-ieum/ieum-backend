@@ -113,7 +113,7 @@ class SlackOAuthServiceIntegrationTest {
     private ResultActions callback(String state, String cookieNonce) throws Exception {
         MockHttpServletRequestBuilder request = get(CALLBACK).param("state", state).param("code", "c1");
         if (cookieNonce != null) {
-            request.cookie(new Cookie("slack_oauth_nonce", cookieNonce));
+            request.cookie(new Cookie("__Host-slack_oauth_nonce", cookieNonce));
         }
         return mockMvc.perform(request);
     }
@@ -220,7 +220,7 @@ class SlackOAuthServiceIntegrationTest {
         givenState("s1", UUID.randomUUID());
 
         mockMvc.perform(get(CALLBACK).param("state", "s1").param("error", "access_denied")
-                .cookie(new Cookie("slack_oauth_nonce", NONCE)))
+                .cookie(new Cookie("__Host-slack_oauth_nonce", NONCE)))
             .andExpect(header().string("Location", FRONT + "error=slack_denied"));
     }
 
