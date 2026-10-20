@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -22,6 +23,8 @@ import com.ieum.auth.repository.SlackUserLinkRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.common.util.AesEncryptor;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import java.net.SocketTimeoutException;
 import java.time.LocalDateTime;
 import java.util.Map;
@@ -55,13 +58,15 @@ class SlackTokenServiceTest {
     private final MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
     private final SlackUserLinkRepository linkRepository = mock(SlackUserLinkRepository.class);
     private final SlackInstallationRepository installationRepository = mock(SlackInstallationRepository.class);
+    private final EntityManager entityManager = mock(EntityManager.class);
     private final AesEncryptor aes = aes();
     private final UUID userId = UUID.randomUUID();
     private SlackTokenService service;
 
     @BeforeEach
     void setUp() {
-        service = new SlackTokenService(linkRepository, installationRepository, aes, new SlackApiClient(restTemplate));
+        service = new SlackTokenService(linkRepository, installationRepository, aes, new SlackApiClient(restTemplate),
+            entityManager);
         ReflectionTestUtils.setField(service, "clientId", "cid");
         ReflectionTestUtils.setField(service, "clientSecret", "csecret");
     }
@@ -143,6 +148,20 @@ class SlackTokenServiceTest {
         assertThat(aes.decrypt(installation.getRefreshToken())).isEqualTo("xoxe-1-new");
         assertThat(installation.getTokenExpiresAt()).isAfter(LocalDateTime.now().plusHours(11));
         verify(installationRepository).save(installation);
+        verify(entityManager).refresh(installation, LockModeType.PESSIMISTIC_WRITE);
+    }
+
+    @Test
+    @DisplayName("락을 잡고 다시 읽은 설치가 다른 요청에 의해 이미 갱신됐으면 교환하지 않고 그 토큰을 준다")
+    void skipsExchangeWhenAnotherRequestRotated() {
+        SlackInstallation installation = linked(LocalDateTime.now().plusMinutes(1), "xoxe-1-old");
+        doAnswer(invocation -> {
+            installation.rotate(aes.encrypt("xoxe.xoxb-other"), aes.encrypt("xoxe-1-other"), LocalDateTime.now().plusHours(12));
+            return null;
+        }).when(entityManager).refresh(installation, LockModeType.PESSIMISTIC_WRITE);
+
+        assertThat(service.getValidBotToken(userId)).isEqualTo("xoxe.xoxb-other");
+        verify(installationRepository, never()).save(any());
     }
 
     @ParameterizedTest

@@ -14,6 +14,11 @@ import com.ieum.auth.service.SlackTokenService;
 import com.ieum.common.util.AesEncryptor;
 import java.time.LocalDateTime;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -23,6 +28,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.web.client.ExpectedCount;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestTemplate;
@@ -80,5 +86,43 @@ class SlackTokenServiceIntegrationTest {
         SlackInstallation saved = installationRepository.findAll().get(0);
         assertThat(aesEncryptor.decrypt(saved.getRefreshToken())).isEqualTo("xoxe-1-new");
         assertThat(aesEncryptor.decrypt(saved.getBotToken())).isEqualTo("xoxe.xoxb-new");
+    }
+
+    @Test
+    @DisplayName("[spec §13] 만료 임박 설치에 두 사용자 요청이 동시에 오면 refresh 교환은 한 번 — 둘 다 새 토큰을 받는다")
+    void concurrentRequestsExchangeOnce() throws Exception {
+        UUID userA = UUID.randomUUID();
+        UUID userB = UUID.randomUUID();
+        expiringInstallation(userA, userB);
+        MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
+        // 두 번째 교환이 나가면 "No further requests expected" AssertionError로 그 스레드가 실패한다
+        server.expect(ExpectedCount.once(), requestTo(REFRESH_URL))
+            .andRespond(request -> {
+                sleepQuietly(200); // 다른 요청이 락 앞(또는 교환 앞)에 도착할 시간 — H2 락 대기 한도(약 1~2초)보다 짧게
+                return withSuccess(ROTATED, MediaType.APPLICATION_JSON).createResponse(request);
+            });
+        CountDownLatch start = new CountDownLatch(1);
+        // 공용 ForkJoinPool은 CPU 2개면 워커 1개라 두 요청이 순서대로 돌아 락 없이도 통과한다 — 스레드 2개를 직접 둔다
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<String> a = pool.submit(() -> { start.await(); return slackTokenService.getValidBotToken(userA); });
+            Future<String> b = pool.submit(() -> { start.await(); return slackTokenService.getValidBotToken(userB); });
+            start.countDown();
+
+            assertThat(a.get(10, TimeUnit.SECONDS)).isEqualTo("xoxe.xoxb-new");
+            assertThat(b.get(10, TimeUnit.SECONDS)).isEqualTo("xoxe.xoxb-new");
+        } finally {
+            pool.shutdownNow();
+        }
+        server.verify();
+        assertThat(aesEncryptor.decrypt(installationRepository.findAll().get(0).getRefreshToken())).isEqualTo("xoxe-1-new");
+    }
+
+    private static void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 }

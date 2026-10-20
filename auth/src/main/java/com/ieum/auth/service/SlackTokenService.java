@@ -8,6 +8,8 @@ import com.ieum.auth.repository.SlackUserLinkRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.common.util.AesEncryptor;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import java.time.LocalDateTime;
 import java.util.Set;
 import java.util.UUID;
@@ -40,6 +42,7 @@ public class SlackTokenService {
     private final SlackInstallationRepository slackInstallationRepository;
     private final AesEncryptor aesEncryptor;
     private final SlackApiClient slackApiClient;
+    private final EntityManager entityManager;
 
     @Value("${slack.oauth.client-id}")
     private String clientId;
@@ -63,6 +66,11 @@ public class SlackTokenService {
         SlackInstallation installation = slackUserLinkRepository.findByUserId(userId)
             .map(SlackUserLink::getInstallation)
             .orElseThrow(() -> new CustomException(ErrorCode.SLACK_NOT_CONNECTED));
+        if (!installation.needsRefresh(LocalDateTime.now())) {
+            return aesEncryptor.decrypt(installation.getBotToken());
+        }
+        // 락과 최신 상태를 함께 얻는다 — 같은 설치를 공유하는 다른 요청이 먼저 갱신했으면 그 토큰을 쓴다(refresh 1회용)
+        entityManager.refresh(installation, LockModeType.PESSIMISTIC_WRITE);
         if (!installation.needsRefresh(LocalDateTime.now())) {
             return aesEncryptor.decrypt(installation.getBotToken());
         }
