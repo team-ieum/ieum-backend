@@ -31,6 +31,7 @@ public class AuthService {
     private final JwtTokenProvider jwtTokenProvider;
     private final PasswordEncoder passwordEncoder;
     private final EmailVerificationService emailVerificationService;
+    private final LoginAttemptService loginAttemptService;
 
     @Value("${jwt.refresh-expiration}")
     private long refreshExpiration;
@@ -69,6 +70,8 @@ public class AuthService {
         user.updatePassword(passwordEncoder.encode(newPassword));
         // ponytail: 이미 발급된 Access Token은 만료(30분)까지 유효하다. 즉시 차단이 필요하면 토큰 블랙리스트 추가.
         refreshTokenRepository.deleteById(user.getId().toString());
+        // 메일 소유를 증명했으므로 로그인 잠금도 푼다 — 제3자가 일부러 잠근 계정을 본인이 바로 복구할 수 있게.
+        loginAttemptService.reset(user.getEmail());
     }
 
     /**
@@ -83,7 +86,10 @@ public class AuthService {
         if (user.getProvider() != AuthProvider.LOCAL) {
             throw new CustomException(ErrorCode.PASSWORD_CHANGE_NOT_SUPPORTED);
         }
+        // 탈취된 Access Token으로 현재 비밀번호를 대입하지 못하게 로그인 실패 카운터를 함께 쓴다.
+        loginAttemptService.checkNotLocked(user.getEmail());
         if (!passwordEncoder.matches(currentPassword, user.getPasswordHash())) {
+            loginAttemptService.recordFailure(user.getEmail());
             throw new CustomException(ErrorCode.CURRENT_PASSWORD_MISMATCH);
         }
         if (passwordEncoder.matches(newPassword, user.getPasswordHash())) {
@@ -92,16 +98,21 @@ public class AuthService {
 
         user.updatePassword(passwordEncoder.encode(newPassword));
         refreshTokenRepository.deleteById(user.getId().toString());
+        loginAttemptService.reset(user.getEmail());
     }
 
     @Transactional
     public TokenInfo login(String email, String password) {
-        User user = userRepository.findByEmail(email)
-            .orElseThrow(() -> new CustomException(ErrorCode.INVALID_CREDENTIALS));
+        // 잠금 확인을 비밀번호 검증보다 먼저 한다 — 잠금 중에는 정답 여부도 알려주지 않는다.
+        loginAttemptService.checkNotLocked(email);
 
-        if (!passwordEncoder.matches(password, user.getPasswordHash())) {
+        User user = userRepository.findByEmail(email).orElse(null);
+        if (user == null || !passwordEncoder.matches(password, user.getPasswordHash())) {
+            // 없는 이메일도 똑같이 센다 — 잠김 응답으로 가입 여부가 드러나지 않게.
+            loginAttemptService.recordFailure(email);
             throw new CustomException(ErrorCode.INVALID_CREDENTIALS);
         }
+        loginAttemptService.reset(email);
 
         String accessToken = jwtTokenProvider.generateAccessToken(user.getId(), user.getEmail(), user.getRole().name());
         String refreshToken = jwtTokenProvider.generateRefreshToken(user.getId());
