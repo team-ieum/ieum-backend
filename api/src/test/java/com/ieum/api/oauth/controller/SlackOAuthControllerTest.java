@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.ieum.api.common.GlobalExceptionHandler;
 import com.ieum.api.oauth.service.SlackOAuthService;
 import com.ieum.auth.security.CustomUserDetails;
+import jakarta.servlet.http.Cookie;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -22,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.method.annotation.AuthenticationPrincipalArgumentResolver;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
@@ -44,6 +46,7 @@ class SlackOAuthControllerTest {
         CustomUserDetails userDetails = CustomUserDetails.of(userId, "user@example.com", "ROLE_USER");
         SecurityContextHolder.getContext().setAuthentication(
             new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities()));
+        ReflectionTestUtils.setField(slackOAuthController, "frontendRedirectUri", "http://localhost:3000/settings/integrations");
     }
 
     @Test
@@ -62,5 +65,21 @@ class SlackOAuthControllerTest {
                 containsString("HttpOnly"),
                 containsString("Secure"),
                 containsString("SameSite=Lax"))));
+    }
+
+    @Test
+    @DisplayName("callback — 쿠키 nonce를 서비스에 넘기고 결과 쿼리로 302, nonce 쿠키는 Max-Age=0으로 지운다")
+    void callbackRedirectsAndClearsCookie() throws Exception {
+        given(slackOAuthService.handleCallback("s1", "n-1", "c1", null)).willReturn("connected=slack");
+
+        mockMvc.perform(get("/api/v1/slack/oauth2/callback")
+                .param("state", "s1").param("code", "c1")
+                .cookie(new Cookie("slack_oauth_nonce", "n-1")))
+            .andExpect(status().isFound())
+            .andExpect(header().string("Location", "http://localhost:3000/settings/integrations?connected=slack"))
+            .andExpect(header().string("Set-Cookie", allOf(
+                containsString("slack_oauth_nonce="),
+                containsString("Path=/api/v1/slack/oauth2"),
+                containsString("Max-Age=0"))));
     }
 }

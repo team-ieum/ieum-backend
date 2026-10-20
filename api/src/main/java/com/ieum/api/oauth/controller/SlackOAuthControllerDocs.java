@@ -24,4 +24,14 @@ public interface SlackOAuthControllerDocs {
         @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "인증 필요")
     })
     ResponseEntity<ApiResponse<Map<String, String>>> authorize(CustomUserDetails userDetails);
+
+    @Operation(summary = "Slack 설치 콜백",
+        description = "Slack이 리다이렉트하는 콜백(로그인 불필요). 결과는 프런트 연동 화면으로 302 — 성공 ?connected=slack, "
+            + "실패 ?error=slack_state_expired(state 없음·만료) | slack_state_mismatch(설치를 시작한 브라우저가 아님) | "
+            + "slack_denied(취소) | slack_exchange(코드 교환 실패) | slack_org_install(Enterprise 조직 설치·봇이 아닌 토큰) | "
+            + "slack_other_team(다른 워크스페이스에 이미 연결 — 먼저 연결을 해제). nonce 쿠키는 지운다.")
+    @ApiResponses({
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "302", description = "프런트로 리다이렉트(성공·실패 모두)")
+    })
+    ResponseEntity<Void> callback(String state, String code, String error, String nonce);
 }
