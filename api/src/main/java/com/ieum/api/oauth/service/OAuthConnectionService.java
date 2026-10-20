@@ -1,7 +1,11 @@
 package com.ieum.api.oauth.service;
 
 import com.ieum.api.oauth.dto.OAuthConnectionResponse;
+import com.ieum.auth.domain.AuthProvider;
+import com.ieum.auth.domain.ConnectedAccount;
 import com.ieum.auth.repository.ConnectedAccountRepository;
+import com.ieum.common.exception.CustomException;
+import com.ieum.common.exception.ErrorCode;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -28,5 +32,23 @@ public class OAuthConnectionService {
         return connectedAccountRepository.findByUserId(userId).stream()
             .map(OAuthConnectionResponse::from)
             .toList();
+    }
+
+    /**
+     * OAuth 연동을 해제한다 — 우리 DB의 토큰을 즉시 하드 삭제한다(소프트 딜리트 금지).
+     *
+     * <p>로그인 신원은 {@code users.provider_id}로 찾으므로 Google 로그인 사용자가 Google 연동을 해제해도
+     * 로그인은 계속 된다. 해제 후 그 서비스를 쓰는 노드는 실행 시 {@code ACCOUNT_NOT_CONNECTED}로 실패한다.
+     */
+    @Transactional
+    public void disconnect(UUID userId, AuthProvider provider) {
+        if (provider == AuthProvider.LOCAL) {
+            throw new CustomException(ErrorCode.INVALID_INPUT);
+        }
+        ConnectedAccount account = connectedAccountRepository.findByUserIdAndProvider(userId, provider)
+            .orElseThrow(() -> new CustomException(ErrorCode.ACCOUNT_NOT_CONNECTED));
+
+        connectedAccountRepository.delete(account);
+        log.info("[OAuthConnectionService] OAuth 연동 해제 — userId: {}, provider: {}", userId, provider);
     }
 }
