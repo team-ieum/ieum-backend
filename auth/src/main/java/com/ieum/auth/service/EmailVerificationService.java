@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.util.Locale;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -166,7 +167,8 @@ public class EmailVerificationService {
         return "verify:block:" + key(purpose, email);
     }
 
+    // 대소문자·공백만 바꾼 이메일로 쿨다운·시도 횟수·12시간 차단을 우회하지 못하게 정규화한다.
     private static String key(VerificationPurpose purpose, String email) {
-        return purpose.name() + ":" + email;
+        return purpose.name() + ":" + email.trim().toLowerCase(Locale.ROOT);
     }
 }

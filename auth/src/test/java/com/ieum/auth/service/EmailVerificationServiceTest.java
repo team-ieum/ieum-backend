@@ -239,6 +239,19 @@ class EmailVerificationServiceTest {
     }
 
     @Test
+    void 대소문자_공백만_바꾼_이메일도_같은_차단에_걸린다() {
+        given(redisTemplate.hasKey(SIGNUP_BLOCK_KEY)).willReturn(true);
+
+        assertThatThrownBy(() -> service.sendCode("  User@Example.COM ", VerificationPurpose.SIGNUP))
+            .extracting(e -> ((CustomException) e).getErrorCode())
+            .isEqualTo(ErrorCode.VERIFICATION_BLOCKED);
+        assertThatThrownBy(() -> service.verifyCode("USER@example.com", "123456", VerificationPurpose.SIGNUP))
+            .extracting(e -> ((CustomException) e).getErrorCode())
+            .isEqualTo(ErrorCode.VERIFICATION_BLOCKED);
+        verify(mailSender, never()).send(any(SimpleMailMessage.class));
+    }
+
+    @Test
     void 회원가입_차단은_비밀번호_재설정에_영향이_없다() {
         given(redisTemplate.hasKey("verify:block:" + RESET_KEY)).willReturn(false);
         given(userRepository.findByEmail(EMAIL)).willReturn(Optional.of(user(AuthProvider.LOCAL)));
