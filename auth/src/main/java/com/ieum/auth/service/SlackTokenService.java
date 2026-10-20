@@ -120,12 +120,23 @@ public class SlackTokenService {
         return new RefreshedTokens(accessToken, refreshToken, body.path("expires_in").asLong(43_200L));
     }
 
-    /** 교환 결과로 새 access·refresh·만료를 저장하고 새 access(평문)를 돌려준다 */
+    /** 교환 결과로 새 access·refresh·만료를 저장하고 새 access(평문)를 돌려준다. 만료 전 일시 장애면 저장 access를 준다 */
     private String rotate(SlackInstallation installation) {
         if (installation.getRefreshToken() == null) {
             throw new CustomException(ErrorCode.AUTHENTICATION_REQUIRED, RECONNECT_MESSAGE);
         }
-        RefreshedTokens tokens = exchangeRefreshToken(aesEncryptor.decrypt(installation.getRefreshToken()));
+        RefreshedTokens tokens;
+        try {
+            tokens = exchangeRefreshToken(aesEncryptor.decrypt(installation.getRefreshToken()));
+        } catch (CustomException e) {
+            // 일시 장애인데 저장 토큰이 아직 살아 있으면 그걸 쓴다(spec §5-5). 거절·만료 후는 그대로 던진다
+            if (e.getErrorCode() != ErrorCode.TOKEN_REFRESH_FAILED
+                || !LocalDateTime.now().isBefore(installation.getTokenExpiresAt())) {
+                throw e;
+            }
+            log.warn("[SlackTokenService] 갱신 실패 — 만료 전 저장 토큰 사용, team: {}", installation.getTeamId());
+            return aesEncryptor.decrypt(installation.getBotToken());
+        }
         installation.rotate(aesEncryptor.encrypt(tokens.accessToken()), aesEncryptor.encrypt(tokens.refreshToken()),
             LocalDateTime.now().plusSeconds(tokens.expiresIn()));
         slackInstallationRepository.save(installation); // refresh는 1회용 — 반드시 덮어쓴다

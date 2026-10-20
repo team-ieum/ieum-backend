@@ -223,6 +223,39 @@ class SlackTokenServiceTest {
     }
 
     @Test
+    @DisplayName("만료 전(3분 남음) + 교환 일시 장애 → 저장 토큰을 그대로 준다, 저장값 변경 없음(spec §5-5)")
+    void transientFailureBeforeExpiryFallsBackToStoredToken() {
+        LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(3);
+        SlackInstallation installation = linked(expiresAt, "xoxe-1-old");
+        expectRefresh(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+
+        assertThat(service.getValidBotToken(userId)).isEqualTo("xoxe.xoxb-old");
+
+        assertThat(aes.decrypt(installation.getBotToken())).isEqualTo("xoxe.xoxb-old");
+        assertThat(aes.decrypt(installation.getRefreshToken())).isEqualTo("xoxe-1-old");
+        assertThat(installation.getTokenExpiresAt()).isEqualTo(expiresAt);
+        verify(installationRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("만료 전(3분 남음)이어도 재연결 거절은 폴백하지 않는다 → AUTHENTICATION_REQUIRED")
+    void rejectionBeforeExpiryIsNotFallenBack() {
+        linked(LocalDateTime.now().plusMinutes(3), "xoxe-1-old");
+        expectRefresh(withSuccess("{\"ok\":false,\"error\":\"token_revoked\"}", MediaType.APPLICATION_JSON));
+
+        assertErrorCode(() -> service.getValidBotToken(userId), ErrorCode.AUTHENTICATION_REQUIRED);
+    }
+
+    @Test
+    @DisplayName("이미 만료 + 교환 일시 장애 → TOKEN_REFRESH_FAILED(죽은 토큰은 돌려주지 않는다)")
+    void transientFailureAfterExpiryThrows() {
+        linked(LocalDateTime.now().minusMinutes(1), "xoxe-1-old");
+        expectRefresh(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+
+        assertErrorCode(() -> service.getValidBotToken(userId), ErrorCode.TOKEN_REFRESH_FAILED);
+    }
+
+    @Test
     @DisplayName("ok:true인데 refresh_token이 없으면 저장하지 않고 TOKEN_REFRESH_FAILED — 1회용 refresh를 잃지 않게")
     void missingRefreshTokenInResponse() {
         linked(LocalDateTime.now().minusMinutes(1), "xoxe-1-old");
