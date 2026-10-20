@@ -52,7 +52,15 @@ public class SlackDisconnectService {
             return;
         }
         UUID installationId = link.getInstallation().getId();
-        SlackInstallation installation = slackInstallationRepository.findByIdForUpdate(installationId).orElseThrow();
+        SlackInstallation installation = slackInstallationRepository.findByIdForUpdate(installationId).orElse(null);
+        if (installation == null) {
+            return; // 동시 해제가 먼저 설치까지 지웠다
+        }
+        // 락 앞에서 기다리는 동안 동시 해제가 링크를 지웠을 수 있다 — 락 뒤에 다시 읽는다
+        link = slackUserLinkRepository.findByUserId(userId).orElse(null);
+        if (link == null || !link.getInstallation().getId().equals(installationId)) {
+            return;
+        }
         slackUserLinkRepository.delete(link);
         if (slackUserLinkRepository.countByInstallation_Id(installationId) > 0) {
             return; // 같은 워크스페이스를 쓰는 사람이 남았다 — 설치·토큰 유지

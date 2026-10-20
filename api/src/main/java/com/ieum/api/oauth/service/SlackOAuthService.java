@@ -7,6 +7,7 @@ import com.ieum.auth.domain.SlackUserLink;
 import com.ieum.auth.repository.SlackInstallationRepository;
 import com.ieum.auth.repository.SlackOAuthStateRepository;
 import com.ieum.auth.repository.SlackUserLinkRepository;
+import com.ieum.auth.repository.UserRepository;
 import com.ieum.auth.service.SlackApiClient;
 import com.ieum.common.util.AesEncryptor;
 import java.nio.charset.StandardCharsets;
@@ -45,6 +46,7 @@ public class SlackOAuthService {
     private final SlackOAuthStateRepository slackOAuthStateRepository;
     private final SlackInstallationRepository slackInstallationRepository;
     private final SlackUserLinkRepository slackUserLinkRepository;
+    private final UserRepository userRepository;
     private final SlackApiClient slackApiClient;
     private final AesEncryptor aesEncryptor;
     private final TransactionTemplate transactionTemplate;
@@ -154,15 +156,24 @@ public class SlackOAuthService {
             log.warn("[SlackOAuthService] 설치 저장 실패 — {}", e.getClass().getSimpleName());
             return "error=slack_exchange";
         }
-        if (outcome == Outcome.OTHER_TEAM_UNUSED) {
+        if (outcome == Outcome.OTHER_TEAM_UNUSED || outcome == Outcome.USER_GONE_UNUSED) {
             slackApiClient.revokeQuietly(accessToken); // 커밋 뒤 — 아무도 안 쓰는 설치를 남기지 않는다
         }
-        return outcome == Outcome.CONNECTED ? "connected=slack" : "error=slack_other_team";
+        return switch (outcome) {
+            case CONNECTED -> "connected=slack";
+            case OTHER_TEAM_KEPT, OTHER_TEAM_UNUSED -> "error=slack_other_team";
+            case USER_GONE_KEPT, USER_GONE_UNUSED -> "error=slack_state_expired";
+        };
     }
 
-    private enum Outcome { CONNECTED, OTHER_TEAM_KEPT, OTHER_TEAM_UNUSED }
+    private enum Outcome { CONNECTED, OTHER_TEAM_KEPT, OTHER_TEAM_UNUSED, USER_GONE_KEPT, USER_GONE_UNUSED }
 
     private Outcome save(UUID userId, String teamId, JsonNode body, String accessToken) {
+        // state를 만든 사용자가 그새 탈퇴했다 — 주인 없는 링크·설치를 만들지 않는다. 그 팀 설치가 있으면 토큰이 공유 봇 토큰일 수 있어 revoke하지 않는다
+        if (!userRepository.existsById(userId)) {
+            return slackInstallationRepository.findByTeamIdForUpdate(teamId).isPresent()
+                ? Outcome.USER_GONE_KEPT : Outcome.USER_GONE_UNUSED;
+        }
         Optional<SlackUserLink> link = slackUserLinkRepository.findByUserId(userId);
         Optional<SlackInstallation> locked = slackInstallationRepository.findByTeamIdForUpdate(teamId);
 

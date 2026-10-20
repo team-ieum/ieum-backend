@@ -21,6 +21,7 @@ import com.ieum.auth.domain.SlackUserLink;
 import com.ieum.auth.repository.SlackInstallationRepository;
 import com.ieum.auth.repository.SlackOAuthStateRepository;
 import com.ieum.auth.repository.SlackUserLinkRepository;
+import com.ieum.auth.repository.UserRepository;
 import com.ieum.common.util.AesEncryptor;
 import jakarta.servlet.http.Cookie;
 import java.net.URLDecoder;
@@ -60,6 +61,7 @@ class SlackOAuthServiceIntegrationTest {
     @Autowired private MockMvc mockMvc;
     @Autowired private SlackOAuthService slackOAuthService;
     @MockitoBean private SlackOAuthStateRepository stateRepository;
+    @MockitoBean private UserRepository userRepository;
 
     private static String decode(String value) {
         return URLDecoder.decode(value, StandardCharsets.UTF_8);
@@ -80,13 +82,19 @@ class SlackOAuthServiceIntegrationTest {
     @BeforeEach
     void bindServer() {
         server = MockRestServiceServer.bindTo(restTemplate).build();
+        given(userRepository.existsById(any())).willReturn(true); // state의 사용자는 기본으로 살아 있다
     }
 
     @AfterEach
     void verifyAndClean() {
-        server.verify(); // 기대를 등록하지 않은 케이스는 Slack 호출이 하나도 없어야 통과한다
-        linkRepository.deleteAll();
-        installationRepository.deleteAll();
+        try {
+            // 기대를 등록한 호출이 다 나갔는지만 본다(기대가 없으면 그냥 통과). 'Slack 호출 0건'은 이게 아니라, 기대 없는 요청이
+            // 그 시점에 AssertionError(No further requests expected)를 던져 테스트를 깨는 것이 보장한다 — Error라 어느 catch도 삼키지 않는다
+            server.verify();
+        } finally {
+            linkRepository.deleteAll();
+            installationRepository.deleteAll();
+        }
     }
 
     /** team·토큰·rotation 필드를 바꿔 끼우는 설치 응답 */
@@ -283,7 +291,7 @@ class SlackOAuthServiceIntegrationTest {
     @DisplayName("2-6 다른 팀에 이미 연결 + 그 팀 설치 없음 → 설치를 만들지 않고 받은 토큰 revoke, slack_other_team")
     void callbackOtherTeamWithoutInstallationRevokes() throws Exception {
         UUID userA = UUID.randomUUID();
-        linkedTo("T1", userA);
+        SlackInstallation t1 = linkedTo("T1", userA);
         givenState("s1", userA);
         expectExchange(installed("T2", ""));
         expectRevoke("xoxb-new");
@@ -291,6 +299,23 @@ class SlackOAuthServiceIntegrationTest {
         callback("s1", NONCE).andExpect(header().string("Location", FRONT + "error=slack_other_team"));
 
         assertThat(installationRepository.count()).isEqualTo(1);
+        assertThat(linkRepository.findByUserId(userA)).get()
+            .extracting(link -> link.getInstallation().getId()).isEqualTo(t1.getId()); // D8 — 링크를 옮기지 않는다
+    }
+
+    @Test
+    @DisplayName("state를 만든 사용자가 그새 탈퇴 + 그 팀 설치 없음 → 저장 없이 받은 토큰 revoke, slack_state_expired")
+    void callbackAfterWithdrawalRevokesWithoutSaving() throws Exception {
+        UUID gone = UUID.randomUUID();
+        givenState("s1", gone);
+        given(userRepository.existsById(gone)).willReturn(false);
+        expectExchange(installed("T1", ""));
+        expectRevoke("xoxb-new");
+
+        callback("s1", NONCE).andExpect(header().string("Location", FRONT + "error=slack_state_expired"));
+
+        assertThat(installationRepository.count()).isZero();
+        assertThat(linkRepository.count()).isZero();
     }
 
     @Test

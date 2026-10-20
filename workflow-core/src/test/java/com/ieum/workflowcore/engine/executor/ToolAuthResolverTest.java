@@ -90,6 +90,16 @@ class ToolAuthResolverTest {
     }
 
     @Test
+    @DisplayName("웹훅 도구 slack만 있으면 헤더도 Slack 토큰 조회도 없다 — 미연결 사용자의 웹훅 실행을 막지 않는다")
+    void slackWebhookToolAlone_noHeaderNoLookup() {
+        Map<String, String> headers = toolAuthResolver.resolveHeaders(
+            List.of(Map.of("name", "slack")), UUID.randomUUID());
+
+        assertThat(headers).isEmpty();
+        verifyNoInteractions(slackTokenProvider);
+    }
+
+    @Test
     @DisplayName("Slack 봇 도구에 credentialId·tool.auth가 붙어 있어도 무시한다 — LLM 키가 slack.com으로 나가지 않게")
     void slackBotTool_ignoresByokCredential() {
         UUID userId = UUID.randomUUID();

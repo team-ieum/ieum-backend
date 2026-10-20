@@ -16,6 +16,11 @@ import com.ieum.common.util.AesEncryptor;
 import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -56,7 +61,9 @@ class SlackDisconnectServiceTest {
 
     @AfterEach
     void verifyAndClean() {
-        server.verify(); // 기대를 등록하지 않은 케이스는 Slack 호출이 하나도 없어야 통과한다
+        // 기대를 등록한 호출이 다 나갔는지만 본다(기대가 없으면 그냥 통과). 'Slack 호출 0건'은 이게 아니라, 기대 없는 요청이
+        // 그 시점에 AssertionError(No further requests expected)를 던져 테스트를 깨는 것이 보장한다 — Error라 어느 catch도 삼키지 않는다
+        server.verify();
         linkRepository.deleteAll();
         installationRepository.deleteAll();
     }
@@ -227,5 +234,61 @@ class SlackDisconnectServiceTest {
 
         assertThat(linkRepository.count()).isZero();
         assertThat(installationRepository.count()).isZero();
+    }
+
+    @Test
+    @DisplayName("같은 사용자 해제가 동시에 두 번 와도(마지막 사용자) 둘 다 예외 없이 끝난다 — 링크·설치 삭제, revoke는 한 번")
+    void concurrentDoubleDisconnectLastUser() throws Exception {
+        UUID me = UUID.randomUUID();
+        SlackInstallation installation = installation("T1", aes.encrypt("xoxb-bot"), null, null, me);
+        expectRevoke("xoxb-bot");
+
+        disconnectTwiceWhileLocked(installation.getId(), me);
+
+        assertThat(linkRepository.count()).isZero();
+        assertThat(installationRepository.count()).isZero();
+    }
+
+    @Test
+    @DisplayName("공유 설치에서 같은 사용자 해제가 동시에 두 번 와도 둘 다 예외 없이 끝난다 — 내 링크만 삭제, 설치 유지")
+    void concurrentDoubleDisconnectSharedInstallation() throws Exception {
+        UUID me = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        SlackInstallation installation = installation("T1", aes.encrypt("xoxb-bot"), null, null, me, other);
+
+        disconnectTwiceWhileLocked(installation.getId(), me);
+
+        assertThat(linkRepository.findByUserId(me)).isEmpty();
+        assertThat(linkRepository.findByUserId(other)).isPresent();
+        assertThat(installationRepository.count()).isEqualTo(1);
+    }
+
+    /** 보조 트랜잭션이 설치 행 락을 쥔 동안 두 해제가 링크를 읽고 락 앞에 줄 서게 한 뒤 놓는다. 해제가 던지면 get()이 실패한다(컨트롤러에선 500) */
+    private void disconnectTwiceWhileLocked(UUID installationId, UUID userId) throws Exception {
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(3);
+        try {
+            Future<?> holder = pool.submit(() -> transactionTemplate.executeWithoutResult(tx -> {
+                installationRepository.findByIdForUpdate(installationId);
+                locked.countDown();
+                try {
+                    release.await(10, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+            assertThat(locked.await(5, TimeUnit.SECONDS)).isTrue();
+            Future<?> first = pool.submit(() -> slackDisconnectService.disconnect(userId));
+            Future<?> second = pool.submit(() -> slackDisconnectService.disconnect(userId));
+            Thread.sleep(300); // 둘 다 링크를 읽고 락 앞에 설 시간 — H2 락 대기 한도(약 1~2초)보다 짧게
+            release.countDown();
+            holder.get(10, TimeUnit.SECONDS);
+            first.get(10, TimeUnit.SECONDS);
+            second.get(10, TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
     }
 }

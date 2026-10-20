@@ -8,6 +8,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.headerDoesNotExist;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
@@ -124,6 +125,7 @@ class SlackTokenServiceTest {
         linked(null, null);
 
         assertThat(service.getValidBotToken(userId)).isEqualTo("xoxe.xoxb-old");
+        verifyNoInteractions(entityManager); // 락을 잡지 않는다
     }
 
     @Test
@@ -133,6 +135,7 @@ class SlackTokenServiceTest {
 
         assertThat(service.getValidBotToken(userId)).isEqualTo("xoxe.xoxb-old");
         verify(installationRepository, never()).save(any());
+        verifyNoInteractions(entityManager); // 락을 잡지 않는다
     }
 
     @ParameterizedTest(name = "만료까지 {0}분")

@@ -55,13 +55,13 @@ public class SlackChannelOptionSource implements OptionSource {
         String token = slackTokenProvider.getValidBotToken(userId);
         String q = normalize(inputs.get("q"));
         if (q == null) {
-            JsonNode body = list(token, PAGE_SIZE, cursor);
+            JsonNode body = list(userId, token, PAGE_SIZE, cursor);
             return new OptionPage(items(body, null, PAGE_SIZE), nextCursor(body));
         }
         List<OptionItem> found = new ArrayList<>();
         String pageCursor = null; // 검색은 들어온 cursor를 쓰지 않는다 — nextCursor를 주지 않으므로
         for (int page = 0; page < SEARCH_MAX_PAGES && found.size() < PAGE_SIZE; page++) {
-            JsonNode body = list(token, SEARCH_PAGE_SIZE, pageCursor);
+            JsonNode body = list(userId, token, SEARCH_PAGE_SIZE, pageCursor);
             found.addAll(items(body, q, PAGE_SIZE - found.size()));
             pageCursor = nextCursor(body);
             if (pageCursor == null) {
@@ -104,7 +104,7 @@ public class SlackChannelOptionSource implements OptionSource {
     }
 
     /** Slack은 오류도 HTTP 200 + ok:false로 준다 — HTTP 상태만 보면 조용히 빈 목록이 된다 */
-    private JsonNode list(String token, int limit, String cursor) {
+    private JsonNode list(UUID userId, String token, int limit, String cursor) {
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
         form.add("types", "public_channel");
         form.add("exclude_archived", "true");
@@ -117,6 +117,8 @@ public class SlackChannelOptionSource implements OptionSource {
             body = slackApiClient.call("conversations.list", form, token);
         } catch (HttpClientErrorException e) {
             if (e.getStatusCode().value() == 429) {
+                // 워크스페이스 단위 한도(Tier 2) — 5xx와 구분해 캐시 도입 판단 근거로 남긴다. 팀 ID는 여기 없어 userId로 남긴다
+                log.warn("[SlackChannelOptionSource] conversations.list HTTP 429 — userId: {}", userId);
                 throw new CustomException(ErrorCode.SLACK_API_UNAVAILABLE);
             }
             throw new CustomException(ErrorCode.INVALID_INPUT, "Slack이 요청을 거부했어요 (HTTP " + e.getStatusCode().value() + ")");

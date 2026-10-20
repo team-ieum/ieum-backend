@@ -83,7 +83,7 @@ public class SlackTokenService {
 
     /**
      * oauth.v2.access(grant_type=refresh_token) 교환만 하고 저장하지 않는다 — 폼 구성과 거절 분류는 여기 한 곳이다.
-     * Task 7 해제가 이것을 쓴다(설치를 지울 거라 회전 결과를 저장할 곳이 없다).
+     * 해제(SlackDisconnectService)가 쓴다(설치를 지울 거라 회전 결과를 저장할 곳이 없다).
      *
      * @throws CustomException AUTHENTICATION_REQUIRED(재연결) · TOKEN_REFRESH_FAILED
      */
