@@ -156,6 +156,21 @@ class CatalogStartupCheckTest {
         assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of())).isEmpty();
     }
 
+    @Test
+    @DisplayName("카탈로그 PR 모양 — slack_bot(auth slack_oauth) + builtin:slack_ ACTION + slack.channels 공급원이면 문제 없음")
+    void fixture_slackBotAccepted(@TempDir Path dir) throws IOException {
+        EventCatalog catalog = load(dir, MANUAL_APP + """
+                ,"slack_bot":{"provider":"slack","title":"Slack","brand":"slack","serviceType":"SLACK","auth":"slack_oauth"}""",
+                "[]", Map.of("slack_bot/send_channel_message.json", """
+                        {"node_type":"ACTION","kind":"action","tool_key":"builtin:slack_send_channel_message",
+                         "fixed":{"type":"ACTION","config":{}},
+                         "fields":{"channel":{"title":"채널","required":true,"optionsSource":"slack.channels"}}}"""));
+
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of("slack.channels"))).isEmpty();
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of()))
+                .containsExactly("optionsSource 공급원 없음: slack.channels (slack_bot.send_channel_message)");
+    }
+
     private static String gmailApp() {
         return MANUAL_APP + """
                 ,"gmail":{"provider":"google","title":"Gmail","brand":"gmail","serviceType":"GOOGLE","auth":"google_oauth"}""";
