@@ -146,6 +146,71 @@ class AuthServiceTest {
         assertThat(googleUser.getPasswordHash()).isNull();
     }
 
+    // ===== changePassword =====
+
+    @Test
+    void changePassword_success_updatesPasswordAndDeletesRefreshToken() {
+        User user = buildUser();
+        given(userRepository.findById(user.getId())).willReturn(Optional.of(user));
+        given(passwordEncoder.matches("OldPassword1!", "encoded-password")).willReturn(true);
+        given(passwordEncoder.matches("NewPassword1!", "encoded-password")).willReturn(false);
+        given(passwordEncoder.encode("NewPassword1!")).willReturn("new-encoded");
+
+        authService.changePassword(user.getId(), "OldPassword1!", "NewPassword1!");
+
+        assertThat(user.getPasswordHash()).isEqualTo("new-encoded");
+        then(refreshTokenRepository).should().deleteById(user.getId().toString());
+    }
+
+    @Test
+    void changePassword_wrongCurrent_throwsCurrentPasswordMismatch() {
+        User user = buildUser();
+        given(userRepository.findById(user.getId())).willReturn(Optional.of(user));
+        given(passwordEncoder.matches("WrongPass1!", "encoded-password")).willReturn(false);
+
+        assertChangePasswordFails(user.getId(), "WrongPass1!", "NewPassword1!", ErrorCode.CURRENT_PASSWORD_MISMATCH);
+        assertThat(user.getPasswordHash()).isEqualTo("encoded-password");
+    }
+
+    @Test
+    void changePassword_sameAsCurrent_throwsPasswordSameAsCurrent() {
+        User user = buildUser();
+        given(userRepository.findById(user.getId())).willReturn(Optional.of(user));
+        given(passwordEncoder.matches("OldPassword1!", "encoded-password")).willReturn(true);
+
+        assertChangePasswordFails(user.getId(), "OldPassword1!", "OldPassword1!", ErrorCode.PASSWORD_SAME_AS_CURRENT);
+    }
+
+    @Test
+    void changePassword_socialAccount_throwsNotSupported() {
+        User googleUser = User.builder()
+                .id(UUID.randomUUID())
+                .email("user@example.com")
+                .name("홍길동")
+                .provider(AuthProvider.GOOGLE)
+                .role(UserRole.ROLE_USER)
+                .build();
+        given(userRepository.findById(googleUser.getId())).willReturn(Optional.of(googleUser));
+
+        assertChangePasswordFails(googleUser.getId(), "any", "NewPassword1!", ErrorCode.PASSWORD_CHANGE_NOT_SUPPORTED);
+        assertThat(googleUser.getPasswordHash()).isNull();
+    }
+
+    @Test
+    void changePassword_userNotFound_throwsNotFound() {
+        UUID userId = UUID.randomUUID();
+        given(userRepository.findById(userId)).willReturn(Optional.empty());
+
+        assertChangePasswordFails(userId, "OldPassword1!", "NewPassword1!", ErrorCode.NOT_FOUND);
+    }
+
+    private void assertChangePasswordFails(UUID userId, String current, String next, ErrorCode expected) {
+        assertThatThrownBy(() -> authService.changePassword(userId, current, next))
+                .isInstanceOf(CustomException.class)
+                .satisfies(e -> assertThat(((CustomException) e).getErrorCode()).isEqualTo(expected));
+        then(refreshTokenRepository).should(never()).deleteById(anyString());
+    }
+
     // ===== login =====
 
     @Test

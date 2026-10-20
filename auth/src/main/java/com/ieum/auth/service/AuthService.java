@@ -71,6 +71,29 @@ public class AuthService {
         refreshTokenRepository.deleteById(user.getId().toString());
     }
 
+    /**
+     * 로그인 상태에서 현재 비밀번호를 확인한 뒤 바꾸고, Refresh Token을 지워 모든 기기의 세션을 끊는다.
+     * 비밀번호를 잊은 경우는 이메일 인증 기반 {@link #resetPassword}가 맡는다.
+     */
+    @Transactional
+    public void changePassword(UUID userId, String currentPassword, String newPassword) {
+        User user = userRepository.findById(userId)
+            .orElseThrow(() -> new CustomException(ErrorCode.NOT_FOUND));
+
+        if (user.getProvider() != AuthProvider.LOCAL) {
+            throw new CustomException(ErrorCode.PASSWORD_CHANGE_NOT_SUPPORTED);
+        }
+        if (!passwordEncoder.matches(currentPassword, user.getPasswordHash())) {
+            throw new CustomException(ErrorCode.CURRENT_PASSWORD_MISMATCH);
+        }
+        if (passwordEncoder.matches(newPassword, user.getPasswordHash())) {
+            throw new CustomException(ErrorCode.PASSWORD_SAME_AS_CURRENT);
+        }
+
+        user.updatePassword(passwordEncoder.encode(newPassword));
+        refreshTokenRepository.deleteById(user.getId().toString());
+    }
+
     @Transactional
     public TokenInfo login(String email, String password) {
         User user = userRepository.findByEmail(email)
