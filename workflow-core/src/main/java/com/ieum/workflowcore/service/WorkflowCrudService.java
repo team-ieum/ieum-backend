@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.chat.repository.ChatMessageRepository;
+import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.document.WorkflowDefinitionRepository;
 import com.ieum.workflowcore.domain.Workflow;
@@ -64,6 +66,8 @@ public class WorkflowCrudService {
     private final ObjectMapper objectMapper;
     private final AppTriggerSubscriptionService appTriggerSubscriptionService;
     private final WorkflowWebhookTokenRepository webhookTokenRepository;
+    private final ChatSessionRepository chatSessionRepository;
+    private final ChatMessageRepository chatMessageRepository;
 
     // ------------------------------------------------------------------ WRITE
 
@@ -301,6 +305,9 @@ public class WorkflowCrudService {
         nodeTestSampleRepository.deleteByWorkflow(workflow);
         appTriggerSubscriptionService.deleteByWorkflowId(workflowId);
         webhookTokenRepository.deleteByWorkflowId(workflowId);
+        // 채팅 세션은 workflow_id FK가 없어 지우지 않으면 고아로 남는다. 메시지 → 세션 순서(session_id FK).
+        chatMessageRepository.deleteByWorkflowId(workflowId);
+        chatSessionRepository.deleteByWorkflowId(workflowId);
         workflowRepository.delete(workflow);
 
         afterCommit(() -> {

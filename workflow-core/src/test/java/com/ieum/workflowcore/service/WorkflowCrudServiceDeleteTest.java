@@ -4,6 +4,8 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.inOrder;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.workflowcore.chat.repository.ChatMessageRepository;
+import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
 import com.ieum.workflowcore.document.WorkflowDefinitionRepository;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.repository.NodeTestSampleRepository;
@@ -44,6 +46,8 @@ class WorkflowCrudServiceDeleteTest {
     @Mock private NodeTestSampleRepository nodeTestSampleRepository;
     @Mock private AppTriggerSubscriptionService appTriggerSubscriptionService;
     @Mock private WorkflowWebhookTokenRepository webhookTokenRepository;
+    @Mock private ChatSessionRepository chatSessionRepository;
+    @Mock private ChatMessageRepository chatMessageRepository;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
     @InjectMocks private WorkflowCrudService service;
 
@@ -92,6 +96,20 @@ class WorkflowCrudServiceDeleteTest {
 
         InOrder order = inOrder(webhookTokenRepository, workflowRepository);
         order.verify(webhookTokenRepository).deleteByWorkflowId(workflowId);
+        order.verify(workflowRepository).delete(workflow);
+    }
+
+    @Test
+    @DisplayName("삭제 — 채팅 메시지 → 세션 → 워크플로우 순으로 지운다(IEUM-BE-96, 채팅이 고아로 남지 않게)")
+    void delete_removesChatMessagesThenSessionsBeforeWorkflow() {
+        Workflow workflow = workflow();
+        given(workflowRepository.findByIdAndUserId(workflowId, userId)).willReturn(Optional.of(workflow));
+
+        runInTransaction(() -> service.deleteWorkflow(userId, workflowId));
+
+        InOrder order = inOrder(chatMessageRepository, chatSessionRepository, workflowRepository);
+        order.verify(chatMessageRepository).deleteByWorkflowId(workflowId);
+        order.verify(chatSessionRepository).deleteByWorkflowId(workflowId);
         order.verify(workflowRepository).delete(workflow);
     }
 
