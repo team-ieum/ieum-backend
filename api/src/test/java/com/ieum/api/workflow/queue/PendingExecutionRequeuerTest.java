@@ -11,6 +11,7 @@ import com.ieum.api.deployment.DeploymentControl;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.Clock;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -18,12 +19,19 @@ import org.junit.jupiter.api.BeforeEach;
 import org.mockito.ArgumentCaptor;
 import org.springframework.data.domain.Pageable;
 import org.springframework.test.util.ReflectionTestUtils;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import com.ieum.workflowcore.repository.WorkflowExecutionRepository.PendingObservation;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.core.read.ListAppender;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import org.slf4j.LoggerFactory;
 
 class PendingExecutionRequeuerTest {
     private WorkflowExecutionRepository executions;
     private ExecutionJobQueue queue;
     private DeploymentControl control;
     private PendingExecutionRequeuer requeuer;
+    private SimpleMeterRegistry metrics;
 
     @BeforeEach
     void setUp() {
@@ -33,6 +41,8 @@ class PendingExecutionRequeuerTest {
         when(control.isOwner()).thenReturn(true);
         when(executions.findPendingIdsBetween(any(), any(), any())).thenReturn(List.of());
         requeuer = new PendingExecutionRequeuer(executions, queue, control);
+        metrics = new SimpleMeterRegistry();
+        ReflectionTestUtils.setField(requeuer, "metrics", metrics);
         ReflectionTestUtils.setField(requeuer, "notBefore", Instant.now().minusSeconds(86400).toString());
         requeuer.validatePolicy();
     }
@@ -92,10 +102,120 @@ class PendingExecutionRequeuerTest {
 
     @Test
     void ownershipLossDuringBatchStopsFurtherPublication() {
+        ReflectionTestUtils.setField(requeuer, "nextObservation", Instant.MAX);
         when(executions.findPendingIdsBetween(any(), any(), any()))
             .thenReturn(List.of(UUID.randomUUID(), UUID.randomUUID()));
         when(control.isOwner()).thenReturn(true, true, false);
         requeuer.recoverPending();
         verify(queue, times(1)).requeuePending(any(), eq(3));
+    }
+
+    @Test
+    void pendingAt61MinutesWarnsAndSetsSampleMetricWithoutReplayingOrFailingIt() {
+        Instant now = Instant.parse("2026-10-21T03:00:00Z");
+        setNow(now);
+        LocalDateTime started = LocalDateTime.ofInstant(now.minusSeconds(61 * 60), ZoneId.systemDefault());
+        var row = observation(started);
+        when(executions.findPendingObservationsBetween(any(), any(), any())).thenReturn(List.of(row));
+        Logger logger = (Logger) LoggerFactory.getLogger(PendingExecutionRequeuer.class);
+        var logs = new ListAppender<ILoggingEvent>(); logs.start(); logger.addAppender(logs);
+        try {
+            requeuer.recoverPending();
+            requeuer.recoverPending(); // Observation is rate limited independently of the 20-second scan.
+        } finally { logger.detachAppender(logs); }
+        assertThat(gauge("excluded.sampled", "reason", "age")).isEqualTo(1);
+        assertThat(gauge("excluded.oldest_age_seconds", "reason", "age")).isEqualTo(3660);
+        assertThat(logs.list.stream().filter(log -> log.getLevel().equals(ch.qos.logback.classic.Level.WARN))
+            .map(ILoggingEvent::getFormattedMessage)).singleElement()
+            .asString().contains("운영자 검토 필요", "reason: age", row.getId().toString(), "PENDING 유지");
+        verify(executions, times(1)).findPendingObservationsBetween(any(), any(), any());
+        verifyNoInteractions(queue);
+        verify(executions, never()).save(any());
+        verify(executions, never()).finishIfNotTerminal(any(), any(), anyBoolean(), any());
+    }
+
+    @Test
+    void excludedObservationIsOwnerOnlyAndResetsGaugesOnLossOfOwnership() {
+        var row = observation(LocalDateTime.now().minusDays(2));
+        when(executions.findPendingObservationsBefore(any(), any()))
+            .thenReturn(List.of(row));
+        requeuer.recoverPending();
+        assertThat(gauge("excluded.sampled", "reason", "before_cutoff")).isEqualTo(1);
+        clearInvocations(executions);
+        when(control.isOwner()).thenReturn(false);
+        requeuer.recoverPending();
+        assertThat(gauge("excluded.sampled", "reason", "before_cutoff")).isZero();
+        assertThat(metrics.get("ieum.workflow.pending.recovery.observed_at_epoch_seconds").gauge().value()).isZero();
+        verifyNoInteractions(executions);
+    }
+
+    @Test
+    void observationUses101RowSentinelAndResetsAfterBacklogClears() {
+        Instant now = Instant.now(); setNow(now);
+        var rows = java.util.stream.IntStream.range(0, 101)
+            .mapToObj(i -> observation(LocalDateTime.now().minusHours(2).plusSeconds(i))).toList();
+        when(executions.findPendingObservationsBetween(any(), any(), any())).thenReturn(rows, List.of());
+        requeuer.recoverPending();
+        assertThat(gauge("excluded.sampled", "reason", "age")).isEqualTo(100);
+        assertThat(gauge("excluded.limit_reached", "reason", "age")).isEqualTo(1);
+        var page = ArgumentCaptor.forClass(Pageable.class);
+        verify(executions).findPendingObservationsBetween(any(), any(), page.capture());
+        assertThat(page.getValue().getPageSize()).isEqualTo(101);
+        ReflectionTestUtils.setField(requeuer, "clock", Clock.fixed(now.plusSeconds(61), ZoneId.systemDefault()));
+        requeuer.recoverPending();
+        assertThat(gauge("excluded.sampled", "reason", "age")).isZero();
+        assertThat(gauge("excluded.limit_reached", "reason", "age")).isZero();
+        assertThat(gauge("excluded.oldest_age_seconds", "reason", "age")).isZero();
+    }
+
+    @Test
+    void exhaustedAndDeferredAreCountedAndLastBatchGaugesRecover() {
+        when(executions.findPendingIdsBetween(any(), any(), any()))
+            .thenReturn(List.of(UUID.randomUUID(), UUID.randomUUID()), List.of());
+        when(queue.requeuePending(any(), eq(3))).thenReturn(ExecutionJobQueue.RecoveryResult.ATTEMPTS_EXHAUSTED,
+            ExecutionJobQueue.RecoveryResult.DEFERRED);
+        requeuer.recoverPending();
+        assertThat(gauge("batch", "result", "attempts_exhausted")).isEqualTo(1);
+        assertThat(gauge("batch", "result", "deferred")).isEqualTo(1);
+        assertThat(metrics.get("ieum.workflow.pending.recovery.results").tag("result", "attempts_exhausted")
+            .counter().count()).isEqualTo(1);
+        requeuer.recoverPending();
+        assertThat(gauge("batch", "result", "attempts_exhausted")).isZero();
+        assertThat(gauge("batch", "result", "deferred")).isZero();
+    }
+
+    @Test
+    void observationFailurePreservesLastSnapshotAndDoesNotBlockInWindowRecovery() {
+        Instant now = Instant.now(); setNow(now);
+        var row = observation(LocalDateTime.now().minusHours(2));
+        when(executions.findPendingObservationsBetween(any(), any(), any())).thenReturn(List.of(row))
+            .thenThrow(new IllegalStateException("observation timed out"));
+        requeuer.recoverPending();
+        double successfulAt = metrics.get("ieum.workflow.pending.recovery.observed_at_epoch_seconds").gauge().value();
+        ReflectionTestUtils.setField(requeuer, "clock", Clock.fixed(now.plusSeconds(61), ZoneId.systemDefault()));
+        when(executions.findPendingIdsBetween(any(), any(), any())).thenReturn(List.of(UUID.randomUUID()));
+        requeuer.recoverPending();
+        assertThat(gauge("excluded.sampled", "reason", "age")).isEqualTo(1);
+        assertThat(metrics.get("ieum.workflow.pending.recovery.observed_at_epoch_seconds").gauge().value())
+            .isEqualTo(successfulAt);
+        assertThat(metrics.get("ieum.workflow.pending.recovery.observation.failures").counter().count()).isEqualTo(1);
+        verify(queue).requeuePending(any(), eq(3));
+    }
+
+    private void setNow(Instant now) {
+        ReflectionTestUtils.setField(requeuer, "clock", Clock.fixed(now, ZoneId.systemDefault()));
+        ReflectionTestUtils.setField(requeuer, "notBefore", now.minusSeconds(86400).toString());
+        requeuer.validatePolicy();
+    }
+
+    private PendingObservation observation(LocalDateTime started) {
+        var row = mock(PendingObservation.class);
+        when(row.getId()).thenReturn(UUID.randomUUID());
+        when(row.getStartedAt()).thenReturn(started);
+        return row;
+    }
+
+    private double gauge(String suffix, String key, String value) {
+        return metrics.get("ieum.workflow.pending.recovery." + suffix).tag(key, value).gauge().value();
     }
 }

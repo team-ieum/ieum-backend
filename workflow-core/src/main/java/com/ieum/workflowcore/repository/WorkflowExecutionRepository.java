@@ -17,8 +17,30 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.data.domain.Pageable;
+import jakarta.persistence.QueryHint;
+import org.springframework.data.jpa.repository.QueryHints;
 
 public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecution, UUID> {
+
+    interface PendingObservation {
+        UUID getId();
+        LocalDateTime getStartedAt();
+    }
+
+    /** Bounded result samples; these queries never mutate historical executions. */
+    @QueryHints(@QueryHint(name = "jakarta.persistence.query.timeout", value = "3000"))
+    @Query("SELECT e.id AS id, e.startedAt AS startedAt FROM WorkflowExecution e WHERE "
+        + "e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.PENDING "
+        + "AND e.startedAt < :threshold ORDER BY e.startedAt, e.id")
+    List<PendingObservation> findPendingObservationsBefore(@Param("threshold") LocalDateTime threshold,
+        Pageable pageable);
+
+    @QueryHints(@QueryHint(name = "jakarta.persistence.query.timeout", value = "3000"))
+    @Query("SELECT e.id AS id, e.startedAt AS startedAt FROM WorkflowExecution e WHERE "
+        + "e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.PENDING "
+        + "AND e.startedAt >= :notBefore AND e.startedAt < :threshold ORDER BY e.startedAt, e.id")
+    List<PendingObservation> findPendingObservationsBetween(@Param("notBefore") LocalDateTime notBefore,
+        @Param("threshold") LocalDateTime threshold, Pageable pageable);
 
     @Query("SELECT e.id FROM WorkflowExecution e WHERE "
         + "e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.PENDING "
