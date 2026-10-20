@@ -39,7 +39,7 @@ public interface UserControllerDocs {
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<Void>> changePassword(CustomUserDetails userDetails, ChangePasswordRequest request);
 
-    @Operation(summary = "회원 탈퇴")
+    @Operation(summary = "회원 탈퇴", description = "계정을 삭제한다. Slack 연결도 같이 해제한다 — 같은 워크스페이스를 쓰는 다른 사용자가 없으면 탈퇴가 커밋된 뒤 봇 토큰을 폐기한다.")
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<Void>> deleteMyAccount(CustomUserDetails userDetails);
 }

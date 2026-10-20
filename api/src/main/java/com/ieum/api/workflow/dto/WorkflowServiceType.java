@@ -27,6 +27,7 @@ public enum WorkflowServiceType {
         "notion", NOTION,
         "github", GITHUB,
         "slack", SLACK,
+        "slack_bot", SLACK,
         "discord", DISCORD,
         "webhook", WEBHOOK,
         "http", WEBHOOK
@@ -35,6 +36,7 @@ public enum WorkflowServiceType {
     /** AI 노드 config.tools[].name 접두사 → 서비스. AgentNodeExecutor/ToolAuthResolver의 도구 이름 규칙과 일치해야 한다. */
     private static final Map<String, WorkflowServiceType> TOOL_PREFIXES = Map.of(
         "slack", SLACK,
+        "builtin:slack_", SLACK,
         "discord", DISCORD,
         "builtin:notion_", NOTION,
         "builtin:github_", GITHUB,
