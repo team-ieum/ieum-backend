@@ -1,9 +1,11 @@
 package com.ieum.api.user.controller;
 
+import com.ieum.api.user.dto.ChangePasswordRequest;
 import com.ieum.api.user.dto.UpdateUserRequest;
 import com.ieum.api.user.dto.UserResponse;
 import com.ieum.api.user.service.UserService;
 import com.ieum.auth.security.CustomUserDetails;
+import com.ieum.auth.service.AuthService;
 import com.ieum.common.dto.ApiResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class UserController implements UserControllerDocs {
 
     private final UserService userService;
+    private final AuthService authService;
 
     @GetMapping("/me")
     public ResponseEntity<ApiResponse<UserResponse>> getMyProfile(
@@ -37,6 +40,15 @@ public class UserController implements UserControllerDocs {
 
         return ResponseEntity.ok(
             ApiResponse.ok(userService.updateMyProfile(userDetails.getId(), request.getName())));
+    }
+
+    @PatchMapping("/me/password")
+    public ResponseEntity<ApiResponse<Void>> changePassword(
+        @AuthenticationPrincipal CustomUserDetails userDetails,
+        @RequestBody @Valid ChangePasswordRequest request) {
+
+        authService.changePassword(userDetails.getId(), request.getCurrentPassword(), request.getNewPassword());
+        return ResponseEntity.ok(ApiResponse.ok());
     }
 
     @DeleteMapping("/me")

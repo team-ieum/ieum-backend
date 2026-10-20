@@ -12,9 +12,12 @@ import com.ieum.common.exception.ErrorCode;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.time.Duration;
+import java.util.Locale;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.mail.MailException;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
@@ -35,6 +38,7 @@ public class EmailVerificationService {
     static final long VERIFIED_TTL_SECONDS = 600;
     static final long RESEND_COOLDOWN_MILLIS = 30_000;
     static final int MAX_ATTEMPTS = 5;
+    static final Duration BLOCK_DURATION = Duration.ofHours(12);
 
     private static final SecureRandom RANDOM = new SecureRandom();
 
@@ -42,11 +46,13 @@ public class EmailVerificationService {
     private final EmailVerifiedRepository verifiedRepository;
     private final UserRepository userRepository;
     private final JavaMailSender mailSender;
+    private final StringRedisTemplate redisTemplate;
 
     @Value("${spring.mail.username:}")
     private String from;
 
     public void sendCode(String email, VerificationPurpose purpose) {
+        checkNotBlocked(purpose, email);
         if (!isSendTarget(email, purpose)) {
             return;
         }
@@ -74,6 +80,7 @@ public class EmailVerificationService {
 
     // ponytail: 시도 횟수는 read-modify-write라 동시 요청이 몰리면 5회를 약간 넘길 수 있다. 6자리 코드에서 의미 있는 차이가 아니라 원자 연산(INCR)은 생략.
     public void verifyCode(String email, String code, VerificationPurpose purpose) {
+        checkNotBlocked(purpose, email);
         String key = key(purpose, email);
         EmailVerificationCode saved = codeRepository.findById(key)
             .orElseThrow(() -> new CustomException(ErrorCode.VERIFICATION_CODE_EXPIRED));
@@ -84,6 +91,8 @@ public class EmailVerificationService {
             saved.increaseAttempts(System.currentTimeMillis());
             if (saved.getAttempts() >= MAX_ATTEMPTS) {
                 codeRepository.deleteById(key);
+                // 재발송으로 시도 횟수를 무한히 되살리지 못하게 12시간 동안 발송·검증을 막는다.
+                redisTemplate.opsForValue().set(blockKey(purpose, email), "1", BLOCK_DURATION);
                 throw new CustomException(ErrorCode.VERIFICATION_ATTEMPTS_EXCEEDED);
             }
             codeRepository.save(saved);
@@ -148,7 +157,18 @@ public class EmailVerificationService {
         }
     }
 
+    private void checkNotBlocked(VerificationPurpose purpose, String email) {
+        if (Boolean.TRUE.equals(redisTemplate.hasKey(blockKey(purpose, email)))) {
+            throw new CustomException(ErrorCode.VERIFICATION_BLOCKED);
+        }
+    }
+
+    private static String blockKey(VerificationPurpose purpose, String email) {
+        return "verify:block:" + key(purpose, email);
+    }
+
+    // 대소문자·공백만 바꾼 이메일로 쿨다운·시도 횟수·12시간 차단을 우회하지 못하게 정규화한다.
     private static String key(VerificationPurpose purpose, String email) {
-        return purpose.name() + ":" + email;
+        return purpose.name() + ":" + email.trim().toLowerCase(Locale.ROOT);
     }
 }
