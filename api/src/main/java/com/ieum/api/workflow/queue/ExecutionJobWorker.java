@@ -9,6 +9,8 @@ import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
+import com.ieum.api.deployment.ExecutionAdvisoryLocks;
+import org.springframework.beans.factory.annotation.Autowired;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.Set;
@@ -26,7 +28,8 @@ import org.springframework.stereotype.Component;
 /**
  * 잡 큐에서 꺼낸 executionId로 워크플로우를 실행한다(소비 전담).
  *
- * <p><b>워커는 API와 같은 프로세스에서 돈다 — 별도 프로세스로 빼지 말 것.</b>
+ * <p>분산 모드에서는 Redis 이벤트 전달과 PostgreSQL 실행 잠금으로 여러 워커를 지원한다.
+ * <p><b>분산 모드가 꺼져 있으면 워커는 API와 같은 프로세스에서 돈다.</b>
  * {@code ExecutionEventPublisher}가 executionId 키의 in-memory {@code Sinks.Many} 허브라,
  * SSE를 구독한 HTTP 스레드와 실행 스레드가 같은 JVM에 있어야만 진행 이벤트가 전달된다.
  * 이 큐의 목적은 수평 확장이 아니라 <b>내구성(프로세스 재시작 복구)</b>이다.
@@ -46,6 +49,9 @@ import org.springframework.stereotype.Component;
 public class ExecutionJobWorker implements StreamListener<String, MapRecord<String, String, String>> {
 
     /** 실행 풀 포화 시 제출 재시도 횟수·간격. 다 소진하면 폴링 스레드에서 인라인 실행한다. */
+    @Autowired(required = false)
+    private ExecutionAdvisoryLocks advisoryLocks;
+
     private static final int SUBMIT_ATTEMPTS = 3;
     private static final Duration SUBMIT_RETRY_DELAY = Duration.ofSeconds(1);
 
@@ -96,6 +102,19 @@ public class ExecutionJobWorker implements StreamListener<String, MapRecord<Stri
             log.info("[ExecutionJobWorker] 이미 실행 중인 잡의 재배달 — 무시. executionId: {}", executionId);
             return;
         }
+        ExecutionAdvisoryLocks.Lease lease = null;
+        if (advisoryLocks != null) {
+            try { lease = advisoryLocks.tryAcquire(executionId); }
+            catch (Exception e) {
+                inFlight.remove(executionId);
+                log.error("Cannot acquire execution lock; leaving job pending: {}", executionId, e);
+                return;
+            }
+            if (lease == null) {
+                inFlight.remove(executionId);
+                return; // The owner will acknowledge; do not lose recovery if it crashes.
+            }
+        }
         try {
             Optional<WorkflowExecution> found =
                 workflowExecutionRepository.findWithVersionById(executionId);
@@ -120,6 +139,10 @@ public class ExecutionJobWorker implements StreamListener<String, MapRecord<Stri
             log.error("[ExecutionJobWorker] 잡 처리 실패 — executionId: {}", executionId, e);
             workflowExecutionService.markAsFailed(executionId, e.getMessage());
         } finally {
+            if (lease != null) {
+                try { lease.close(); }
+                catch (Exception e) { log.error("Cannot release execution lock: {}", executionId, e); }
+            }
             inFlight.remove(executionId);
             // ack는 반드시 실행이 종료 상태로 확정된 뒤다. 앞당기면 프로세스가 죽을 때
             // pending에 남지 않아 재시작 복구 대상에서 빠진다.

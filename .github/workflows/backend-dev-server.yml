@@ -86,6 +86,7 @@ jobs:
         run: |
           cat > Dockerfile.ci <<'EOF'
           FROM eclipse-temurin:21-jre
+          LABEL ieum.bluegreen.capable="true"
           WORKDIR /app
           COPY .deploy/app.jar /app/app.jar
           EXPOSE 8080
@@ -100,39 +101,11 @@ jobs:
             -t $IMAGE_NAME:${{ github.sha }} \
             -t $IMAGE_NAME:latest .
 
-      # 기존 백엔드 컨테이너 교체
-      - name: Restart backend container
+      - name: Deploy through shared blue-green controller
+        env:
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker network inspect "$DOCKER_NETWORK" >/dev/null 2>&1 \
-            || docker network create --subnet 10.10.10.0/24 "$DOCKER_NETWORK"
-
-          docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-          docker rm -f "$LEGACY_CONTAINER_NAME" >/dev/null 2>&1 || true
-
-          ENV_ARGS=""
-          if [ -f "$ENV_FILE" ]; then
-            ENV_ARGS="--env-file $ENV_FILE"
-          fi
-
-          docker run -d \
-            --name "$CONTAINER_NAME" \
-            --restart unless-stopped \
-            --network "$DOCKER_NETWORK" \
-            --ip "$BACKEND_IP" \
-            -e SPRING_PROFILES_ACTIVE="$SPRING_PROFILES_ACTIVE" \
-            $ENV_ARGS \
-            "$IMAGE_NAME:latest"
-
-      # 배포 확인
-      - name: Health check
-        run: |
-          for i in $(seq 1 30); do
-            if curl -fsS "http://$BACKEND_IP:$BACKEND_PORT/actuator/health/readiness" >/dev/null 2>&1; then
-              exit 0
-            fi
-
-            sleep 2
-          done
-
-          docker logs --tail 200 "$CONTAINER_NAME"
-          exit 1
+          set -euo pipefail
+          python3 /home/kwung/deploy/bluegreen/bluegreen.py deploy \
+            --service backend \
+            --image "$IMAGE_NAME:$IMAGE_TAG"

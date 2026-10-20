@@ -6,6 +6,7 @@ dependencies {
     implementation project(':common')
     implementation project(':auth')
     implementation project(':workflow-core')
+    implementation 'org.springframework.boot:spring-boot-starter-quartz'
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
     implementation 'org.springframework.boot:spring-boot-starter-websocket'

@@ -231,4 +231,16 @@ class ExecutionJobQueueBootstrapTest {
             .withId(id)
             .withStreamKey(ExecutionJobQueue.STREAM_KEY);
     }
+    @Test
+    void liveConsumerIsNeverReclaimedEvenAfterMinIdle() {
+        var control = Mockito.mock(com.ieum.api.deployment.DeploymentControl.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(bootstrap, "deploymentControl", control);
+        when(container.isRunning()).thenReturn(true);
+        RecordId id = RecordId.of("5-0");
+        givenPending(id);
+        when(control.consumerAlive(anyString())).thenReturn(true);
+        bootstrap.reclaimOrphanedJobs();
+        verify(streamOperations, never()).claim(anyString(), anyString(), anyString(), any(XClaimOptions.class));
+    }
+
 }

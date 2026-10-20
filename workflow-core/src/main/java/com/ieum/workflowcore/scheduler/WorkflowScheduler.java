@@ -8,6 +8,7 @@ import org.quartz.CronTrigger;
 import org.quartz.JobBuilder;
 import org.quartz.JobDetail;
 import org.quartz.JobKey;
+import org.quartz.ObjectAlreadyExistsException;
 import org.quartz.Scheduler;
 import org.quartz.SchedulerException;
 import org.quartz.TriggerBuilder;
@@ -26,6 +27,11 @@ import org.springframework.stereotype.Component;
 public class WorkflowScheduler {
 
     private final Scheduler scheduler;
+
+    public boolean jobExists(UUID workflowId) {
+        try { return scheduler.checkExists(JobKeyGenerator.jobKey(workflowId)); }
+        catch (SchedulerException e) { throw new IllegalStateException(e); }
+    }
 
     /**
      * 워크플로우 스케줄 Job을 등록하거나 Cron 표현식을 갱신한다.
@@ -60,7 +66,11 @@ public class WorkflowScheduler {
                     .usingJobData(WorkflowScheduleJob.KEY_WORKFLOW_ID, workflowId.toString())
                     .storeDurably(false)
                     .build();
-                scheduler.scheduleJob(jobDetail, trigger);
+                try { scheduler.scheduleJob(jobDetail, trigger); }
+                catch (ObjectAlreadyExistsException race) {
+                    // Another cluster member restored the same deterministic JobKey.
+                    scheduler.rescheduleJob(triggerKey, trigger);
+                }
                 log.info("[WorkflowScheduler] Job 신규 등록 — workflowId: {}, cron: {}", workflowId, cronExpression);
             }
         } catch (SchedulerException e) {

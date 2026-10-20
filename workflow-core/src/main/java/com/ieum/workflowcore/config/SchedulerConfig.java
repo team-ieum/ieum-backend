@@ -1,6 +1,7 @@
 package com.ieum.workflowcore.config;
 
 import java.util.Properties;
+import javax.sql.DataSource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationContext;
@@ -32,12 +33,16 @@ public class SchedulerConfig {
     public SchedulerFactoryBean schedulerFactoryBean(
             QuartzJobFactory jobFactory,
             @Value("${ieum.scheduler.thread-count:10}") int threadCount,
-            @Value("${ieum.scheduler.thread-name-prefix:quartz-}") String threadNamePrefix
+            @Value("${ieum.scheduler.thread-name-prefix:quartz-}") String threadNamePrefix,
+            DataSource dataSource,
+            @Value("${ieum.scheduler.job-store-type:ram}") String jobStoreType,
+            @Value("${ieum.scheduler.auto-startup:true}") boolean autoStartup
     ) {
         SchedulerFactoryBean factory = new SchedulerFactoryBean();
         factory.setJobFactory(jobFactory);
         factory.setWaitForJobsToCompleteOnShutdown(true);
-        factory.setOverwriteExistingJobs(true);
+        factory.setOverwriteExistingJobs(false);
+        factory.setAutoStartup(autoStartup);
 
         log.info("[SchedulerConfig] Quartz 스레드풀 설정 — threadCount: {}, threadNamePrefix: {}",
             threadCount, threadNamePrefix);
@@ -45,7 +50,18 @@ public class SchedulerConfig {
         Properties props = new Properties();
         props.setProperty("org.quartz.threadPool.threadCount", String.valueOf(threadCount));
         props.setProperty("org.quartz.threadPool.threadNamePrefix", threadNamePrefix);
-        props.setProperty("org.quartz.jobStore.class", "org.quartz.simpl.RAMJobStore");
+        if ("jdbc".equals(jobStoreType)) {
+            factory.setDataSource(dataSource);
+            factory.setSchedulerName("ieum-workflows");
+            props.setProperty("org.quartz.scheduler.instanceId", "AUTO");
+            props.setProperty("org.quartz.jobStore.isClustered", "true");
+            props.setProperty("org.quartz.jobStore.clusterCheckinInterval", "10000");
+            props.setProperty("org.quartz.jobStore.driverDelegateClass", "org.quartz.impl.jdbcjobstore.PostgreSQLDelegate");
+            props.setProperty("org.quartz.jobStore.tablePrefix", "IEUM_QRTZ_");
+            props.setProperty("org.quartz.jobStore.useProperties", "true");
+        } else {
+            props.setProperty("org.quartz.jobStore.class", "org.quartz.simpl.RAMJobStore");
+        }
 
         factory.setQuartzProperties(props);
         return factory;

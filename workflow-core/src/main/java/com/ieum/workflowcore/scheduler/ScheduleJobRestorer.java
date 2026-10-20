@@ -6,6 +6,7 @@ import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
 
@@ -20,6 +21,9 @@ import org.springframework.stereotype.Component;
 @Component
 @RequiredArgsConstructor
 public class ScheduleJobRestorer implements ApplicationRunner {
+
+    @Value("${ieum.scheduler.job-store-type:ram}")
+    private String jobStoreType = "ram";
 
     private final WorkflowCrudService workflowCrudService;
     private final WorkflowScheduler workflowScheduler;
@@ -38,7 +42,9 @@ public class ScheduleJobRestorer implements ApplicationRunner {
         int successCount = 0;
         for (Workflow workflow : scheduleWorkflows) {
             try {
-                workflowScheduler.registerJob(workflow.getId(), workflow.getCronExpression());
+                if (!"jdbc".equals(jobStoreType) || !workflowScheduler.jobExists(workflow.getId())) {
+                    workflowScheduler.registerJob(workflow.getId(), workflow.getCronExpression());
+                }
                 successCount++;
             } catch (Exception e) {
                 // 단일 Job 복구 실패가 전체 기동을 막지 않도록 예외를 삼킴

@@ -292,4 +292,14 @@ class ExecutionJobWorkerTest {
         verify(streamOperations).acknowledge(
             ExecutionJobQueue.STREAM_KEY, ExecutionJobQueue.GROUP, RECORD_ID);
     }
+    @Test
+    void anotherInstanceOwnsExecution_doesNotExecuteOrAcknowledge() throws Exception {
+        var locks = Mockito.mock(com.ieum.api.deployment.ExecutionAdvisoryLocks.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(worker, "advisoryLocks", locks);
+        when(locks.tryAcquire(executionId)).thenReturn(null);
+        worker.onMessage(jobRecord(executionId.toString()));
+        verify(workflowExecutionRepository, never()).findWithVersionById(any());
+        verify(streamOperations, never()).acknowledge(any(), any(), any(RecordId.class));
+    }
+
 }

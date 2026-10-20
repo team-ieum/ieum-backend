@@ -4,6 +4,9 @@ import static com.ieum.api.workflow.queue.ExecutionJobQueue.CONSUMER;
 import static com.ieum.api.workflow.queue.ExecutionJobQueue.GROUP;
 import static com.ieum.api.workflow.queue.ExecutionJobQueue.STREAM_KEY;
 
+import com.ieum.api.deployment.DeploymentControl;
+import org.springframework.beans.factory.annotation.Autowired;
+import jakarta.annotation.PreDestroy;
 import java.time.Duration;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
@@ -31,7 +34,8 @@ import org.springframework.stereotype.Component;
  * 잡 큐를 기동하고(컨슈머 그룹 생성 → 소비 시작) 고아 잡을 주기적으로 회수한다.
  * 부팅 복원이라는 점에서 {@code ScheduleJobRestorer}(Quartz)와 같은 역할이다.
  *
- * <p><b>이 큐는 단일 인스턴스 배포(stop-then-start)를 전제로 한다.</b> 컨슈머 이름이 상수라
+ * <p>분산 배포에서는 인스턴스별 소비자·생존 키·PostgreSQL 실행 잠금을 사용한다.
+ * <p><b>분산 모드가 꺼져 있으면 단일 인스턴스 배포를 전제로 한다.</b> 컨슈머 이름이 상수라
  * 인스턴스를 구분하지 않고, SSE 허브({@code ExecutionEventPublisher})도 in-memory라 애초에
  * 다중 인스턴스가 성립하지 않는다. 롤링 배포처럼 두 인스턴스가 겹치는 순간이 생기면
  * {@link #reclaimOrphanedJobs()}가 살아 있는 인스턴스의 in-flight 잡을 회수해 이중 실행할 수 있다.
@@ -50,6 +54,28 @@ public class ExecutionJobQueueBootstrap implements ApplicationRunner {
      * ponytail: 단순 1회 조회. 이보다 많이 밀렸다면 로그로 알리고 다음 주기에 마저 회수한다.
      */
     private static final int RECLAIM_LIMIT = 1_000;
+
+    @Value("${ieum.workflow.queue.consumer-name:runner}")
+    private String consumerName = CONSUMER;
+    @Autowired(required = false)
+    private DeploymentControl deploymentControl;
+    private boolean registered;
+    private volatile boolean draining;
+    public boolean isDraining() { return draining; }
+    public void resumeConsuming() { draining = false; startWhenReady(); }
+
+    @PreDestroy
+    public void stopConsuming() {
+        draining = true;
+        executionJobQueue.markConsumerUnhealthy(new IllegalStateException("Instance shutting down"));
+        executionJobListenerContainer.stop();
+    }
+
+    @Scheduled(fixedDelay = 20000, initialDelay = 1000)
+    public void startWhenReady() {
+        if (!draining && deploymentControl != null && deploymentControl.distributedReady()
+                && !executionJobListenerContainer.isRunning()) run(null);
+    }
 
     private final StringRedisTemplate redisTemplate;
     private final StreamMessageListenerContainer<String, MapRecord<String, String, String>>
@@ -87,8 +113,10 @@ public class ExecutionJobQueueBootstrap implements ApplicationRunner {
     }
 
     @Override
-    public void run(ApplicationArguments args) {
+    public synchronized void run(ApplicationArguments args) {
+        if (draining || (deploymentControl != null && !deploymentControl.distributedReady())) return;
         try {
+            if (deploymentControl != null) deploymentControl.heartbeat();
             createGroupIfAbsent();
             startConsuming();
             log.info("[ExecutionJobQueueBootstrap] 잡 큐 기동 완료 — stream: {}, group: {}, minIdle: {}",
@@ -131,9 +159,13 @@ public class ExecutionJobQueueBootstrap implements ApplicationRunner {
                     RECLAIM_LIMIT);
             }
 
-            List<RecordId> ids = pending.stream().map(PendingMessage::getId).toList();
+            List<RecordId> ids = pending.stream()
+                .filter(message -> deploymentControl == null
+                    || !deploymentControl.consumerAlive(message.getConsumerName()))
+                .map(PendingMessage::getId).toList();
+            if (ids.isEmpty()) return;
             List<MapRecord<String, String, String>> claimed = ops.claim(
-                STREAM_KEY, GROUP, CONSUMER, XClaimOptions.minIdle(reclaimMinIdle).ids(ids));
+                STREAM_KEY, GROUP, consumerName, XClaimOptions.minIdle(reclaimMinIdle).ids(ids));
             if (claimed.isEmpty()) {
                 return;  // 전부 아직 in-flight — minIdle이 지켜준 경우다
             }
@@ -175,13 +207,16 @@ public class ExecutionJobQueueBootstrap implements ApplicationRunner {
         // cancelOnError(항상 false): 구독을 살려 두고 onPollError가 복구를 시도한다.
         StreamReadRequest<String> request = StreamReadRequest
             .builder(StreamOffset.create(STREAM_KEY, ReadOffset.lastConsumed()))
-            .consumer(Consumer.from(GROUP, CONSUMER))
+            .consumer(Consumer.from(GROUP, consumerName))
             .autoAcknowledge(false)
             .cancelOnError(t -> false)
             .errorHandler(this::onPollError)
             .build();
 
-        executionJobListenerContainer.register(request, executionJobWorker);
+        if (!registered) {
+            executionJobListenerContainer.register(request, executionJobWorker);
+            registered = true;
+        }
         executionJobListenerContainer.start();
         executionJobQueue.markConsumerHealthy();
     }

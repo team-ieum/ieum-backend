@@ -1,5 +1,7 @@
 package com.ieum.workflowcore.scheduler;
 
+import com.ieum.workflowcore.deployment.BackgroundOwnership;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.ieum.workflowcore.config.StuckExecutionProperties;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
@@ -31,6 +33,9 @@ import org.springframework.stereotype.Component;
 @Component
 @RequiredArgsConstructor
 public class WorkflowCleanupScheduler {
+    @Autowired(required = false)
+    private BackgroundOwnership backgroundOwnership;
+
 
     private static final long ORPHAN_THRESHOLD_MINUTES = 30;
 
@@ -41,6 +46,7 @@ public class WorkflowCleanupScheduler {
 
     @Scheduled(cron = "0 */10 * * * *")
     public void cleanupOrphanWorkflows() {
+        if (backgroundOwnership != null && !backgroundOwnership.isOwner()) return;
         LocalDateTime threshold = LocalDateTime.now().minusMinutes(ORPHAN_THRESHOLD_MINUTES);
         List<UUID> candidates = workflowCrudService.findOrphanCandidates(threshold);
 
@@ -99,6 +105,7 @@ public class WorkflowCleanupScheduler {
      */
     @Scheduled(cron = "0 */10 * * * *")
     public void failStuckRunningExecutions() {
+        if (backgroundOwnership != null && !backgroundOwnership.isOwner()) return;
         Duration threshold = stuckExecutionProperties.getThreshold();
         List<UUID> stuckIds = workflowExecutionService.findStuckRunningExecutionIds(
             LocalDateTime.now().minus(threshold));
@@ -148,6 +155,7 @@ public class WorkflowCleanupScheduler {
      */
     @Scheduled(cron = "0 */10 * * * *")
     public void expireWaitingApprovals() {
+        if (backgroundOwnership != null && !backgroundOwnership.isOwner()) return;
         List<UUID> expiredIds =
             workflowExecutionService.findExpiredApprovalExecutionIds(LocalDateTime.now());
         if (expiredIds.isEmpty()) {
