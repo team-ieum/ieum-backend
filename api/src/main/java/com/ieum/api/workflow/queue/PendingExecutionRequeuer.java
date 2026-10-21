@@ -8,6 +8,7 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository.PendingObservation;
@@ -33,6 +34,8 @@ public class PendingExecutionRequeuer {
     private final DeploymentControl control;
     @Value("${ieum.workflow.queue.pending-recovery-not-before:}")
     private String notBefore = "";
+    @Value("${ieum.workflow.queue.pending-recovery-expected-zone:}")
+    private String expectedZoneName = "";
     @Value("${ieum.workflow.queue.pending-requeue-grace:PT1M}")
     private Duration grace = Duration.ofMinutes(1);
     @Value("${ieum.workflow.queue.pending-recovery-max-age:PT1H}")
@@ -51,6 +54,7 @@ public class PendingExecutionRequeuer {
     private final AtomicLong deferredLastBatch = new AtomicLong();
     private final AtomicLong observedAtEpochSeconds = new AtomicLong();
     private boolean metersRegistered;
+    private boolean historicalSummaryWarned;
     private LocalDateTime cutoff;
     private int page;
     private static final int PAGE_SIZE = 100;
@@ -66,6 +70,7 @@ public class PendingExecutionRequeuer {
 
     @PostConstruct
     void validatePolicy() {
+        validateExpectedZone();
         try {
             cutoff = LocalDateTime.ofInstant(OffsetDateTime.parse(notBefore).toInstant(), clock.getZone());
         } catch (Exception e) {
@@ -77,13 +82,37 @@ public class PendingExecutionRequeuer {
             throw new IllegalStateException("Invalid pending recovery age/grace/attempt policy");
         }
         registerMeters();
-        log.info("[PendingExecutionRequeuer] 복구 정책 — cutoff: {}, local timestamp zone: {}, max age: {}, "
+        log.info("[PendingExecutionRequeuer] 복구 정책 — cutoff: {}, local timestamp zone: {}, expected zone: {}, max age: {}, "
                 + "attempt budget: {}; 제외된 PENDING은 자동 실패/재실행하지 않는다",
-            notBefore, clock.getZone(), maxAge, maxAttempts);
+            notBefore, clock.getZone(), expectedZoneName, maxAge, maxAttempts);
+    }
+
+    private void validateExpectedZone() {
+        final ZoneId expected;
+        try {
+            if (expectedZoneName.isBlank()) throw new IllegalArgumentException("Expected zone is missing");
+            expected = ZoneId.of(expectedZoneName.strip());
+        } catch (Exception e) {
+            throw new IllegalStateException("Distributed pending recovery requires operator-reviewed "
+                + "ieum.workflow.queue.pending-recovery-expected-zone (case-sensitive ZoneId)", e);
+        }
+        ZoneId actual = ZoneId.systemDefault();
+        if (!sameTimestampZone(expected, actual) || !sameTimestampZone(expected, clock.getZone())) {
+            throw new IllegalStateException("Pending recovery timezone differs from operator-reviewed zone: "
+                + "expected=" + expected + ", JVM=" + actual + ", clock=" + clock.getZone()
+                + "; correct TZ/JVM options before startup; existing timestamps are not converted");
+        }
+    }
+
+    // Accept aliases only when their complete historical/future rules agree. Equal current offsets
+    // alone cannot establish how older LocalDateTime values were written.
+    static boolean sameTimestampZone(ZoneId expected, ZoneId effective) {
+        return expected.getRules().equals(effective.getRules());
     }
 
     @Scheduled(fixedDelayString = "${ieum.workflow.queue.pending-requeue-interval:PT20S}")
     public synchronized void recoverPending() {
+        validateExpectedZone();
         if (!control.isOwner()) {
             resetGauges();
             nextObservation = Instant.MIN;
@@ -152,13 +181,14 @@ public class PendingExecutionRequeuer {
         sample.limitReached.set(rows.size() > PAGE_SIZE ? 1 : 0);
         sample.oldestAgeSeconds.set(rows.isEmpty() ? 0
             : Math.max(0, Duration.between(rows.getFirst().getStartedAt(), now).getSeconds()));
-        if (!rows.isEmpty()) {
+        if (!rows.isEmpty() && (sample != beforeCutoff || !historicalSummaryWarned)) {
+            if (sample == beforeCutoff) historicalSummaryWarned = true;
             log.warn("[PendingExecutionRequeuer] 운영자 검토 필요 — excluded reason: {}, sampled: {}{}, "
                     + "oldest execution: {}, oldest startedAt: {}, oldest age seconds: {}; "
                     + "자동 FAILED/삭제/재실행 없이 PENDING 유지, SCHEDULE 중복 방지 조건 유지",
                 sample.reason, sample.sampled.get(), sample.limitReached.get() == 1 ? "+" : "",
                 rows.getFirst().getId(), rows.getFirst().getStartedAt(), sample.oldestAgeSeconds.get());
-        } else if (prior > 0) {
+        } else if (rows.isEmpty() && prior > 0) {
             log.info("[PendingExecutionRequeuer] 제외 PENDING 관측 정상화 — reason: {}", sample.reason);
         }
     }

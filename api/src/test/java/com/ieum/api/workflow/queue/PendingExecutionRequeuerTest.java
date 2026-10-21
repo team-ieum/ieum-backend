@@ -43,6 +43,7 @@ class PendingExecutionRequeuerTest {
         requeuer = new PendingExecutionRequeuer(executions, queue, control);
         metrics = new SimpleMeterRegistry();
         ReflectionTestUtils.setField(requeuer, "metrics", metrics);
+        ReflectionTestUtils.setField(requeuer, "expectedZoneName", ZoneId.systemDefault().getId());
         ReflectionTestUtils.setField(requeuer, "notBefore", Instant.now().minusSeconds(86400).toString());
         requeuer.validatePolicy();
     }
@@ -200,6 +201,89 @@ class PendingExecutionRequeuerTest {
             .isEqualTo(successfulAt);
         assertThat(metrics.get("ieum.workflow.pending.recovery.observation.failures").counter().count()).isEqualTo(1);
         verify(queue).requeuePending(any(), eq(3));
+    }
+
+    @Test
+    void historicalWarningIsOncePerProcessAcrossRepeatedObservationAndOwnershipChanges() {
+        Instant now = Instant.now(); setNow(now);
+        var historical = observation(LocalDateTime.now().minusDays(2));
+        var age = observation(LocalDateTime.now().minusHours(2));
+        when(executions.findPendingObservationsBefore(any(), any())).thenReturn(List.of(historical));
+        when(executions.findPendingObservationsBetween(any(), any(), any())).thenReturn(List.of(age));
+        Logger logger = (Logger) LoggerFactory.getLogger(PendingExecutionRequeuer.class);
+        var logs = new ListAppender<ILoggingEvent>(); logs.start(); logger.addAppender(logs);
+        try {
+            requeuer.recoverPending();
+            ReflectionTestUtils.setField(requeuer, "clock", Clock.fixed(now.plusSeconds(61), ZoneId.systemDefault()));
+            requeuer.recoverPending();
+            when(control.isOwner()).thenReturn(false);
+            requeuer.recoverPending();
+            assertThat(gauge("excluded.sampled", "reason", "before_cutoff")).isZero();
+            when(control.isOwner()).thenReturn(true);
+            ReflectionTestUtils.setField(requeuer, "clock", Clock.fixed(now.plusSeconds(122), ZoneId.systemDefault()));
+            requeuer.recoverPending();
+        } finally { logger.detachAppender(logs); }
+        var warnings = logs.list.stream().filter(log -> log.getLevel().equals(ch.qos.logback.classic.Level.WARN))
+            .map(ILoggingEvent::getFormattedMessage).toList();
+        assertThat(warnings.stream().filter(log -> log.contains("reason: before_cutoff"))).hasSize(1);
+        assertThat(warnings.stream().filter(log -> log.contains("reason: age"))).hasSize(3);
+        assertThat(gauge("excluded.sampled", "reason", "before_cutoff")).isEqualTo(1);
+        verify(executions, times(3)).findPendingObservationsBefore(any(), any());
+    }
+
+    @Test
+    void anEmptyHistoricalFirstObservationDoesNotConsumeTheOneTimeSummary() {
+        Instant now = Instant.now(); setNow(now);
+        requeuer.recoverPending();
+        var historical = observation(LocalDateTime.now().minusDays(2));
+        when(executions.findPendingObservationsBefore(any(), any())).thenReturn(List.of(historical));
+        Logger logger = (Logger) LoggerFactory.getLogger(PendingExecutionRequeuer.class);
+        var logs = new ListAppender<ILoggingEvent>(); logs.start(); logger.addAppender(logs);
+        try {
+            ReflectionTestUtils.setField(requeuer, "clock", Clock.fixed(now.plusSeconds(61), ZoneId.systemDefault()));
+            requeuer.recoverPending();
+        } finally { logger.detachAppender(logs); }
+        assertThat(logs.list.stream().map(ILoggingEvent::getFormattedMessage)
+            .filter(log -> log.contains("reason: before_cutoff"))).hasSize(1);
+    }
+
+    @Test
+    void missingInvalidOrDifferentlyCasedExpectedZoneFailsBeforeAnyRecovery() {
+        for (String invalid : List.of("", "asia/seoul", "not-a-time-zone")) {
+            ReflectionTestUtils.setField(requeuer, "expectedZoneName", invalid);
+            assertThatThrownBy(requeuer::validatePolicy).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("pending-recovery-expected-zone");
+        }
+        assertThatThrownBy(requeuer::recoverPending).isInstanceOf(IllegalStateException.class);
+        verifyNoInteractions(executions, queue);
+    }
+
+    @Test
+    void expectedZoneMismatchRejectsJvmOverrideInsteadOfReinterpretingStoredTimestamps() {
+        ZoneId different = PendingExecutionRequeuer.sameTimestampZone(ZoneId.systemDefault(), ZoneId.of("UTC"))
+            ? ZoneId.of("Asia/Seoul") : ZoneId.of("UTC");
+        ReflectionTestUtils.setField(requeuer, "expectedZoneName", different.getId());
+        assertThatThrownBy(requeuer::validatePolicy).isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("timezone differs").hasMessageContaining("JVM=")
+            .hasMessageContaining("existing timestamps are not converted");
+        assertThatThrownBy(requeuer::recoverPending).isInstanceOf(IllegalStateException.class);
+        verifyNoInteractions(executions, queue);
+    }
+
+    @Test
+    void fullTimezoneRulesAcceptAliasesButRejectMatchingCurrentOffsets() {
+        assertThat(PendingExecutionRequeuer.sameTimestampZone(ZoneId.of("UTC"), ZoneId.of("Etc/UTC"))).isTrue();
+        assertThat(PendingExecutionRequeuer.sameTimestampZone(ZoneId.of("Asia/Seoul"), ZoneId.of("+09:00"))).isFalse();
+    }
+
+    @Test
+    void runtimeClockZoneDriftStopsBeforeDatabaseQueriesOrPublication() {
+        ZoneId different = PendingExecutionRequeuer.sameTimestampZone(ZoneId.systemDefault(), ZoneId.of("UTC"))
+            ? ZoneId.of("Asia/Seoul") : ZoneId.of("UTC");
+        ReflectionTestUtils.setField(requeuer, "clock", Clock.fixed(Instant.now(), different));
+        assertThatThrownBy(requeuer::recoverPending).isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("timezone differs");
+        verifyNoInteractions(executions, queue);
     }
 
     private void setNow(Instant now) {

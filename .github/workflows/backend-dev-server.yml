@@ -18,6 +18,8 @@ env:
 
 jobs:
   deploy:
+    # Covers bounded cross-repository lock waiting plus this job's build and deployment.
+    timeout-minutes: 360
     name: Deploy Dev to Self Hosted Server
     runs-on:
       group: ieum_dev_server
@@ -180,7 +182,7 @@ jobs:
               # Never print raw contents, which may contain credentials.
               raise SystemExit('Backend environment snapshot rejected: ' + str(error)) from None
           PY
-          python3 /home/kwung/deploy/bluegreen/bluegreen.py deploy \
+          python3 /home/kwung/deploy/bluegreen/bluegreen.py --lock-timeout 14400 deploy \
             --service backend \
             --image "$IMAGE_NAME:$IMAGE_TAG" \
             --env-file "$candidate_env" \

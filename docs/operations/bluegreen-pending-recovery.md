@@ -13,7 +13,10 @@ hint를 적용한다. 결과는 oldest-first이며 100행을 넘으면 경고와
 - `age`: cutoff 이후지만 기본 1시간 복구 창보다 오래된 PENDING.
 
 `운영자 검토 필요` WARN은 범위, 최대 100행인 표본 수, 초과 여부, 가장 오래된 실행 ID와
-준비 시각을 포함한다. 61분 된 PENDING도 계속 관측한다. 정상화하면 INFO를 남기고 해당
+준비 시각을 포함한다. `before_cutoff`는 최초 비어 있지 않은 관측에서 프로세스당 1회만
+WARN 요약을 남긴다. 관측과 gauge 갱신은 계속되며, 소유권을 잃었다 되찾아도 이 경고를
+다시 내지 않는다. `age`는 기존 관측 주기마다 WARN을 반복하므로 61분 된 PENDING은
+계속 드러난다. 정상화하면 INFO를 남기고 해당
 gauge를 0으로 되돌린다. candidate/retained는 이 조회나 경고를 수행하지 않으며, 소유권을
 잃으면 gauge를 0으로 되돌린다. 관측 실패는 별도 WARN/counter로 알리고 이전의 성공한
 관측값과 시각을 보존한다. 관측 실패가 창 안의 복구를 막지는 않는다.
@@ -58,6 +61,17 @@ WARN이 발생하면 해당 실행의 DB 상태, stream/PEL, 실행 로그 및 �
   이 변경은 Legacy marker를 추측으로 삭제하지 않는다. 정리하려면 DB terminal 상태,
   관련 stream/PEL 부재, marker가 여전히 같은 항목을 가리키는지 먼저 확인해야 한다.
 - `startedAt`은 시간대 정보가 없는 LocalDateTime이다. 시작 정책 INFO에 cutoff와 유효 JVM
-  시간대를 기록하므로 Legacy와 새 컨테이너의 TZ/JVM 설정 및 과거 DB 기록 기준을 비교한다.
-  이 변경은 기존 timestamp를 변환하거나 TZ를 덮어쓰지 않는다. 두 버전의 시간대가 다르면
-  재적용 전에 기준을 확정해야 한다.
+  시간대·기대 시간대를 기록하므로 Legacy와 새 컨테이너의 TZ/JVM 설정 및 과거 DB 기록
+  기준을 비교한다. 분산 모드에는 운영자가 확인한
+  `ieum.workflow.queue.pending-recovery-expected-zone`
+  (`IEUM_WORKFLOW_QUEUE_PENDING_RECOVERY_EXPECTED_ZONE`)이 반드시 필요하다. 누락, 잘못된
+  ZoneId, 기대 시간대와 실제 JVM/Clock 시간대의 불일치는 기동을 거부한다. 복구 직전에도
+  확인해 시간대가 달라진 상태에서는 DB 조회·재발행을 시작하지 않는다.
+- ZoneId는 대소문자를 구분한다. `UTC`/`Etc/UTC` 등 역사·미래 규칙이 완전히 같은 alias는
+  허용하지만 현재 offset만 같은 `Asia/Seoul`/`+09:00`은 같은 기록 기준으로 취급하지 않는다.
+  `-Duser.timezone` 등 JVM 옵션이 `TZ`와 다른 실제 시간대를 만들면 불일치 검사가 걸린다.
+  Java 옵션을 지우거나 기존 DB timestamp를 변환하지 않는다.
+- controller는 최초 운영자 확인값을 `--backend-time-zone` 또는 기대 시간대 env로 받아
+  `control/backend-time-zone`에 고정하고 후속 후보의 `TZ`와 기대 시간대를 계속 주입한다.
+  `--replace-env` 파일에 `TZ`가 빠져도 확인한 기준이 사라지지 않아야 한다. `TZ` 존재 자체는
+  과거 DB 기록 기준을 검토했다는 의미가 아니므로 별도의 명시적 확인값이 필요하다.
