@@ -22,6 +22,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.messaging.simp.user.SimpUserRegistry;
+import org.springframework.beans.factory.annotation.Autowired;
 
 @Component
 @Endpoint(id = "deployment")
@@ -40,6 +41,8 @@ public class DeploymentEndpoint {
     private final DeploymentConnections connections;
     private final DeploymentRequests requests;
     private final DeploymentWorkTracker background;
+    @Autowired(required = false)
+    private PendingRecoveryStatus pendingRecoveryStatus = new PendingRecoveryStatus();
 
     public DeploymentEndpoint(DeploymentControl control, ExecutionJobQueueBootstrap bootstrap,
             Scheduler scheduler, @Qualifier("workflowExecutor") Executor executor,
@@ -70,6 +73,7 @@ public class DeploymentEndpoint {
             Map.entry("retired", connections.isRetired()), Map.entry("activeJobs", activeJobs),
             Map.entry("activeRequests", requests.activeCount()), Map.entry("queuedJobs", queued),
             Map.entry("activeChatJobs", background.activeCount()),
+            Map.entry("pendingRecoveryTimezone", pendingRecoveryStatus.snapshot().asMap()),
             Map.entry("sseSubscribers", events.subscriberCount()),
             Map.entry("websocketUsers", Math.max(users.getUserCount(), connections.sessionCount())),
             Map.entry("clusteredQuartz", scheduler.getMetaData().isJobStoreClustered()),

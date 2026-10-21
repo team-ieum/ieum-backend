@@ -2,6 +2,7 @@ package com.ieum.api.workflow.queue;
 
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.api.deployment.DeploymentControl;
+import com.ieum.api.deployment.PendingRecoveryStatus;
 import jakarta.annotation.PostConstruct;
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -46,7 +47,12 @@ public class PendingExecutionRequeuer {
     private Duration observationInterval = Duration.ofMinutes(1);
     @Autowired(required = false)
     private MeterRegistry metrics;
+    @Autowired(required = false)
+    private PendingRecoveryStatus timezoneStatus = new PendingRecoveryStatus();
     private Clock clock = Clock.systemDefaultZone();
+    private Instant nextTimezoneWarning = Instant.MIN;
+    private String lastTimezoneWarning;
+    private static final Duration TIMEZONE_WARNING_INTERVAL = Duration.ofMinutes(5);
     private Instant nextObservation = Instant.MIN;
     private final ExcludedSample beforeCutoff = new ExcludedSample("before_cutoff");
     private final ExcludedSample agedOut = new ExcludedSample("age");
@@ -81,6 +87,7 @@ public class PendingExecutionRequeuer {
                 || maxAttempts < 1 || maxAttempts > 100 || observationInterval.compareTo(Duration.ofSeconds(20)) < 0) {
             throw new IllegalStateException("Invalid pending recovery age/grace/attempt policy");
         }
+        timezoneStatus.valid(expectedZoneName, ZoneId.systemDefault().getId(), clock.getZone().getId(), clock.instant());
         registerMeters();
         log.info("[PendingExecutionRequeuer] 복구 정책 — cutoff: {}, local timestamp zone: {}, expected zone: {}, max age: {}, "
                 + "attempt budget: {}; 제외된 PENDING은 자동 실패/재실행하지 않는다",
@@ -112,7 +119,11 @@ public class PendingExecutionRequeuer {
 
     @Scheduled(fixedDelayString = "${ieum.workflow.queue.pending-requeue-interval:PT20S}")
     public synchronized void recoverPending() {
-        validateExpectedZone();
+        if (!runtimeTimezoneValid()) {
+            resetGauges();
+            nextObservation = Instant.MIN;
+            return;
+        }
         if (!control.isOwner()) {
             resetGauges();
             nextObservation = Instant.MIN;
@@ -149,6 +160,38 @@ public class PendingExecutionRequeuer {
         } catch (Exception e) {
             if (metrics != null) metrics.counter("ieum.workflow.pending.recovery.failures").increment();
             log.warn("[PendingExecutionRequeuer] PENDING 복구 실패 — 다음 주기 재시도", e);
+        }
+    }
+
+    private boolean runtimeTimezoneValid() {
+        try {
+            validateExpectedZone();
+            var prior = timezoneStatus.snapshot();
+            timezoneStatus.valid(expectedZoneName, ZoneId.systemDefault().getId(), clock.getZone().getId(), clock.instant());
+            if (prior.initialized() && prior.blocked()) {
+                log.info("[PendingExecutionRequeuer] 시간대 검증 정상화 — PENDING 복구 재개; expected: {}, JVM: {}, clock: {}",
+                    expectedZoneName, ZoneId.systemDefault(), clock.getZone());
+            }
+            lastTimezoneWarning = null;
+            nextTimezoneWarning = Instant.MIN;
+            return true;
+        } catch (IllegalStateException failure) {
+            String reason = failure.getCause() == null ? "zone_mismatch" : "invalid_expected_zone";
+            timezoneStatus.blocked(expectedZoneName == null ? "" : expectedZoneName,
+                ZoneId.systemDefault().getId(), clock.getZone().getId(), reason, clock.instant());
+            if (metrics != null) {
+                metrics.counter("ieum.workflow.pending.recovery.timezone.validation_failures").increment();
+                metrics.counter("ieum.workflow.pending.recovery.failures").increment();
+            }
+            String signature = reason + "|" + expectedZoneName + "|" + ZoneId.systemDefault() + "|" + clock.getZone();
+            if (!signature.equals(lastTimezoneWarning) || !clock.instant().isBefore(nextTimezoneWarning)) {
+                log.warn("[PendingExecutionRequeuer] 시간대 불일치로 PENDING 복구 중지 — {}; "
+                        + "운영자가 TZ/JVM 옵션을 확인해야 한다; DB 조회/재발행 없음, 동일 경고는 최대 5분마다 반복",
+                    failure.getMessage());
+                lastTimezoneWarning = signature;
+                nextTimezoneWarning = clock.instant().plus(TIMEZONE_WARNING_INTERVAL);
+            }
+            return false;
         }
     }
 
@@ -211,6 +254,10 @@ public class PendingExecutionRequeuer {
             .tag("result", "deferred").register(metrics);
         Gauge.builder("ieum.workflow.pending.recovery.observed_at_epoch_seconds", observedAtEpochSeconds,
             AtomicLong::get).register(metrics);
+        Gauge.builder("ieum.workflow.pending.recovery.timezone.valid", timezoneStatus,
+            status -> status.snapshot().valid() ? 1 : 0).register(metrics);
+        Gauge.builder("ieum.workflow.pending.recovery.timezone.blocked", timezoneStatus,
+            status -> status.snapshot().blocked() ? 1 : 0).register(metrics);
     }
 
     private void resetGauges() {

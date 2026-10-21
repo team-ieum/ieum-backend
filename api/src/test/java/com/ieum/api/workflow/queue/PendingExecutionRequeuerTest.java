@@ -8,6 +8,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.api.deployment.DeploymentControl;
+import com.ieum.api.deployment.PendingRecoveryStatus;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -254,7 +255,8 @@ class PendingExecutionRequeuerTest {
             assertThatThrownBy(requeuer::validatePolicy).isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("pending-recovery-expected-zone");
         }
-        assertThatThrownBy(requeuer::recoverPending).isInstanceOf(IllegalStateException.class);
+        org.assertj.core.api.Assertions.assertThatCode(requeuer::recoverPending).doesNotThrowAnyException();
+        assertThat(gauge("timezone.blocked", "", "")).isEqualTo(1);
         verifyNoInteractions(executions, queue);
     }
 
@@ -266,7 +268,8 @@ class PendingExecutionRequeuerTest {
         assertThatThrownBy(requeuer::validatePolicy).isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("timezone differs").hasMessageContaining("JVM=")
             .hasMessageContaining("existing timestamps are not converted");
-        assertThatThrownBy(requeuer::recoverPending).isInstanceOf(IllegalStateException.class);
+        org.assertj.core.api.Assertions.assertThatCode(requeuer::recoverPending).doesNotThrowAnyException();
+        assertThat(status().snapshot().reason()).isEqualTo("zone_mismatch");
         verifyNoInteractions(executions, queue);
     }
 
@@ -281,9 +284,51 @@ class PendingExecutionRequeuerTest {
         ZoneId different = PendingExecutionRequeuer.sameTimestampZone(ZoneId.systemDefault(), ZoneId.of("UTC"))
             ? ZoneId.of("Asia/Seoul") : ZoneId.of("UTC");
         ReflectionTestUtils.setField(requeuer, "clock", Clock.fixed(Instant.now(), different));
-        assertThatThrownBy(requeuer::recoverPending).isInstanceOf(IllegalStateException.class)
-            .hasMessageContaining("timezone differs");
+        org.assertj.core.api.Assertions.assertThatCode(requeuer::recoverPending).doesNotThrowAnyException();
+        assertThat(metrics.get("ieum.workflow.pending.recovery.timezone.validation_failures").counter().count())
+            .isEqualTo(1);
+        assertThat(status().snapshot().blocked()).isTrue();
         verifyNoInteractions(executions, queue);
+    }
+
+    @Test
+    void runtimeDriftRecordsFailureThrottlesWarningsAndAutomaticallyResumesWhenCorrected() {
+        Instant now = Instant.now(); setNow(now);
+        ZoneId different = PendingExecutionRequeuer.sameTimestampZone(ZoneId.systemDefault(), ZoneId.of("UTC"))
+            ? ZoneId.of("Asia/Seoul") : ZoneId.of("UTC");
+        Logger logger = (Logger) LoggerFactory.getLogger(PendingExecutionRequeuer.class);
+        var logs = new ListAppender<ILoggingEvent>(); logs.start(); logger.addAppender(logs);
+        try {
+            for (long elapsed : new long[]{0, 20, 300}) {
+                ReflectionTestUtils.setField(requeuer, "clock", Clock.fixed(now.plusSeconds(elapsed), different));
+                org.assertj.core.api.Assertions.assertThatCode(requeuer::recoverPending).doesNotThrowAnyException();
+            }
+            verifyNoInteractions(executions, queue);
+            assertThat(gauge("timezone.valid", "", "")).isZero();
+            assertThat(gauge("timezone.blocked", "", "")).isEqualTo(1);
+            assertThat(status().snapshot().blockedChecks()).isEqualTo(3);
+            assertThat(status().snapshot().blockedSinceEpochSeconds()).isEqualTo(now.getEpochSecond());
+            assertThat(status().snapshot().lastBlockedAtEpochSeconds()).isEqualTo(now.plusSeconds(300).getEpochSecond());
+            ReflectionTestUtils.setField(requeuer, "clock", Clock.fixed(now.plusSeconds(301), ZoneId.systemDefault()));
+            requeuer.recoverPending();
+            requeuer.recoverPending();
+        } finally { logger.detachAppender(logs); }
+        assertThat(logs.list.stream().filter(log -> log.getLevel().equals(ch.qos.logback.classic.Level.WARN)))
+            .hasSize(2).allSatisfy(log -> assertThat(log.getThrowableProxy()).isNull());
+        assertThat(logs.list.stream().map(ILoggingEvent::getFormattedMessage)
+            .filter(log -> log.contains("시간대 검증 정상화"))).hasSize(1);
+        assertThat(metrics.get("ieum.workflow.pending.recovery.timezone.validation_failures").counter().count())
+            .isEqualTo(3);
+        assertThat(metrics.get("ieum.workflow.pending.recovery.failures").counter().count()).isEqualTo(3);
+        assertThat(gauge("timezone.valid", "", "")).isEqualTo(1);
+        assertThat(gauge("timezone.blocked", "", "")).isZero();
+        assertThat(status().snapshot().blockedSinceEpochSeconds()).isZero();
+        assertThat(status().snapshot().blockedChecks()).isEqualTo(3);
+        verify(executions, times(2)).findPendingIdsBetween(any(), any(), any());
+    }
+
+    private PendingRecoveryStatus status() {
+        return (PendingRecoveryStatus) ReflectionTestUtils.getField(requeuer, "timezoneStatus");
     }
 
     private void setNow(Instant now) {
@@ -300,6 +345,7 @@ class PendingExecutionRequeuerTest {
     }
 
     private double gauge(String suffix, String key, String value) {
+        if (key.isEmpty()) return metrics.get("ieum.workflow.pending.recovery." + suffix).gauge().value();
         return metrics.get("ieum.workflow.pending.recovery." + suffix).tag(key, value).gauge().value();
     }
 }

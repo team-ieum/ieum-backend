@@ -40,8 +40,33 @@ gauge를 0으로 되돌린다. candidate/retained는 이 조회나 경고를 수
 | `ieum.workflow.pending.recovery.results{result}` | 복구 결과 관측 횟수, 실행별 고유 개수가 아님 |
 | `ieum.workflow.pending.recovery.observation.failures` | 창 밖 관측 실패 횟수 |
 | `ieum.workflow.pending.recovery.failures` | 창 안 복구 처리 실패 횟수 |
+| `ieum.workflow.pending.recovery.timezone.validation_failures` | 실행 중 시간대 검증에 실패해 차단된 주기 횟수 |
+| `ieum.workflow.pending.recovery.timezone.valid` | 마지막 시간대 검증 정상일 때 1 |
+| `ieum.workflow.pending.recovery.timezone.blocked` | 시간대 검증 때문에 복구가 차단됐을 때 1 |
 
 Gauge는 정상화·소유권 상실에 따라 초기화하고 counter는 누적한다.
+시간대 valid/blocked gauge는 소유권과 별도로 검증 상태를 나타낸다. 시간대 차단은 기존
+`recovery.failures`와 전용 `timezone.validation_failures` counter 양쪽에 포함된다.
+
+## 실행 중 시간대가 달라진 경우
+
+기동 시 누락·불일치는 계속 기동 실패로 처리한다. 실행 중 검증 실패는 주기 작업 밖으로
+반복 예외를 던지지 않고 DB 조회·재발행 전에 중단한다. 동일 불일치의 WARN은 최초와
+최대 5분마다 남기며, expected/JVM/Clock 값이 바뀌면 즉시 다시 남긴다. 매 차단 주기는
+counter에 포함된다. 운영자가 원래의 확인된 시간대를 복원하면 다음 주기(기본 20초)에
+정상화 INFO를 1회 남기고 자동 복구를 재개한다. 별도의 clear 명령은 없고 counter는 유지한다.
+
+기존 내부 `/actuator/deployment` 응답의 `pendingRecoveryTimezone` 객체에서 확인할 수 있다.
+새 endpoint나 공개 metrics 경로는 추가하지 않는다. 값은 마지막 검사 기준이며
+`checkedAtEpochSeconds`로 시점을 확인한다.
+
+- `initialized`, `valid`, `blocked`: 검증 여부와 현재 복구 차단 상태.
+- `reason`: 정상은 빈 문자열, 불일치는 `zone_mismatch`, 설정 오류는 `invalid_expected_zone`.
+  아직 검사하지 않았으면 `not_validated`다.
+- `expectedZone`, `jvmZone`, `clockZone`: 확인된 기대값과 실제 JVM·Clock 값.
+- `checkedAtEpochSeconds`, `blockedSinceEpochSeconds`, `lastBlockedAtEpochSeconds`: 마지막 검사,
+  현재 차단 시작, 마지막 차단 시각. 정상화하면 현재 차단 시작 값은 0으로 돌아간다.
+- `blockedChecks`: 프로세스의 누적 차단 주기 수. 정상화해도 유지한다.
 
 ## 운영자 판단과 스케줄 보호
 

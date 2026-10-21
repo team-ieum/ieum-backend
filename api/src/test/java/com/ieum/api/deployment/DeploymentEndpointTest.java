@@ -11,6 +11,9 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.time.Instant;
+import java.util.Map;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -90,5 +93,25 @@ class DeploymentEndpointTest {
         when(worker.activeCount()).thenReturn(3);
         when(runner.activeCount()).thenReturn(1);
         assertThat(endpoint.status()).containsEntry("activeJobs", 3);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void existingDeploymentStatusShowsBlockedRecoveryAndCorrectionWithoutAnotherEndpoint() throws Exception {
+        var pending = new PendingRecoveryStatus();
+        ReflectionTestUtils.setField(endpoint, "pendingRecoveryStatus", pending);
+        Instant now = Instant.parse("2026-10-21T00:00:00Z");
+        pending.valid("Asia/Seoul", "Asia/Seoul", "Asia/Seoul", now);
+        pending.blocked("Asia/Seoul", "UTC", "Asia/Seoul", "zone_mismatch", now.plusSeconds(20));
+        var blocked = (Map<String, Object>) endpoint.status().get("pendingRecoveryTimezone");
+        assertThat(blocked).containsEntry("initialized", true).containsEntry("valid", false)
+            .containsEntry("blocked", true).containsEntry("reason", "zone_mismatch")
+            .containsEntry("expectedZone", "Asia/Seoul").containsEntry("jvmZone", "UTC")
+            .containsEntry("blockedChecks", 1L).containsEntry("checkedAtEpochSeconds", now.plusSeconds(20).getEpochSecond());
+        pending.valid("Asia/Seoul", "Asia/Seoul", "Asia/Seoul", now.plusSeconds(40));
+        var recovered = (Map<String, Object>) endpoint.status().get("pendingRecoveryTimezone");
+        assertThat(recovered).containsEntry("valid", true).containsEntry("blocked", false)
+            .containsEntry("reason", "").containsEntry("blockedSinceEpochSeconds", 0L)
+            .containsEntry("blockedChecks", 1L);
     }
 }
