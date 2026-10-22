@@ -45,15 +45,16 @@ public class DiscordOAuthController implements DiscordOAuthControllerDocs {
             .body(ApiResponse.ok(Map.of("authUrl", authorization.authUrl())));
     }
 
-    /** state는 필수가 아니다 — 없으면 400 화이트 페이지 대신 연동 화면으로 "만료"를 돌려준다. guild_id·permissions 쿼리는 받지 않는다 */
+    /** state는 필수가 아니다 — 없으면 400 화이트 페이지 대신 연동 화면으로 "만료"를 돌려준다. guild_id는 교환 실패 퇴장 판정 힌트로만 넘긴다(spec §4-2-4) */
     @GetMapping("/callback")
     public ResponseEntity<Void> callback(
         @RequestParam(required = false) String state,
         @RequestParam(required = false) String code,
         @RequestParam(required = false) String error,
+        @RequestParam(name = "guild_id", required = false) String guildId,
         @CookieValue(name = NONCE_COOKIE, required = false) String nonce
     ) {
-        String result = discordOAuthService.handleCallback(state, nonce, code, error);
+        String result = discordOAuthService.handleCallback(state, nonce, code, error, guildId);
         return ResponseEntity.status(HttpStatus.FOUND)
             .header(HttpHeaders.LOCATION, frontendRedirectUri + "?" + result)
             .header(HttpHeaders.SET_COOKIE, nonceCookie("", 0))

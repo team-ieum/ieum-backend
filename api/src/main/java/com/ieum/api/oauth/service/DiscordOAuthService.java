@@ -16,12 +16,15 @@ import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.util.UriComponentsBuilder;
 
@@ -37,6 +40,8 @@ public class DiscordOAuthService {
     public static final long STATE_TTL_SECONDS = 300L;
     private static final String AUTHORIZE_URL = "https://discord.com/oauth2/authorize";
     private static final SecureRandom RANDOM = new SecureRandom();
+    /** Discord snowflake — ASCII 숫자만, 공백·경로 문자 불가(matches()라 끝 개행도 불가) */
+    private static final Pattern SNOWFLAKE = Pattern.compile("^[0-9]{17,20}$");
 
     private final DiscordOAuthStateRepository stateRepository;
     private final DiscordGuildLinkRepository linkRepository;
@@ -89,9 +94,10 @@ public class DiscordOAuthService {
 
     /**
      * 설치 콜백 판정(spec §4-2 — 순서를 바꾸지 않는다). 돌려주는 값은 프런트 리다이렉트 쿼리다.
-     * 교환 응답 guild가 진실이다 — 쿼리의 guild_id는 힌트일 뿐이라 받지도 않는다. 로그엔 응답 본문을 남기지 않는다(토큰 포함).
+     * 교환 응답 guild가 진실이다 — 쿼리의 guild_id는 힌트라 교환 응답이 끊긴 실패의 퇴장 판정 밖에서는 쓰지 않는다(spec §4-2-4).
+     * 로그엔 응답 본문을 남기지 않는다(토큰 포함).
      */
-    public String handleCallback(String state, String nonce, String code, String error) {
+    public String handleCallback(String state, String nonce, String code, String error, String guildIdHint) {
         // 2-1 state 조회·즉시 삭제(1회 소비 — 쿠키가 틀려도 다시 못 쓴다)
         DiscordOAuthState saved = state == null ? null : stateRepository.findById(state).orElse(null);
         if (saved == null) {
@@ -117,7 +123,13 @@ public class DiscordOAuthService {
         try {
             body = discordApiClient.exchangeCode(code, redirectUri);
         } catch (RestClientException e) {
-            log.warn("[DiscordOAuthService] 코드 교환 실패 — {}", DiscordApiClient.describe(e));
+            // spec §4-2-4 — 타임아웃·5xx는 Discord가 교환을 처리해 봇이 이미 들어왔을 수 있다. 4xx·429 소진은 처리되지 않았다
+            boolean maybeProcessed = e instanceof ResourceAccessException || e instanceof HttpServerErrorException;
+            boolean leaveCheck = maybeProcessed && guildIdHint != null && SNOWFLAKE.matcher(guildIdHint).matches();
+            log.warn("[DiscordOAuthService] 코드 교환 실패 — {}, 힌트 퇴장 판정: {}", DiscordApiClient.describe(e), leaveCheck);
+            if (leaveCheck) {
+                discordDisconnectService.leaveIfOrphan(guildIdHint);
+            }
             return "error=discord_exchange";
         }
         String accessToken = body.path("access_token").asText("");

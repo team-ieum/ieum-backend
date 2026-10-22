@@ -85,9 +85,10 @@ class DiscordOAuthControllerTest {
     }
 
     @Test
-    @DisplayName("callback — 쿠키 nonce를 서비스에 넘기고 결과 쿼리로 302, nonce 쿠키는 Max-Age=0으로 지운다")
+    @DisplayName("callback — 쿠키 nonce·guild_id 힌트를 서비스에 넘기고 결과 쿼리로 302, nonce 쿠키는 Max-Age=0으로 지운다")
     void callbackRedirectsAndClearsCookie() throws Exception {
-        given(discordOAuthService.handleCallback("s1", "n-1", "c1", null)).willReturn("connected=discord");
+        given(discordOAuthService.handleCallback("s1", "n-1", "c1", null, "999999999999999999"))
+            .willReturn("connected=discord");
 
         mockMvc.perform(get("/api/v1/discord/oauth2/callback")
                 .param("state", "s1").param("code", "c1").param("guild_id", "999999999999999999")

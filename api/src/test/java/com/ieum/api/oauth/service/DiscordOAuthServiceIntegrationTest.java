@@ -385,4 +385,73 @@ class DiscordOAuthServiceIntegrationTest {
 
         assertThat(linkRepository.count()).isZero();
     }
+
+    // spec §4-2-4 — 교환 응답만 끊긴(처리됐을 수 있는) 실패에서만 쿼리 guild_id 힌트로 퇴장 판정
+    private ResultActions callbackWithHint(String state, String guildIdHint) throws Exception {
+        MockHttpServletRequestBuilder request = get(CALLBACK).param("state", state).param("code", "c1")
+            .cookie(new Cookie("__Host-discord_oauth_nonce", NONCE));
+        if (guildIdHint != null) {
+            request.param("guild_id", guildIdHint);
+        }
+        return mockMvc.perform(request);
+    }
+
+    private void expectExchangeTimeout() {
+        server.expect(requestTo(API + "/oauth2/token")).andRespond(request -> {
+            throw new java.net.SocketTimeoutException("Read timed out");
+        });
+    }
+
+    @Test
+    @DisplayName("2-4 교환 read timeout + 유효 힌트 + 그 서버 링크 0 → 힌트 서버에서 봇 퇴장, discord_exchange")
+    void exchangeTimeoutLeavesHintGuild() throws Exception {
+        givenState("s1", UUID.randomUUID());
+        expectExchangeTimeout();
+        expectLeave(G1);
+
+        callbackWithHint("s1", G1).andExpect(header().string("Location", FRONT + "error=discord_exchange"));
+    }
+
+    @Test
+    @DisplayName("2-4 교환 5xx + 유효 힌트 + 링크 0 → 힌트 서버에서 봇 퇴장")
+    void exchange5xxLeavesHintGuild() throws Exception {
+        givenState("s1", UUID.randomUUID());
+        server.expect(requestTo(API + "/oauth2/token")).andRespond(withServerError());
+        expectLeave(G1);
+
+        callbackWithHint("s1", G1).andExpect(header().string("Location", FRONT + "error=discord_exchange"));
+    }
+
+    @Test
+    @DisplayName("2-4 교환 timeout + 유효 힌트지만 그 서버에 다른 사용자 링크 있음 → 퇴장 요청 없음")
+    void exchangeTimeoutKeepsBotWhenOthersLinked() throws Exception {
+        linkRepository.save(new DiscordGuildLink(UUID.randomUUID(), G1, "이음 서버", "9"));
+        givenState("s1", UUID.randomUUID());
+        expectExchangeTimeout();
+
+        callbackWithHint("s1", G1).andExpect(header().string("Location", FRONT + "error=discord_exchange"));
+    }
+
+    @Test
+    @DisplayName("2-4 교환 400(invalid_grant = 처리 안 됨) + 유효 힌트 → 퇴장 요청 없음")
+    void exchange4xxIgnoresHint() throws Exception {
+        givenState("s1", UUID.randomUUID());
+        server.expect(requestTo(API + "/oauth2/token"))
+            .andRespond(withStatus(HttpStatus.BAD_REQUEST).contentType(MediaType.APPLICATION_JSON)
+                .body("{\"error\":\"invalid_grant\"}"));
+
+        callbackWithHint("s1", G1).andExpect(header().string("Location", FRONT + "error=discord_exchange"));
+    }
+
+    @Test
+    @DisplayName("2-4 교환 5xx + 힌트 형식 불일치('1/../2')·없음 → 퇴장 요청 없음")
+    void exchange5xxIgnoresMalformedOrMissingHint() throws Exception {
+        givenState("s1", UUID.randomUUID());
+        givenState("s2", UUID.randomUUID());
+        server.expect(requestTo(API + "/oauth2/token")).andRespond(withServerError());
+        server.expect(requestTo(API + "/oauth2/token")).andRespond(withServerError());
+
+        callbackWithHint("s1", "1/../2").andExpect(header().string("Location", FRONT + "error=discord_exchange"));
+        callbackWithHint("s2", null).andExpect(header().string("Location", FRONT + "error=discord_exchange"));
+    }
 }
