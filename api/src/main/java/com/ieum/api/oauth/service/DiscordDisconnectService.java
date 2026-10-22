@@ -53,6 +53,7 @@ public class DiscordDisconnectService {
         List<DiscordGuildLink> links = linkRepository.findAllByUserIdOrderByCreatedAtAsc(userId);
         List<String> guildIds = links.stream().map(DiscordGuildLink::getGuildId).toList();
         linkRepository.deleteAllInBatch(links); // 벌크 — 동시 해제로 이미 지워진 행이 있어도 실패하지 않는다
+        // ponytail: 커밋 뒤 서버마다 재카운트·봇 퇴장 HTTP를 요청 스레드에서 차례로 해 탈퇴 응답이 최대 서버 N개×(read timeout 30초+429 대기 5초) 늦어진다. 문제가 되면 비동기 정리 큐로
         guildIds.forEach(this::leaveIfOrphan);
     }
 

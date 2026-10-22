@@ -211,7 +211,7 @@ class DiscordOptionSourcesTest {
     }
 
     @Test
-    @DisplayName("텍스트(0)·공지(5)만, position 순, (채널 ID, #이름), nextCursor null. guild_id 앞뒤 공백은 뗀다")
+    @DisplayName("텍스트(0)·공지(5)만, 카테고리·위치 순, (채널 ID, #이름), nextCursor null. guild_id 앞뒤 공백은 뗀다")
     void filtersSendableAndSortsByPosition() {
         ownsGuild(G1);
         expectChannels(withSuccess(MIXED, MediaType.APPLICATION_JSON));
@@ -221,6 +221,27 @@ class DiscordOptionSourcesTest {
         assertThat(page.items()).containsExactly(
             new OptionItem("9004", "#General"), new OptionItem("9003", "#공지"), new OptionItem("9001", "#random"));
         assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("Discord 화면 순서 — 카테고리 없는 채널 먼저, 그다음 카테고리 position 순으로 묶고, 안에서 position·id 숫자 순")
+    void sortsByCategoryThenPosition() {
+        ownsGuild(G1);
+        String json = """
+            [
+              {"id":"100","name":"뒤-카테고리","type":4,"position":1},
+              {"id":"200","name":"앞-카테고리","type":4,"position":0},
+              {"id":"31","name":"a1","type":0,"position":0,"parent_id":"100"},
+              {"id":"100000","name":"b-tie-big","type":0,"position":0,"parent_id":"200"},
+              {"id":"99999","name":"b-tie-small","type":5,"position":0,"parent_id":"200"},
+              {"id":"33","name":"b2","type":0,"position":1,"parent_id":"200"},
+              {"id":"34","name":"a2","type":0,"position":1,"parent_id":"100"},
+              {"id":"35","name":"nocat","type":0,"position":5,"parent_id":null}
+            ]""";
+        expectChannels(withSuccess(json, MediaType.APPLICATION_JSON));
+
+        assertThat(channels.fetch(userId, Map.of("guild_id", G1), null).items()).extracting(OptionItem::name)
+            .containsExactly("#nocat", "#b-tie-small", "#b-tie-big", "#b2", "#a1", "#a2");
     }
 
     @Test

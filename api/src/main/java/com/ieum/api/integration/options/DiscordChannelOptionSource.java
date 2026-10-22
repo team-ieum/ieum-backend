@@ -9,6 +9,7 @@ import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -21,7 +22,7 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
 
 /**
- * 고른 Discord 서버의 텍스트·공지 채널(spec §10) — 값은 채널 ID, 이름은 {@code #이름}, position 순, 한 번에 전부.
+ * 고른 Discord 서버의 텍스트·공지 채널(spec §10) — 값은 채널 ID, 이름은 {@code #이름}, 카테고리·위치 순(Discord 화면 순서), 한 번에 전부.
  * 내 링크에 있는 서버만 — 봇은 IEUM 전원이 설치한 서버에 들어가 있어 검사 없으면 남의 서버 채널이 보인다.
  * 2026-11-16 전까지는 봇이 볼 수 없는 채널도 나온다(Discord changelog) — 권한 계산은 하지 않고 실행 때 50001 안내에 맡긴다.
  * 트랜잭션을 걸지 않는다(options 관례). 캐시 없음.
@@ -34,6 +35,7 @@ public class DiscordChannelOptionSource implements OptionSource {
     static final String BOT_MISSING_MESSAGE = "봇이 서버에 없어요. Discord를 다시 연결해 주세요";
     /** 0 = GUILD_TEXT, 5 = GUILD_ANNOUNCEMENT — 첫 노드가 보낼 수 있는 채널 */
     private static final Set<Integer> SENDABLE_TYPES = Set.of(0, 5);
+    private static final int CATEGORY_TYPE = 4;
 
     private final DiscordGuildLinkRepository linkRepository;
     private final DiscordApiClient discordApiClient;
@@ -56,15 +58,26 @@ public class DiscordChannelOptionSource implements OptionSource {
             .map(DiscordGuildLink::getGuildId)
             .orElseThrow(() -> new CustomException(ErrorCode.DISCORD_GUILD_NOT_CONNECTED));
         String q = normalize(inputs.get("q"));
+        JsonNode all = channelsOf(linkedGuildId);
+        Map<String, Integer> categoryPosition = new HashMap<>();
+        for (JsonNode channel : all) {
+            if (channel.path("type").asInt(-1) == CATEGORY_TYPE) {
+                categoryPosition.put(channel.path("id").asText(), channel.path("position").asInt(0));
+            }
+        }
         List<JsonNode> sendable = new ArrayList<>();
-        for (JsonNode channel : channelsOf(linkedGuildId)) {
+        for (JsonNode channel : all) {
             if (SENDABLE_TYPES.contains(channel.path("type").asInt(-1))
                     && (q == null || channel.path("name").asText("").toLowerCase(Locale.ROOT).contains(q))) {
                 sendable.add(channel);
             }
         }
         List<OptionItem> items = sendable.stream()
-            .sorted(Comparator.comparingInt(channel -> channel.path("position").asInt(0)))
+            // Discord 화면 순서 — position은 카테고리 안에서만 의미가 있다. 카테고리 없는 채널이 맨 앞(-1)
+            .sorted(Comparator.<JsonNode>comparingInt(
+                    channel -> categoryPosition.getOrDefault(channel.path("parent_id").asText(""), -1))
+                .thenComparingInt(channel -> channel.path("position").asInt(0))
+                .thenComparingLong(channel -> channel.path("id").asLong(0)))
             .map(channel -> new OptionItem(channel.path("id").asText(), "#" + channel.path("name").asText("")))
             .toList();
         return new OptionPage(items, null);

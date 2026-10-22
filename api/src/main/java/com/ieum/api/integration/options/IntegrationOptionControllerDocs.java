@@ -31,7 +31,7 @@ public interface IntegrationOptionControllerDocs {
             + "못 찾으면 items=[] — 채널 ID 직접 입력으로 안내), "
             + "discord/guilds(입력 없음 — 연결한 Discord 서버, 값은 서버 ID·이름은 실시간 서버 이름. 봇이 쫓겨난 서버는 "
             + "'이름 (봇 없음 · 다시 연결)', Discord 일시 장애면 연결 시점 이름. nextCursor 항상 null), "
-            + "discord/channels(guild_id 필수 — 그 서버의 텍스트·공지 채널, 값은 채널 ID·이름은 #이름, position 순. "
+            + "discord/channels(guild_id 필수 — 그 서버의 텍스트·공지 채널, 값은 채널 ID·이름은 #이름, 카테고리·위치 순. "
             + "q 선택 — 이름 부분 일치(대소문자·앞의 # 무시). nextCursor 항상 null. 서버를 고르기 전에는 열지 않는다), "
             + "nextCursor가 있으면 cursor로 다음 페이지를 조회하고, null이면 마지막 페이지입니다. "
             + "오류 code: GOOGLE_SCOPE_REQUIRED(403, Google 권한 증분 동의 필요 — scope_groups는 "

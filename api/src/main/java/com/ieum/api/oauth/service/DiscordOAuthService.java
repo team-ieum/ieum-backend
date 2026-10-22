@@ -7,6 +7,8 @@ import com.ieum.auth.repository.DiscordGuildLinkRepository;
 import com.ieum.auth.repository.DiscordOAuthStateRepository;
 import com.ieum.auth.repository.UserRepository;
 import com.ieum.auth.service.DiscordApiClient;
+import com.ieum.common.exception.CustomException;
+import com.ieum.common.exception.ErrorCode;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -186,7 +188,7 @@ public class DiscordOAuthService {
                 MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException e) {
             // SHA-256은 모든 JDK 구현체가 필수 제공 — 발생하지 않는다
-            throw new IllegalStateException("SHA-256 없음", e);
+            throw new CustomException(ErrorCode.INTERNAL_SERVER_ERROR);
         }
     }
 }
