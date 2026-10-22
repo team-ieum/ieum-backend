@@ -97,6 +97,11 @@ jobs:
           SLACK_CLIENT_SECRET: ${{ secrets.SLACK_CLIENT_SECRET }}
           SLACK_REDIRECT_URI: ${{ secrets.AWS_SLACK_REDIRECT_URI }}
           SLACK_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_SLACK_FRONTEND_REDIRECT_URI }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          DISCORD_CLIENT_SECRET: ${{ secrets.DISCORD_CLIENT_SECRET }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_REDIRECT_URI: ${{ secrets.AWS_DISCORD_REDIRECT_URI }}
+          DISCORD_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_DISCORD_FRONTEND_REDIRECT_URI }}
         run: |
           set -euo pipefail
 
@@ -132,7 +137,12 @@ jobs:
             SLACK_CLIENT_ID \
             SLACK_CLIENT_SECRET \
             SLACK_REDIRECT_URI \
-            SLACK_FRONTEND_REDIRECT_URI
+            SLACK_FRONTEND_REDIRECT_URI \
+            DISCORD_CLIENT_ID \
+            DISCORD_CLIENT_SECRET \
+            DISCORD_BOT_TOKEN \
+            DISCORD_REDIRECT_URI \
+            DISCORD_FRONTEND_REDIRECT_URI
           do
             [ -n "${!name}" ] || missing_vars+=("$name")
           done
@@ -220,6 +230,11 @@ jobs:
           SLACK_CLIENT_SECRET: ${{ secrets.SLACK_CLIENT_SECRET }}
           SLACK_REDIRECT_URI: ${{ secrets.AWS_SLACK_REDIRECT_URI }}
           SLACK_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_SLACK_FRONTEND_REDIRECT_URI }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          DISCORD_CLIENT_SECRET: ${{ secrets.DISCORD_CLIENT_SECRET }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_REDIRECT_URI: ${{ secrets.AWS_DISCORD_REDIRECT_URI }}
+          DISCORD_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_DISCORD_FRONTEND_REDIRECT_URI }}
         run: |
           set -euo pipefail
 
@@ -268,6 +283,11 @@ jobs:
             -e SLACK_CLIENT_SECRET="$SLACK_CLIENT_SECRET" \
             -e SLACK_REDIRECT_URI="$SLACK_REDIRECT_URI" \
             -e SLACK_FRONTEND_REDIRECT_URI="$SLACK_FRONTEND_REDIRECT_URI" \
+            -e DISCORD_CLIENT_ID="$DISCORD_CLIENT_ID" \
+            -e DISCORD_CLIENT_SECRET="$DISCORD_CLIENT_SECRET" \
+            -e DISCORD_BOT_TOKEN="$DISCORD_BOT_TOKEN" \
+            -e DISCORD_REDIRECT_URI="$DISCORD_REDIRECT_URI" \
+            -e DISCORD_FRONTEND_REDIRECT_URI="$DISCORD_FRONTEND_REDIRECT_URI" \
             "$IMAGE_NAME:latest"
 
       - name: Health check
