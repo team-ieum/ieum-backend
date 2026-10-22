@@ -3,12 +3,14 @@ package com.ieum.api;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.ieum.api.config.DefaultBetaPlatformProvider;
+import com.ieum.api.config.DefaultDiscordAccessProvider;
 import com.ieum.api.config.DefaultExecutionJobEnqueuer;
 import com.ieum.api.config.DefaultSlackTokenProvider;
 import com.ieum.api.trigger.github.GitHubIssueSource;
 import com.ieum.api.trigger.gmail.GmailTriggerClient;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.executor.BetaPlatformProvider;
+import com.ieum.workflowcore.engine.executor.DiscordAccessProvider;
 import com.ieum.workflowcore.engine.executor.ExecutionJobEnqueuer;
 import com.ieum.workflowcore.engine.executor.SlackTokenProvider;
 import com.ieum.workflowcore.trigger.TriggerHandlerRegistry;
@@ -61,6 +63,12 @@ class IeumApplicationTest {
     @DisplayName("SlackTokenProvider는 DefaultSlackTokenProvider로 풀린다 (Stub이면 모든 Slack 노드가 미연결로 실패)")
     void slackTokenProvider_resolvesToDefault(@Autowired SlackTokenProvider slackTokenProvider) {
         assertThat(slackTokenProvider).isInstanceOf(DefaultSlackTokenProvider.class);
+    }
+
+    @Test
+    @DisplayName("DiscordAccessProvider는 DefaultDiscordAccessProvider로 풀린다 (Stub이면 모든 Discord 노드가 미연결로 실패)")
+    void discordAccessProvider_resolvesToDefault(@Autowired DiscordAccessProvider discordAccessProvider) {
+        assertThat(discordAccessProvider).isInstanceOf(DefaultDiscordAccessProvider.class);
     }
 
     @Test

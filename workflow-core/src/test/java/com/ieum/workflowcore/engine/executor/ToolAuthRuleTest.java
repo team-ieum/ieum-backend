@@ -17,11 +17,15 @@ class ToolAuthRuleTest {
         "builtin:github_create_issue,    github_token",
         "builtin:slack_send_channel_message, slack_oauth",
         "builtin:slack_send,             slack_oauth",
+        "builtin:discord_send_channel_message, discord_oauth",
+        "builtin:discord_x,              discord_oauth",
         "slack,                          webhook_credential",
         "discord,                        webhook_credential",
         // 웹훅은 이름 정확 일치 — 접두사로 보면 slack_x도 웹훅 URL을 받는다. 봇 접두사(builtin:slack_)와도 겹치지 않는다
         "slack_x,",
         "builtin:slack,",
+        // 웹훅 도구 discord(정확 일치)와 봇 접두사 builtin:discord_는 겹치지 않는다
+        "builtin:discord,",
         // gmail.send_email(builder=false)의 tool_key — 실행기 어디서도 토큰을 싣지 않는다
         "gmail,",
         "builtin:google,",
@@ -36,9 +40,9 @@ class ToolAuthRuleTest {
     @DisplayName("authOf가 돌려주는 값은 전부 KNOWN_AUTHS 안에 있다")
     void authOf_valuesAreKnown() {
         for (String key : new String[]{"builtin:google_x", "builtin:notion_x", "builtin:github_x", "builtin:slack_x",
-                "slack", "discord"}) {
+                "builtin:discord_x", "slack", "discord"}) {
             assertThat(ToolAuthRule.KNOWN_AUTHS).contains(ToolAuthRule.authOf(key));
         }
-        assertThat(ToolAuthRule.KNOWN_AUTHS).hasSize(5);
+        assertThat(ToolAuthRule.KNOWN_AUTHS).hasSize(6);
     }
 }

@@ -32,6 +32,9 @@ class ToolAuthResolverTest {
     @Mock
     private SlackTokenProvider slackTokenProvider;
 
+    @Mock
+    private DiscordAccessProvider discordAccessProvider;
+
     @InjectMocks
     private ToolAuthResolver toolAuthResolver;
 
@@ -137,5 +140,85 @@ class ToolAuthResolverTest {
             .isInstanceOf(CustomException.class)
             .extracting(e -> ((CustomException) e).getErrorCode())
             .isEqualTo(ErrorCode.SLACK_NOT_CONNECTED);
+    }
+
+    @Test
+    @DisplayName("Discord 봇 도구 → X-Discord-Token(봇 토큰)·X-Discord-Guild-Ids(쉼표). 웹훅 도구 discord는 헤더·조회 없음")
+    void discordBotTool_putsTokenAndGuildIds() {
+        UUID userId = UUID.randomUUID();
+        when(discordAccessProvider.get(userId))
+            .thenReturn(new DiscordAccess("bot-token", List.of("111111111111111111", "222222222222222222")));
+
+        Map<String, String> headers = toolAuthResolver.resolveHeaders(List.of(
+            Map.of("name", "builtin:discord_send_channel_message"),
+            Map.of("name", "discord")), userId);
+
+        assertThat(headers).containsExactly(
+            Map.entry("X-Discord-Token", "bot-token"),
+            Map.entry("X-Discord-Guild-Ids", "111111111111111111,222222222222222222"));
+    }
+
+    @Test
+    @DisplayName("웹훅 도구 discord만 있으면 헤더도 Discord 조회도 없다 — 미연결 사용자의 웹훅 실행을 막지 않는다")
+    void discordWebhookToolAlone_noHeaderNoLookup() {
+        Map<String, String> headers = toolAuthResolver.resolveHeaders(
+            List.of(Map.of("name", "discord")), UUID.randomUUID());
+
+        assertThat(headers).isEmpty();
+        verifyNoInteractions(discordAccessProvider);
+    }
+
+    @Test
+    @DisplayName("Discord 봇 도구에 credentialId·tool.auth가 붙어 있어도 무시한다 — LLM 키가 discord.com으로 나가지 않게")
+    void discordBotTool_ignoresByokCredential() {
+        UUID userId = UUID.randomUUID();
+        when(discordAccessProvider.get(userId)).thenReturn(new DiscordAccess("bot-token", List.of("111111111111111111")));
+
+        Map<String, String> headers = toolAuthResolver.resolveHeaders(List.of(
+            Map.of("name", "builtin:discord_send_channel_message", "credentialId", "llm-cred-id",
+                "auth", Map.of("type", "plain", "value", "sk-llm-key"))), userId);
+
+        assertThat(headers).containsEntry("X-Discord-Token", "bot-token").doesNotContainValue("sk-llm-key");
+        verifyNoInteractions(credentialProvider);
+    }
+
+    @Test
+    @DisplayName("[Review Focus 2] Discord 봇 도구가 여럿이어도 조회는 한 번")
+    void discordToolsShareOneLookup() {
+        UUID userId = UUID.randomUUID();
+        when(discordAccessProvider.get(userId)).thenReturn(new DiscordAccess("bot-token", List.of("111111111111111111")));
+
+        toolAuthResolver.resolveHeaders(List.of(
+            Map.of("name", "builtin:discord_send_channel_message"),
+            Map.of("name", "builtin:discord_create_thread")), userId);
+
+        verify(discordAccessProvider, times(1)).get(userId);
+    }
+
+    @Test
+    @DisplayName("Slack·Discord 봇 도구가 함께 있으면 두 앱 헤더가 모두 실린다")
+    void slackAndDiscordTogether() {
+        UUID userId = UUID.randomUUID();
+        when(slackTokenProvider.getValidBotToken(userId)).thenReturn("xoxb-bot");
+        when(discordAccessProvider.get(userId)).thenReturn(new DiscordAccess("bot-token", List.of("111111111111111111")));
+
+        Map<String, String> headers = toolAuthResolver.resolveHeaders(List.of(
+            Map.of("name", "builtin:slack_send_channel_message"),
+            Map.of("name", "builtin:discord_send_channel_message")), userId);
+
+        assertThat(headers).containsOnlyKeys("X-Slack-Token", "X-Discord-Token", "X-Discord-Guild-Ids");
+    }
+
+    @Test
+    @DisplayName("Discord 미연결 → DISCORD_NOT_CONNECTED가 그대로 올라간다(노드 실패)")
+    void discordNotConnected_propagates() {
+        UUID userId = UUID.randomUUID();
+        when(discordAccessProvider.get(userId)).thenThrow(new CustomException(ErrorCode.DISCORD_NOT_CONNECTED));
+
+        assertThatThrownBy(() -> toolAuthResolver.resolveHeaders(
+                List.of(Map.of("name", "builtin:discord_send_channel_message")), userId))
+            .isInstanceOf(CustomException.class)
+            .extracting(e -> ((CustomException) e).getErrorCode())
+            .isEqualTo(ErrorCode.DISCORD_NOT_CONNECTED);
     }
 }

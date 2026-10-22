@@ -85,6 +85,7 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 | `NotionTokenProvider` | api (OAuth 토큰) |
 | `GitHubTokenProvider` | api (OAuth 토큰) |
 | `SlackTokenProvider` | api (Slack 봇 토큰 — 미연결이면 `SLACK_NOT_CONNECTED` 예외) |
+| `DiscordAccessProvider` | api (Discord 봇 토큰 + 사용자 연결 서버 ID — 링크 0이면 `DISCORD_NOT_CONNECTED` 예외) |
 | `WebhookCredentialProvider` | api (송신 웹훅 URL + 실패 알림 대상 웹훅) |
 | `McpCatalogProvider` | api (MCP 서버 카탈로그) |
 | `UserRoleProvider` | api (self-hosted LLM 라우팅 판정) |

@@ -72,7 +72,8 @@ class AgentNodeExecutorTest {
     private ToolCallPreparer preparer(WebhookCredentialProvider webhookProvider) {
         return new ToolCallPreparer(
             googleTokenProvider,
-            new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider, mock(SlackTokenProvider.class)),
+            new ToolAuthResolver(credentialProvider, notionTokenProvider, gitHubTokenProvider, mock(SlackTokenProvider.class),
+                mock(DiscordAccessProvider.class)),
             webhookProvider);
     }
 
