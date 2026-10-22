@@ -25,11 +25,16 @@ import com.ieum.common.exception.ErrorCode;
 import java.net.SocketTimeoutException;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -146,5 +151,142 @@ class DiscordOptionSourcesTest {
         linked();
 
         assertErrorCode(() -> guilds.fetch(userId, Map.of(), null), ErrorCode.DISCORD_NOT_CONNECTED);
+    }
+
+    private final DiscordChannelOptionSource channels = new DiscordChannelOptionSource(linkRepository, client);
+
+    private void ownsGuild(String guildId) {
+        given(linkRepository.findByUserIdAndGuildId(userId, guildId)).willReturn(Optional.of(link(guildId, "이음")));
+    }
+
+    private static String channel(String id, String name, int type, int position) {
+        return "{\"id\":\"%s\",\"name\":\"%s\",\"type\":%d,\"position\":%d,\"guild_id\":\"%s\"}"
+            .formatted(id, name, type, position, G1);
+    }
+
+    private static String channelList(String... channels) {
+        return Stream.of(channels).collect(Collectors.joining(",", "[", "]"));
+    }
+
+    private void expectChannels(ResponseCreator response) {
+        server.expect(once(), requestTo(API + "/guilds/" + G1 + "/channels"))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Authorization", "Bot bot-token"))
+            .andRespond(response);
+    }
+
+    private static final String MIXED = channelList(
+        channel("9001", "random", 0, 2),
+        channel("9002", "voice", 2, 0),          // 음성 — 제외
+        channel("9003", "공지", 5, 1),            // 공지 — 포함
+        channel("9004", "General", 0, 0),
+        channel("9005", "카테고리", 4, 0),         // 카테고리 — 제외
+        channel("9006", "forum", 15, 3));        // 포럼 — 제외
+
+    @Test
+    @DisplayName("키는 discord.channels")
+    void channelsKey() {
+        assertThat(channels.key()).isEqualTo("discord.channels");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "   ", "{{nodes.a.output.guild_id}}"})
+    @DisplayName("guild_id가 비었거나 참조식이면 INVALID_INPUT — Discord 호출 없음")
+    void guildIdRequired(String guildId) {
+        assertErrorCode(() -> channels.fetch(userId, Map.of("guild_id", guildId), null), ErrorCode.INVALID_INPUT);
+    }
+
+    @Test
+    @DisplayName("guild_id 입력 자체가 없어도 INVALID_INPUT")
+    void guildIdMissing() {
+        assertErrorCode(() -> channels.fetch(userId, Map.of(), null), ErrorCode.INVALID_INPUT);
+    }
+
+    @Test
+    @DisplayName("내가 연결하지 않은 서버면 DISCORD_GUILD_NOT_CONNECTED(403) — 봇이 들어가 있어도 남의 서버 채널은 보여 주지 않는다")
+    void othersGuildRejected() {
+        given(linkRepository.findByUserIdAndGuildId(userId, G1)).willReturn(Optional.empty());
+
+        assertErrorCode(() -> channels.fetch(userId, Map.of("guild_id", G1), null), ErrorCode.DISCORD_GUILD_NOT_CONNECTED);
+    }
+
+    @Test
+    @DisplayName("텍스트(0)·공지(5)만, position 순, (채널 ID, #이름), nextCursor null. guild_id 앞뒤 공백은 뗀다")
+    void filtersSendableAndSortsByPosition() {
+        ownsGuild(G1);
+        expectChannels(withSuccess(MIXED, MediaType.APPLICATION_JSON));
+
+        OptionPage page = channels.fetch(userId, Map.of("guild_id", " " + G1 + " "), null);
+
+        assertThat(page.items()).containsExactly(
+            new OptionItem("9004", "#General"), new OptionItem("9003", "#공지"), new OptionItem("9001", "#random"));
+        assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("[Review Focus 4] 검색어의 앞 #·대소문자·앞뒤 공백을 무시한다 — 라벨이 #이름이라 사용자는 '#Gen '을 친다")
+    void searchIgnoresHashCaseAndSpaces() {
+        ownsGuild(G1);
+        expectChannels(withSuccess(MIXED, MediaType.APPLICATION_JSON));
+
+        assertThat(channels.fetch(userId, Map.of("guild_id", G1, "q", " #Gen "), null).items())
+            .containsExactly(new OptionItem("9004", "#General"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "   ", "#", " # "})
+    @DisplayName("공백뿐인 q·#만 있는 q는 없는 것으로 본다")
+    void blankQueryIsNoQuery(String q) {
+        ownsGuild(G1);
+        expectChannels(withSuccess(MIXED, MediaType.APPLICATION_JSON));
+
+        assertThat(channels.fetch(userId, Map.of("guild_id", G1, "q", q), null).items()).hasSize(3);
+    }
+
+    @Test
+    @DisplayName("봇 없음(404·10004)·(403·50001) → AUTHENTICATION_REQUIRED + 다시 연결 문구")
+    void botMissingAsksReconnect() {
+        ownsGuild(G1);
+        expectChannels(json(HttpStatus.FORBIDDEN, "{\"message\":\"Missing Access\",\"code\":50001}"));
+
+        assertThatThrownBy(() -> channels.fetch(userId, Map.of("guild_id", G1), null))
+            .isInstanceOf(CustomException.class)
+            .hasMessage(DiscordChannelOptionSource.BOT_MISSING_MESSAGE)
+            .extracting(e -> ((CustomException) e).getErrorCode())
+            .isEqualTo(ErrorCode.AUTHENTICATION_REQUIRED);
+    }
+
+    @Test
+    @DisplayName("404(Unknown Guild)도 봇 없음")
+    void unknownGuildAsksReconnect() {
+        ownsGuild(G1);
+        expectChannels(json(HttpStatus.NOT_FOUND, "{\"message\":\"Unknown Guild\",\"code\":10004}"));
+
+        assertErrorCode(() -> channels.fetch(userId, Map.of("guild_id", G1), null), ErrorCode.AUTHENTICATION_REQUIRED);
+    }
+
+    @Test
+    @DisplayName("401(봇 토큰 무효) → DISCORD_API_UNAVAILABLE, 재시도 없음")
+    void unauthorizedIsUnavailable() {
+        ownsGuild(G1);
+        expectChannels(json(HttpStatus.UNAUTHORIZED, "{\"message\":\"401: Unauthorized\",\"code\":0}"));
+
+        assertErrorCode(() -> channels.fetch(userId, Map.of("guild_id", G1), null), ErrorCode.DISCORD_API_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("5xx·네트워크·429(retry_after>5초) → DISCORD_API_UNAVAILABLE")
+    void transientIsUnavailable() {
+        ownsGuild(G1);
+        expectChannels(withServerError());
+        assertErrorCode(() -> channels.fetch(userId, Map.of("guild_id", G1), null), ErrorCode.DISCORD_API_UNAVAILABLE);
+
+        server.reset();
+        expectChannels(withException(new SocketTimeoutException()));
+        assertErrorCode(() -> channels.fetch(userId, Map.of("guild_id", G1), null), ErrorCode.DISCORD_API_UNAVAILABLE);
+
+        server.reset();
+        expectChannels(json(HttpStatus.TOO_MANY_REQUESTS, "{\"retry_after\":30.0}"));
+        assertErrorCode(() -> channels.fetch(userId, Map.of("guild_id", G1), null), ErrorCode.DISCORD_API_UNAVAILABLE);
     }
 }

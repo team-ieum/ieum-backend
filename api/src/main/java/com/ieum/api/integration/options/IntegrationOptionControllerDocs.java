@@ -29,13 +29,17 @@ public interface IntegrationOptionControllerDocs {
             + "slack/channels(연결한 Slack 워크스페이스의 공개 채널, 보관 제외 — 값은 채널 ID·이름은 #이름. q 없으면 20개씩이고 "
             + "items가 비어도 nextCursor가 있을 수 있음. q 선택 — 이름 부분 일치(대소문자·앞의 # 무시), 최대 1,000개 중 20개, nextCursor 항상 null. "
             + "못 찾으면 items=[] — 채널 ID 직접 입력으로 안내), "
+            + "discord/guilds(입력 없음 — 연결한 Discord 서버, 값은 서버 ID·이름은 실시간 서버 이름. 봇이 쫓겨난 서버는 "
+            + "'이름 (봇 없음 · 다시 연결)', Discord 일시 장애면 연결 시점 이름. nextCursor 항상 null), "
+            + "discord/channels(guild_id 필수 — 그 서버의 텍스트·공지 채널, 값은 채널 ID·이름은 #이름, position 순. "
+            + "q 선택 — 이름 부분 일치(대소문자·앞의 # 무시). nextCursor 항상 null. 서버를 고르기 전에는 열지 않는다), "
             + "nextCursor가 있으면 cursor로 다음 페이지를 조회하고, null이면 마지막 페이지입니다. "
             + "오류 code: GOOGLE_SCOPE_REQUIRED(403, Google 권한 증분 동의 필요 — scope_groups는 "
             + "spreadsheets·worksheets=sheets, files·folders=drive, calendars·writable_calendars·events=calendar. "
             + "sheets 그룹은 drive를 포함해 파일·폴더도 충족), "
-            + "ACCOUNT_NOT_CONNECTED(400), SLACK_NOT_CONNECTED(400), "
+            + "ACCOUNT_NOT_CONNECTED(400), SLACK_NOT_CONNECTED(400), DISCORD_NOT_CONNECTED(400), DISCORD_GUILD_NOT_CONNECTED(403, 연결하지 않은 서버), "
             + "AUTHENTICATION_REQUIRED(401, 재연동 필요), GOOGLE_RESOURCE_NOT_FOUND(404), "
-            + "GOOGLE_API_UNAVAILABLE(503), NOTION_API_UNAVAILABLE(503), GITHUB_API_UNAVAILABLE(503), SLACK_API_UNAVAILABLE(503), "
+            + "GOOGLE_API_UNAVAILABLE(503), NOTION_API_UNAVAILABLE(503), GITHUB_API_UNAVAILABLE(503), SLACK_API_UNAVAILABLE(503), DISCORD_API_UNAVAILABLE(503), "
             + "INVALID_INPUT(400), NOT_FOUND(404, 알 수 없는 목록)")
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<OptionPage>> getOptions(
