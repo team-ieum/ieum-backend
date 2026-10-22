@@ -8,13 +8,16 @@ import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -40,6 +43,21 @@ public class DiscordOAuthController implements DiscordOAuthControllerDocs {
         return ResponseEntity.ok()
             .header(HttpHeaders.SET_COOKIE, nonceCookie(authorization.nonce(), DiscordOAuthService.STATE_TTL_SECONDS))
             .body(ApiResponse.ok(Map.of("authUrl", authorization.authUrl())));
+    }
+
+    /** state는 필수가 아니다 — 없으면 400 화이트 페이지 대신 연동 화면으로 "만료"를 돌려준다. guild_id·permissions 쿼리는 받지 않는다 */
+    @GetMapping("/callback")
+    public ResponseEntity<Void> callback(
+        @RequestParam(required = false) String state,
+        @RequestParam(required = false) String code,
+        @RequestParam(required = false) String error,
+        @CookieValue(name = NONCE_COOKIE, required = false) String nonce
+    ) {
+        String result = discordOAuthService.handleCallback(state, nonce, code, error);
+        return ResponseEntity.status(HttpStatus.FOUND)
+            .header(HttpHeaders.LOCATION, frontendRedirectUri + "?" + result)
+            .header(HttpHeaders.SET_COOKIE, nonceCookie("", 0))
+            .build();
     }
 
     @DeleteMapping("/connections/{guildId}")

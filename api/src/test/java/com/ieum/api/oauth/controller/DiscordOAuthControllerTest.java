@@ -17,6 +17,7 @@ import com.ieum.api.common.GlobalExceptionHandler;
 import com.ieum.api.oauth.service.DiscordDisconnectService;
 import com.ieum.api.oauth.service.DiscordOAuthService;
 import com.ieum.auth.security.CustomUserDetails;
+import jakarta.servlet.http.Cookie;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -81,5 +82,21 @@ class DiscordOAuthControllerTest {
             .andExpect(status().isNoContent());
 
         verify(discordDisconnectService).disconnect(userId, "111111111111111111");
+    }
+
+    @Test
+    @DisplayName("callback — 쿠키 nonce를 서비스에 넘기고 결과 쿼리로 302, nonce 쿠키는 Max-Age=0으로 지운다")
+    void callbackRedirectsAndClearsCookie() throws Exception {
+        given(discordOAuthService.handleCallback("s1", "n-1", "c1", null)).willReturn("connected=discord");
+
+        mockMvc.perform(get("/api/v1/discord/oauth2/callback")
+                .param("state", "s1").param("code", "c1").param("guild_id", "999999999999999999")
+                .cookie(new Cookie("__Host-discord_oauth_nonce", "n-1")))
+            .andExpect(status().isFound())
+            .andExpect(header().string("Location", "http://localhost:3000/settings/integrations?connected=discord"))
+            .andExpect(header().string("Set-Cookie", allOf(
+                containsString("__Host-discord_oauth_nonce="),
+                containsString("Path=/;"),
+                containsString("Max-Age=0"))));
     }
 }
