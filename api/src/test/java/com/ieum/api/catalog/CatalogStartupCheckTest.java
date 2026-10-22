@@ -171,6 +171,38 @@ class CatalogStartupCheckTest {
                 .containsExactly("optionsSource 공급원 없음: slack.channels (slack_bot.send_channel_message)");
     }
 
+    @Test
+    @DisplayName("카탈로그 PR 모양 — discord_bot(auth discord_oauth) + builtin:discord_ ACTION + 공급원 2개(직속 discord.guilds·도구 칸 discord.channels)면 문제 없음")
+    void fixture_discordBotAccepted(@TempDir Path dir) throws IOException {
+        EventCatalog catalog = load(dir, MANUAL_APP + """
+                ,"discord_bot":{"provider":"discord","title":"Discord","brand":"discord","serviceType":"DISCORD","auth":"discord_oauth"}""",
+                "[]", Map.of("discord_bot/send_channel_message.json", """
+                        {"node_type":"ACTION","kind":"action","tool_key":"builtin:discord_send_channel_message",
+                         "builder":true,"generation":false,
+                         "fixed":{"type":"ACTION","config":{}},
+                         "inputFields":[{"key":"guild_id","title":"서버","type":"string","ref":false,"optionsSource":"discord.guilds"}],
+                         "fields":{"channel_id":{"title":"채널","required":true,"optionsSource":"discord.channels","optionsInputs":["guild_id"]},
+                                   "content":{"title":"메시지","type":"text","required":true}},
+                         "outputFields":[{"key":"id","title":"메시지 ID","type":"string"}]}"""));
+
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of("discord.guilds", "discord.channels"))).isEmpty();
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of())).containsExactlyInAnyOrder(
+                "optionsSource 공급원 없음: discord.guilds (discord_bot.send_channel_message)",
+                "optionsSource 공급원 없음: discord.channels (discord_bot.send_channel_message)");
+    }
+
+    @Test
+    @DisplayName("discord_bot 앱 auth를 웹훅 것(webhook_credential)으로 두면 'tool_key 인증 불일치' — 앱 하나에 auth 하나(D7)")
+    void fixture_discordBotWrongAuth(@TempDir Path dir) throws IOException {
+        EventCatalog catalog = load(dir, MANUAL_APP + """
+                ,"discord_bot":{"provider":"discord","title":"Discord","brand":"discord","serviceType":"DISCORD","auth":"webhook_credential"}""",
+                "[]", Map.of("discord_bot/send_channel_message.json", action("builtin:discord_send_channel_message", "")));
+
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of())).containsExactly(
+                "tool_key 인증 불일치: discord_bot.send_channel_message tool_key=builtin:discord_send_channel_message"
+                        + " 기대 auth=discord_oauth 앱 auth=webhook_credential");
+    }
+
     private static String gmailApp() {
         return MANUAL_APP + """
                 ,"gmail":{"provider":"google","title":"Gmail","brand":"gmail","serviceType":"GOOGLE","auth":"google_oauth"}""";

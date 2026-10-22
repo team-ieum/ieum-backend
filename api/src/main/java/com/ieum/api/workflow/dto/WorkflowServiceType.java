@@ -20,17 +20,18 @@ public enum WorkflowServiceType {
      * 비AI 노드 event 앱 키({@code <앱>.<이벤트>}의 앱) → 서비스. 여기 없는 앱(google_calendar·schedule·
      * manual·branch·transform·approval)은 아이콘이 없다. apps.json brand는 이 enum과 1:1이 아니라 쓰지 않는다.
      */
-    private static final Map<String, WorkflowServiceType> APP_SERVICES = Map.of(
-        "gmail", GMAIL,
-        "google_sheets", GOOGLE_SHEETS,
-        "google_drive", GOOGLE_DRIVE,
-        "notion", NOTION,
-        "github", GITHUB,
-        "slack", SLACK,
-        "slack_bot", SLACK,
-        "discord", DISCORD,
-        "webhook", WEBHOOK,
-        "http", WEBHOOK
+    private static final Map<String, WorkflowServiceType> APP_SERVICES = Map.ofEntries(
+        Map.entry("gmail", GMAIL),
+        Map.entry("google_sheets", GOOGLE_SHEETS),
+        Map.entry("google_drive", GOOGLE_DRIVE),
+        Map.entry("notion", NOTION),
+        Map.entry("github", GITHUB),
+        Map.entry("slack", SLACK),
+        Map.entry("slack_bot", SLACK),
+        Map.entry("discord", DISCORD),
+        Map.entry("discord_bot", DISCORD),
+        Map.entry("webhook", WEBHOOK),
+        Map.entry("http", WEBHOOK)
     );
 
     /** AI 노드 config.tools[].name 접두사 → 서비스. AgentNodeExecutor/ToolAuthResolver의 도구 이름 규칙과 일치해야 한다. */
@@ -38,6 +39,7 @@ public enum WorkflowServiceType {
         "slack", SLACK,
         "builtin:slack_", SLACK,
         "discord", DISCORD,
+        "builtin:discord_", DISCORD,
         "builtin:notion_", NOTION,
         "builtin:github_", GITHUB,
         "gmail", GMAIL, // ieum-agent 도구명
