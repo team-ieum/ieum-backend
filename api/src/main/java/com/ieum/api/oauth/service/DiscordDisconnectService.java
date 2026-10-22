@@ -42,18 +42,18 @@ public class DiscordDisconnectService {
     /** 내 (userId, guildId) 링크가 없으면 아무것도 안 한다(멱등) — 지운 링크가 없으면 퇴장 판정도 하지 않는다 */
     @Transactional
     public void disconnect(UUID userId, String guildId) {
-        linkRepository.findByUserIdAndGuildId(userId, guildId).ifPresent(link -> {
-            linkRepository.delete(link);
+        if (linkRepository.deleteByUserIdAndGuildId(userId, guildId) > 0) {
             leaveIfOrphan(guildId);
-        });
+        }
     }
 
     /** 회원 탈퇴 — 호출자 트랜잭션에 합류한다. 퇴장은 그 트랜잭션이 커밋된 뒤에만 나간다 */
     @Transactional
     public void disconnectAll(UUID userId) {
         List<DiscordGuildLink> links = linkRepository.findAllByUserIdOrderByCreatedAtAsc(userId);
-        linkRepository.deleteAll(links);
-        links.forEach(link -> leaveIfOrphan(link.getGuildId()));
+        List<String> guildIds = links.stream().map(DiscordGuildLink::getGuildId).toList();
+        linkRepository.deleteAllInBatch(links); // 벌크 — 동시 해제로 이미 지워진 행이 있어도 실패하지 않는다
+        guildIds.forEach(this::leaveIfOrphan);
     }
 
     /**

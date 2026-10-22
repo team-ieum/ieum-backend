@@ -209,6 +209,37 @@ class DiscordDisconnectServiceTest {
     }
 
     @Test
+    @DisplayName("같은 링크 동시 해제(더블클릭·해제×탈퇴) — 둘 다 예외 없이 끝나고 퇴장은 한 번만")
+    void concurrentSameLinkDisconnectIsSafe() throws Exception {
+        UUID me = UUID.randomUUID();
+        link(me, G1);
+        expectLeave(G1); // 실제로 지운 쪽만 퇴장 판정 — 0행 삭제 쪽은 호출하지 않는다
+        CyclicBarrier bothLoaded = new CyclicBarrier(2);
+        Callable<Void> disconnect = () -> transactionTemplate.execute(status -> {
+            // 둘 다 링크를 읽은 뒤에 해제를 시작한다 — 엔티티 delete면 나중 커밋이 0행 삭제로 StaleObjectStateException
+            assertThat(linkRepository.findByUserIdAndGuildId(me, G1)).isPresent();
+            try {
+                bothLoaded.await(5, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+            discordDisconnectService.disconnect(me, G1);
+            return null;
+        });
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Void> first = pool.submit(disconnect);
+            Future<Void> second = pool.submit(disconnect);
+
+            assertThatCode(() -> first.get(10, TimeUnit.SECONDS)).doesNotThrowAnyException();
+            assertThatCode(() -> second.get(10, TimeUnit.SECONDS)).doesNotThrowAnyException();
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(linkRepository.countByGuildId(G1)).isZero();
+    }
+
+    @Test
     @DisplayName("퇴장이 실패해도(HTTP 5xx) 예외 없이 끝난다 — 링크 삭제는 이미 커밋됐다")
     void leaveFailureIsSwallowed() {
         UUID me = UUID.randomUUID();

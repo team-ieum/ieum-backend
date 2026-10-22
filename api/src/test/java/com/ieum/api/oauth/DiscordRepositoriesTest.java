@@ -57,8 +57,6 @@ class DiscordRepositoriesTest {
             .extracting(DiscordGuildLink::getGuildId).containsExactly(G1, G2);
         assertThat(linkRepository.findByUserIdAndGuildId(me, G2)).get()
             .extracting(DiscordGuildLink::getGuildName).isEqualTo("서버2");
-        assertThat(linkRepository.existsByUserIdAndGuildId(me, G1)).isTrue();
-        assertThat(linkRepository.existsByUserIdAndGuildId(me, "333333333333333333")).isFalse();
     }
 
     @Test

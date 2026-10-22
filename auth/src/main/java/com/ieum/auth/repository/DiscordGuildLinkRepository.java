@@ -5,6 +5,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 public interface DiscordGuildLinkRepository extends JpaRepository<DiscordGuildLink, UUID> {
 
@@ -13,7 +16,10 @@ public interface DiscordGuildLinkRepository extends JpaRepository<DiscordGuildLi
 
     Optional<DiscordGuildLink> findByUserIdAndGuildId(UUID userId, String guildId);
 
-    boolean existsByUserIdAndGuildId(UUID userId, String guildId);
+    /** 해제 — 벌크 삭제라 동시 해제의 나중 쪽은 0행(엔티티 delete면 StaleObjectStateException). 반환값 = 지운 행 수 */
+    @Modifying
+    @Query("delete from DiscordGuildLink l where l.userId = :userId and l.guildId = :guildId")
+    int deleteByUserIdAndGuildId(@Param("userId") UUID userId, @Param("guildId") String guildId);
 
     /** 해제 뒤 "그 서버 마지막 IEUM 링크였나" — 커밋 뒤 새 트랜잭션에서만 부른다(spec §6) */
     long countByGuildId(String guildId);
