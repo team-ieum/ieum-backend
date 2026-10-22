@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.ieum.api.credential.repository.CredentialRepository;
 import com.ieum.api.mcp.repository.McpServerCatalogRepository;
+import com.ieum.api.oauth.service.DiscordDisconnectService;
 import com.ieum.api.oauth.service.SlackDisconnectService;
 import com.ieum.api.prompt.repository.PromptTemplateRepository;
 import com.ieum.api.webhookcredential.repository.WebhookCredentialRepository;
@@ -33,6 +34,7 @@ class UserServiceTest {
 
     @Mock private UserRepository userRepository;
     @Mock private SlackDisconnectService slackDisconnectService;
+    @Mock private DiscordDisconnectService discordDisconnectService;
     @Mock private WorkflowCrudService workflowCrudService;
     @Mock private CredentialRepository credentialRepository;
     @Mock private WebhookCredentialRepository webhookCredentialRepository;
@@ -51,11 +53,13 @@ class UserServiceTest {
 
         userService.deleteMyAccount(userId);
 
-        InOrder order = inOrder(userRepository, slackDisconnectService, workflowCrudService, credentialRepository,
-            webhookCredentialRepository, mcpServerCatalogRepository, promptTemplateRepository,
+        InOrder order = inOrder(userRepository, slackDisconnectService, discordDisconnectService, workflowCrudService,
+            credentialRepository, webhookCredentialRepository, mcpServerCatalogRepository, promptTemplateRepository,
             connectedAccountRepository, refreshTokenRepository);
-        order.verify(userRepository).findByIdForUpdate(userId); // users 행 락을 먼저 — 설치 콜백과 락 순서(users → slack_installations)를 맞춘다
+        order.verify(userRepository).findByIdForUpdate(userId); // users 행 락을 먼저 — 설치 콜백과 락 순서(users → 링크)를 맞춘다
         order.verify(slackDisconnectService).disconnect(userId); // 링크가 남으면 봇 토큰이 영구 잔존
+        order.verify(discordDisconnectService).disconnectAll(userId); // 링크가 남으면 "남은 링크 0"에 못 닿아 봇이 영구 잔존
+        order.verify(userRepository).flush();
         order.verify(workflowCrudService).deleteAllByUserId(userId);
         order.verify(credentialRepository).deleteByUserId(userId);
         order.verify(webhookCredentialRepository).deleteByUserId(userId);
@@ -76,7 +80,7 @@ class UserServiceTest {
             .isInstanceOf(CustomException.class)
             .extracting(e -> ((CustomException) e).getErrorCode())
             .isEqualTo(ErrorCode.NOT_FOUND);
-        verifyNoInteractions(slackDisconnectService, workflowCrudService, credentialRepository,
+        verifyNoInteractions(discordDisconnectService, slackDisconnectService, workflowCrudService, credentialRepository,
             webhookCredentialRepository, mcpServerCatalogRepository, promptTemplateRepository,
             connectedAccountRepository, refreshTokenRepository);
     }

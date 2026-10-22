@@ -1,13 +1,18 @@
 package com.ieum.api.user.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 
 import com.ieum.api.NoRedisTestConfig;
 import com.ieum.auth.domain.AuthProvider;
+import com.ieum.auth.domain.DiscordGuildLink;
 import com.ieum.auth.domain.SlackInstallation;
 import com.ieum.auth.domain.SlackUserLink;
 import com.ieum.auth.domain.User;
 import com.ieum.auth.domain.UserRole;
+import com.ieum.auth.repository.DiscordGuildLinkRepository;
 import com.ieum.auth.repository.RefreshTokenRepository;
 import com.ieum.auth.repository.SlackInstallationRepository;
 import com.ieum.auth.repository.SlackUserLinkRepository;
@@ -24,8 +29,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.web.client.RestTemplate;
 
 /**
  * 실제 트랜잭션·DB로 탈퇴를 검증한다. mock 단위 테스트로는 못 잡는 문제가 있다 —
@@ -38,12 +47,15 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 class UserServiceWithdrawalIntegrationTest {
 
     private static final String TEAM_ID = "T-WITHDRAW";
+    private static final String GUILD_ID = "987654321098765432";
 
     @Autowired private UserService userService;
     @Autowired private UserRepository userRepository;
     @Autowired private WorkflowRepository workflowRepository;
     @Autowired private SlackInstallationRepository installationRepository;
     @Autowired private SlackUserLinkRepository linkRepository;
+    @Autowired private DiscordGuildLinkRepository discordLinkRepository;
+    @Autowired private RestTemplate restTemplate;
 
     @MockitoBean private RefreshTokenRepository refreshTokenRepository;       // Redis
     @MockitoBean private WorkflowDefinitionRepository definitionRepository;   // Mongo (커밋 후 정리)
@@ -61,6 +73,9 @@ class UserServiceWithdrawalIntegrationTest {
         installationRepository.findAll().stream()
             .filter(i -> TEAM_ID.equals(i.getTeamId()))
             .forEach(installationRepository::delete);
+        discordLinkRepository.findAll().stream()
+            .filter(link -> GUILD_ID.equals(link.getGuildId()))
+            .forEach(discordLinkRepository::delete);
     }
 
     @Test
@@ -84,5 +99,24 @@ class UserServiceWithdrawalIntegrationTest {
         assertThat(workflowRepository.findByUserId(userId, Pageable.unpaged())).isEmpty();
         assertThat(linkRepository.findByUserId(userId)).isEmpty();
         assertThat(installationRepository.findAll()).noneMatch(i -> TEAM_ID.equals(i.getTeamId()));
+    }
+
+    @Test
+    @DisplayName("마지막 Discord 사용자 탈퇴 — 링크가 커밋 후 남지 않고, 커밋 뒤 봇이 서버를 나간다")
+    void deleteMyAccount_removesDiscordLinksAndLeavesOrphanGuild() {
+        User user = userRepository.save(User.builder()
+            .email("withdraw-discord@ieum.test").name("u").provider(AuthProvider.LOCAL).role(UserRole.ROLE_USER).build());
+        userId = user.getId();
+        discordLinkRepository.save(new DiscordGuildLink(userId, GUILD_ID, "서버", "U1"));
+        MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
+        server.expect(requestTo("https://discord.com/api/v10/users/@me/guilds/" + GUILD_ID))
+            .andExpect(method(HttpMethod.DELETE))
+            .andRespond(withStatus(HttpStatus.NO_CONTENT));
+
+        userService.deleteMyAccount(userId);
+
+        server.verify();
+        assertThat(userRepository.findById(userId)).isEmpty();
+        assertThat(discordLinkRepository.findAll()).noneMatch(link -> GUILD_ID.equals(link.getGuildId()));
     }
 }
