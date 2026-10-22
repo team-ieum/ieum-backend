@@ -10,8 +10,14 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 
 import com.ieum.api.NoRedisTestConfig;
+import com.ieum.auth.domain.AuthProvider;
 import com.ieum.auth.domain.DiscordGuildLink;
+import com.ieum.auth.domain.User;
+import com.ieum.auth.domain.UserRole;
 import com.ieum.auth.repository.DiscordGuildLinkRepository;
+import com.ieum.auth.repository.UserRepository;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CyclicBarrier;
@@ -50,10 +56,12 @@ class DiscordDisconnectServiceTest {
 
     @Autowired private DiscordDisconnectService discordDisconnectService;
     @Autowired private DiscordGuildLinkRepository linkRepository;
+    @Autowired private UserRepository userRepository;
     @Autowired private RestTemplate restTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private PlatformTransactionManager transactionManager;
     private MockRestServiceServer server;
+    private final List<UUID> users = new ArrayList<>();
 
     @BeforeEach
     void bindServer() {
@@ -66,7 +74,16 @@ class DiscordDisconnectServiceTest {
             server.verify();
         } finally {
             linkRepository.deleteAll();
+            userRepository.deleteAllById(users);
         }
+    }
+
+    /** 해제는 users 행을 먼저 잠근다 — 행이 있어야 링크를 지운다 */
+    private UUID user() {
+        UUID id = userRepository.save(User.builder().email(UUID.randomUUID() + "@ieum.test").name("u")
+            .provider(AuthProvider.LOCAL).role(UserRole.ROLE_USER).build()).getId();
+        users.add(id);
+        return id;
     }
 
     private void link(UUID userId, String guildId) {
@@ -94,7 +111,7 @@ class DiscordDisconnectServiceTest {
     @Test
     @DisplayName("[Review Focus 1] 내 링크가 없으면 퇴장 판정도 하지 않는다(멱등) — 남은 링크 0인 서버여도 Discord 호출 없음")
     void noLinkIsNoop() {
-        discordDisconnectService.disconnect(UUID.randomUUID(), G1);
+        discordDisconnectService.disconnect(user(), G1);
 
         assertThat(linkRepository.count()).isZero();
     }
@@ -105,7 +122,7 @@ class DiscordDisconnectServiceTest {
         UUID other = UUID.randomUUID();
         link(other, G1);
 
-        discordDisconnectService.disconnect(UUID.randomUUID(), G1);
+        discordDisconnectService.disconnect(user(), G1);
 
         assertThat(linkRepository.findByUserIdAndGuildId(other, G1)).isPresent();
     }
@@ -113,7 +130,7 @@ class DiscordDisconnectServiceTest {
     @Test
     @DisplayName("같은 서버에 다른 사용자 링크가 남으면 내 링크만 지우고 봇은 남는다")
     void othersRemainKeepsBot() {
-        UUID me = UUID.randomUUID();
+        UUID me = user();
         UUID other = UUID.randomUUID();
         link(me, G1);
         link(other, G1);
@@ -127,7 +144,7 @@ class DiscordDisconnectServiceTest {
     @Test
     @DisplayName("마지막 링크 → 커밋 뒤 재카운트 0 → 봇 퇴장. 내 다른 서버 링크는 그대로")
     void lastLinkLeavesAfterCommit() {
-        UUID me = UUID.randomUUID();
+        UUID me = user();
         link(me, G1);
         link(me, G2);
         expectLeave(G1);
@@ -141,7 +158,7 @@ class DiscordDisconnectServiceTest {
     @Test
     @DisplayName("[Review Focus 3] 호출자 트랜잭션(회원 탈퇴)이 롤백되면 퇴장하지 않고 링크도 남는다 — 퇴장은 커밋 뒤에만")
     void callerRollbackSkipsLeave() {
-        UUID me = UUID.randomUUID();
+        UUID me = user();
         link(me, G1);
 
         transactionTemplate.executeWithoutResult(status -> {
@@ -155,7 +172,7 @@ class DiscordDisconnectServiceTest {
     @Test
     @DisplayName("커밋과 재카운트 사이에 다른 사용자가 같은 서버를 연결했으면 퇴장하지 않는다")
     void linkCreatedBeforeRecountKeepsBot() {
-        UUID me = UUID.randomUUID();
+        UUID me = user();
         UUID newcomer = UUID.randomUUID();
         link(me, G1);
 
@@ -171,8 +188,8 @@ class DiscordDisconnectServiceTest {
     @Test
     @DisplayName("두 링크 동시 해제 — 둘 다 트랜잭션 안에선 상대 링크를 보지만(1·1) 커밋 뒤 재카운트라 봇은 최소 한 번 나간다")
     void concurrentLastTwoDisconnectsLeaveAtLeastOnce() throws Exception {
-        UUID a = UUID.randomUUID();
-        UUID b = UUID.randomUUID();
+        UUID a = user();
+        UUID b = user();
         link(a, G1);
         link(b, G1);
         // 나중에 커밋한 쪽은 반드시 0을 본다. 둘 다 0을 보면 두 번째 퇴장은 404(이미 없음)가 되지만 여기선 둘 다 204로 받는다
@@ -211,7 +228,7 @@ class DiscordDisconnectServiceTest {
     @Test
     @DisplayName("같은 링크 동시 해제(더블클릭·해제×탈퇴) — 둘 다 예외 없이 끝나고 퇴장은 한 번만")
     void concurrentSameLinkDisconnectIsSafe() throws Exception {
-        UUID me = UUID.randomUUID();
+        UUID me = user();
         link(me, G1);
         expectLeave(G1); // 실제로 지운 쪽만 퇴장 판정 — 0행 삭제 쪽은 호출하지 않는다
         CyclicBarrier bothLoaded = new CyclicBarrier(2);
@@ -240,9 +257,46 @@ class DiscordDisconnectServiceTest {
     }
 
     @Test
+    @DisplayName("users 행이 없으면(탈퇴) 링크가 남아 있어도 아무것도 안 한다 — 탈퇴 정리는 disconnectAll 몫")
+    void missingUserIsNoop() {
+        UUID gone = UUID.randomUUID();
+        link(gone, G1);
+
+        discordDisconnectService.disconnect(gone, G1);
+
+        assertThat(linkRepository.findByUserIdAndGuildId(gone, G1)).isPresent();
+    }
+
+    @Test
+    @DisplayName("해제는 users 행 락을 먼저 잡는다 — 재연결 콜백(save)이 그 행을 잡고 있으면 커밋까지 기다렸다가 지운다")
+    void disconnectWaitsForUserRowLock() throws Exception {
+        UUID me = user();
+        link(me, G1);
+        expectLeave(G1);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> disconnect = transactionTemplate.execute(status -> {
+                userRepository.findByIdForUpdate(me); // 콜백 save가 잡는 락
+                Future<?> f = pool.submit(() -> discordDisconnectService.disconnect(me, G1));
+                try {
+                    Thread.sleep(300);
+                } catch (InterruptedException e) {
+                    throw new IllegalStateException(e);
+                }
+                assertThat(f).isNotDone();
+                return f;
+            });
+            disconnect.get(10, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(linkRepository.findByUserIdAndGuildId(me, G1)).isEmpty();
+    }
+
+    @Test
     @DisplayName("퇴장이 실패해도(HTTP 5xx) 예외 없이 끝난다 — 링크 삭제는 이미 커밋됐다")
     void leaveFailureIsSwallowed() {
-        UUID me = UUID.randomUUID();
+        UUID me = user();
         link(me, G1);
         server.expect(requestTo(leaveUrl(G1))).andRespond(withServerError());
 
@@ -253,7 +307,7 @@ class DiscordDisconnectServiceTest {
     @Test
     @DisplayName("이미 쫓겨난 서버(404·10004)도 예외 없이 끝난다")
     void alreadyGoneIsSwallowed() {
-        UUID me = UUID.randomUUID();
+        UUID me = user();
         link(me, G1);
         server.expect(requestTo(leaveUrl(G1)))
             .andRespond(withStatus(HttpStatus.NOT_FOUND).contentType(MediaType.APPLICATION_JSON)
@@ -266,7 +320,7 @@ class DiscordDisconnectServiceTest {
     @Test
     @DisplayName("disconnectAll — 내 링크 전부 삭제, 남은 링크가 0이 된 서버만 퇴장")
     void disconnectAllLeavesOnlyOrphans() {
-        UUID me = UUID.randomUUID();
+        UUID me = user();
         UUID other = UUID.randomUUID();
         link(me, G1);
         link(me, G2);

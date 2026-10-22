@@ -30,7 +30,7 @@ public class OAuthConnectionResponse {
     @Schema(description = "표시 이름 — SLACK은 워크스페이스 이름, DISCORD는 연결 시점 서버 이름, 다른 제공자는 null", example = "이음 팀", nullable = true)
     private final String displayName;
 
-    @Schema(description = "부여된 Scopes 목록 (DISCORD는 null — 봇 권한은 앱 공통)", nullable = true)
+    @Schema(description = "부여된 Scopes 목록 (DISCORD는 빈 목록 — 봇 권한은 앱 공통)")
     private final List<String> scopes;
 
     @Schema(description = "연동 일시")
@@ -58,13 +58,14 @@ public class OAuthConnectionResponse {
             .build();
     }
 
-    /** 서버마다 1개. scopes는 null — 봇 권한(D6)은 앱 공통이라 링크별 값이 없다 */
+    /** 서버마다 1개. scopes는 빈 목록 — 봇 권한(D6)은 앱 공통이라 링크별 값이 없다 */
     public static OAuthConnectionResponse fromDiscord(DiscordGuildLink link) {
         return OAuthConnectionResponse.builder()
             .id(link.getId())
             .provider("DISCORD")
             .providerAccountId(link.getGuildId())
             .displayName(link.getGuildName())
+            .scopes(List.of())
             .createdAt(link.getCreatedAt())
             .build();
     }

@@ -19,7 +19,7 @@ import org.springframework.web.client.RestClientException;
  * 연결한 Discord 서버(spec §10, D9) — 값은 서버 ID, 이름은 링크마다 GET /guilds/{id}로 받은 실시간 이름.
  * 봇이 쫓겨난 서버는 빼지 않고 "(봇 없음 · 다시 연결)"을 붙인다(google.calendars "(읽기 전용)" 선례). 일시 오류는 연결 시점 이름.
  * DB 이름은 갱신하지 않는다. 트랜잭션을 걸지 않는다(options 관례).
- * ponytail: parallelStream(공용 ForkJoinPool) — 사용자당 서버 수가 작다는 전제. 수십 개가 되면 전용 executor로.
+ * ponytail: 사용자당 링크 수가 적어 순차 호출 — 많아지면 전용 executor로.
  */
 @Slf4j
 @Component
@@ -42,7 +42,7 @@ public class DiscordGuildOptionSource implements OptionSource {
         if (links.isEmpty()) {
             throw new CustomException(ErrorCode.DISCORD_NOT_CONNECTED);
         }
-        return new OptionPage(links.parallelStream().map(this::item).toList(), null);
+        return new OptionPage(links.stream().map(this::item).toList(), null);
     }
 
     private OptionItem item(DiscordGuildLink link) {

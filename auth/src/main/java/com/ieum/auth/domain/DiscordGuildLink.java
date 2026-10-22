@@ -51,9 +51,13 @@ public class DiscordGuildLink extends BaseEntity {
         this.discordUserId = discordUserId;
     }
 
-    /** 같은 사용자가 같은 서버를 다시 연결했을 때 */
+    /** 같은 사용자가 같은 서버를 다시 연결했을 때. 못 받은 값(null·빈 이름 — /users/@me 실패 등)은 저장된 값을 유지한다 */
     public void refresh(String guildName, String discordUserId) {
-        this.guildName = guildName;
-        this.discordUserId = discordUserId;
+        if (guildName != null && !guildName.isBlank()) {
+            this.guildName = guildName;
+        }
+        if (discordUserId != null) {
+            this.discordUserId = discordUserId;
+        }
     }
 }

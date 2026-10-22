@@ -28,7 +28,6 @@ public class DefaultDiscordAccessProvider implements DiscordAccessProvider {
     public DiscordAccess get(UUID userId) {
         List<String> guildIds = linkRepository.findAllByUserIdOrderByCreatedAtAsc(userId).stream()
             .map(DiscordGuildLink::getGuildId)
-            .distinct()
             .sorted()
             .toList();
         if (guildIds.isEmpty()) {

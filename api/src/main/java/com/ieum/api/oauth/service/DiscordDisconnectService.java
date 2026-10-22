@@ -2,6 +2,7 @@ package com.ieum.api.oauth.service;
 
 import com.ieum.auth.domain.DiscordGuildLink;
 import com.ieum.auth.repository.DiscordGuildLinkRepository;
+import com.ieum.auth.repository.UserRepository;
 import com.ieum.auth.service.DiscordApiClient;
 import java.util.List;
 import java.util.UUID;
@@ -28,20 +29,28 @@ import org.springframework.web.client.RestClientException;
 public class DiscordDisconnectService {
 
     private final DiscordGuildLinkRepository linkRepository;
+    private final UserRepository userRepository;
     private final DiscordApiClient discordApiClient;
     private final TransactionTemplate requiresNew;
 
-    public DiscordDisconnectService(DiscordGuildLinkRepository linkRepository, DiscordApiClient discordApiClient,
-                                    PlatformTransactionManager transactionManager) {
+    public DiscordDisconnectService(DiscordGuildLinkRepository linkRepository, UserRepository userRepository,
+                                    DiscordApiClient discordApiClient, PlatformTransactionManager transactionManager) {
         this.linkRepository = linkRepository;
+        this.userRepository = userRepository;
         this.discordApiClient = discordApiClient;
         this.requiresNew = new TransactionTemplate(transactionManager);
         this.requiresNew.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
-    /** 내 (userId, guildId) 링크가 없으면 아무것도 안 한다(멱등) — 지운 링크가 없으면 퇴장 판정도 하지 않는다 */
+    /**
+     * 내 (userId, guildId) 링크가 없으면 아무것도 안 한다(멱등) — 지운 링크가 없으면 퇴장 판정도 하지 않는다.
+     * users 행을 먼저 잠근다 — 설치 콜백 save·회원 탈퇴와 같은 순서(users → 링크)로 재연결 콜백과 줄 세운다. 사용자가 없으면 끝.
+     */
     @Transactional
     public void disconnect(UUID userId, String guildId) {
+        if (userRepository.findByIdForUpdate(userId).isEmpty()) {
+            return;
+        }
         if (linkRepository.deleteByUserIdAndGuildId(userId, guildId) > 0) {
             leaveIfOrphan(guildId);
         }

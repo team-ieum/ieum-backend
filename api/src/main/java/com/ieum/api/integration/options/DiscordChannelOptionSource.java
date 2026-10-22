@@ -73,9 +73,11 @@ public class DiscordChannelOptionSource implements OptionSource {
             }
         }
         List<OptionItem> items = sendable.stream()
-            // Discord 화면 순서 — position은 카테고리 안에서만 의미가 있다. 카테고리 없는 채널이 맨 앞(-1)
+            // Discord 화면 순서 — position은 카테고리 안에서만 의미가 있다. 카테고리 없는 채널이 맨 앞(-1).
+            // position이 같은 카테고리끼리 채널이 섞이지 않게 카테고리 id로 한 번 더 묶는다
             .sorted(Comparator.<JsonNode>comparingInt(
                     channel -> categoryPosition.getOrDefault(channel.path("parent_id").asText(""), -1))
+                .thenComparingLong(channel -> channel.path("parent_id").asLong(0))
                 .thenComparingInt(channel -> channel.path("position").asInt(0))
                 .thenComparingLong(channel -> channel.path("id").asLong(0)))
             .map(channel -> new OptionItem(channel.path("id").asText(), "#" + channel.path("name").asText("")))

@@ -54,7 +54,7 @@ class DiscordOptionSourcesTest {
     private static final String G3 = "333333333333333333";
 
     private final RestTemplate restTemplate = new RestTemplate();
-    private final MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).ignoreExpectOrder(true).build();
+    private final MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
     private final DiscordGuildLinkRepository linkRepository = mock(DiscordGuildLinkRepository.class);
     private final DiscordApiClient client = new DiscordApiClient(restTemplate, "cid", "secret", "bot-token");
     private final DiscordGuildOptionSource guilds = new DiscordGuildOptionSource(linkRepository, client);
@@ -224,7 +224,7 @@ class DiscordOptionSourcesTest {
     }
 
     @Test
-    @DisplayName("Discord 화면 순서 — 카테고리 없는 채널 먼저, 그다음 카테고리 position 순으로 묶고, 안에서 position·id 숫자 순")
+    @DisplayName("Discord 화면 순서 — 카테고리 없는 채널 먼저, 그다음 카테고리 position·id 순으로 묶고, 안에서 position·id 숫자 순")
     void sortsByCategoryThenPosition() {
         ownsGuild(G1);
         String json = """
@@ -236,12 +236,19 @@ class DiscordOptionSourcesTest {
               {"id":"99999","name":"b-tie-small","type":5,"position":0,"parent_id":"200"},
               {"id":"33","name":"b2","type":0,"position":1,"parent_id":"200"},
               {"id":"34","name":"a2","type":0,"position":1,"parent_id":"100"},
-              {"id":"35","name":"nocat","type":0,"position":5,"parent_id":null}
+              {"id":"35","name":"nocat","type":0,"position":5,"parent_id":null},
+              {"id":"400","name":"같은위치-큰id","type":4,"position":2},
+              {"id":"300","name":"같은위치-작은id","type":4,"position":2},
+              {"id":"41","name":"d1","type":0,"position":0,"parent_id":"400"},
+              {"id":"42","name":"c2","type":0,"position":1,"parent_id":"300"},
+              {"id":"43","name":"d2","type":0,"position":1,"parent_id":"400"},
+              {"id":"44","name":"c1","type":0,"position":0,"parent_id":"300"}
             ]""";
         expectChannels(withSuccess(json, MediaType.APPLICATION_JSON));
 
+        // position이 같은 카테고리(300·400)는 카테고리 id 순으로 묶여 채널이 섞이지 않는다
         assertThat(channels.fetch(userId, Map.of("guild_id", G1), null).items()).extracting(OptionItem::name)
-            .containsExactly("#nocat", "#b-tie-small", "#b-tie-big", "#b2", "#a1", "#a2");
+            .containsExactly("#nocat", "#b-tie-small", "#b-tie-big", "#b2", "#a1", "#a2", "#c1", "#c2", "#d1", "#d2");
     }
 
     @Test

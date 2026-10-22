@@ -186,7 +186,7 @@ class OAuthConnectionServiceTest {
     }
 
     @Test
-    @DisplayName("Discord 링크마다 DISCORD 항목 — id=링크 id, providerAccountId=guild_id, displayName=서버 이름, scopes=null, 연결 순서")
+    @DisplayName("Discord 링크마다 DISCORD 항목 — id=링크 id, providerAccountId=guild_id, displayName=서버 이름, scopes=빈 목록, 연결 순서")
     void getConnections_IncludesDiscordPerGuild() {
         UUID userId = UUID.randomUUID();
         DiscordGuildLink first = new DiscordGuildLink(userId, "111111111111111111", "이음 서버", "U1");
@@ -207,7 +207,7 @@ class OAuthConnectionServiceTest {
             assertThat(r.getId()).isEqualTo(firstId);
             assertThat(r.getProvider()).isEqualTo("DISCORD");
             assertThat(r.getDisplayName()).isEqualTo("이음 서버");
-            assertThat(r.getScopes()).isNull();
+            assertThat(r.getScopes()).isEmpty();
             assertThat(r.getCreatedAt()).isEqualTo(linkedAt);
         });
     }

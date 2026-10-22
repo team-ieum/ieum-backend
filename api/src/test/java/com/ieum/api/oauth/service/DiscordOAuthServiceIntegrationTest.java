@@ -338,6 +338,24 @@ class DiscordOAuthServiceIntegrationTest {
     }
 
     @Test
+    @DisplayName("다시 연결 때 /users/@me가 실패하면 저장된 Discord 사용자를 지우지 않는다(서버 이름은 갱신)")
+    void reconnectMeFailureKeepsInstaller() throws Exception {
+        UUID userA = UUID.randomUUID();
+        linkRepository.save(new DiscordGuildLink(userA, G1, "옛 이름", "1"));
+        givenState("s1", userA);
+        expectExchange(installed(G1, "새 이름"));
+        server.expect(requestTo(API + "/users/@me")).andRespond(withServerError());
+        expectRevoke();
+
+        callback("s1", NONCE).andExpect(header().string("Location", FRONT + "connected=discord"));
+
+        assertThat(linkRepository.findAllByUserIdOrderByCreatedAtAsc(userA)).singleElement().satisfies(link -> {
+            assertThat(link.getGuildName()).isEqualTo("새 이름");
+            assertThat(link.getDiscordUserId()).isEqualTo("1");
+        });
+    }
+
+    @Test
     @DisplayName("2-9 state를 만든 사용자가 그새 탈퇴 + 그 서버 다른 링크 없음 → 링크 없이 봇 퇴장, discord_state_expired")
     void callbackAfterWithdrawalLeavesOrphanGuild() throws Exception {
         UUID gone = UUID.randomUUID();
@@ -371,7 +389,7 @@ class DiscordOAuthServiceIntegrationTest {
     }
 
     @Test
-    @DisplayName("2-9 저장이 재시도까지 실패(discord_user_id 32자 초과) → 500 JSON이 아니라 discord_exchange로 302, 봇 퇴장 판정")
+    @DisplayName("2-9 저장 실패(discord_user_id 32자 초과) → 500 JSON이 아니라 discord_exchange로 302, 봇 퇴장 판정")
     void callbackSaveFailureLeavesOrphanGuild() throws Exception {
         givenState("s1", UUID.randomUUID());
         expectExchange(installed(G1, "이음 서버"));

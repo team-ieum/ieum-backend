@@ -20,7 +20,6 @@ import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpServerErrorException;
@@ -160,12 +159,7 @@ public class DiscordOAuthService {
         String installer = discordUserId;
         Outcome outcome;
         try {
-            try {
-                outcome = transactionTemplate.execute(tx -> save(userId, guildId, guildName, installer));
-            } catch (DataIntegrityViolationException e) {
-                // 같은 사용자의 같은 서버 콜백이 동시에 들어와 (user_id, guild_id) 유일 제약에 걸렸다 — 다시 돌면 갱신 경로를 탄다
-                outcome = transactionTemplate.execute(tx -> save(userId, guildId, guildName, installer));
-            }
+            outcome = transactionTemplate.execute(tx -> save(userId, guildId, guildName, installer));
         } catch (RuntimeException e) {
             // 2-9 봇은 이미 서버에 있다 — 링크 없는 봇이 영원히 남지 않게 퇴장 판정
             log.warn("[DiscordOAuthService] 링크 저장 실패 — guild: {}, {}", guildId, e.getClass().getSimpleName());
