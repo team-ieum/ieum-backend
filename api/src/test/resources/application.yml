@@ -99,6 +99,15 @@ slack:
     frontend-redirect-uri: http://localhost/settings/integrations
     bot-scopes: "chat:write,chat:write.public,channels:read,groups:read,im:read,mpim:read,channels:history,groups:history,channels:manage,groups:write,im:write,reactions:read,reactions:write,users:read,users:read.email,files:write,canvases:write,emoji:read"
 
+discord:
+  bot-token: test-discord-bot-token
+  oauth:
+    client-id: test-discord-client-id
+    client-secret: test-discord-client-secret
+    redirect-uri: http://localhost/api/v1/discord/oauth2/callback
+    frontend-redirect-uri: http://localhost/settings/integrations
+    permissions: "275146460176"
+
 management:
   health:
     redis:
