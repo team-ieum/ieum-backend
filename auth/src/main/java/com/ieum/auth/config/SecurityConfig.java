@@ -112,6 +112,8 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/github/**").authenticated()
                 .requestMatchers("/api/v1/slack/oauth2/callback").permitAll()
                 .requestMatchers("/api/v1/slack/**").authenticated()
+                .requestMatchers("/api/v1/discord/oauth2/callback").permitAll()
+                .requestMatchers("/api/v1/discord/**").authenticated()
                 .anyRequest().authenticated())
             .oauth2Login(oauth2 -> oauth2
                 .authorizationEndpoint(auth -> auth

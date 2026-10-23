@@ -89,6 +89,24 @@ class WorkflowServiceTypeTest {
     }
 
     @Test
+    void discord_bot_ACTION과_AI_봇도구는_DISCORD다() {
+        assertThat(WorkflowServiceType.extract(List.of(
+            node(NodeType.ACTION, "discord_bot.send_channel_message", Map.of()))))
+            .containsExactly(DISCORD);
+        assertThat(WorkflowServiceType.extract(List.of(
+            node(NodeType.AI, "ai.agent", Map.of("tools", List.of(Map.of("name", "builtin:discord_send_channel_message")))))))
+            .containsExactly(DISCORD);
+    }
+
+    @Test
+    void 웹훅_discord와_봇_discord_bot이_함께_있어도_DISCORD_하나() {
+        assertThat(WorkflowServiceType.extract(List.of(
+            node(NodeType.ACTION, "discord.send_message", Map.of()),
+            node(NodeType.ACTION, "discord_bot.send_channel_message", Map.of()))))
+            .containsExactly(DISCORD);
+    }
+
+    @Test
     void event가_없거나_점이_없으면_아이콘_없음() {
         assertThat(WorkflowServiceType.extract(List.of(
             node(null, null, Map.of("tools", List.of("slack"))),

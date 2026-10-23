@@ -18,6 +18,7 @@ public interface OAuthConnectionControllerDocs {
 
     @Operation(summary = "연동된 OAuth 계정 목록 조회", description = "현재 로그인한 사용자의 연동된 OAuth 계정 목록을 조회합니다. "
         + "SLACK 항목은 id=Slack 링크 ID, providerAccountId=워크스페이스(team) ID, displayName=워크스페이스 이름, scopes=봇 scope. "
+        + "DISCORD 항목은 연결한 서버마다 1개 — id=서버 링크 ID, providerAccountId=서버(guild) ID, displayName=연결 시점 서버 이름, scopes=빈 목록. "
         + "다른 제공자의 displayName은 null입니다.")
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<List<OAuthConnectionResponse>>> getConnections(CustomUserDetails userDetails);
@@ -37,6 +38,9 @@ public interface OAuthConnectionControllerDocs {
 
         **Slack은 이 API가 아니다.** 목록의 `SLACK` 항목은 `DELETE /api/v1/slack/oauth2/connection`으로 해제한다
         (워크스페이스 단위 설치라 해제 방식이 다르다 — 이 경로에 `SLACK`을 보내면 `INVALID_INPUT`)
+
+        **Discord도 이 API가 아니다.** `DISCORD` 항목은 `DELETE /api/v1/discord/oauth2/connections/{providerAccountId}`로
+        서버마다 해제한다.
         """)
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<Void>> disconnect(

@@ -22,11 +22,14 @@ public class ToolAuthResolver {
         ToolAuthRule.GITHUB_BUILTIN_PREFIX, "X-GitHub-Token"
     );
     private static final String SLACK_HEADER = "X-Slack-Token";
+    private static final String DISCORD_TOKEN_HEADER = "X-Discord-Token";
+    private static final String DISCORD_GUILD_IDS_HEADER = "X-Discord-Guild-Ids";
 
     private final CredentialProvider credentialProvider;
     private final NotionTokenProvider notionTokenProvider;
     private final GitHubTokenProvider gitHubTokenProvider;
     private final SlackTokenProvider slackTokenProvider;
+    private final DiscordAccessProvider discordAccessProvider;
 
     public Map<String, String> resolveHeaders(List<Map<String, Object>> tools, UUID userId) {
         if (tools == null || tools.isEmpty()) {
@@ -44,6 +47,16 @@ public class ToolAuthResolver {
             // 미연결이면 SLACK_NOT_CONNECTED가 그대로 올라가 노드 실패가 된다. 도구가 여럿이어도 토큰 조회는 한 번.
             if (toolName.startsWith(ToolAuthRule.SLACK_BUILTIN_PREFIX)) {
                 headers.computeIfAbsent(SLACK_HEADER, header -> slackTokenProvider.getValidBotToken(userId));
+                continue;
+            }
+            // Discord 봇 도구도 같은 이유로 BYOK 분기 앞에서 끊는다(spec §7) — 봇 토큰과 허용 서버 목록을 한 번만 싣는다.
+            // 미연결이면 DISCORD_NOT_CONNECTED가 그대로 올라가 노드 실패가 된다.
+            if (toolName.startsWith(ToolAuthRule.DISCORD_BUILTIN_PREFIX)) {
+                if (!headers.containsKey(DISCORD_TOKEN_HEADER)) {
+                    DiscordAccess access = discordAccessProvider.get(userId);
+                    headers.put(DISCORD_TOKEN_HEADER, access.botToken());
+                    headers.put(DISCORD_GUILD_IDS_HEADER, String.join(",", access.guildIds()));
+                }
                 continue;
             }
 

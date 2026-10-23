@@ -32,6 +32,7 @@ import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.engine.executor.NotionTokenProvider;
+import com.ieum.workflowcore.engine.executor.DiscordAccessProvider;
 import com.ieum.workflowcore.engine.executor.SlackTokenProvider;
 import com.ieum.workflowcore.engine.executor.StubWebhookCredentialProvider;
 import com.ieum.workflowcore.engine.executor.ToolAuthResolver;
@@ -112,7 +113,7 @@ class ActionNodeRuntimeTest {
             new ToolCallPreparer(
                 mock(GoogleTokenProvider.class),
                 new ToolAuthResolver(mock(CredentialProvider.class), mock(NotionTokenProvider.class),
-                    gitHubTokenProvider, mock(SlackTokenProvider.class)),
+                    gitHubTokenProvider, mock(SlackTokenProvider.class), mock(DiscordAccessProvider.class)),
                 new StubWebhookCredentialProvider()),
             uid -> "ROLE_USER",
             idempotencyStore,

@@ -11,9 +11,11 @@ import static org.mockito.Mockito.when;
 import com.ieum.api.oauth.dto.OAuthConnectionResponse;
 import com.ieum.auth.domain.AuthProvider;
 import com.ieum.auth.domain.ConnectedAccount;
+import com.ieum.auth.domain.DiscordGuildLink;
 import com.ieum.auth.domain.SlackInstallation;
 import com.ieum.auth.domain.SlackUserLink;
 import com.ieum.auth.repository.ConnectedAccountRepository;
+import com.ieum.auth.repository.DiscordGuildLinkRepository;
 import com.ieum.auth.repository.SlackUserLinkRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
@@ -47,6 +49,9 @@ class OAuthConnectionServiceTest {
 
     @Mock
     private SlackUserLinkRepository slackUserLinkRepository;
+
+    @Mock
+    private DiscordGuildLinkRepository discordGuildLinkRepository;
 
     @InjectMocks
     private OAuthConnectionService oauthConnectionService;
@@ -178,5 +183,32 @@ class OAuthConnectionServiceTest {
         } finally {
             TransactionSynchronizationManager.clearSynchronization();
         }
+    }
+
+    @Test
+    @DisplayName("Discord 링크마다 DISCORD 항목 — id=링크 id, providerAccountId=guild_id, displayName=서버 이름, scopes=빈 목록, 연결 순서")
+    void getConnections_IncludesDiscordPerGuild() {
+        UUID userId = UUID.randomUUID();
+        DiscordGuildLink first = new DiscordGuildLink(userId, "111111111111111111", "이음 서버", "U1");
+        DiscordGuildLink second = new DiscordGuildLink(userId, "222222222222222222", "스터디", "U1");
+        UUID firstId = UUID.randomUUID();
+        LocalDateTime linkedAt = LocalDateTime.of(2026, 10, 21, 9, 0);
+        ReflectionTestUtils.setField(first, "id", firstId);
+        ReflectionTestUtils.setField(first, "createdAt", linkedAt);
+        when(connectedAccountRepository.findByUserId(userId)).thenReturn(List.of());
+        when(slackUserLinkRepository.findByUserId(userId)).thenReturn(Optional.empty());
+        when(discordGuildLinkRepository.findAllByUserIdOrderByCreatedAtAsc(userId)).thenReturn(List.of(first, second));
+
+        List<OAuthConnectionResponse> responses = oauthConnectionService.getConnections(userId);
+
+        assertThat(responses).extracting(OAuthConnectionResponse::getProviderAccountId)
+            .containsExactly("111111111111111111", "222222222222222222");
+        assertThat(responses.get(0)).satisfies(r -> {
+            assertThat(r.getId()).isEqualTo(firstId);
+            assertThat(r.getProvider()).isEqualTo("DISCORD");
+            assertThat(r.getDisplayName()).isEqualTo("이음 서버");
+            assertThat(r.getScopes()).isEmpty();
+            assertThat(r.getCreatedAt()).isEqualTo(linkedAt);
+        });
     }
 }

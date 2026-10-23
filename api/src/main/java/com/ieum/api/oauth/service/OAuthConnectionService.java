@@ -4,6 +4,7 @@ import com.ieum.api.oauth.dto.OAuthConnectionResponse;
 import com.ieum.auth.domain.AuthProvider;
 import com.ieum.auth.domain.ConnectedAccount;
 import com.ieum.auth.repository.ConnectedAccountRepository;
+import com.ieum.auth.repository.DiscordGuildLinkRepository;
 import com.ieum.auth.repository.SlackUserLinkRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
@@ -28,6 +29,7 @@ public class OAuthConnectionService {
     private final AesEncryptor aesEncryptor;
     private final OAuthTokenRevoker tokenRevoker;
     private final SlackUserLinkRepository slackUserLinkRepository;
+    private final DiscordGuildLinkRepository discordGuildLinkRepository;
 
     /**
      * 사용자의 연동된 OAuth 계정 목록을 조회한다.
@@ -37,9 +39,12 @@ public class OAuthConnectionService {
      */
     public List<OAuthConnectionResponse> getConnections(UUID userId) {
         log.debug("[OAuthConnectionService] OAuth 연동 목록 조회 — userId: {}", userId);
-        return Stream.concat(
+        return Stream.of(
                 connectedAccountRepository.findByUserId(userId).stream().map(OAuthConnectionResponse::from),
-                slackUserLinkRepository.findByUserId(userId).map(OAuthConnectionResponse::fromSlack).stream())
+                slackUserLinkRepository.findByUserId(userId).map(OAuthConnectionResponse::fromSlack).stream(),
+                discordGuildLinkRepository.findAllByUserIdOrderByCreatedAtAsc(userId).stream()
+                    .map(OAuthConnectionResponse::fromDiscord))
+            .flatMap(s -> s)
             .toList();
     }
 
