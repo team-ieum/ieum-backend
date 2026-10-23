@@ -137,22 +137,26 @@ public class DiscordOAuthService {
         String guildId = body.path("guild").path("id").asText("");
         if (guildId.isEmpty()) {
             log.warn("[DiscordOAuthService] 교환 응답에 guild 없음");
-            discordApiClient.revokeQuietly(accessToken);
+            if (!accessToken.isEmpty()) {
+                discordApiClient.revokeQuietly(accessToken);
+            }
             return "error=discord_exchange";
         }
         String guildName = body.path("guild").path("name").asText(null);
         log.info("[DiscordOAuthService] 설치 응답 — guild: {}", guildId);
 
-        // 2-6 설치한 Discord 사용자(실패해도 진행)
+        // 2-6 설치한 Discord 사용자(실패해도 진행) — 토큰이 없으면 조회·폐기할 것도 없다
         String discordUserId = null;
-        try {
-            discordUserId = discordApiClient.currentUser(accessToken).path("id").asText(null);
-        } catch (RestClientException e) {
-            log.warn("[DiscordOAuthService] /users/@me 실패 — guild: {}, {}", guildId, DiscordApiClient.describe(e));
-        }
+        if (!accessToken.isEmpty()) {
+            try {
+                discordUserId = discordApiClient.currentUser(accessToken).path("id").asText(null);
+            } catch (RestClientException e) {
+                log.warn("[DiscordOAuthService] /users/@me 실패 — guild: {}, {}", guildId, DiscordApiClient.describe(e));
+            }
 
-        // 2-7 사용자 토큰은 쓰지 않는다 — 바로 폐기(best-effort)
-        discordApiClient.revokeQuietly(accessToken);
+            // 2-7 사용자 토큰은 쓰지 않는다 — 바로 폐기(best-effort)
+            discordApiClient.revokeQuietly(accessToken);
+        }
 
         // 2-8 링크 upsert — Discord 호출이 끝난 뒤에만 짧은 트랜잭션
         UUID userId = saved.getUserId();

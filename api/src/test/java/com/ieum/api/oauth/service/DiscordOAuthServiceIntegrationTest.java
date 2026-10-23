@@ -302,6 +302,19 @@ class DiscordOAuthServiceIntegrationTest {
     }
 
     @Test
+    @DisplayName("2-6·2-7 교환 응답에 access_token이 없으면 /users/@me·revoke 없이 연결한다(discord_user_id NULL)")
+    void callbackWithoutAccessTokenSkipsMeAndRevoke() throws Exception {
+        UUID userA = UUID.randomUUID();
+        givenState("s1", userA);
+        expectExchange("{\"guild\":{\"id\":\"" + G1 + "\",\"name\":\"이음 서버\"}}");
+
+        callback("s1", NONCE).andExpect(header().string("Location", FRONT + "connected=discord"));
+
+        assertThat(linkRepository.findAllByUserIdOrderByCreatedAtAsc(userA)).singleElement()
+            .extracting(DiscordGuildLink::getDiscordUserId).isNull();
+    }
+
+    @Test
     @DisplayName("같은 서버를 두 사용자가 연결 → 링크 2개(D1·D2)")
     void sameGuildTwoUsers() throws Exception {
         givenState("s1", UUID.randomUUID());
