@@ -44,3 +44,6 @@ graphify-out/
 # SDD 작업 산출물 (원장·브리프·리뷰 패키지·계획서 — 브랜치 종료 시 삭제됨)
 .superpowers/
 docs/superpowers/
+
+# Python deployment tooling
+scripts/bluegreen/__pycache__/

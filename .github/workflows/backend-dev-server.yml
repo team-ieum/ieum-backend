@@ -123,7 +123,10 @@ jobs:
           IEUM_TEST_POSTGRES_URL: jdbc:postgresql://127.0.0.1:${{ job.services.postgres.ports['5432'] }}/ieum_ci_test
           IEUM_TEST_POSTGRES_USER: ieum_ci_test
           IEUM_TEST_POSTGRES_PASSWORD: ieum_ci_test_only_password
-        run: ./gradlew test --no-daemon
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/bluegreen -p 'test_*.py'
+          ./gradlew test --no-daemon
 
       # Docker 이미지에 넣을 Spring Boot JAR 준비
       - name: Prepare boot jar
@@ -177,54 +180,21 @@ jobs:
             exit 1
           fi
 
-      - name: Deploy with a validated backend environment snapshot
+      - name: Deploy with prefixed GitHub Secrets
         env:
           IMAGE_TAG: ${{ github.sha }}
+          IEUM_BACKEND_SECRETS_JSON: ${{ toJSON(secrets) }}
         run: |
+          set +x
           set -euo pipefail
           umask 077
           candidate_env="$(mktemp "$RUNNER_TEMP/ieum-backend-env.XXXXXX")"
           trap 'rm -f -- "$candidate_env"' EXIT
           trap 'exit 130' INT
           trap 'exit 143' TERM
-          python3 - /home/kwung/deploy/ieum-backend/.env "$candidate_env" <<'PY'
-          import os
-          from pathlib import Path
-          import re
-          import stat
-          import sys
-
-          source, candidate = map(Path, sys.argv[1:])
-          try:
-              metadata = source.lstat()
-              if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
-                  raise ValueError('Backend environment must be a private regular file owned by the deployment account')
-              descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
-              with os.fdopen(descriptor, 'rb') as stream:
-                  metadata = os.fstat(stream.fileno())
-                  if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
-                      raise ValueError('Backend environment must be a private regular file owned by the deployment account')
-                  raw = stream.read(1024 * 1024 + 1)
-                  after = os.fstat(stream.fileno())
-                  if (metadata.st_size, metadata.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
-                      raise ValueError('Backend environment changed while taking its snapshot; retry deployment')
-              if len(raw) > 1024 * 1024:
-                  raise ValueError('Backend environment is too large')
-              values = {}
-              for line in raw.decode('utf-8').splitlines():
-                  if not line or line.startswith('#'):
-                      continue
-                  key, separator, value = line.partition('=')
-                  if not separator or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) or '\x00' in value:
-                      raise ValueError('Invalid backend environment format')
-                  if key in values:
-                      raise ValueError('Duplicate backend environment key')
-                  values[key] = value
-              candidate.write_bytes(raw)
-          except (OSError, UnicodeError, ValueError) as error:
-              # Never print raw contents, which may contain credentials.
-              raise SystemExit('Backend environment snapshot rejected: ' + str(error)) from None
-          PY
+          python3 scripts/bluegreen/backend_env.py "$candidate_env"
+          # Do not pass the full workflow Secrets context to the controller.
+          unset IEUM_BACKEND_SECRETS_JSON
           python3 /home/kwung/deploy/bluegreen/bluegreen.py --lock-timeout 14400 deploy \
             --job-deadline-epoch "$IEUM_BLUEGREEN_JOB_DEADLINE_EPOCH" \
             --service backend \
