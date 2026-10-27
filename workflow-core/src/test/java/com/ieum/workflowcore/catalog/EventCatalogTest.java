@@ -168,6 +168,25 @@ class EventCatalogTest {
         }
     }
 
+    @Test
+    @DisplayName("fieldsSource를 fields·inputFields에서 children까지 모으고 optionsSource와 섞지 않는다")
+    void fieldsSources_collectedSeparately(@TempDir Path dir) throws IOException {
+        writeCatalog(dir, Map.of("manual/run.json", trigger("MANUAL"), "manual/row.json", """
+                {"node_type":"ACTION","kind":"action","tool_key":"x","fixed":{"type":"ACTION","config":{}},
+                 "fields":{"db":{"optionsSource":"a.dbs"},
+                           "properties":{"type":"dict","fieldsSource":"a.props","fieldsInputs":["db"]}},
+                 "inputFields":[{"key":"o","type":"object","children":[
+                   {"key":"inner","type":"dict","fieldsSource":"a.inner"}]}]}"""));
+
+        try (URLClassLoader loader = loader(dir)) {
+            EventCatalog catalog = EventCatalog.load(loader);
+            EventDefinition row = catalog.event("manual.row").orElseThrow();
+            assertThat(row.fieldsSources()).containsExactly("a.inner", "a.props");
+            assertThat(row.optionsSources()).containsExactly("a.dbs");
+            assertThat(catalog.event("manual.run").orElseThrow().fieldsSources()).isEmpty();
+        }
+    }
+
     static Stream<Arguments> invalidEvents() {
         return Stream.of(
                 Arguments.of("node_type이 NodeType 값이 아님", """
