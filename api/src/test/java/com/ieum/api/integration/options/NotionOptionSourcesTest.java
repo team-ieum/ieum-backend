@@ -30,6 +30,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -43,7 +44,9 @@ import org.springframework.web.client.RestTemplate;
  */
 class NotionOptionSourcesTest {
 
-    private static final String SEARCH_URL = "https://api.notion.com/v1/search";
+    private static final String API = "https://api.notion.com/v1";
+    private static final String SEARCH_URL = API + "/search";
+    private static final String DS = "1f2e3d4c5b6a79881f2e3d4c5b6a7988";
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private final RestTemplate restTemplate = new RestTemplate();
@@ -161,6 +164,127 @@ class NotionOptionSourcesTest {
         server.expect(requestTo(SEARCH_URL)).andRespond(withException(new SocketTimeoutException("read timed out")));
 
         assertErrorCode(() -> reader.search(userId, "page", null), ErrorCode.NOTION_API_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("dataSource — GET /v1/data_sources/{id}, 2026-03-11 헤더, 본문 없음")
+    void dataSourceGetsSchema() {
+        connected();
+        server.expect(requestTo(API + "/data_sources/" + DS))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Authorization", "Bearer ntn-token"))
+            .andExpect(header("Notion-Version", "2026-03-11"))
+            .andExpect(content().string(""))
+            .andRespond(withSuccess("{\"object\":\"data_source\",\"properties\":{}}", MediaType.APPLICATION_JSON));
+
+        assertThat(reader.dataSource(userId, DS).path("object").asText()).isEqualTo("data_source");
+    }
+
+    @Test
+    @DisplayName("queryDataSource — title만, 최근 편집순 sorts(배열 — search의 sort 아님), 행만, 50개. q·cursor 없으면 filter·start_cursor 없음")
+    void queryDataSourceFirstPage() {
+        connected();
+        server.expect(requestTo(API + "/data_sources/" + DS + "/query?filter_properties=title"))
+            .andExpect(method(HttpMethod.POST))
+            .andExpect(header("Notion-Version", "2026-03-11"))
+            .andExpect(jsonPath("$.sorts[0].timestamp").value("last_edited_time"))
+            .andExpect(jsonPath("$.sorts[0].direction").value("descending"))
+            .andExpect(jsonPath("$.sort").doesNotExist())
+            .andExpect(jsonPath("$.result_type").value("page"))
+            .andExpect(jsonPath("$.page_size").value(50))
+            .andExpect(jsonPath("$.filter").doesNotExist())
+            .andExpect(jsonPath("$.start_cursor").doesNotExist())
+            .andRespond(withSuccess("{\"results\":[],\"has_more\":false}", MediaType.APPLICATION_JSON));
+
+        reader.queryDataSource(userId, DS, null, null);
+    }
+
+    @Test
+    @DisplayName("queryDataSource — q는 title contains 필터, cursor는 start_cursor")
+    void queryDataSourceWithQueryAndCursor() {
+        connected();
+        server.expect(requestTo(API + "/data_sources/" + DS + "/query?filter_properties=title"))
+            .andExpect(jsonPath("$.filter.property").value("title"))
+            .andExpect(jsonPath("$.filter.title.contains").value("회의"))
+            .andExpect(jsonPath("$.start_cursor").value("c2"))
+            .andRespond(withSuccess("{\"results\":[],\"has_more\":false}", MediaType.APPLICATION_JSON));
+
+        reader.queryDataSource(userId, DS, "회의", "c2");
+    }
+
+    @Test
+    @DisplayName("templates — 100개씩, q는 name 쿼리(& 까지 인코딩), cursor는 start_cursor")
+    void templatesQuery() {
+        connected();
+        server.expect(requestTo(API + "/data_sources/" + DS + "/templates?page_size=100"))
+            .andExpect(method(HttpMethod.GET))
+            .andRespond(withSuccess("{\"templates\":[],\"has_more\":false}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(API + "/data_sources/" + DS + "/templates?page_size=100&name=a%26b&start_cursor=c2"))
+            .andRespond(withSuccess("{\"templates\":[],\"has_more\":false}", MediaType.APPLICATION_JSON));
+
+        reader.templates(userId, DS, null, null);
+        reader.templates(userId, DS, "a&b", "c2");
+    }
+
+    @Test
+    @DisplayName("users — GET /v1/users 100명씩, cursor는 start_cursor")
+    void usersQuery() {
+        connected();
+        server.expect(requestTo(API + "/users?page_size=100"))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Notion-Version", "2026-03-11"))
+            .andRespond(withSuccess("{\"results\":[],\"has_more\":false}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(API + "/users?page_size=100&start_cursor=u2"))
+            .andRespond(withSuccess("{\"results\":[],\"has_more\":false}", MediaType.APPLICATION_JSON));
+
+        reader.users(userId, null);
+        reader.users(userId, "u2");
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "401, AUTHENTICATION_REQUIRED",
+        "403, INVALID_INPUT",
+        "404, INVALID_INPUT",
+        "429, NOTION_API_UNAVAILABLE",
+        "500, NOTION_API_UNAVAILABLE"
+    })
+    @DisplayName("새 호출도 search와 같은 오류 매핑 — 404(공유되지 않은 DB)는 INVALID_INPUT")
+    void newCallsShareErrorMapping(int status, ErrorCode expected) {
+        connected();
+        server.expect(requestTo(API + "/data_sources/" + DS)).andRespond(withStatus(HttpStatus.valueOf(status))
+            .contentType(MediaType.APPLICATION_JSON)
+            .body("{\"object\":\"error\",\"status\":" + status + ",\"code\":\"x\",\"message\":\"id abc\"}"));
+
+        assertErrorCode(() -> reader.dataSource(userId, DS), expected);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "   ", "{{nodes.a.output.id}}", "../users", "1f2e3d4c5b6a79881f2e3d4c5b6a7988?x=1",
+        "1f2e3d4c5b6a79881f2e3d4c5b6a798", "1f2e3d4c5b6a79881f2e3d4c5b6a7988/query", "1f2e3d4c-5b6a-7988-1f2e-3d4c5b6a798g"})
+    @DisplayName("data_source_id가 비었거나 참조식이거나 Notion id 형식이 아니면 INVALID_INPUT — 경로에 끼우지 않는다")
+    void dataSourceIdRejectsBadInput(String raw) {
+        assertErrorCode(() -> NotionApiReader.dataSourceId(Map.of("data_source_id", raw)), ErrorCode.INVALID_INPUT);
+    }
+
+    @Test
+    @DisplayName("data_source_id — 빈 값·참조식은 고칠 길을 알려 주고, 하이픈 있는 UUID·앞뒤 공백은 통과")
+    void dataSourceIdMessagesAndAccepts() {
+        assertThatThrownBy(() -> NotionApiReader.dataSourceId(Map.of()))
+            .hasMessage("데이터베이스를 먼저 골라 주세요.");
+        assertThatThrownBy(() -> NotionApiReader.dataSourceId(Map.of("data_source_id", "{{nodes.a.output.id}}")))
+            .hasMessage("변수 참조로 지정된 데이터베이스는 실행 전이라 불러올 수 없어요.");
+        assertThat(NotionApiReader.dataSourceId(Map.of("data_source_id", " 1f2e3d4c-5b6a-7988-1f2e-3d4c5b6a7988 ")))
+            .isEqualTo("1f2e3d4c-5b6a-7988-1f2e-3d4c5b6a7988");
+        assertThat(NotionApiReader.dataSourceId(Map.of("data_source_id", DS))).isEqualTo(DS);
+    }
+
+    @Test
+    @DisplayName("검색어 q — 앞뒤 공백을 떼고 비면 null")
+    void queryStripsAndBlankIsNull() {
+        assertThat(NotionApiReader.query(Map.of("q", "  회의 "))).isEqualTo("회의");
+        assertThat(NotionApiReader.query(Map.of("q", "  "))).isNull();
+        assertThat(NotionApiReader.query(Map.of())).isNull();
     }
 
     @Test
