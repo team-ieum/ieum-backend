@@ -31,14 +31,16 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 class IntegrationOptionControllerTest {
 
     private final OptionSource worksheets = mock(OptionSource.class);
+    private final FieldSource properties = mock(FieldSource.class);
     private final UUID userId = UUID.randomUUID();
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
         given(worksheets.key()).willReturn("google.worksheets");
-        IntegrationOptionController controller =
-            new IntegrationOptionController(new IntegrationOptionService(List.of(worksheets)));
+        given(properties.key()).willReturn("notion.properties");
+        IntegrationOptionController controller = new IntegrationOptionController(
+            new IntegrationOptionService(List.of(worksheets)), new IntegrationFieldService(List.of(properties)));
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
             .setControllerAdvice(new GlobalExceptionHandler())
             .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
@@ -114,5 +116,33 @@ class IntegrationOptionControllerTest {
             .andExpect(status().isForbidden())
             .andExpect(jsonPath("$.success").value(false))
             .andExpect(jsonPath("$.code").value("GOOGLE_SCOPE_REQUIRED"));
+    }
+
+    @Test
+    @DisplayName("/fields — 쿼리 전부를 inputs로 넘기고 응답은 data.fields = Field 목록")
+    void fieldsReturnsFieldList() throws Exception {
+        given(properties.fetch(userId, Map.of("data_source_id", "1f2e")))
+            .willReturn(List.of(Map.of("key", "title", "title", "이름", "type", "string", "required", false)));
+
+        mockMvc.perform(get("/api/v1/integrations/notion/fields/properties").param("data_source_id", "1f2e"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.success").value(true))
+            .andExpect(jsonPath("$.code").value("OK"))
+            .andExpect(jsonPath("$.data.fields[0].key").value("title"))
+            .andExpect(jsonPath("$.data.fields[0].title").value("이름"))
+            .andExpect(jsonPath("$.data.fields[0].type").value("string"))
+            .andExpect(jsonPath("$.data.fields[0].required").value(false));
+    }
+
+    @Test
+    @DisplayName("/fields 알 수 없는 {app}/{resource}는 404 NOT_FOUND — 같은 이름의 options 공급원이 있어도 쓰지 않는다")
+    void unknownFieldSourceIsNotFound() throws Exception {
+        mockMvc.perform(get("/api/v1/integrations/google/fields/worksheets"))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.code").value("NOT_FOUND"))
+            .andExpect(jsonPath("$.message").value("지원하지 않는 칸 목록입니다."));
+
+        verify(properties, never()).fetch(any(), any());
+        verify(worksheets, never()).fetch(any(), any(), any());
     }
 }
