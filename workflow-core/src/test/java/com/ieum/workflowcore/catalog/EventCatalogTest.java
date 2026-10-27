@@ -92,6 +92,20 @@ class EventCatalogTest {
     }
 
     @Test
+    @DisplayName("동적 칸 이벤트 — notion.create_row·update_row는 properties의 fieldsSource와 드롭다운 optionsSource를 따로 모은다")
+    void notionRows_fieldsSourceFromRealCatalog() {
+        EventDefinition create = CATALOG.event("notion.create_row").orElseThrow();
+        EventDefinition update = CATALOG.event("notion.update_row").orElseThrow();
+
+        assertThat(create.toolKey()).isEqualTo("builtin:notion_create_row");
+        assertThat(create.fieldsSources()).containsExactly("notion.properties");
+        assertThat(create.optionsSources()).containsExactlyInAnyOrder("notion.databases", "notion.templates");
+        assertThat(update.toolKey()).isEqualTo("builtin:notion_update_row");
+        assertThat(update.fieldsSources()).containsExactly("notion.properties");
+        assertThat(update.optionsSources()).containsExactlyInAnyOrder("notion.databases", "notion.data_source_items");
+    }
+
+    @Test
     @DisplayName("builder:false 이벤트도 읽는다 — gmail.send_email")
     void gmailSendEmail_nonBuilder() {
         EventDefinition e = CATALOG.event("gmail.send_email").orElseThrow();
