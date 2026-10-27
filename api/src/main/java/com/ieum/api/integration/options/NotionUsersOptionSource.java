@@ -33,7 +33,8 @@ public class NotionUsersOptionSource implements OptionSource {
         body.path("results").forEach(user -> {
             if ("person".equals(user.path("type").asText())) {
                 String id = user.path("id").asText();
-                items.add(new OptionItem(id, user.path("name").asText(id)));
+                String name = user.path("name").asText("");
+                items.add(new OptionItem(id, name.isBlank() ? id : name));
             }
         });
         return new OptionPage(items, NotionApiReader.nextCursor(body));

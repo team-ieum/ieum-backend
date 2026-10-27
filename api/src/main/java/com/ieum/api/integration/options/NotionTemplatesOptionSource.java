@@ -37,8 +37,10 @@ public class NotionTemplatesOptionSource implements OptionSource {
         if (q == null && cursor == null) {
             items.add(DEFAULT_TEMPLATE);
         }
-        body.path("templates").forEach(template -> items.add(new OptionItem(
-            template.path("id").asText(), template.path("name").asText(NotionApiReader.UNTITLED))));
+        body.path("templates").forEach(template -> {
+            String name = template.path("name").asText("");
+            items.add(new OptionItem(template.path("id").asText(), name.isBlank() ? NotionApiReader.UNTITLED : name));
+        });
         return new OptionPage(items, NotionApiReader.nextCursor(body));
     }
 }

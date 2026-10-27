@@ -499,6 +499,20 @@ class NotionOptionSourcesTest {
     }
 
     @Test
+    @DisplayName("notion.templates — 이름이 빈 문자열·공백뿐이면 (제목 없음)")
+    void templatesBlankNameIsUntitled() {
+        connected();
+        server.expect(requestTo(API + "/data_sources/" + DS + "/templates?page_size=100&name=x"))
+            .andRespond(withSuccess("""
+                {"templates":[{"id":"tpl-1","name":""},{"id":"tpl-2","name":"  "}],"has_more":false}""",
+                MediaType.APPLICATION_JSON));
+
+        OptionPage page = templates.fetch(userId, Map.of("data_source_id", DS, "q", "x"), null);
+
+        assertThat(page.items()).containsExactly(new OptionItem("tpl-1", "(제목 없음)"), new OptionItem("tpl-2", "(제목 없음)"));
+    }
+
+    @Test
     @DisplayName("notion.users — 사람만(봇 제외), 값은 사용자 ID, q는 보내지 않는다")
     void usersArePeopleOnly() {
         connected();
@@ -507,12 +521,14 @@ class NotionOptionSourcesTest {
                 {"object":"list","has_more":false,"next_cursor":null,"results":[
                   {"object":"user","id":"u-1","type":"person","name":"윤도훈","person":{"email":"a@b.c"}},
                   {"object":"user","id":"b-1","type":"bot","name":"IEUM","bot":{}},
-                  {"object":"user","id":"u-2","type":"person","name":null,"person":{}}]}
+                  {"object":"user","id":"u-2","type":"person","name":null,"person":{}},
+                  {"object":"user","id":"u-3","type":"person","name":" ","person":{}}]}
                 """, MediaType.APPLICATION_JSON));
 
         OptionPage page = users.fetch(userId, Map.of("q", "윤"), null);
 
-        assertThat(page.items()).containsExactly(new OptionItem("u-1", "윤도훈"), new OptionItem("u-2", "u-2"));
+        assertThat(page.items()).containsExactly(new OptionItem("u-1", "윤도훈"), new OptionItem("u-2", "u-2"),
+            new OptionItem("u-3", "u-3"));
         assertThat(page.nextCursor()).isNull();
     }
 
