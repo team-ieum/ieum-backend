@@ -140,7 +140,7 @@ public final class EventCatalog {
         }
         return new EventDefinition(name, app, nodeType, kind, triggerType, toolKey,
                 !Boolean.FALSE.equals(raw.get("builder")), !Boolean.FALSE.equals(raw.get("generation")),
-                optionsSources(raw));
+                sources(raw, "optionsSource"), sources(raw, "fieldsSource"));
     }
 
     private static PresetDefinition parsePreset(Map<String, Object> raw) {
@@ -148,25 +148,28 @@ public final class EventCatalog {
         if (id == null || id.isBlank()) {
             throw fail("presets.json", "id가 없는 프리셋이 있다");
         }
-        return new PresetDefinition(id, optionsSources(raw));
+        return new PresetDefinition(id, sources(raw, "optionsSource"), sources(raw, "fieldsSource"));
     }
 
-    /** fields(칸 → 부분 Field)와 inputFields(Field 목록)를 children까지 훑어 optionsSource 값을 모은다. */
-    private static Set<String> optionsSources(Map<String, Object> raw) {
+    /**
+     * fields(칸 → 부분 Field)와 inputFields(Field 목록)를 children까지 훑어 {@code attr}(optionsSource·fieldsSource)
+     * 문자열 값을 모은다.
+     */
+    private static Set<String> sources(Map<String, Object> raw, String attr) {
         Set<String> out = new TreeSet<>();
-        collectOptionsSources(raw.get("fields"), out);
-        collectOptionsSources(raw.get("inputFields"), out);
+        collectSources(raw.get("fields"), attr, out);
+        collectSources(raw.get("inputFields"), attr, out);
         return Collections.unmodifiableSet(out);
     }
 
-    private static void collectOptionsSources(Object node, Set<String> out) {
+    private static void collectSources(Object node, String attr, Set<String> out) {
         if (node instanceof Map<?, ?> map) {
-            if (map.get("optionsSource") instanceof String source) {
+            if (map.get(attr) instanceof String source) {
                 out.add(source);
             }
-            map.values().forEach(v -> collectOptionsSources(v, out));
+            map.values().forEach(v -> collectSources(v, attr, out));
         } else if (node instanceof List<?> list) {
-            list.forEach(v -> collectOptionsSources(v, out));
+            list.forEach(v -> collectSources(v, attr, out));
         }
     }
 

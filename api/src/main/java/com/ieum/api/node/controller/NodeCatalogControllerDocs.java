@@ -15,12 +15,14 @@ public interface NodeCatalogControllerDocs {
     @Operation(
         summary = "노드 카탈로그 조회",
         description = "빌더에 추가할 수 있는 노드 종류(entries)별 id·nodeType·kind·provider·app·title·description·fixed(해당 시 outputDynamic·outputsFrom)와 "
-            + "inputFields·outputFields(key/title/type/description/path/required/default/choices/optionsSource/optionsInputs/list/"
-            + "children/dynamic/ref)를 반환합니다. ieum-agent 카탈로그를 그대로 전달하며 캐시하지 않습니다. "
+            + "inputFields·outputFields(key/title/type/description/path/required/default/choices/optionsSource/optionsInputs/"
+            + "fieldsSource/fieldsInputs/list/children/dynamic/ref)를 반환합니다. ieum-agent 카탈로그를 그대로 전달하며 캐시하지 않습니다. "
             + "항목마다 kind(trigger/action/search)·provider·app을 싣고(순서는 id순), fixed={type,event,config}는 새 노드의 뼈대입니다"
             + "(config는 비AI {brand}, AI는 {agentType, credentialId, tools, brand}). 새 노드의 event = 항목 id이고, "
             + "path는 값의 노드 JSON 위치입니다. "
             + "optionsSource는 GET /api/v1/integrations/{app}/options/{resource}로 조회합니다. "
+            + "fieldsSource는 type dict 칸의 안쪽 칸 목록이고 GET /api/v1/integrations/{app}/fields/{resource}(쿼리 = fieldsInputs 칸 값)로 "
+            + "조회합니다. 그 응답 Field에만 optionsParams(그 칸 드롭다운 요청에 고정으로 싣는 쿼리)가 있습니다. "
             + "값이 비면(키 없음) 액션은 default를 쓰고, AI 에이전트의 도구 필드는 AI가 결정합니다. "
             + "오류 code: PROVIDER_ERROR(502), PROVIDER_TIMEOUT(504), PROVIDER_RATE_LIMITED(429).")
     @PreAuthorize("hasRole('USER')")
