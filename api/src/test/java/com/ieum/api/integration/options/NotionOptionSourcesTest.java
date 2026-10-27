@@ -57,6 +57,9 @@ class NotionOptionSourcesTest {
     private final NotionPagesOptionSource pages = new NotionPagesOptionSource(reader);
     private final NotionDatabasesOptionSource databases = new NotionDatabasesOptionSource(reader);
     private final NotionPropertiesFieldSource properties = new NotionPropertiesFieldSource(reader);
+    private final NotionDataSourceItemsOptionSource items = new NotionDataSourceItemsOptionSource(reader);
+    private final NotionTemplatesOptionSource templates = new NotionTemplatesOptionSource(reader);
+    private final NotionUsersOptionSource users = new NotionUsersOptionSource(reader);
     private final UUID userId = UUID.randomUUID();
 
     @AfterEach
@@ -440,8 +443,105 @@ class NotionOptionSourcesTest {
     }
 
     @Test
+    @DisplayName("notion.data_source_items — 행만(data_source 결과는 건너뜀), 값은 페이지 ID·이름은 title(없으면 (제목 없음)), 다음 커서")
+    void itemsQueryUsesSortsAndSkipsDataSources() {
+        connected();
+        server.expect(requestTo(API + "/data_sources/" + DS + "/query?filter_properties=title"))
+            .andExpect(jsonPath("$.sorts[0].timestamp").value("last_edited_time"))
+            .andExpect(jsonPath("$.sort").doesNotExist())
+            .andExpect(jsonPath("$.result_type").value("page"))
+            .andRespond(withSuccess("""
+                {"object":"list","type":"page_or_data_source","has_more":true,"next_cursor":"r-2","results":[
+                  {"object":"page","id":"row-1","properties":{"이름":{"id":"title","type":"title","title":[{"plain_text":"10월 회의"}]}}},
+                  {"object":"data_source","id":"ds-wiki","properties":{}},
+                  {"object":"page","id":"row-2","properties":{"Name":{"id":"title","type":"title","title":[]}}}]}
+                """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = items.fetch(userId, Map.of("data_source_id", DS), null);
+
+        assertThat(page.items()).containsExactly(new OptionItem("row-1", "10월 회의"), new OptionItem("row-2", "(제목 없음)"));
+        assertThat(page.nextCursor()).isEqualTo("r-2");
+    }
+
+    @Test
+    @DisplayName("notion.data_source_items — q(앞뒤 공백 제거)는 title contains 필터, cursor는 start_cursor")
+    void itemsSearchByTitle() {
+        connected();
+        server.expect(requestTo(API + "/data_sources/" + DS + "/query?filter_properties=title"))
+            .andExpect(jsonPath("$.filter.title.contains").value("회의"))
+            .andExpect(jsonPath("$.start_cursor").value("r-2"))
+            .andRespond(withSuccess("{\"results\":[],\"has_more\":false}", MediaType.APPLICATION_JSON));
+
+        assertThat(items.fetch(userId, Map.of("data_source_id", DS, "q", " 회의 "), "r-2").items()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("notion.templates — 검색어 없는 첫 페이지만 맨 앞에 default, q가 있거나 다음 페이지면 없다")
+    void templatesDefaultOnlyOnFirstPageWithoutQuery() {
+        connected();
+        String body = """
+            {"templates":[{"id":"tpl-1","name":"회의록","is_default":false}],"has_more":true,"next_cursor":"t-2"}""";
+        server.expect(requestTo(API + "/data_sources/" + DS + "/templates?page_size=100"))
+            .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+        server.expect(requestTo(API + "/data_sources/" + DS + "/templates?page_size=100&name=%ED%9A%8C%EC%9D%98"))
+            .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+        server.expect(requestTo(API + "/data_sources/" + DS + "/templates?page_size=100&start_cursor=t-2"))
+            .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+
+        OptionPage first = templates.fetch(userId, Map.of("data_source_id", DS), null);
+        OptionPage searched = templates.fetch(userId, Map.of("data_source_id", DS, "q", "회의"), null);
+        OptionPage next = templates.fetch(userId, Map.of("data_source_id", DS, "q", "  "), "t-2");
+
+        assertThat(first.items()).containsExactly(new OptionItem("default", "기본 템플릿"), new OptionItem("tpl-1", "회의록"));
+        assertThat(first.nextCursor()).isEqualTo("t-2");
+        assertThat(searched.items()).containsExactly(new OptionItem("tpl-1", "회의록"));
+        assertThat(next.items()).containsExactly(new OptionItem("tpl-1", "회의록"));
+    }
+
+    @Test
+    @DisplayName("notion.users — 사람만(봇 제외), 값은 사용자 ID, q는 보내지 않는다")
+    void usersArePeopleOnly() {
+        connected();
+        server.expect(requestTo(API + "/users?page_size=100"))
+            .andRespond(withSuccess("""
+                {"object":"list","has_more":false,"next_cursor":null,"results":[
+                  {"object":"user","id":"u-1","type":"person","name":"윤도훈","person":{"email":"a@b.c"}},
+                  {"object":"user","id":"b-1","type":"bot","name":"IEUM","bot":{}},
+                  {"object":"user","id":"u-2","type":"person","name":null,"person":{}}]}
+                """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = users.fetch(userId, Map.of("q", "윤"), null);
+
+        assertThat(page.items()).containsExactly(new OptionItem("u-1", "윤도훈"), new OptionItem("u-2", "u-2"));
+        assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("notion.users — 연결에 사용자 정보 권한이 없으면(403) 재연동 안내 INVALID_INPUT")
+    void usersWithoutCapabilityIsInvalidInput() {
+        connected();
+        server.expect(requestTo(API + "/users?page_size=100")).andRespond(withStatus(HttpStatus.FORBIDDEN));
+
+        assertThatThrownBy(() -> users.fetch(userId, Map.of(), null))
+            .hasMessage("Notion 연동 권한이 부족합니다. Notion을 다시 연동해 주세요.");
+    }
+
+    @Test
+    @DisplayName("행·템플릿 드롭다운 — data_source_id가 참조식·형식 오류면 토큰 조회·HTTP 없이 INVALID_INPUT")
+    void itemsAndTemplatesRejectBadDataSourceId() {
+        assertErrorCode(() -> items.fetch(userId, Map.of("data_source_id", "{{nodes.a.output.id}}"), null),
+            ErrorCode.INVALID_INPUT);
+        assertErrorCode(() -> templates.fetch(userId, Map.of("data_source_id", "../users"), null),
+            ErrorCode.INVALID_INPUT);
+        assertErrorCode(() -> items.fetch(userId, Map.of(), null), ErrorCode.INVALID_INPUT);
+        verifyNoInteractions(tokenProvider);
+    }
+
+    @Test
     @DisplayName("공급원 키는 agent FIELD_META의 optionsSource와 1:1 계약")
     void keysMatchAgentOptionsSource() {
-        assertThat(List.of(pages.key(), databases.key())).containsExactly("notion.pages", "notion.databases");
+        assertThat(List.of(pages.key(), databases.key(), items.key(), templates.key(), users.key()))
+            .containsExactly("notion.pages", "notion.databases", "notion.data_source_items", "notion.templates", "notion.users");
+        assertThat(properties.key()).isEqualTo("notion.properties");
     }
 }

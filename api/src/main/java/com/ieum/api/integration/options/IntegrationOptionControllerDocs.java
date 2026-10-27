@@ -22,6 +22,12 @@ public interface IntegrationOptionControllerDocs {
             + "google/writable_calendars(일정을 쓸 수 있는 캘린더만 — accessRole writerWithoutPrivateAccess·writer·owner, 꼬리표 없음. 걸러진 페이지는 items가 비어도 nextCursor가 있을 수 있음), "
             + "google/events(calendar_id 선택 — 비우면 기본 캘린더, q 선택 — 검색어, 공백이면 무시. 지금 이후 일정만 시작순 20개씩), google/files, google/folders, "
             + "notion/pages, notion/databases(값은 data source id), "
+            + "notion/data_source_items(data_source_id 필수 — 그 DB의 행, 값은 페이지 ID·이름은 제목, 최근 편집순 50개씩. "
+            + "q 선택 — 제목 부분 일치. relation 칸은 /fields 응답의 optionsParams로 대상 DB id가 온다), "
+            + "notion/templates(data_source_id 필수 — 값은 템플릿 ID·이름은 템플릿 이름, 100개씩. q가 없으면 첫 페이지 맨 앞에 "
+            + "default(기본 템플릿 — 기본 템플릿이 없는 DB면 실행 때 실패). q 선택 — 이름 부분 일치), "
+            + "notion/users(입력 없음 — 워크스페이스 사람 사용자(봇·게스트 제외), 값은 사용자 ID, 100명씩. q 미지원. "
+            + "Notion 연동에 사용자 정보 권한이 없으면 INVALID_INPUT), "
             + "ai/models·ieum/credentials(llmProvider 필수 — CLAUDE·OPENAI·GEMINI), "
             + "ieum/webhooks(전체, HTTP 노드용)·slack/webhooks·discord/webhooks, ieum/mcp_servers"
             + "(웹훅·MCP는 활성 항목만, 모두 요청자 소유만). "
@@ -47,12 +53,12 @@ public interface IntegrationOptionControllerDocs {
         CustomUserDetails userDetails,
         @Parameter(description = "연동 앱", example = "google") String app,
         @Parameter(description = "리소스 종류", example = "worksheets") String resource,
-        @Parameter(description = "cursor(선택), 검색어 q(선택 — 지원하는 목록만 읽음), optionsInputs 필드 값. 예: spreadsheet_id=1Bxi…, calendar_id=primary, q=회의") Map<String, String> params);
+        @Parameter(description = "cursor(선택), 검색어 q(선택 — 지원하는 목록만 읽음), optionsInputs 필드 값, /fields 응답 Field의 optionsParams. 예: spreadsheet_id=1Bxi…, calendar_id=primary, q=회의, data_source_id=1f2e…") Map<String, String> params);
 
     @Operation(
         summary = "동적 칸 목록 조회",
         description = "카탈로그 dict 칸의 fieldsSource({app}.{resource})에 해당하는 안쪽 칸 목록을 조회합니다. "
-            + "data.fields는 카탈로그 Field 모양입니다 — key·title·type·required(늘 false), 있을 때만 description·list·"
+            + "data.fields는 카탈로그 Field 모양입니다 — key·title·type·required(바깥 칸은 늘 false, date의 start는 true), 있을 때만 description·list·"
             + "choices([{id,name}] — id가 저장 값)·optionsSource·optionsParams·children. 페이지 넘김 없음. "
             + "저장은 config.<칸> = {key: 값}이고 key는 받은 그대로 씁니다(다시 인코딩하지 않는다 — '.'은 이미 %2E). "
             + "optionsParams는 그 칸 드롭다운 요청(GET /api/v1/integrations/{app}/options/{resource})에 고정으로 실을 쿼리입니다. "
