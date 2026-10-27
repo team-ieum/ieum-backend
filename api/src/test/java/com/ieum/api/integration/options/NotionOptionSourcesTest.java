@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
@@ -55,6 +56,7 @@ class NotionOptionSourcesTest {
     private final NotionApiReader reader = new NotionApiReader(tokenProvider, restTemplate);
     private final NotionPagesOptionSource pages = new NotionPagesOptionSource(reader);
     private final NotionDatabasesOptionSource databases = new NotionDatabasesOptionSource(reader);
+    private final NotionPropertiesFieldSource properties = new NotionPropertiesFieldSource(reader);
     private final UUID userId = UUID.randomUUID();
 
     @AfterEach
@@ -344,6 +346,97 @@ class NotionOptionSourcesTest {
 
         assertThat(page.items()).containsExactly(new OptionItem("ds-1", "업무 보드"));
         assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("notion.properties — 지원 타입 전부를 spec §4-3대로, title 맨 앞·나머지 이름순, 전부 required false")
+    void propertiesMapEveryNotionType() throws Exception {
+        connected();
+        server.expect(requestTo(API + "/data_sources/" + DS))
+            .andRespond(withSuccess("""
+                {"object":"data_source","id":"%s","properties":{
+                  "점수":{"id":"n%%3F1","name":"점수","type":"number","number":{"format":"number"}},
+                  "이름":{"id":"title","name":"이름","type":"title","title":{}},
+                  "상태":{"id":"a%%3Bc","name":"상태","type":"status","description":"진행 단계",
+                          "status":{"options":[{"id":"opt1","name":"진행 중","color":"blue"},{"id":"opt2","name":"완료","color":"green"}],
+                                    "groups":[]}},
+                  "담당":{"id":"Xy.z","name":"담당","type":"people","people":{}},
+                  "프로젝트":{"id":"rel1","name":"프로젝트","type":"relation",
+                            "relation":{"database_id":"db-9","data_source_id":"ds-9","type":"single_property","single_property":{}}},
+                  "마감":{"id":"due","name":"마감","type":"date","date":{}},
+                  "메모":{"id":"memo","name":"메모","type":"rich_text","rich_text":{},"description":null},
+                  "완료":{"id":"done","name":"완료","type":"checkbox","checkbox":{}},
+                  "단계":{"id":"sel","name":"단계","type":"select","select":{"options":[{"id":"s1","name":"기획"}]}},
+                  "태그":{"id":"tags","name":"태그","type":"multi_select","multi_select":{"options":[{"id":"t1","name":"긴급"}]}},
+                  "링크":{"id":"link","name":"링크","type":"url","url":{}},
+                  "메일":{"id":"mail","name":"메일","type":"email","email":{}},
+                  "전화":{"id":"tel","name":"전화","type":"phone_number","phone_number":{}}}}
+                """.formatted(DS), MediaType.APPLICATION_JSON));
+
+        JsonNode fields = JSON.valueToTree(properties.fetch(userId, Map.of("data_source_id", DS)));
+
+        assertThat(fields).isEqualTo(json("""
+            [{"key":"title","title":"이름","type":"string","required":false},
+             {"key":"sel","title":"단계","type":"string","required":false,"choices":[{"id":"s1","name":"기획"}]},
+             {"key":"Xy%2Ez","title":"담당","type":"string","required":false,"list":true,"optionsSource":"notion.users"},
+             {"key":"link","title":"링크","type":"string","required":false},
+             {"key":"due","title":"마감","type":"object","required":false,"children":[
+               {"key":"start","title":"시작","type":"datetime","required":true},
+               {"key":"end","title":"끝","type":"datetime","required":false}]},
+             {"key":"memo","title":"메모","type":"text","required":false},
+             {"key":"mail","title":"메일","type":"string","required":false},
+             {"key":"a%3Bc","title":"상태","type":"string","required":false,"description":"진행 단계",
+              "choices":[{"id":"opt1","name":"진행 중"},{"id":"opt2","name":"완료"}]},
+             {"key":"done","title":"완료","type":"boolean","required":false},
+             {"key":"tel","title":"전화","type":"string","required":false},
+             {"key":"n%3F1","title":"점수","type":"number","required":false},
+             {"key":"tags","title":"태그","type":"string","required":false,"list":true,"choices":[{"id":"t1","name":"긴급"}]},
+             {"key":"rel1","title":"프로젝트","type":"string","required":false,"list":true,
+              "optionsSource":"notion.data_source_items","optionsParams":{"data_source_id":"ds-9"}}]
+            """));
+    }
+
+    @Test
+    @DisplayName("notion.properties — 쓸 수 없는 타입(읽기 전용·파일·장소·검증·처음 보는 타입)은 칸이 없다")
+    void unsupportedTypesHaveNoField() {
+        connected();
+        server.expect(requestTo(API + "/data_sources/" + DS))
+            .andRespond(withSuccess("""
+                {"properties":{
+                  "Name":{"id":"title","name":"Name","type":"title","title":{}},
+                  "f":{"id":"f1","name":"f","type":"formula","formula":{"expression":"1"}},
+                  "r":{"id":"r1","name":"r","type":"rollup","rollup":{}},
+                  "ct":{"id":"c1","name":"ct","type":"created_time","created_time":{}},
+                  "cb":{"id":"c2","name":"cb","type":"created_by","created_by":{}},
+                  "et":{"id":"e1","name":"et","type":"last_edited_time","last_edited_time":{}},
+                  "eb":{"id":"e2","name":"eb","type":"last_edited_by","last_edited_by":{}},
+                  "uid":{"id":"u1","name":"uid","type":"unique_id","unique_id":{"prefix":"T"}},
+                  "btn":{"id":"b1","name":"btn","type":"button","button":{}},
+                  "file":{"id":"fi","name":"file","type":"files","files":{}},
+                  "place":{"id":"pl","name":"place","type":"place","place":{}},
+                  "ver":{"id":"v1","name":"ver","type":"verification","verification":{}},
+                  "new":{"id":"nw","name":"new","type":"something_new","something_new":{}}}}
+                """, MediaType.APPLICATION_JSON));
+
+        assertThat(properties.fetch(userId, Map.of("data_source_id", DS)))
+            .extracting(field -> field.get("key")).containsExactly("title");
+    }
+
+    @Test
+    @DisplayName("칸 key는 Notion 속성 ID에서 '.'만 %2E — 이미 인코딩된 %xx는 다시 인코딩하지 않는다")
+    void keyEncodesDotOnly() {
+        assertThat(NotionPropertiesFieldSource.fieldKey("Xy.z")).isEqualTo("Xy%2Ez");
+        assertThat(NotionPropertiesFieldSource.fieldKey("a%3Bc")).isEqualTo("a%3Bc");
+        assertThat(NotionPropertiesFieldSource.fieldKey("f%5C%5C%3Ap.")).isEqualTo("f%5C%5C%3Ap%2E");
+        assertThat(NotionPropertiesFieldSource.fieldKey("title")).isEqualTo("title");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "{{nodes.a.output.id}}", "../users"})
+    @DisplayName("notion.properties — data_source_id가 비었거나 참조식·형식 오류면 토큰 조회·HTTP 없이 INVALID_INPUT")
+    void propertiesRejectBadDataSourceIdBeforeTokenLookup(String raw) {
+        assertErrorCode(() -> properties.fetch(userId, Map.of("data_source_id", raw)), ErrorCode.INVALID_INPUT);
+        verifyNoInteractions(tokenProvider);
     }
 
     @Test
