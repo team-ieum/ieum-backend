@@ -8,6 +8,8 @@ import com.ieum.api.chat.service.AgentClient;
 import com.ieum.api.chat.service.AgentClient.AgentChatCallParams;
 import com.ieum.api.chat.service.ChatService;
 import com.ieum.api.chat.service.ChatService.StreamSetupResult;
+import com.ieum.api.chat.service.ChatTurnLock;
+import com.ieum.auth.delegation.DelegationTokenService;
 import com.ieum.common.exception.CustomException;
 import java.security.Principal;
 import java.util.UUID;
@@ -50,10 +52,13 @@ import reactor.core.scheduler.Schedulers;
 public class WebSocketChatHandler {
 
     private static final String USER_STREAM_DESTINATION = "/queue/chat/stream";
+    static final String TURN_BUSY_MESSAGE = "이전 응답을 기다리는 중입니다. 잠시 후 다시 보내 주세요.";
 
     private final ChatService chatService;
     private final AgentClient agentClient;
     private final SimpMessageSendingOperations messagingTemplate;
+    private final ChatTurnLock chatTurnLock;
+    private final DelegationTokenService delegationTokenService;
 
     /**
      * 채팅 메시지를 수신하고 AI 응답을 스트리밍으로 전송한다.
@@ -81,71 +86,133 @@ public class WebSocketChatHandler {
 
         log.info("[WS] 채팅 메시지 수신 — workflowId: {}, userId: {}", workflowId, userId);
 
-        // 1. 트랜잭션 처리 (세션/메시지 저장, 에이전트 설정 로드)
-        StreamSetupResult setup;
+        // 0. 사용자당 동시 턴 1개(IEUM-BE-106) — 세션·메시지를 만들기 전에 막는다(바쁠 때 보낸 메시지가 대화에 남지 않게).
+        boolean acquired;
         try {
-            setup = chatService.prepareStream(workflowId, userId, userRole, request);
-        } catch (CustomException e) {
-            log.warn("[WS] prepareStream 실패 — userId: {}, error: {}", userId, e.getMessage());
-            sendToUser(userName, ChatStreamResponse.error(e.getMessage()));
-            return;
+            acquired = chatTurnLock.tryAcquire(userId);
         } catch (Exception e) {
-            log.error("[WS] prepareStream 예외 — userId: {}", userId, e);
+            log.error("[WS] 동시 턴 락 확인 실패 — userId: {}", userId, e);
             sendToUser(userName, ChatStreamResponse.error("서버 오류가 발생했습니다."));
             return;
         }
-
-        // 2. 베타 platform 키 쿼터 예약 — subscribe 바로 직전(사전작업은 이미 끝났으므로 그 앞 실패는 환불 대상이 아니다).
-        //    쿼터 초과(CustomException)는 예외가 그대로 전파되며 BetaQuotaService가 스스로 카운터를 원복하므로
-        //    별도 환불이 불필요하다. Redis 다운 등 infra RuntimeException도 마찬가지로 INCR 자체가 실패했을
-        //    것이므로(키를 반환받지 못했으므로) 환불할 예약이 없다 — 두 경우 모두 여기서 잡아 error 프레임을
-        //    보내지 않으면 클라이언트가 @MessageMapping 밖으로 탈출한 예외 때문에 응답을 영영 못 받고 멈춘다.
-        String betaReservationKey;
-        try {
-            betaReservationKey = chatService.reserveBetaQuota(setup.config(), userId);
-        } catch (CustomException e) {
-            log.warn("[WS] 베타 쿼터 예약 실패 — userId: {}, error: {}", userId, e.getMessage());
-            sendToUser(userName, ChatStreamResponse.error(e.getMessage()));
-            return;
-        } catch (Exception e) {
-            log.error("[WS] 베타 쿼터 예약 예외 — userId: {}", userId, e);
-            sendToUser(userName, ChatStreamResponse.error("서버 오류가 발생했습니다."));
+        if (!acquired) {
+            sendToUser(userName, ChatStreamResponse.error(TURN_BUSY_MESSAGE));
             return;
         }
 
-        // 3. 스트리밍 구독 (비동기) — agent SSE 이벤트를 STAGE/DONE/ERROR로 분기 전달.
-        //    withBetaQuotaRefund가 doFinally로 error/cancel(클라 disconnect)/비성공-complete를
-        //    전부 잡아 정확히 1회 환불한다(§#1~3 강건화).
-        Flux<ChatStreamEvent> chatStream = agentClient.chatStream(AgentChatCallParams.builder()
-            .workflowId(workflowId)
-            .prompt(setup.prompt())
-            .currentNodes(setup.currentNodes())
-            .currentEdges(setup.currentEdges())
-            .availableIntegrations(setup.integrationContext().available())
-            .unavailableIntegrations(setup.integrationContext().unavailable())
-            .llmProvider(setup.config().llmProvider())
-            .apiKey(setup.config().decryptedApiKey())
-            .googleAccessToken(setup.googleToken())
-            .githubToken(setup.githubToken())
-            .notionToken(setup.notionToken())
-            .availableMcpServers(setup.availableMcpServers())
-            .availableWebhooks(setup.availableWebhooks())
-            .userId(userId)
-            .userRole(userRole)
-            .useBetaPlatformKey(setup.config().useBetaPlatformKey())
-            .build());
+        // 스트림에 넘기기 전에 어디서 끝나든 락을 푼다 — 넘긴 뒤엔 스트림 doFinally가 위임 토큰과 함께 푼다.
+        boolean handedOff = false;
+        try {
+            // 1. 트랜잭션 처리 (세션/메시지 저장, 에이전트 설정 로드)
+            StreamSetupResult setup;
+            try {
+                setup = chatService.prepareStream(workflowId, userId, userRole, request);
+            } catch (CustomException e) {
+                log.warn("[WS] prepareStream 실패 — userId: {}, error: {}", userId, e.getMessage());
+                sendToUser(userName, ChatStreamResponse.error(e.getMessage()));
+                return;
+            } catch (Exception e) {
+                log.error("[WS] prepareStream 예외 — userId: {}", userId, e);
+                sendToUser(userName, ChatStreamResponse.error("서버 오류가 발생했습니다."));
+                return;
+            }
 
-        withBetaQuotaRefund(chatStream, betaReservationKey)
-            // finalizeStream은 동기 blocking(JPA) 작업이므로 Netty EventLoop 스레드에서 실행되면
-            // Thread Starvation을 유발한다. boundedElastic로 전환해 별도 스레드 풀에서 처리한다.
-            .publishOn(Schedulers.boundedElastic())
-            .subscribe(
-                event -> handleStreamEvent(userName, workflowId, request, setup, event),
-                error -> {
-                    log.error("[WS] 스트리밍 오류 — sessionId: {}", setup.sessionId(), error);
-                    sendToUser(userName, ChatStreamResponse.error("AI 응답 중 오류가 발생했습니다."));
+            // 2. 베타 platform 키 쿼터 예약 — subscribe 바로 직전(사전작업은 이미 끝났으므로 그 앞 실패는 환불 대상이 아니다).
+            //    쿼터 초과(CustomException)는 예외가 그대로 전파되며 BetaQuotaService가 스스로 카운터를 원복하므로
+            //    별도 환불이 불필요하다. Redis 다운 등 infra RuntimeException도 마찬가지로 INCR 자체가 실패했을
+            //    것이므로(키를 반환받지 못했으므로) 환불할 예약이 없다 — 두 경우 모두 여기서 잡아 error 프레임을
+            //    보내지 않으면 클라이언트가 @MessageMapping 밖으로 탈출한 예외 때문에 응답을 영영 못 받고 멈춘다.
+            String betaReservationKey;
+            try {
+                betaReservationKey = chatService.reserveBetaQuota(setup.config(), userId);
+            } catch (CustomException e) {
+                log.warn("[WS] 베타 쿼터 예약 실패 — userId: {}, error: {}", userId, e.getMessage());
+                sendToUser(userName, ChatStreamResponse.error(e.getMessage()));
+                return;
+            } catch (Exception e) {
+                log.error("[WS] 베타 쿼터 예약 예외 — userId: {}", userId, e);
+                sendToUser(userName, ChatStreamResponse.error("서버 오류가 발생했습니다."));
+                return;
+            }
+
+            // 3. 위임 토큰(IEUM-BE-106) — agent가 이 턴 동안 사용자 대신 BE 허용 경로 5개를 부른다. 실패하면 예약을 돌려준다.
+            //    role은 Principal authority 문자열 그대로(ROLE_ 접두사 포함) — 필터가 SimpleGrantedAuthority에 그대로 넣는다.
+            if (userRole == null) {
+                log.error("[WS] Principal에 role이 없어 위임 토큰을 발급하지 않는다 — userId: {}", userId);
+                chatService.releaseBetaQuotaOnFailure(betaReservationKey);
+                sendToUser(userName, ChatStreamResponse.error("서버 오류가 발생했습니다."));
+                return;
+            }
+            String delegationToken;
+            try {
+                delegationToken = delegationTokenService.issue(userId, userRole, workflowId);
+            } catch (Exception e) {
+                log.error("[WS] 위임 토큰 발급 실패 — userId: {}", userId, e);
+                chatService.releaseBetaQuotaOnFailure(betaReservationKey);
+                sendToUser(userName, ChatStreamResponse.error("서버 오류가 발생했습니다."));
+                return;
+            }
+
+            // 4. 스트리밍 구독 (비동기) — agent SSE 이벤트를 STAGE/DONE/ERROR로 분기 전달.
+            //    withBetaQuotaRefund가 doFinally로 error/cancel(클라 disconnect)/비성공-complete를
+            //    전부 잡아 정확히 1회 환불한다(§#1~3 강건화).
+            Flux<ChatStreamEvent> chatStream = agentClient.chatStream(AgentChatCallParams.builder()
+                .workflowId(workflowId)
+                .prompt(setup.prompt())
+                .currentNodes(setup.currentNodes())
+                .currentEdges(setup.currentEdges())
+                .availableIntegrations(setup.integrationContext().available())
+                .unavailableIntegrations(setup.integrationContext().unavailable())
+                .llmProvider(setup.config().llmProvider())
+                .apiKey(setup.config().decryptedApiKey())
+                .googleAccessToken(setup.googleToken())
+                .githubToken(setup.githubToken())
+                .notionToken(setup.notionToken())
+                .availableMcpServers(setup.availableMcpServers())
+                .availableWebhooks(setup.availableWebhooks())
+                .userId(userId)
+                .userRole(userRole)
+                .useBetaPlatformKey(setup.config().useBetaPlatformKey())
+                .delegationToken(delegationToken)
+                .build());
+
+            withBetaQuotaRefund(chatStream, betaReservationKey)
+                // finalizeStream은 동기 blocking(JPA) 작업이므로 Netty EventLoop 스레드에서 실행되면
+                // Thread Starvation을 유발한다. boundedElastic로 전환해 별도 스레드 풀에서 처리한다.
+                .publishOn(Schedulers.boundedElastic())
+                // publishOn 뒤라 DONE 저장(finalizeStream)이 끝난 다음에 돈다 — 저장 중에 다음 턴이 시작되지 않는다.
+                .doFinally(signal -> endTurn(userId, delegationToken))
+                .subscribe(
+                    event -> handleStreamEvent(userName, workflowId, request, setup, event),
+                    error -> {
+                        log.error("[WS] 스트리밍 오류 — sessionId: {}", setup.sessionId(), error);
+                        sendToUser(userName, ChatStreamResponse.error("AI 응답 중 오류가 발생했습니다."));
+                    }
+                );
+            handedOff = true;
+        } finally {
+            if (!handedOff) {
+                try {
+                    chatTurnLock.release(userId);
+                } catch (Exception e) {
+                    log.warn("[WS] 동시 턴 락 해제 실패(TTL로 만료) — userId: {}", userId, e);
                 }
-            );
+            }
+        }
+    }
+
+    /** 턴 종료(완료·오류·취소) — 위임 토큰을 바로 폐기하고 동시 턴 락을 푼다. 하나가 실패해도 다른 하나는 한다. */
+    private void endTurn(UUID userId, String delegationToken) {
+        try {
+            delegationTokenService.revoke(delegationToken);
+        } catch (Exception e) {
+            log.warn("[WS] 위임 토큰 폐기 실패(TTL로 만료) — userId: {}", userId, e);
+        }
+        try {
+            chatTurnLock.release(userId);
+        } catch (Exception e) {
+            log.warn("[WS] 동시 턴 락 해제 실패(TTL로 만료) — userId: {}", userId, e);
+        }
     }
 
     /**

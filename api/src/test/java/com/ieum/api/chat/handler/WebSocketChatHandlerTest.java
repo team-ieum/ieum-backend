@@ -5,11 +5,13 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.after;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.api.chat.dto.ChatRequest;
@@ -22,7 +24,9 @@ import com.ieum.api.chat.service.AgentClient.AgentChatCallParams;
 import com.ieum.api.chat.service.ChatService;
 import com.ieum.api.chat.service.ChatService.AgentConfig;
 import com.ieum.api.chat.service.ChatService.StreamSetupResult;
+import com.ieum.api.chat.service.ChatTurnLock;
 import com.ieum.api.chat.service.IntegrationContextService.IntegrationContext;
+import com.ieum.auth.delegation.DelegationTokenService;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import java.security.Principal;
@@ -33,6 +37,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
@@ -52,6 +57,8 @@ class WebSocketChatHandlerTest {
     @Mock private ChatService chatService;
     @Mock private AgentClient agentClient;
     @Mock private SimpMessageSendingOperations messagingTemplate;
+    @Mock private ChatTurnLock chatTurnLock;
+    @Mock private DelegationTokenService delegationTokenService;
 
     @InjectMocks private WebSocketChatHandler handler;
 
@@ -85,6 +92,7 @@ class WebSocketChatHandlerTest {
 
     /** handleChat() 전체 흐름을 도는 테스트에서만 필요 — withBetaQuotaRefund 단위 테스트는 handleChat을 거치지 않는다. */
     private void mockPrepareStream() {
+        given(chatTurnLock.tryAcquire(userId)).willReturn(true);
         given(chatService.prepareStream(eq(workflowId), eq(userId), eq("ROLE_USER"), eq(request))).willReturn(setup);
     }
 
@@ -218,6 +226,145 @@ class WebSocketChatHandlerTest {
         List<ChatStreamResponse> sent = captureSent(1);
         assertThat(sent.get(0).getType()).isEqualTo(StreamType.ERROR);
         assertThat(sent.get(0).getContent()).isEqualTo("응답 저장 중 오류가 발생했습니다.");
+    }
+
+    // ─────────────────── 동시 턴 락·위임 토큰 (IEUM-BE-106) ─────────────────
+
+    @Test
+    @DisplayName("진행 중인 턴이 있으면 안내 error 프레임만 — 세션·메시지·쿼터·토큰을 건드리지 않고 락도 풀지 않는다")
+    void turnBusy_sendsWaitMessageOnly() {
+        given(chatTurnLock.tryAcquire(userId)).willReturn(false);
+
+        handler.handleChat(workflowId, request, principal);
+
+        List<ChatStreamResponse> sent = captureSent(1);
+        assertThat(sent.get(0).getType()).isEqualTo(StreamType.ERROR);
+        assertThat(sent.get(0).getContent()).isEqualTo("이전 응답을 기다리는 중입니다. 잠시 후 다시 보내 주세요.");
+        verifyNoInteractions(chatService, agentClient, delegationTokenService);
+        verify(chatTurnLock, never()).release(any());
+    }
+
+    @Test
+    @DisplayName("락 확인 중 Redis 장애면 일반 error 프레임 — 예외가 @MessageMapping 밖으로 새지 않는다")
+    void turnLockFailure_sendsGenericError() {
+        given(chatTurnLock.tryAcquire(userId)).willThrow(new RuntimeException("RedisConnectionFailureException"));
+
+        handler.handleChat(workflowId, request, principal);
+
+        List<ChatStreamResponse> sent = captureSent(1);
+        assertThat(sent.get(0).getContent()).isEqualTo("서버 오류가 발생했습니다.");
+        verifyNoInteractions(chatService, agentClient, delegationTokenService);
+    }
+
+    @Test
+    @DisplayName("위임 토큰을 chatStream에 싣고, 턴이 끝나면 DONE 저장 뒤에 토큰 폐기·락 해제")
+    void delegationToken_passedToAgentAndRevokedAfterFinalize() {
+        mockPrepareStream();
+        given(delegationTokenService.issue(userId, "ROLE_USER", workflowId)).willReturn("deleg-raw");
+        ChatAgentResponse agentResponse = mock(ChatAgentResponse.class);
+        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any(), any()))
+            .willReturn(mock(ChatResponse.class));
+        mockChatStream(ChatStreamEvent.done(agentResponse));
+
+        handler.handleChat(workflowId, request, principal);
+
+        verify(chatTurnLock, timeout(2000)).release(userId);
+        // role은 WS Principal authority 문자열 그대로(접두사 포함) — 필터가 SimpleGrantedAuthority에 그대로 넣는다.
+        verify(delegationTokenService).issue(userId, "ROLE_USER", workflowId);
+        ArgumentCaptor<AgentChatCallParams> params = ArgumentCaptor.forClass(AgentChatCallParams.class);
+        verify(agentClient).chatStream(params.capture());
+        assertThat(params.getValue().delegationToken()).isEqualTo("deleg-raw");
+        InOrder order = inOrder(chatService, delegationTokenService, chatTurnLock);
+        order.verify(chatService).finalizeStream(any(), any(), any(), any(), any(), any());
+        order.verify(delegationTokenService).revoke("deleg-raw");
+        order.verify(chatTurnLock).release(userId);
+    }
+
+    @Test
+    @DisplayName("agent ERROR 이벤트로 끝나도 토큰 폐기·락 해제")
+    void errorEvent_stillRevokesAndReleases() {
+        mockPrepareStream();
+        given(delegationTokenService.issue(userId, "ROLE_USER", workflowId)).willReturn("deleg-raw");
+        mockChatStream(ChatStreamEvent.error("AI 응답 중 오류가 발생했습니다."));
+
+        handler.handleChat(workflowId, request, principal);
+
+        verify(chatTurnLock, timeout(2000)).release(userId);
+        verify(delegationTokenService).revoke("deleg-raw");
+    }
+
+    @Test
+    @DisplayName("스트림이 끝나지 않는 동안엔 락을 쥐고 토큰도 폐기하지 않는다")
+    void streamInFlight_holdsLockAndToken() {
+        mockPrepareStream();
+        given(delegationTokenService.issue(userId, "ROLE_USER", workflowId)).willReturn("deleg-raw");
+        given(agentClient.chatStream(any())).willReturn(Flux.never());
+
+        handler.handleChat(workflowId, request, principal);
+
+        verify(chatTurnLock, never()).release(any());
+        verify(delegationTokenService, never()).revoke(any());
+    }
+
+    @Test
+    @DisplayName("prepareStream 실패 — 락을 풀고 토큰은 발급하지 않는다")
+    void prepareStreamFailure_releasesLock() {
+        given(chatTurnLock.tryAcquire(userId)).willReturn(true);
+        given(chatService.prepareStream(eq(workflowId), eq(userId), eq("ROLE_USER"), eq(request)))
+            .willThrow(new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+
+        handler.handleChat(workflowId, request, principal);
+
+        captureSent(1);
+        verify(chatTurnLock).release(userId);
+        verifyNoInteractions(delegationTokenService, agentClient);
+    }
+
+    @Test
+    @DisplayName("쿼터 예약 실패 — 락을 풀고 토큰은 발급하지 않는다")
+    void quotaFailure_releasesLock() {
+        mockPrepareStream();
+        Mockito.doThrow(new CustomException(ErrorCode.BETA_QUOTA_EXCEEDED))
+            .when(chatService).reserveBetaQuota(setup.config(), userId);
+
+        handler.handleChat(workflowId, request, principal);
+
+        captureSent(1);
+        verify(chatTurnLock).release(userId);
+        verifyNoInteractions(delegationTokenService, agentClient);
+    }
+
+    @Test
+    @DisplayName("위임 토큰 발급 실패 — 예약을 환불하고 락을 풀고 agent를 부르지 않는다")
+    void issueFailure_refundsAndReleases() {
+        mockPrepareStream();
+        given(chatService.reserveBetaQuota(setup.config(), userId)).willReturn(TEST_RESERVATION_KEY);
+        given(delegationTokenService.issue(userId, "ROLE_USER", workflowId))
+            .willThrow(new RuntimeException("RedisConnectionFailureException"));
+
+        handler.handleChat(workflowId, request, principal);
+
+        List<ChatStreamResponse> sent = captureSent(1);
+        assertThat(sent.get(0).getContent()).isEqualTo("서버 오류가 발생했습니다.");
+        verify(chatService).releaseBetaQuotaOnFailure(TEST_RESERVATION_KEY);
+        verify(chatTurnLock).release(userId);
+        verify(agentClient, never()).chatStream(any(AgentChatCallParams.class));
+    }
+
+    @Test
+    @DisplayName("Principal에 role이 없으면 위임 토큰을 발급하지 않는다 — 예약 환불·락 해제")
+    void nullRole_noIssue_refundsAndReleases() {
+        Principal noRole = new UsernamePasswordAuthenticationToken(userId.toString(), null, List.of());
+        given(chatTurnLock.tryAcquire(userId)).willReturn(true);
+        given(chatService.prepareStream(eq(workflowId), eq(userId), Mockito.isNull(), eq(request))).willReturn(setup);
+        given(chatService.reserveBetaQuota(setup.config(), userId)).willReturn(TEST_RESERVATION_KEY);
+
+        handler.handleChat(workflowId, request, noRole);
+
+        captureSent(1);
+        verify(chatService).releaseBetaQuotaOnFailure(TEST_RESERVATION_KEY);
+        verify(chatTurnLock).release(userId);
+        verifyNoInteractions(delegationTokenService, agentClient);
     }
 
     // ─────────────────── withBetaQuotaRefund (exactly-once 환불) ────────────
