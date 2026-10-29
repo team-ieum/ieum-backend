@@ -614,7 +614,7 @@ public class ChatService {
             TriggerNodeSchedule schedule = TriggerNodeSchedule.compute(nodes, eventCatalog);
             schedule.assertCronPresent(nodes);   // REST와 같은 400 문구 — 저장 쪽 일반 문구보다 먼저
             workflowCrudService.saveAgentVersion(workflowId, nodesJson, edgesJson,
-                schedule.triggerType(), schedule.cron());
+                schedule.triggerType(), schedule.cron(), false);
             log.info("[ChatService] 워크플로우 버전 저장 완료 — workflowId: {}, type: {}",
                 workflowId, agentResponse.getType());
             return nodes;

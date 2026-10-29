@@ -54,6 +54,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -655,7 +656,7 @@ class ChatServiceTest {
         ChatResponse result = chatService.finalizeStream(
             workflowId, sessionId, resp, config, UUID.randomUUID(), userId);
 
-        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any(), any(), any());
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any(), any(), any(), eq(false));
         verify(workflowCrudService).updateWorkflowName(workflowId, "테스트 WF");
         verify(messageRepository).save(any(ChatMessage.class));
         assertThat(result.getType()).isEqualTo(AgentResponseType.WORKFLOW_GENERATED);
@@ -767,7 +768,7 @@ class ChatServiceTest {
         ChatResponse result = chatService.finalizeStream(
             workflowId, sessionId, resp, config, UUID.randomUUID(), userId);
 
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
         verify(messageRepository).save(any(ChatMessage.class));
         assertThat(result.getContent()).isEqualTo("좀 더 알려주세요");
     }
@@ -791,7 +792,7 @@ class ChatServiceTest {
                 .isEqualTo(ErrorCode.INVALID_WORKFLOW));
 
         // 거부는 저장 경로에 닿기 전에 끝나야 한다 — 새 버전이 남으면 막은 의미가 없다.
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
         verify(workflowCrudService, never()).updateWorkflowName(any(), any());
         verify(messageRepository, never()).save(any(ChatMessage.class));
     }
@@ -818,7 +819,7 @@ class ChatServiceTest {
             .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
                 .isEqualTo(ErrorCode.INVALID_WORKFLOW));
 
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
     }
 
     @Test
@@ -852,7 +853,7 @@ class ChatServiceTest {
 
         chatService.finalizeStream(workflowId, sessionId, resp, config, UUID.randomUUID(), userId);
 
-        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any(), any(), any());
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any(), any(), any(), eq(false));
     }
 
     // ─────────────────── agent 생성 정의의 남의 credentialId 거부 (IEUM-BE-64) ─
@@ -883,7 +884,7 @@ class ChatServiceTest {
             .satisfies(e -> assertThat(e.getMessage())
                 .doesNotContain(foreignCredentialId.toString()));
 
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
     }
 
     @Test
@@ -905,7 +906,7 @@ class ChatServiceTest {
         verify(workflowCrudService).saveAgentVersion(
             eq(workflowId),
             argThat(nodesJson -> nodesJson.contains(fallbackCredentialId.toString())),
-            any(), any(), any());
+            any(), any(), any(), eq(false));
     }
 
     @Test
@@ -929,7 +930,7 @@ class ChatServiceTest {
             .satisfies(e -> assertThat(e.getMessage())
                 .doesNotContain(foreignCredentialId.toString()));
 
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
     }
 
     @Test
@@ -961,7 +962,7 @@ class ChatServiceTest {
             .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
                 .isEqualTo(ErrorCode.INVALID_WORKFLOW));
 
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
     }
 
     @Test
@@ -989,7 +990,7 @@ class ChatServiceTest {
             // 메시지는 WS 핸들러가 사용자에게 그대로 보내고 로그에도 남는다.
             .satisfies(e -> assertThat(e.getMessage()).doesNotContain("sk-live-not-a-real-key"));
 
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
     }
 
     // ─────────────────── 채팅 저장 경로의 엣지 id 채우기 (IEUM-BE-65) ────────
@@ -1053,7 +1054,7 @@ class ChatServiceTest {
         chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
 
         ArgumentCaptor<String> edgesJson = ArgumentCaptor.forClass(String.class);
-        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), edgesJson.capture(), any(), any());
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), edgesJson.capture(), any(), any(), eq(false));
         List<Object> saved = objectMapper.readValue(edgesJson.getValue(), new TypeReference<>() {});
         // 비-Map 원소는 그대로 통과하고, Map 원소는 source/target이 없어도 id를 받는다.
         assertThat(saved).hasSize(3);
@@ -1074,7 +1075,7 @@ class ChatServiceTest {
         assertThatThrownBy(() -> chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
     }
 
     @Test
@@ -1242,7 +1243,7 @@ class ChatServiceTest {
     /** saveAgentVersion에 넘어간 nodesJson을 캡처해 파싱한다. */
     private List<Map<String, Object>> captureSavedNodes() throws Exception {
         ArgumentCaptor<String> nodesJson = ArgumentCaptor.forClass(String.class);
-        verify(workflowCrudService).saveAgentVersion(eq(workflowId), nodesJson.capture(), any(), any(), any());
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), nodesJson.capture(), any(), any(), any(), eq(false));
         return objectMapper.readValue(nodesJson.getValue(), new TypeReference<>() {});
     }
 
@@ -1263,7 +1264,7 @@ class ChatServiceTest {
         chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
 
         verify(workflowCrudService).saveAgentVersion(
-            eq(workflowId), any(), any(), eq(TriggerType.SCHEDULE), eq("0 9 * * *"));
+            eq(workflowId), any(), any(), eq(TriggerType.SCHEDULE), eq("0 9 * * *"), eq(false));
     }
 
     @Test
@@ -1277,7 +1278,7 @@ class ChatServiceTest {
         chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
 
         verify(workflowCrudService).saveAgentVersion(
-            eq(workflowId), any(), any(), eq(TriggerType.WEBHOOK), isNull());
+            eq(workflowId), any(), any(), eq(TriggerType.WEBHOOK), isNull(), eq(false));
     }
 
     @Test
@@ -1291,7 +1292,7 @@ class ChatServiceTest {
         chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
 
         verify(workflowCrudService).saveAgentVersion(
-            eq(workflowId), any(), any(), eq(TriggerType.MANUAL), isNull());
+            eq(workflowId), any(), any(), eq(TriggerType.MANUAL), isNull(), eq(false));
     }
 
     @Test
@@ -1306,7 +1307,7 @@ class ChatServiceTest {
         chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
 
         verify(workflowCrudService).saveAgentVersion(
-            eq(workflowId), any(), any(), eq(TriggerType.WEBHOOK), isNull());
+            eq(workflowId), any(), any(), eq(TriggerType.WEBHOOK), isNull(), eq(false));
     }
 
     @Test
@@ -1321,7 +1322,7 @@ class ChatServiceTest {
                 assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW);
                 assertThat(e.getMessage()).contains("schedule.daily").contains("node-trigger");
             });
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
     }
 
     @Test
@@ -1336,7 +1337,7 @@ class ChatServiceTest {
                 assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_CRON_EXPRESSION);
                 assertThat(e.getMessage()).isEqualTo("schedule.every 노드(node-trigger)의 config.cron이 필요합니다");
             });
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
     }
 
     /** finalizeStream이 메시지를 저장하는 데 필요한 최소 스텁. */
@@ -1350,7 +1351,7 @@ class ChatServiceTest {
     /** saveAgentVersion에 넘어간 edgesJson을 캡처해 파싱한다. */
     private List<Map<String, Object>> captureSavedEdges() throws Exception {
         ArgumentCaptor<String> edgesJson = ArgumentCaptor.forClass(String.class);
-        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), edgesJson.capture(), any(), any());
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), edgesJson.capture(), any(), any(), eq(false));
         return objectMapper.readValue(edgesJson.getValue(), new TypeReference<>() {});
     }
 
