@@ -610,13 +610,19 @@ public class ChatService {
 
             String nodesJson = objectMapper.writeValueAsString(nodes);
             String edgesJson = objectMapper.writeValueAsString(fillEdgeIds(agentResponse.getEdges()));
-            // 트리거는 저장할 노드에서 계산한다 — 트리거 노드가 없으면 MANUAL이라 기존 스케줄·Job이 해제된다(IEUM-BE-92).
-            TriggerNodeSchedule schedule = TriggerNodeSchedule.compute(nodes, eventCatalog);
-            schedule.assertCronPresent(nodes);   // REST와 같은 400 문구 — 저장 쪽 일반 문구보다 먼저
-            workflowCrudService.saveAgentVersion(workflowId, nodesJson, edgesJson,
-                schedule.triggerType(), schedule.cron(), false);
-            log.info("[ChatService] 워크플로우 버전 저장 완료 — workflowId: {}, type: {}",
-                workflowId, agentResponse.getType());
+            if (agentResponse.isBuilding()) {
+                // 대화형 빌드 중간 저장(IEUM-BE-106) — 트리거를 계산하지 않는다. 반쯤 만든 schedule.every(cron 없음)도
+                // 저장되고, saveAgentVersion이 MANUAL·구독 없음으로 둬 빌드가 끝나기 전엔 스케줄·앱 트리거·웹훅 수신이 꺼져 있다.
+                workflowCrudService.saveAgentVersion(workflowId, nodesJson, edgesJson, null, null, true);
+            } else {
+                // 트리거는 저장할 노드에서 계산한다 — 트리거 노드가 없으면 MANUAL이라 기존 스케줄·Job이 해제된다(IEUM-BE-92).
+                TriggerNodeSchedule schedule = TriggerNodeSchedule.compute(nodes, eventCatalog);
+                schedule.assertCronPresent(nodes);   // REST와 같은 400 문구 — 저장 쪽 일반 문구보다 먼저
+                workflowCrudService.saveAgentVersion(workflowId, nodesJson, edgesJson,
+                    schedule.triggerType(), schedule.cron(), false);
+            }
+            log.info("[ChatService] 워크플로우 버전 저장 완료 — workflowId: {}, type: {}, building: {}",
+                workflowId, agentResponse.getType(), agentResponse.isBuilding());
             return nodes;
         } catch (JsonProcessingException e) {
             log.error("[ChatService] 노드/엣지 직렬화 실패 — workflowId: {}", workflowId, e);
@@ -837,6 +843,11 @@ public class ChatService {
             if (maxVersionBeforeSave <= 1 && agentResponse.getWorkflowName() != null) {
                 workflowCrudService.updateWorkflowName(workflowId, agentResponse.getWorkflowName());
             }
+        }
+        if (!agentResponse.isWorkflowResult() && "DONE".equals(agentResponse.getBuildState())) {
+            // DONE은 WORKFLOW_MODIFIED + 전체 nodes와 함께 와야 저장된다(IEUM-BE-106). 아니면 트리거가 조용히 안 켜지므로 드러낸다.
+            log.warn("[ChatService] buildState=DONE인데 저장 대상 응답이 아니라 트리거가 켜지지 않는다 — workflowId: {}, type: {}",
+                workflowId, agentResponse.getType());
         }
 
         if (agentResponse.getType() == AgentResponseType.INTEGRATION_REQUIRED) {

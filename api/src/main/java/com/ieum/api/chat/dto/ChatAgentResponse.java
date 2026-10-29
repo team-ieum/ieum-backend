@@ -18,7 +18,8 @@ import lombok.NoArgsConstructor;
  *   "changeDescription": "...",   // WORKFLOW_MODIFIED 시에만 채워짐
  *   "usage": {                    // 모델이 토큰을 보고하지 않으면 null
  *     "promptTokens": 1200, "completionTokens": 340, "totalTokens": 1540
- *   }
+ *   },
+ *   "buildState": "BUILDING"      // 대화형 빌드 엔진만 싣는다(BUILDING | DONE), 없으면 DONE
  * }
  * </pre>
  */
@@ -76,6 +77,12 @@ public class ChatAgentResponse {
      */
     private Usage usage;
 
+    /**
+     * 대화형 빌드 상태 {@code "BUILDING" | "DONE"} (IEUM-BE-106). 옛 agent는 보내지 않는다(null).
+     * {@link #isBuilding()}만 빌드 중으로 보고, null·모르는 값은 DONE(지금 저장 경로 그대로)이다.
+     */
+    private String buildState;
+
     /** agent 응답의 usage 필드. {@code /v1/execute}의 동명 구조와 같은 형태다. */
     @Getter
     @NoArgsConstructor
@@ -110,6 +117,11 @@ public class ChatAgentResponse {
      */
     public Integer getTotalTokens() {
         return usage != null ? usage.getTotalTokens() : null;
+    }
+
+    /** 빌드 중간 저장인지 — 정확히 {@code "BUILDING"}일 때만 true. 그 밖은 옛 agent 하위호환으로 DONE 취급. */
+    public boolean isBuilding() {
+        return "BUILDING".equals(buildState);
     }
 
     /** 워크플로우 생성 또는 수정 응답인지 확인 */

@@ -1,5 +1,9 @@
 package com.ieum.api.chat.service;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.chat.dto.AgentResponseType;
@@ -40,12 +44,15 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Answers;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -1338,6 +1345,79 @@ class ChatServiceTest {
                 assertThat(e.getMessage()).isEqualTo("schedule.every 노드(node-trigger)의 config.cron이 필요합니다");
             });
         verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
+    }
+
+    // ─────────────────── 대화형 빌드 중간 저장 buildState (IEUM-BE-106) ───────────
+
+    @Test
+    @DisplayName("BUILDING이면 cron 없는 schedule.every도 저장된다 — 트리거를 계산하지 않고 building=true로 넘긴다")
+    void finalizeStream_building_scheduleWithoutCron_savedAsBuilding() throws Exception {
+        ChatAgentResponse resp = buildStateResponse("BUILDING", """
+            { "id": "node-trigger", "event": "schedule.every", "type": "TRIGGER", "config": {} }""");
+        givenFinalizeStreamSession();
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any(), isNull(), isNull(), eq(true));
+    }
+
+    @Test
+    @DisplayName("BUILDING이어도 저장 가드는 돈다 — 노드 config.url이 웹훅 원문이면 저장하지 않는다")
+    void finalizeStream_building_rawWebhookUrl_notSaved() throws Exception {
+        ChatAgentResponse resp = buildStateResponse("BUILDING", """
+            { "id": "node-http", "event": "http.request", "type": "HTTP", "config": { "method": "POST", "url": "%s" } }"""
+            .formatted(SLACK_WEBHOOK));
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        assertThatThrownBy(() -> chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId))
+            .isInstanceOfSatisfying(CustomException.class, e ->
+                assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
+    }
+
+    @ParameterizedTest(name = "buildState={0}")
+    @ValueSource(strings = {"DONE", "building"})
+    @DisplayName("DONE이나 모르는 값이면 지금 경로 그대로 — 트리거를 계산해 building=false로 넘긴다")
+    void finalizeStream_doneOrUnknownBuildState_computesTrigger(String buildState) throws Exception {
+        ChatAgentResponse resp = buildStateResponse(buildState, """
+            { "id": "node-trigger", "event": "schedule.every", "type": "TRIGGER", "config": { "cron": "0 9 * * *" } }""");
+        givenFinalizeStreamSession();
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+
+        verify(workflowCrudService).saveAgentVersion(
+            eq(workflowId), any(), any(), eq(TriggerType.SCHEDULE), eq("0 9 * * *"), eq(false));
+    }
+
+    @Test
+    @DisplayName("DONE인데 WORKFLOW_MODIFIED가 아니면 저장하지 않고 WARN — 트리거가 조용히 안 켜지는 계약 위반을 로그로 드러낸다")
+    void finalizeStream_doneWithoutWorkflowResult_warns() throws Exception {
+        ChatAgentResponse resp = objectMapper.readValue("""
+            { "message": "켜 둘게요", "type": "CLARIFICATION_NEEDED", "buildState": "DONE" }""", ChatAgentResponse.class);
+        givenFinalizeStreamSession();
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        Logger logger = (Logger) LoggerFactory.getLogger(ChatService.class);
+        logger.addAppender(appender);
+        try {
+            chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
+        assertThat(appender.list).anyMatch(e ->
+            e.getLevel() == Level.WARN && e.getFormattedMessage().contains("buildState=DONE"));
+    }
+
+    /** buildState를 실은 WORKFLOW_MODIFIED 응답(대화형 빌드 엔진 모양). */
+    private ChatAgentResponse buildStateResponse(String buildState, String nodeJson) throws Exception {
+        return objectMapper.readValue("""
+            { "message": "진행 중", "type": "WORKFLOW_MODIFIED", "buildState": "%s", "nodes": [ %s ], "edges": [] }
+            """.formatted(buildState, nodeJson), ChatAgentResponse.class);
     }
 
     /** finalizeStream이 메시지를 저장하는 데 필요한 최소 스텁. */
