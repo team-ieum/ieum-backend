@@ -29,8 +29,11 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -396,5 +399,84 @@ class HttpNodeExecutorTest {
         assertThat(sent.get("static").asText()).isEqualTo("그대로");
         assertThat(new ObjectMapper().readTree(sent.get("summary").asText()))
             .isEqualTo(new ObjectMapper().valueToTree(metadata));
+    }
+
+    // ── SSRF 보강 (IEUM-BE-106) ─────────────────────────────────────────────
+
+    private Node urlNode(String url) {
+        Node node = httpNode(new HashMap<>());
+        node.getConfig().put("url", url);
+        return node;
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "http://100.64.0.1/x", "http://100.127.255.254/x",   // CGNAT 100.64.0.0/10
+        "http://[fc00::1]/x", "http://[fd12:3456::1]/x"       // IPv6 ULA fc00::/7
+    })
+    @DisplayName("CGNAT·IPv6 ULA 주소는 호출 전에 막는다")
+    void internalRanges_blocked(String url) {
+        ExecutorResult result = executor.execute(urlNode(url), Collections.emptyMap(), cursor());
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getErrorMessage()).contains("내부 네트워크 주소");
+        verify(restTemplate, never()).exchange(any(String.class), any(HttpMethod.class), any(HttpEntity.class), eq(String.class));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"http://100.63.255.255/x", "http://100.128.0.1/x", "http://[fe00::1]/x"})
+    @DisplayName("CGNAT·ULA 경계 바로 밖은 막지 않는다")
+    void justOutsideInternalRanges_allowed(String url) {
+        when(restTemplate.exchange(eq(url), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class)))
+            .thenReturn(new ResponseEntity<>("{}", HttpStatus.OK));
+
+        ExecutorResult result = executor.execute(urlNode(url), Collections.emptyMap(), cursor());
+
+        assertThat(result.isSuccess()).isTrue();
+    }
+
+    @Test
+    @DisplayName("3xx는 따라가지 않은 그대로 결과 — statusCode와 location을 낸다")
+    void redirect_isResultWithLocation() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setLocation(java.net.URI.create("http://169.254.169.254/latest/meta-data/"));
+        when(restTemplate.exchange(eq(URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class)))
+            .thenReturn(new ResponseEntity<>(null, headers, HttpStatus.FOUND));
+
+        ExecutorResult result = executor.execute(httpNode(new HashMap<>()), Collections.emptyMap(), cursor());
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput())
+            .containsEntry("statusCode", 302)
+            .containsEntry("location", "http://169.254.169.254/latest/meta-data/");
+    }
+
+    @Test
+    @DisplayName("3xx가 아니면 location을 싣지 않는다 — 기존 출력 모양 그대로")
+    void nonRedirect_hasNoLocation() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(HttpHeaders.LOCATION, "http://203.0.113.10/created/1");
+        when(restTemplate.exchange(eq(URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class)))
+            .thenReturn(new ResponseEntity<>("{}", headers, HttpStatus.CREATED));
+
+        ExecutorResult result = executor.execute(httpNode(new HashMap<>()), Collections.emptyMap(), cursor());
+
+        assertThat(result.getOutput()).containsOnlyKeys("statusCode", "body");
+    }
+
+    @Test
+    @DisplayName("비인코딩 Location(공백)도 3xx는 SUCCESS — location은 헤더 원문 그대로")
+    void redirect_unencodedLocation_isRawString() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(HttpHeaders.LOCATION, "/search?q=a b");
+        when(restTemplate.exchange(eq(URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class)))
+            .thenReturn(new ResponseEntity<>(null, headers, HttpStatus.FOUND));
+
+        ExecutorResult result = executor.execute(httpNode(new HashMap<>()), Collections.emptyMap(), cursor());
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput())
+            .containsEntry("statusCode", 302)
+            .containsEntry("location", "/search?q=a b");
     }
 }

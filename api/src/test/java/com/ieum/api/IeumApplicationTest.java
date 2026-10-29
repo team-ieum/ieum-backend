@@ -12,12 +12,14 @@ import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.executor.BetaPlatformProvider;
 import com.ieum.workflowcore.engine.executor.DiscordAccessProvider;
 import com.ieum.workflowcore.engine.executor.ExecutionJobEnqueuer;
+import com.ieum.workflowcore.engine.executor.HttpNodeExecutor;
 import com.ieum.workflowcore.engine.executor.SlackTokenProvider;
 import com.ieum.workflowcore.trigger.TriggerHandlerRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Import;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
@@ -82,6 +84,14 @@ class IeumApplicationTest {
     @DisplayName("트리거 핸들러 레지스트리가 TriggerType 값을 전부 덮는다 (빠지면 그 트리거가 실행·구독·노드 테스트에서 IllegalStateException)")
     void triggerHandlerRegistry_coversEveryTriggerType(@Autowired TriggerHandlerRegistry registry) {
         assertThat(registry.types()).containsExactlyInAnyOrder(TriggerType.values());
+    }
+
+    @Test
+    @DisplayName("HttpNodeExecutor는 httpNodeRestTemplate을 받는다 (공용 @Primary면 302를 따라가 SSRF)")
+    void httpNodeExecutor_usesHttpNodeRestTemplate(@Autowired ApplicationContext context,
+                                                   @Autowired HttpNodeExecutor httpNodeExecutor) {
+        assertThat(ReflectionTestUtils.getField(httpNodeExecutor, "restTemplate"))
+            .isSameAs(context.getBean("httpNodeRestTemplate"));
     }
 
     @Test

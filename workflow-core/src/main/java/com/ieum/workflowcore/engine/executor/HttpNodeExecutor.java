@@ -9,13 +9,15 @@ import com.ieum.workflowcore.engine.FailureClassifier;
 import com.ieum.workflowcore.engine.FailureKind;
 import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.RetryPolicy;
+import java.net.Inet4Address;
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.URI;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -48,8 +50,10 @@ import org.springframework.web.client.RestTemplate;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class HttpNodeExecutor implements NodeExecutor {
+
+    /** 응답 본문 상한 1MB — api {@code httpNodeRestTemplate}이 이만큼만 읽는다(agent {@code http_fetch}와 같은 값). */
+    public static final int MAX_RESPONSE_BYTES = 1_048_576;
 
     private static final String IDEMPOTENCY_HEADER = "Idempotency-Key";
 
@@ -57,6 +61,15 @@ public class HttpNodeExecutor implements NodeExecutor {
     private final ObjectMapper objectMapper;
     private final IdempotencyStore idempotencyStore;
     private final WebhookCredentialProvider webhookCredentialProvider;
+
+    /** {@code httpNodeRestTemplate} — 리다이렉트를 따라가지 않고 본문을 1MB까지만 읽는 HTTP 노드 전용 클라이언트(IEUM-BE-106). */
+    public HttpNodeExecutor(@Qualifier("httpNodeRestTemplate") RestTemplate restTemplate, ObjectMapper objectMapper,
+                            IdempotencyStore idempotencyStore, WebhookCredentialProvider webhookCredentialProvider) {
+        this.restTemplate = restTemplate;
+        this.objectMapper = objectMapper;
+        this.idempotencyStore = idempotencyStore;
+        this.webhookCredentialProvider = webhookCredentialProvider;
+    }
 
     @Override
     public NodeType getNodeType() {
@@ -154,6 +167,12 @@ public class HttpNodeExecutor implements NodeExecutor {
             Map<String, Object> output = new HashMap<>();
             output.put("statusCode", response.getStatusCode().value());
             output.put("body", parseBody(response.getBody()));
+            // 리다이렉트는 따라가지 않는다 — 3xx는 그대로 결과이고, 갈 곳은 location으로 보여 준다(IEUM-BE-106).
+            // 원문 문자열 그대로 — getLocation()은 URI 파싱이라 공백 등 비인코딩 값에서 예외가 나 정상 3xx가 FAILED 된다.
+            String location = response.getHeaders().getFirst(HttpHeaders.LOCATION);
+            if (response.getStatusCode().is3xxRedirection() && location != null) {
+                output.put("location", location);
+            }
 
             log.info("[HttpExecutor] 응답 수신 — status: {}", response.getStatusCode().value());
             return ExecutorResult.success(output, System.currentTimeMillis() - startTime);
@@ -206,7 +225,9 @@ public class HttpNodeExecutor implements NodeExecutor {
 
     /**
      * SSRF 방어: 루프백·사이트로컬·링크로컬 등 내부 네트워크 주소 차단.
-     * AWS 메타데이터(169.254.169.254), localhost, 10.x/172.16-31.x/192.168.x 등을 포함한다.
+     * AWS 메타데이터(169.254.169.254), localhost, 10.x/172.16-31.x/192.168.x, CGNAT 100.64.0.0/10,
+     * IPv6 ULA fc00::/7을 포함한다. 첫 호스트만 본다 — 리다이렉트는 클라이언트가 따라가지 않는다(IEUM-BE-106).
+     * DNS 재조회(rebinding)는 막지 않는다(운영 IMDSv2 필수·hop limit 1로 갈음).
      */
     private void validateUrl(String url) {
         try {
@@ -218,7 +239,9 @@ public class HttpNodeExecutor implements NodeExecutor {
             if (address.isLoopbackAddress()
                     || address.isSiteLocalAddress()
                     || address.isLinkLocalAddress()
-                    || address.isAnyLocalAddress()) {
+                    || address.isAnyLocalAddress()
+                    || isCarrierGradeNat(address)
+                    || isUniqueLocalIpv6(address)) {
                 throw new IllegalArgumentException(
                     "내부 네트워크 주소로의 요청은 허용되지 않습니다: " + host);
             }
@@ -227,6 +250,17 @@ public class HttpNodeExecutor implements NodeExecutor {
         } catch (Exception e) {
             throw new IllegalArgumentException("유효하지 않은 URL: " + url, e);
         }
+    }
+
+    /** 100.64.0.0/10 — {@code isSiteLocalAddress}가 보지 않는 사설 대역(클라우드 내부망에 쓰인다). */
+    private static boolean isCarrierGradeNat(InetAddress address) {
+        byte[] b = address.getAddress();
+        return address instanceof Inet4Address && (b[0] & 0xff) == 100 && (b[1] & 0xc0) == 64;
+    }
+
+    /** fc00::/7 — IPv6 사설 대역. {@code isSiteLocalAddress}는 폐기된 fec0::/10만 본다. */
+    private static boolean isUniqueLocalIpv6(InetAddress address) {
+        return address instanceof Inet6Address && (address.getAddress()[0] & 0xfe) == 0xfc;
     }
 
     private Object parseBody(String body) {
