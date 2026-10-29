@@ -126,6 +126,8 @@ ieum:
   agent:
     url: ${AGENT_SERVICE_URL}
     timeout-seconds: ${AGENT_TIMEOUT_SECONDS:180}
+    # BE→agent 공유 비밀(X-Internal-Token, IEUM-BE-106). 비면 헤더를 싣지 않는다 — 값 등록은 .env(AGENT_INTERNAL_TOKEN)
+    internal-token: ${AGENT_INTERNAL_TOKEN:}
   scheduler:
     thread-count: ${QUARTZ_THREAD_COUNT:10}
     thread-name-prefix: ${QUARTZ_THREAD_NAME_PREFIX:quartz-}

@@ -45,6 +45,7 @@ class ActionNodeExecutorTest {
     private static final String EVENT = "github.create_issue";
     private static final String TOOL_KEY = toolKeyOf(EVENT);
     private static final String WEBHOOK_URL = "https://hooks.slack.com/services/T000/B000/secret-token";
+    private static final String INTERNAL_TOKEN = "internal-secret";
 
     private final ObjectMapper mapper = new ObjectMapper();
     private final UUID userId = UUID.randomUUID();
@@ -87,7 +88,8 @@ class ActionNodeExecutorTest {
             uid -> "ROLE_USER",
             idempotencyStore,
             30,
-            CATALOG);
+            CATALOG,
+            INTERNAL_TOKEN);
     }
 
     // ── 헬퍼 ────────────────────────────────────────────────────────────────
@@ -143,6 +145,17 @@ class ActionNodeExecutorTest {
 
         assertThat(result.isSuccess()).isTrue();
         assertThat(result.getOutput()).containsExactly(Map.entry("content", content));
+    }
+
+    @Test
+    @DisplayName("agent 호출에 X-Internal-Token을 싣는다 (IEUM-BE-106)")
+    void request_carriesInternalToken() throws Exception {
+        enqueueSuccess();
+
+        executor.execute(githubNode(), NO_INPUT, cursor(userId));
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Internal-Token")).isEqualTo(INTERNAL_TOKEN);
     }
 
     @Test

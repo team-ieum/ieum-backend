@@ -29,6 +29,8 @@ class AgentClientTest {
     private AgentClient agentClient;
     private final UUID userId = UUID.randomUUID();
 
+    private static final String INTERNAL_TOKEN = "internal-secret";
+
     private static final String CHAT_RESPONSE_BODY =
         "{\"message\":\"안녕하세요\",\"type\":\"CLARIFICATION_NEEDED\"}";
 
@@ -36,7 +38,7 @@ class AgentClientTest {
     void setUp() throws IOException {
         mockWebServer = new MockWebServer();
         mockWebServer.start();
-        agentClient = new AgentClient(mockWebServer.url("/").toString(), 30, new ObjectMapper());
+        agentClient = new AgentClient(mockWebServer.url("/").toString(), 30, new ObjectMapper(), INTERNAL_TOKEN);
     }
 
     @AfterEach
@@ -110,6 +112,37 @@ class AgentClientTest {
         assertThat(recorded.getHeader("X-Key-Mode")).isEqualTo("platform");
         assertThat(recorded.getHeader("X-LLM-Provider")).isEqualTo("GEMINI");
         assertThat(recorded.getHeader("X-LLM-Api-Key")).isNull();
+    }
+
+    @Test
+    @DisplayName("chat·chatStream·getNodeCatalog 모두 X-Internal-Token을 싣는다 (IEUM-BE-106)")
+    void everyAgentCall_carriesInternalToken() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody(CHAT_RESPONSE_BODY));
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "text/event-stream").setBody("event: done\ndata: " + CHAT_RESPONSE_BODY + "\n\n"));
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody("{\"nodes\": []}"));
+
+        agentClient.chat(baseParams().build());
+        agentClient.chatStream(baseParams().build()).blockLast();
+        agentClient.getNodeCatalog();
+
+        for (int i = 0; i < 3; i++) {
+            assertThat(mockWebServer.takeRequest().getHeader("X-Internal-Token")).isEqualTo(INTERNAL_TOKEN);
+        }
+    }
+
+    @Test
+    @DisplayName("internal-token이 비면 X-Internal-Token을 싣지 않는다 — agent도 값이 없으면 검사를 끈다")
+    void blankInternalToken_headerOmitted() throws InterruptedException {
+        AgentClient noToken = new AgentClient(mockWebServer.url("/").toString(), 30, new ObjectMapper(), "");
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody("{\"nodes\": []}"));
+
+        noToken.getNodeCatalog();
+
+        assertThat(mockWebServer.takeRequest().getHeader("X-Internal-Token")).isNull();
     }
 
     @Test

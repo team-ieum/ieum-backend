@@ -35,7 +35,7 @@ class WorkflowValidationClientTest {
     void setUp() throws IOException {
         server = new MockWebServer();
         server.start();
-        client = new WorkflowValidationClient(server.url("/").toString());
+        client = new WorkflowValidationClient(server.url("/").toString(), "internal-secret");
     }
 
     @AfterEach
@@ -61,6 +61,16 @@ class WorkflowValidationClientTest {
         JsonNode body = mapper.readTree(request.getBody().readUtf8());
         assertThat(body.get("nodes").get(1).get("id").asText()).isEqualTo("a");
         assertThat(body.get("edges").get(0).get("target").asText()).isEqualTo("a");
+    }
+
+    @Test
+    @DisplayName("검증 호출에 X-Internal-Token을 싣는다 (IEUM-BE-106)")
+    void sendsInternalToken() throws Exception {
+        server.enqueue(json(200, "{\"valid\":true,\"errors\":[]}"));
+
+        client.validate(nodes, edges);
+
+        assertThat(server.takeRequest(1, TimeUnit.SECONDS).getHeader("X-Internal-Token")).isEqualTo("internal-secret");
     }
 
     @Test
@@ -145,7 +155,7 @@ class WorkflowValidationClientTest {
         String url = dead.url("/").toString();
         dead.shutdown();
 
-        assertThat(new WorkflowValidationClient(url).validate(nodes, edges)).isEmpty();
+        assertThat(new WorkflowValidationClient(url, "").validate(nodes, edges)).isEmpty();
     }
 
     @Test

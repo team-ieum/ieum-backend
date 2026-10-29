@@ -10,6 +10,7 @@ import com.ieum.api.chat.dto.ChatStreamEvent;
 import com.ieum.api.chat.dto.IntegrationInfo;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.engine.AgentInternalToken;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
@@ -34,6 +35,7 @@ import reactor.core.publisher.Flux;
  *   <li>{@code X-User-Id} — 사용자 UUID</li>
  *   <li>{@code X-Google-Access-Token} — Google 빌트인 도구 사용 시 (optional)</li>
  *   <li>{@code X-Key-Mode: platform} — 베타 플랫폼 키 위임 시 (credentialId 없음 + 베타 자격, 키 헤더 생략)</li>
+ *   <li>{@code X-Internal-Token} — 모든 agent 호출, {@code ieum.agent.internal-token}이 비면 생략 (IEUM-BE-106)</li>
  * </ul>
  *
  * <h3>요청 body</h3>
@@ -61,10 +63,12 @@ public class AgentClient {
     public AgentClient(
         @Value("${ieum.agent.url}") String agentBaseUrl,
         @Value("${ieum.agent.chat-timeout-seconds:60}") int timeoutSeconds,
-        ObjectMapper objectMapper
+        ObjectMapper objectMapper,
+        @Value("${ieum.agent.internal-token:}") String internalToken
     ) {
         this.webClient = WebClient.builder()
             .baseUrl(agentBaseUrl)
+            .defaultHeaders(AgentInternalToken.headers(internalToken))
             .build();
         this.timeoutSeconds = timeoutSeconds;
         this.objectMapper = objectMapper;
@@ -120,7 +124,7 @@ public class AgentClient {
 
     /**
      * ieum-agent {@code GET /v1/nodes/catalog} — 노드 종류별 입력·출력 필드 정의를 그대로 받아 온다 (IEUM-BE-75).
-     * agent 쪽은 무인증 엔드포인트라 크레덴셜 헤더를 싣지 않는다(사용자 인증은 BE 컨트롤러가 한다).
+     * 크레덴셜 헤더는 싣지 않는다(사용자 인증은 BE 컨트롤러가 한다). 내부 토큰은 모든 호출에 실린다(IEUM-BE-106).
      */
     public JsonNode getNodeCatalog() {
         try {
