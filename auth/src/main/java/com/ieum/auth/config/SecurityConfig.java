@@ -1,5 +1,6 @@
 package com.ieum.auth.config;
 
+import com.ieum.auth.delegation.DelegationTokenFilter;
 import com.ieum.auth.jwt.JwtAuthenticationEntryPoint;
 import com.ieum.auth.jwt.JwtAuthenticationFilter;
 import com.ieum.auth.security.CustomOAuth2UserService;
@@ -46,6 +47,7 @@ public class SecurityConfig {
     private String[] allowedOrigins;
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final DelegationTokenFilter delegationTokenFilter;
     private final JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint;
     private final CustomUserDetailsService customUserDetailsService;
     private final CustomOAuth2UserService customOAuth2UserService;
@@ -129,7 +131,9 @@ public class SecurityConfig {
                     .userService(customOAuth2UserService))
                 .successHandler(oAuth2AuthenticationSuccessHandler)
                 .failureHandler(oAuth2AuthenticationFailureHandler))
-            .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+            .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+            // 위임 토큰(X-Delegation-Token)은 JWT와 다른 필터 — 허용 경로 5개만, 밖이면 401 (IEUM-BE-106)
+            .addFilterBefore(delegationTokenFilter, JwtAuthenticationFilter.class);
 
         return http.build();
     }
