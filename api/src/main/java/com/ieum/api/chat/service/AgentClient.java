@@ -14,6 +14,7 @@ import com.ieum.workflowcore.engine.AgentInternalToken;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -24,6 +25,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * ieum-agent 클라이언트 — {@code POST /v1/chat}(+stream), {@code GET /v1/nodes/catalog}.
@@ -55,6 +58,12 @@ public class AgentClient {
 
     /** LLM을 거치지 않는 카탈로그 GET이라 chat timeout(기본 60초)을 쓰지 않는다 — 폼 열 때 agent가 멈추면 서블릿 스레드를 오래 잡는다. */
     private static final Duration NODE_CATALOG_TIMEOUT = Duration.ofSeconds(10);
+
+    /**
+     * 채팅 스트림 한 턴 전체 상한(IEUM-BE-106). agent 턴 상한 540초 &lt; 이 값 &lt; 위임 토큰 TTL 600초.
+     * 넘으면 구독을 끊고(agent 연결도 닫힌다) error 이벤트로 끝낸다 — 끊긴 스트림의 doFinally가 위임 토큰·동시 턴 락을 푼다.
+     */
+    static final Duration CHAT_STREAM_TIMEOUT = Duration.ofSeconds(570);
 
     private final WebClient webClient;
     private final int timeoutSeconds;
@@ -193,12 +202,32 @@ public class AgentClient {
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.TEXT_EVENT_STREAM),
             params);
+        // 위임 토큰은 WS 스트림에만 싣는다(REST 블로킹 chat은 발급하지 않는다) — agent가 이 값으로 BE 허용 경로 5개를 부른다.
+        if (params.delegationToken() != null) {
+            spec = spec.header("X-Delegation-Token", params.delegationToken());
+        }
 
         return spec.bodyValue(request)
             .retrieve()
             .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {})
             .mapNotNull(this::toStreamEvent)
+            .transform(events -> withTurnTimeout(events, CHAT_STREAM_TIMEOUT))
             .onErrorResume(this::toErrorEvent);
+    }
+
+    /**
+     * 구독부터 마지막 이벤트까지 합친 시간 상한. {@code Flux.timeout(Duration)}은 이벤트 사이 간격이라 STAGE가 올 때마다
+     * 다시 재므로 쓰지 않는다 — 구독 시각에 마감 시각을 정하고, 다음 이벤트 대기마다 남은 시간만큼만 기다린다.
+     * 타이머는 이벤트마다 새로 걸고 스트림이 끝나면 함께 취소된다({@code Mono.delay(...).cache()}는 끝나도 570초 타이머가 남는다).
+     * 시계는 {@code Mono.delay}와 같은 {@code Schedulers.parallel()} — 가상 시간 테스트에서도 같이 흐른다.
+     * 넘으면 {@link java.util.concurrent.TimeoutException}.
+     */
+    static <T> Flux<T> withTurnTimeout(Flux<T> source, Duration limit) {
+        return Flux.defer(() -> {
+            long deadline = Schedulers.parallel().now(TimeUnit.MILLISECONDS) + limit.toMillis();
+            return source.timeout(Mono.delay(limit), item -> Mono.delay(Duration.ofMillis(
+                Math.max(0, deadline - Schedulers.parallel().now(TimeUnit.MILLISECONDS)))));
+        });
     }
 
     /** SSE 프레임을 ChatStreamEvent로 파싱한다. 알 수 없는 event/파싱 실패는 null로 건너뛴다. */
@@ -298,7 +327,8 @@ public class AgentClient {
         List<AvailableWebhook> availableWebhooks,
         UUID userId,
         String userRole,
-        boolean useBetaPlatformKey
+        boolean useBetaPlatformKey,
+        String delegationToken
     ) {
         /** 로그/디버그 출력 시 크레덴셜/토큰이 노출되지 않도록 마스킹한다. */
         @Override
@@ -306,7 +336,7 @@ public class AgentClient {
             return "AgentChatCallParams[workflowId=" + workflowId + ", userId=" + userId
                 + ", llmProvider=" + llmProvider + ", apiKey=***, googleAccessToken=***, "
                 + "githubToken=***, notionToken=***, userRole=" + userRole
-                + ", useBetaPlatformKey=" + useBetaPlatformKey + "]";
+                + ", useBetaPlatformKey=" + useBetaPlatformKey + ", delegationToken=***]";
         }
     }
 }
