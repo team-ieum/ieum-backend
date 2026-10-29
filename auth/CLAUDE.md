@@ -17,6 +17,7 @@ OAuth 로그인은 Google만, Notion·GitHub는 연동(커넥터 토큰) 용도�
 - `JwtTokenProvider` — 토큰 생성/검증/파싱
 - `JwtAuthenticationFilter` — 요청별 JWT 검증 (OncePerRequestFilter)
 - `JwtAuthenticationEntryPoint` — 401 응답 처리
+- `DelegationTokenService` / `DelegationTokenFilter` (`delegation/`, IEUM-BE-106) — WS 채팅 한 턴 동안 agent가 사용자 대신 BE를 부르는 불투명 토큰. 원문 32바이트 base64url, Redis `delegation:{sha256 hex}` = `{userId, role, workflowId}` EX 600(`@RedisHash` 금지 — keyspace events 꺼짐), 발급·폐기는 api `WebSocketChatHandler`. 필터는 `X-Delegation-Token` 헤더가 있을 때만, `JwtAuthenticationFilter` **앞**. 헤더가 공백이거나 토큰의 role이 비면 401(조회 전에 거른다). 허용(메서드+경로) 5개 — `GET /api/v1/integrations/{app}/options/{resource}`·`GET …/fields/{resource}`·`GET /api/v1/oauth/connections`(토큰 userId)·`POST /api/v1/workflows/{workflowId}/nodes/{nodeId}/test`·`GET …/sample`(경로 workflowId = 토큰 것, 아니면 403) — 밖이면 401. 통과하면 `CustomUserDetails.of(userId, "", role)`(이메일 없음 — 대상 컨트롤러는 `getId()`만 쓴다). 허용 경로를 늘릴 때는 그 컨트롤러가 `getUsername()`에 기대지 않는지 먼저 본다
 - `CustomUserDetails` / `CustomUserDetailsService` — Spring Security UserDetails 구현
 - `User` 엔티티 — email, passwordHash, name, provider, providerId, role, **betaAccess**(베타 초대 여부, role과 직교)
 - `UserRole` enum — ROLE_USER, ROLE_ADMIN, **ROLE_TESTER** (ADMIN·TESTER는 self-hosted LLM 라우팅 대상)
