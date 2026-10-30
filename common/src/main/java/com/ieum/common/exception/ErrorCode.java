@@ -125,7 +125,7 @@ public enum ErrorCode {
 
     // 채팅
     CHAT_SESSION_NOT_FOUND(HttpStatus.NOT_FOUND, "채팅 세션을 찾을 수 없습니다."),
-    WORKFLOW_HAS_NO_AI_NODE(HttpStatus.BAD_REQUEST, "워크플로우에 AI 노드가 없습니다. 워크플로우 구성을 확인해주세요."),
+    CHAT_CREDENTIAL_REQUIRED(HttpStatus.BAD_REQUEST, "채팅을 쓰려면 통합 설정 → AI 자격증명에서 AI 키를 등록해 주세요."),
 
     // 베타 플랫폼 키
     BETA_QUOTA_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "베타 체험 사용량 한도를 초과했습니다.");
