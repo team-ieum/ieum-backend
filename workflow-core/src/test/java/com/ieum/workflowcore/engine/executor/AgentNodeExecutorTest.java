@@ -64,7 +64,8 @@ class AgentNodeExecutorTest {
             uid -> null,
             betaPlatformProvider,
             idempotencyStore,
-            30
+            30,
+            INTERNAL_TOKEN
         );
     }
 
@@ -158,6 +159,8 @@ class AgentNodeExecutorTest {
         return cursor;
     }
 
+    private static final String INTERNAL_TOKEN = "internal-secret";
+
     private static final String SUCCESS_RESPONSE =
         "{\"success\":true,\"output\":\"완료\",\"metadata\":null,\"errorMessage\":null}";
 
@@ -229,6 +232,20 @@ class AgentNodeExecutorTest {
         assertThat(result.isSuccess()).isFalse();
         assertThat(result.getFailureKind()).isEqualTo(FailureKind.CLIENT_ERROR);
         assertThat(mockWebServer.getRequestCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("agent 호출에 X-Internal-Token을 싣는다 (IEUM-BE-106)")
+    void execute_sendsInternalToken() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(SUCCESS_RESPONSE));
+
+        executor.execute(buildAgentNode("요약해줘", "CLAUDE", "cred-id-1"),
+            Collections.emptyMap(), buildCursor());
+
+        assertThat(mockWebServer.takeRequest().getHeader("X-Internal-Token")).isEqualTo(INTERNAL_TOKEN);
     }
 
     @Test
@@ -536,7 +553,8 @@ class AgentNodeExecutorTest {
             uid -> null,
             betaPlatformProvider,
             idempotencyStore,
-            30
+            30,
+            INTERNAL_TOKEN
         );
 
         mockWebServer.enqueue(new MockResponse()
@@ -659,7 +677,8 @@ class AgentNodeExecutorTest {
             roleProvider,
             betaProvider,
             idempotencyStore,
-            30
+            30,
+            INTERNAL_TOKEN
         );
     }
 
@@ -868,7 +887,8 @@ class AgentNodeExecutorTest {
             uid -> null,
             betaProvider,
             idempotencyStore,
-            5
+            5,
+            INTERNAL_TOKEN
         );
 
         Node node = buildAgentNodeNoCredential("요약해줘", "CLAUDE");

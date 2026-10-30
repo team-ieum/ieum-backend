@@ -124,16 +124,19 @@ public class WorkflowCrudService {
     /**
      * agent가 만든 정의를 새 버전으로 저장한다. 트리거 타입·cron은 호출자가 노드에서 계산한 값이다 — 트리거 노드가 없으면
      * MANUAL·cron null이 와서 기존 스케줄·Quartz Job이 해제된다(null도 {@code Workflow.updateSchedule}이 MANUAL로 저장한다, IEUM-BE-92).
+     *
+     * @param building 대화형 빌드 중간 저장(IEUM-BE-106). true면 넘어온 트리거를 무시하고 MANUAL·cron null로 저장하고
+     *                 앱 트리거 구독을 빈 노드 목록으로 맞춰 지운다 — 빌드가 끝나기 전엔 스케줄·앱 트리거·웹훅 수신이 켜지지 않는다.
      */
     @Transactional
     public WorkflowVersion saveAgentVersion(UUID workflowId, String nodesJson, String edgesJson,
-            TriggerType triggerType, String cronExpression) {
+            TriggerType triggerType, String cronExpression, boolean building) {
         Workflow workflow = workflowRepository.findById(workflowId)
             .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
-        applySchedule(workflow, triggerType, cronExpression);
+        applySchedule(workflow, building ? TriggerType.MANUAL : triggerType, building ? null : cronExpression);
         // 트리거 노드가 없으면 앱 트리거 없음으로 판정돼 구독 행이 지워진다.
         List<Map<String, Object>> nodes = readNodes(nodesJson);
-        appTriggerSubscriptionService.sync(workflow, nodes);
+        appTriggerSubscriptionService.sync(workflow, building ? List.of() : nodes);
 
         int nextVersion = workflowVersionRepository.findMaxVersionByWorkflowId(workflowId) + 1;
         WorkflowVersion version = saveVersionWithCompensation(workflow, nextVersion, nodes, edgesJson);

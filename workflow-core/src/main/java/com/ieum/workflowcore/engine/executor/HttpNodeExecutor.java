@@ -9,13 +9,17 @@ import com.ieum.workflowcore.engine.FailureClassifier;
 import com.ieum.workflowcore.engine.FailureKind;
 import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.RetryPolicy;
+import java.net.Inet4Address;
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.URI;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -48,15 +52,33 @@ import org.springframework.web.client.RestTemplate;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class HttpNodeExecutor implements NodeExecutor {
 
+    /** 응답 본문 상한 1MB — api {@code httpNodeRestTemplate}이 이만큼만 읽는다(agent {@code http_fetch}와 같은 값). */
+    public static final int MAX_RESPONSE_BYTES = 1_048_576;
+
     private static final String IDEMPOTENCY_HEADER = "Idempotency-Key";
+
+    /** 실행기가 직접 따라가는 리다이렉트 최대 횟수 — 넘으면 노드 실패. */
+    static final int MAX_REDIRECTS = 3;
+    private static final Set<Integer> REDIRECT_STATUSES = Set.of(301, 302, 303, 307, 308);
+    /** 출처가 바뀌는 홉에서 떼는 헤더 — HttpHeaders.remove는 대소문자를 가리지 않는다. */
+    private static final List<String> CREDENTIAL_HEADERS =
+        List.of(HttpHeaders.AUTHORIZATION, HttpHeaders.PROXY_AUTHORIZATION, HttpHeaders.COOKIE);
 
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
     private final IdempotencyStore idempotencyStore;
     private final WebhookCredentialProvider webhookCredentialProvider;
+
+    /** {@code httpNodeRestTemplate} — 리다이렉트를 따라가지 않고(실행기가 매 홉 검사하며 직접 따라간다) 본문을 1MB까지만 읽는 HTTP 노드 전용 클라이언트(IEUM-BE-106). */
+    public HttpNodeExecutor(@Qualifier("httpNodeRestTemplate") RestTemplate restTemplate, ObjectMapper objectMapper,
+                            IdempotencyStore idempotencyStore, WebhookCredentialProvider webhookCredentialProvider) {
+        this.restTemplate = restTemplate;
+        this.objectMapper = objectMapper;
+        this.idempotencyStore = idempotencyStore;
+        this.webhookCredentialProvider = webhookCredentialProvider;
+    }
 
     @Override
     public NodeType getNodeType() {
@@ -149,7 +171,43 @@ public class HttpNodeExecutor implements NodeExecutor {
                 bodyJson = objectMapper.writeValueAsString(cursor.renderDeep(bodyObj));
             }
 
-            ResponseEntity<String> response = sendRequest(method, url, httpHeaders, bodyJson);
+            HttpMethod httpMethod = httpMethod(method);
+            ResponseEntity<String> response = restTemplate.exchange(
+                url, httpMethod, new HttpEntity<>(bodyJson, httpHeaders), String.class);
+
+            // 리다이렉트는 클라이언트(DONT_FOLLOW)가 아니라 여기서 따라간다 — 매 홉 validateUrl을 다시 돌아
+            // 302 한 번으로 내부망에 닿지 못하게 한다(IEUM-BE-106). 301·302·303은 GET·본문 없음, 307·308은 그대로.
+            // 홉은 URI 오버로드로 보낸다 — String이면 이미 percent-encoded된 Location을 다시 인코딩해(%2F→%252F) 서명 URL이 깨진다.
+            URI current = URI.create(url);
+            for (int hops = 0; ; hops++) {
+                int status = response.getStatusCode().value();
+                String location = response.getHeaders().getFirst(HttpHeaders.LOCATION);
+                if (!REDIRECT_STATUSES.contains(status) || location == null) {
+                    break;
+                }
+                if (hops == MAX_REDIRECTS) {
+                    throw new IllegalArgumentException(
+                        "리다이렉트가 " + MAX_REDIRECTS + "회를 넘었습니다 — 마지막 Location: " + location);
+                }
+                URI next;
+                try {
+                    next = current.resolve(location);
+                } catch (IllegalArgumentException e) {
+                    throw new IllegalArgumentException("리다이렉트 Location 형식이 올바르지 않습니다: " + location);
+                }
+                validateUrl(next.toString());
+                // 출처(scheme·host·port)가 바뀌면 자격 헤더를 뗀다 — 사용자 토큰이 다른 호스트로 새지 않게(사용자 결정).
+                if (!sameOrigin(current, next)) {
+                    CREDENTIAL_HEADERS.forEach(httpHeaders::remove);
+                }
+                if (status <= 303) {
+                    httpMethod = HttpMethod.GET;
+                    bodyJson = null;
+                }
+                current = next;
+                response = restTemplate.exchange(
+                    current, httpMethod, new HttpEntity<>(bodyJson, httpHeaders), String.class);
+            }
 
             Map<String, Object> output = new HashMap<>();
             output.put("statusCode", response.getStatusCode().value());
@@ -191,26 +249,44 @@ public class HttpNodeExecutor implements NodeExecutor {
         return message.replace(secretUrl, "***");
     }
 
-    private ResponseEntity<String> sendRequest(
-        String method, String url, HttpHeaders headers, String bodyJson
-    ) {
-        HttpEntity<String> entity = new HttpEntity<>(bodyJson, headers);
+    private static HttpMethod httpMethod(String method) {
         return switch (method) {
-            case "GET" -> restTemplate.exchange(url, HttpMethod.GET, entity, String.class);
-            case "POST" -> restTemplate.exchange(url, HttpMethod.POST, entity, String.class);
-            case "PUT" -> restTemplate.exchange(url, HttpMethod.PUT, entity, String.class);
-            case "DELETE" -> restTemplate.exchange(url, HttpMethod.DELETE, entity, String.class);
+            case "GET" -> HttpMethod.GET;
+            case "POST" -> HttpMethod.POST;
+            case "PUT" -> HttpMethod.PUT;
+            case "DELETE" -> HttpMethod.DELETE;
             default -> throw new IllegalArgumentException("지원하지 않는 HTTP 메서드: " + method);
         };
     }
 
+    private static boolean sameOrigin(URI a, URI b) {
+        return a.getScheme().equalsIgnoreCase(b.getScheme())
+            && a.getHost().equalsIgnoreCase(b.getHost())
+            && port(a) == port(b);
+    }
+
+    private static int port(URI uri) {
+        if (uri.getPort() != -1) {
+            return uri.getPort();
+        }
+        return "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
+    }
+
     /**
      * SSRF 방어: 루프백·사이트로컬·링크로컬 등 내부 네트워크 주소 차단.
-     * AWS 메타데이터(169.254.169.254), localhost, 10.x/172.16-31.x/192.168.x 등을 포함한다.
+     * AWS 메타데이터(169.254.169.254), localhost, 10.x/172.16-31.x/192.168.x, CGNAT 100.64.0.0/10,
+     * IPv6 ULA fc00::/7을 포함한다. 리다이렉트 홉마다 다시 부른다(IEUM-BE-106).
+     * DNS 재조회(rebinding)는 막지 않는다(운영 IMDSv2 필수·hop limit 1로 갈음).
      */
     private void validateUrl(String url) {
         try {
-            String host = new URI(url).getHost();
+            URI uri = new URI(url);
+            // scheme 없는 '//host/..'는 reactor-netty가 localhost로 연결한다 — http·https만 통과.
+            String scheme = uri.getScheme();
+            if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+                throw new IllegalArgumentException("http·https URL만 허용됩니다: " + url);
+            }
+            String host = uri.getHost();
             if (host == null || host.isBlank()) {
                 throw new IllegalArgumentException("URL에 호스트가 없습니다: " + url);
             }
@@ -218,7 +294,9 @@ public class HttpNodeExecutor implements NodeExecutor {
             if (address.isLoopbackAddress()
                     || address.isSiteLocalAddress()
                     || address.isLinkLocalAddress()
-                    || address.isAnyLocalAddress()) {
+                    || address.isAnyLocalAddress()
+                    || isCarrierGradeNat(address)
+                    || isUniqueLocalIpv6(address)) {
                 throw new IllegalArgumentException(
                     "내부 네트워크 주소로의 요청은 허용되지 않습니다: " + host);
             }
@@ -227,6 +305,17 @@ public class HttpNodeExecutor implements NodeExecutor {
         } catch (Exception e) {
             throw new IllegalArgumentException("유효하지 않은 URL: " + url, e);
         }
+    }
+
+    /** 100.64.0.0/10 — {@code isSiteLocalAddress}가 보지 않는 사설 대역(클라우드 내부망에 쓰인다). */
+    private static boolean isCarrierGradeNat(InetAddress address) {
+        byte[] b = address.getAddress();
+        return address instanceof Inet4Address && (b[0] & 0xff) == 100 && (b[1] & 0xc0) == 64;
+    }
+
+    /** fc00::/7 — IPv6 사설 대역. {@code isSiteLocalAddress}는 폐기된 fec0::/10만 본다. */
+    private static boolean isUniqueLocalIpv6(InetAddress address) {
+        return address instanceof Inet6Address && (address.getAddress()[0] & 0xfe) == 0xfc;
     }
 
     private Object parseBody(String body) {

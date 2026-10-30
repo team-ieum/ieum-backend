@@ -100,4 +100,18 @@ class ChatAgentResponseTest {
 
         assertThat(response.getTotalTokens()).isEqualTo(900);
     }
+
+    @Test
+    @DisplayName("buildState — 정확히 \"BUILDING\"만 빌드 중이고, 없음·null·DONE·모르는 값은 DONE으로 본다 (IEUM-BE-106)")
+    void buildState_onlyExactBuildingIsBuilding() throws Exception {
+        assertThat(parse("{\"type\": \"WORKFLOW_MODIFIED\", \"buildState\": \"BUILDING\"}").isBuilding()).isTrue();
+        assertThat(parse("{\"type\": \"WORKFLOW_MODIFIED\", \"buildState\": \"DONE\"}").isBuilding()).isFalse();
+        assertThat(parse("{\"type\": \"WORKFLOW_MODIFIED\"}").isBuilding()).isFalse();
+        assertThat(parse("{\"type\": \"WORKFLOW_MODIFIED\", \"buildState\": null}").isBuilding()).isFalse();
+        assertThat(parse("{\"type\": \"WORKFLOW_MODIFIED\", \"buildState\": \"building\"}").isBuilding()).isFalse();
+    }
+
+    private ChatAgentResponse parse(String json) throws Exception {
+        return objectMapper.readValue(json, ChatAgentResponse.class);
+    }
 }

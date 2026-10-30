@@ -78,6 +78,7 @@ jobs:
           JWT_REFRESH_EXPIRATION: ${{ secrets.AWS_JWT_REFRESH_EXPIRATION }}
           AES_SECRET_KEY: ${{ secrets.AWS_AES_SECRET_KEY }}
           AGENT_SERVICE_URL: ${{ secrets.AWS_AGENT_SERVICE_URL }}
+          AGENT_INTERNAL_TOKEN: ${{ secrets.AWS_AGENT_INTERNAL_TOKEN }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           OAUTH2_REDIRECT_URI: ${{ secrets.AWS_OAUTH2_REDIRECT_URI }}
@@ -119,6 +120,7 @@ jobs:
             JWT_REFRESH_EXPIRATION \
             AES_SECRET_KEY \
             AGENT_SERVICE_URL \
+            AGENT_INTERNAL_TOKEN \
             GOOGLE_CLIENT_ID \
             GOOGLE_CLIENT_SECRET \
             OAUTH2_REDIRECT_URI \
@@ -211,6 +213,7 @@ jobs:
           JWT_REFRESH_EXPIRATION: ${{ secrets.AWS_JWT_REFRESH_EXPIRATION }}
           AES_SECRET_KEY: ${{ secrets.AWS_AES_SECRET_KEY }}
           AGENT_SERVICE_URL: ${{ secrets.AWS_AGENT_SERVICE_URL }}
+          AGENT_INTERNAL_TOKEN: ${{ secrets.AWS_AGENT_INTERNAL_TOKEN }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           OAUTH2_REDIRECT_URI: ${{ secrets.AWS_OAUTH2_REDIRECT_URI }}
@@ -264,6 +267,7 @@ jobs:
             -e JWT_REFRESH_EXPIRATION="$JWT_REFRESH_EXPIRATION" \
             -e AES_SECRET_KEY="$AES_SECRET_KEY" \
             -e AGENT_SERVICE_URL="$AGENT_SERVICE_URL" \
+            -e AGENT_INTERNAL_TOKEN="$AGENT_INTERNAL_TOKEN" \
             -e GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
             -e GOOGLE_CLIENT_SECRET="$GOOGLE_CLIENT_SECRET" \
             -e OAUTH2_REDIRECT_URI="$OAUTH2_REDIRECT_URI" \

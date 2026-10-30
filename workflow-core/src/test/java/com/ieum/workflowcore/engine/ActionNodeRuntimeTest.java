@@ -118,7 +118,8 @@ class ActionNodeRuntimeTest {
             uid -> "ROLE_USER",
             idempotencyStore,
             30,
-            CATALOG);
+            CATALOG,
+            "");
 
         List<NodeExecutor> executors = List.of(new TriggerNodeExecutor(CATALOG, new TriggerHandlerRegistry(List.of(
             new ManualTriggerHandler(), new ScheduleTriggerHandler(), new WebhookTriggerHandler()))), action);

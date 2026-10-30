@@ -145,7 +145,7 @@ class WorkflowCrudServiceScheduleTest {
         given(workflowRepository.findById(workflowId)).willReturn(Optional.of(stored));
 
         runInTransaction(() -> service.saveAgentVersion(workflowId, NODES_JSON, EDGES_JSON,
-            TriggerType.SCHEDULE, unixCron));
+            TriggerType.SCHEDULE, unixCron, false));
 
         assertThat(stored.getTriggerType()).isEqualTo(TriggerType.SCHEDULE);
         assertThat(stored.getCronExpression()).isEqualTo(quartzCron);
@@ -162,7 +162,7 @@ class WorkflowCrudServiceScheduleTest {
         given(workflowRepository.findById(workflowId)).willReturn(Optional.of(stored));
 
         runInTransaction(() -> service.saveAgentVersion(workflowId, NODES_JSON, EDGES_JSON,
-            triggerType, null));
+            triggerType, null, false));
 
         assertThat(stored.getTriggerType()).isEqualTo(triggerType);
         assertThat(stored.getCronExpression()).isNull();
@@ -177,7 +177,7 @@ class WorkflowCrudServiceScheduleTest {
         Workflow stored = workflow(TriggerType.SCHEDULE, CRON);
         given(workflowRepository.findById(workflowId)).willReturn(Optional.of(stored));
 
-        runInTransaction(() -> service.saveAgentVersion(workflowId, NODES_JSON, EDGES_JSON, null, null));
+        runInTransaction(() -> service.saveAgentVersion(workflowId, NODES_JSON, EDGES_JSON, null, null, false));
 
         assertThat(stored.getTriggerType()).isEqualTo(TriggerType.MANUAL);
         assertThat(stored.getCronExpression()).isNull();
@@ -193,12 +193,29 @@ class WorkflowCrudServiceScheduleTest {
 
         // 일·요일 동시 지정 — Unix는 OR로 실행하지만 Quartz는 표현하지 못한다.
         assertThatThrownBy(() -> runInTransaction(() -> service.saveAgentVersion(
-                workflowId, NODES_JSON, EDGES_JSON, TriggerType.SCHEDULE, "0 9 1 * 1")))
+                workflowId, NODES_JSON, EDGES_JSON, TriggerType.SCHEDULE, "0 9 1 * 1", false)))
             .isInstanceOfSatisfying(CustomException.class, e ->
                 assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_CRON_EXPRESSION));
 
         verify(definitionRepository, never()).save(any());
         verifyNoInteractions(workflowScheduler);
+    }
+
+    @Test
+    @DisplayName("빌드 중 AI 저장(building)은 넘어온 SCHEDULE·cron을 무시하고 MANUAL·cron null로 저장, Job을 해제한다 (IEUM-BE-106)")
+    void saveAgentVersion_building_forcesManualAndUnschedules() {
+        stubDefinitionSave();
+        Workflow stored = workflow(TriggerType.SCHEDULE, CRON);
+        given(workflowRepository.findById(workflowId)).willReturn(Optional.of(stored));
+
+        // Quartz로 옮길 수 없는 cron이어도 거부하지 않는다 — building이면 cron을 아예 보지 않는다.
+        runInTransaction(() -> service.saveAgentVersion(workflowId, NODES_JSON, EDGES_JSON,
+            TriggerType.SCHEDULE, "0 9 1 * 1", true));
+
+        assertThat(stored.getTriggerType()).isEqualTo(TriggerType.MANUAL);
+        assertThat(stored.getCronExpression()).isNull();
+        verify(workflowScheduler).deleteJob(stored.getId());
+        verify(workflowScheduler, never()).registerJob(any(), any());
     }
 
     private Workflow workflow(TriggerType triggerType, String cronExpression) {

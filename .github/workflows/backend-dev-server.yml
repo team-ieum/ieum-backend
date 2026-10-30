@@ -106,7 +106,8 @@ jobs:
         run: |
           missing=()
           for name in SLACK_CLIENT_ID SLACK_CLIENT_SECRET SLACK_REDIRECT_URI SLACK_FRONTEND_REDIRECT_URI \
-                      DISCORD_CLIENT_ID DISCORD_CLIENT_SECRET DISCORD_BOT_TOKEN DISCORD_REDIRECT_URI DISCORD_FRONTEND_REDIRECT_URI; do
+                      DISCORD_CLIENT_ID DISCORD_CLIENT_SECRET DISCORD_BOT_TOKEN DISCORD_REDIRECT_URI DISCORD_FRONTEND_REDIRECT_URI \
+                      AGENT_INTERNAL_TOKEN; do
             grep -qE "^${name}=.+" "$ENV_FILE" 2>/dev/null || missing+=("$name")
           done
           if [ ${#missing[@]} -gt 0 ]; then

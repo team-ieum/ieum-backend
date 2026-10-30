@@ -124,9 +124,27 @@ class WorkflowCrudServiceAppTriggerTest {
         given(workflowRepository.findById(workflowId)).willReturn(Optional.of(workflow(true)));
         given(definitionRepository.save(any(WorkflowDefinitionDocument.class))).willAnswer(inv -> inv.getArgument(0));
 
-        runInTransaction(() -> service.saveAgentVersion(workflowId, "[]", "[]", null, null));
+        runInTransaction(() -> service.saveAgentVersion(workflowId, "[]", "[]", null, null, false));
 
         assertThat(syncedNodes()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("AI 저장(building) — 앱 트리거 노드가 있어도 빈 목록으로 sync해 구독 행을 지우고, 정의는 노드 그대로 저장 (IEUM-BE-106)")
+    void agentSaveBuildingSyncsEmptyButKeepsNodes() {
+        Workflow w = workflow(true);
+        given(workflowRepository.findById(workflowId)).willReturn(Optional.of(w));
+        given(definitionRepository.save(any(WorkflowDefinitionDocument.class))).willAnswer(inv -> inv.getArgument(0));
+
+        runInTransaction(() -> service.saveAgentVersion(workflowId, GMAIL_NODES, "[]",
+            TriggerType.GMAIL_NEW_EMAIL, null, true));
+
+        assertThat(syncedNodes()).isEmpty();
+        assertThat(w.getTriggerType()).isEqualTo(TriggerType.MANUAL);
+        ArgumentCaptor<WorkflowDefinitionDocument> doc = ArgumentCaptor.forClass(WorkflowDefinitionDocument.class);
+        verify(definitionRepository).save(doc.capture());
+        assertThat(doc.getValue().getNodes()).singleElement()
+            .satisfies(n -> assertThat(n.get("event")).isEqualTo("gmail.new_email"));
     }
 
     @Test

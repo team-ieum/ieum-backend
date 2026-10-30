@@ -1,6 +1,7 @@
 package com.ieum.workflowcore.engine.executor;
 
 import com.ieum.workflowcore.domain.enums.NodeType;
+import com.ieum.workflowcore.engine.AgentInternalToken;
 import com.ieum.workflowcore.engine.ExecutionCursor;
 import com.ieum.workflowcore.engine.ExecutorResult;
 import com.ieum.workflowcore.engine.FailureClassifier;
@@ -66,10 +67,12 @@ public class AgentNodeExecutor implements NodeExecutor {
         UserRoleProvider userRoleProvider,
         BetaPlatformProvider betaPlatformProvider,
         IdempotencyStore idempotencyStore,
-        @Value("${ieum.agent.timeout-seconds:120}") int agentTimeoutSeconds
+        @Value("${ieum.agent.timeout-seconds:120}") int agentTimeoutSeconds,
+        @Value("${ieum.agent.internal-token:}") String internalToken
     ) {
         this.webClient = WebClient.builder()
             .baseUrl(agentBaseUrl)
+            .defaultHeaders(AgentInternalToken.headers(internalToken))
             .build();
         this.credentialProvider = credentialProvider;
         this.toolCallPreparer = toolCallPreparer;
