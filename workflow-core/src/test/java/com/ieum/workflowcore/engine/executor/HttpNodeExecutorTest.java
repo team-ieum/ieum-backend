@@ -20,6 +20,7 @@ import com.ieum.workflowcore.engine.FailureKind;
 import com.ieum.workflowcore.engine.IdempotencyMode;
 import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.RetryPolicy;
+import java.net.URI;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -445,11 +446,16 @@ class HttpNodeExecutorTest {
         when(restTemplate.exchange(eq(url), eq(method), any(HttpEntity.class), eq(String.class))).thenReturn(response);
     }
 
+    /** 리다이렉트 홉은 URI 오버로드로 나간다 — 이미 인코딩된 Location을 다시 인코딩하지 않게. */
+    private void stubHop(String url, HttpMethod method, ResponseEntity<String> response) {
+        when(restTemplate.exchange(eq(URI.create(url)), eq(method), any(HttpEntity.class), eq(String.class))).thenReturn(response);
+    }
+
     @Test
     @DisplayName("리다이렉트를 직접 따라가 최종 응답의 statusCode·body만 낸다 — 상대 Location은 현재 URL 기준")
     void redirect_followedOnce() {
         stub(URL, HttpMethod.GET, redirect(HttpStatus.FOUND, "/next"));
-        stub("http://203.0.113.10/next", HttpMethod.GET, new ResponseEntity<>("{\"ok\":true}", HttpStatus.OK));
+        stubHop("http://203.0.113.10/next", HttpMethod.GET, new ResponseEntity<>("{\"ok\":true}", HttpStatus.OK));
 
         ExecutorResult result = executor.execute(httpNode(new HashMap<>()), Collections.emptyMap(), cursor());
 
@@ -475,26 +481,26 @@ class HttpNodeExecutorTest {
     @DisplayName("3xx가 4회 이어지면(따라가기 3회 초과) 마지막 Location을 담아 실패한다")
     void redirect_moreThanThree_fails() {
         stub(URL, HttpMethod.GET, redirect(HttpStatus.FOUND, "/a"));
-        stub("http://203.0.113.10/a", HttpMethod.GET, redirect(HttpStatus.FOUND, "/b"));
-        stub("http://203.0.113.10/b", HttpMethod.GET, redirect(HttpStatus.FOUND, "/c"));
-        stub("http://203.0.113.10/c", HttpMethod.GET, redirect(HttpStatus.FOUND, "/d"));
+        stubHop("http://203.0.113.10/a", HttpMethod.GET, redirect(HttpStatus.FOUND, "/b"));
+        stubHop("http://203.0.113.10/b", HttpMethod.GET, redirect(HttpStatus.FOUND, "/c"));
+        stubHop("http://203.0.113.10/c", HttpMethod.GET, redirect(HttpStatus.FOUND, "/d"));
 
         ExecutorResult result = executor.execute(httpNode(new HashMap<>()), Collections.emptyMap(), cursor());
 
         assertThat(result.isSuccess()).isFalse();
         assertThat(result.getFailureKind()).isEqualTo(FailureKind.CLIENT_ERROR);
         assertThat(result.getErrorMessage()).contains("/d");
-        verify(restTemplate, times(4))
-            .exchange(any(String.class), any(HttpMethod.class), any(HttpEntity.class), eq(String.class));
+        verify(restTemplate, times(3))
+            .exchange(any(URI.class), any(HttpMethod.class), any(HttpEntity.class), eq(String.class));
     }
 
     @Test
     @DisplayName("3xx 3회 뒤 200이면 성공한다 — 경계")
     void redirect_exactlyThree_succeeds() {
         stub(URL, HttpMethod.GET, redirect(HttpStatus.FOUND, "/a"));
-        stub("http://203.0.113.10/a", HttpMethod.GET, redirect(HttpStatus.FOUND, "/b"));
-        stub("http://203.0.113.10/b", HttpMethod.GET, redirect(HttpStatus.FOUND, "/c"));
-        stub("http://203.0.113.10/c", HttpMethod.GET, new ResponseEntity<>("{}", HttpStatus.OK));
+        stubHop("http://203.0.113.10/a", HttpMethod.GET, redirect(HttpStatus.FOUND, "/b"));
+        stubHop("http://203.0.113.10/b", HttpMethod.GET, redirect(HttpStatus.FOUND, "/c"));
+        stubHop("http://203.0.113.10/c", HttpMethod.GET, new ResponseEntity<>("{}", HttpStatus.OK));
 
         ExecutorResult result = executor.execute(httpNode(new HashMap<>()), Collections.emptyMap(), cursor());
 
@@ -505,13 +511,13 @@ class HttpNodeExecutorTest {
     @DisplayName("POST에 303이면 다음 홉은 본문 없는 GET")
     void redirect_303_becomesGet() {
         stub(URL, HttpMethod.POST, redirect(HttpStatus.SEE_OTHER, "/done"));
-        stub("http://203.0.113.10/done", HttpMethod.GET, new ResponseEntity<>("{}", HttpStatus.OK));
+        stubHop("http://203.0.113.10/done", HttpMethod.GET, new ResponseEntity<>("{}", HttpStatus.OK));
 
         ExecutorResult result = executor.execute(postNode(Map.of("a", 1)), Collections.emptyMap(), cursor());
 
         assertThat(result.isSuccess()).isTrue();
         ArgumentCaptor<HttpEntity> captor = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate).exchange(eq("http://203.0.113.10/done"), eq(HttpMethod.GET), captor.capture(), eq(String.class));
+        verify(restTemplate).exchange(eq(URI.create("http://203.0.113.10/done")), eq(HttpMethod.GET), captor.capture(), eq(String.class));
         assertThat(captor.getValue().getBody()).isNull();
     }
 
@@ -519,13 +525,13 @@ class HttpNodeExecutorTest {
     @DisplayName("POST에 307이면 다음 홉도 같은 본문의 POST")
     void redirect_307_keepsMethodAndBody() {
         stub(URL, HttpMethod.POST, redirect(HttpStatus.TEMPORARY_REDIRECT, "/again"));
-        stub("http://203.0.113.10/again", HttpMethod.POST, new ResponseEntity<>("{}", HttpStatus.OK));
+        stubHop("http://203.0.113.10/again", HttpMethod.POST, new ResponseEntity<>("{}", HttpStatus.OK));
 
         ExecutorResult result = executor.execute(postNode(Map.of("a", 1)), Collections.emptyMap(), cursor());
 
         assertThat(result.isSuccess()).isTrue();
         ArgumentCaptor<HttpEntity> captor = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate).exchange(eq("http://203.0.113.10/again"), eq(HttpMethod.POST), captor.capture(), eq(String.class));
+        verify(restTemplate).exchange(eq(URI.create("http://203.0.113.10/again")), eq(HttpMethod.POST), captor.capture(), eq(String.class));
         assertThat(captor.getValue().getBody()).isEqualTo("{\"a\":1}");
     }
 
@@ -553,5 +559,66 @@ class HttpNodeExecutorTest {
         assertThat(result.isSuccess()).isFalse();
         assertThat(result.getFailureKind()).isEqualTo(FailureKind.CLIENT_ERROR);
         assertThat(result.getErrorMessage()).contains("/search?q=a b");
+    }
+
+    @Test
+    @DisplayName("percent-encoded Location은 다시 인코딩하지 않고 원문 그대로 보낸다")
+    void redirect_encodedLocation_notDoubleEncoded() {
+        stub(URL, HttpMethod.GET, redirect(HttpStatus.FOUND, "/login?sig=a%2Fb%3D&q=a%20b"));
+        stubHop("http://203.0.113.10/login?sig=a%2Fb%3D&q=a%20b", HttpMethod.GET, new ResponseEntity<>("{}", HttpStatus.OK));
+
+        ExecutorResult result = executor.execute(httpNode(new HashMap<>()), Collections.emptyMap(), cursor());
+
+        assertThat(result.isSuccess()).isTrue();
+        ArgumentCaptor<URI> captor = ArgumentCaptor.forClass(URI.class);
+        verify(restTemplate).exchange(captor.capture(), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class));
+        assertThat(captor.getValue().toString())
+            .isEqualTo("http://203.0.113.10/login?sig=a%2Fb%3D&q=a%20b")
+            .doesNotContain("%25");
+    }
+
+    private HttpHeaders hopHeaders(String location, String hopUrl) {
+        stub(URL, HttpMethod.GET, redirect(HttpStatus.FOUND, location));
+        stubHop(hopUrl, HttpMethod.GET, new ResponseEntity<>("{}", HttpStatus.OK));
+        Map<String, String> headers = new HashMap<>();
+        headers.put("authorization", "Bearer secret");
+        headers.put("Cookie", "sid=1");
+        headers.put("Proxy-Authorization", "Basic x");
+        headers.put("X-Custom", "keep");
+
+        ExecutorResult result = executor.execute(httpNode(headers), Collections.emptyMap(), cursor());
+
+        assertThat(result.isSuccess()).isTrue();
+        ArgumentCaptor<HttpEntity> captor = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(eq(URI.create(hopUrl)), eq(HttpMethod.GET), captor.capture(), eq(String.class));
+        return captor.getValue().getHeaders();
+    }
+
+    @Test
+    @DisplayName("다른 호스트로 가는 홉은 Authorization·Proxy-Authorization·Cookie를 떼고 나머지는 남긴다")
+    void redirect_crossOrigin_stripsCredentials() {
+        HttpHeaders sent = hopHeaders("http://203.0.113.30/next", "http://203.0.113.30/next");
+
+        assertThat(sent.containsKey(HttpHeaders.AUTHORIZATION)).isFalse();
+        assertThat(sent.containsKey(HttpHeaders.PROXY_AUTHORIZATION)).isFalse();
+        assertThat(sent.containsKey(HttpHeaders.COOKIE)).isFalse();
+        assertThat(sent.getFirst("X-Custom")).isEqualTo("keep");
+    }
+
+    @Test
+    @DisplayName("포트만 바뀌어도 다른 출처다")
+    void redirect_portChange_stripsCredentials() {
+        HttpHeaders sent = hopHeaders("http://203.0.113.10:8080/next", "http://203.0.113.10:8080/next");
+
+        assertThat(sent.containsKey(HttpHeaders.AUTHORIZATION)).isFalse();
+    }
+
+    @Test
+    @DisplayName("같은 출처 홉은 Authorization을 그대로 보낸다")
+    void redirect_sameOrigin_keepsCredentials() {
+        HttpHeaders sent = hopHeaders("/next", "http://203.0.113.10/next");
+
+        assertThat(sent.getFirst(HttpHeaders.AUTHORIZATION)).isEqualTo("Bearer secret");
+        assertThat(sent.getFirst(HttpHeaders.COOKIE)).isEqualTo("sid=1");
     }
 }

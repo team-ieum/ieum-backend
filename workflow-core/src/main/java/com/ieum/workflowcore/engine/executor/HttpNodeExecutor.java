@@ -14,6 +14,7 @@ import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.URI;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -61,6 +62,9 @@ public class HttpNodeExecutor implements NodeExecutor {
     /** 실행기가 직접 따라가는 리다이렉트 최대 횟수 — 넘으면 노드 실패. */
     static final int MAX_REDIRECTS = 3;
     private static final Set<Integer> REDIRECT_STATUSES = Set.of(301, 302, 303, 307, 308);
+    /** 출처가 바뀌는 홉에서 떼는 헤더 — HttpHeaders.remove는 대소문자를 가리지 않는다. */
+    private static final List<String> CREDENTIAL_HEADERS =
+        List.of(HttpHeaders.AUTHORIZATION, HttpHeaders.PROXY_AUTHORIZATION, HttpHeaders.COOKIE);
 
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
@@ -167,10 +171,14 @@ public class HttpNodeExecutor implements NodeExecutor {
                 bodyJson = objectMapper.writeValueAsString(cursor.renderDeep(bodyObj));
             }
 
-            ResponseEntity<String> response = sendRequest(method, url, httpHeaders, bodyJson);
+            HttpMethod httpMethod = httpMethod(method);
+            ResponseEntity<String> response = restTemplate.exchange(
+                url, httpMethod, new HttpEntity<>(bodyJson, httpHeaders), String.class);
 
             // 리다이렉트는 클라이언트(DONT_FOLLOW)가 아니라 여기서 따라간다 — 매 홉 validateUrl을 다시 돌아
             // 302 한 번으로 내부망에 닿지 못하게 한다(IEUM-BE-106). 301·302·303은 GET·본문 없음, 307·308은 그대로.
+            // 홉은 URI 오버로드로 보낸다 — String이면 이미 percent-encoded된 Location을 다시 인코딩해(%2F→%252F) 서명 URL이 깨진다.
+            URI current = URI.create(url);
             for (int hops = 0; ; hops++) {
                 int status = response.getStatusCode().value();
                 String location = response.getHeaders().getFirst(HttpHeaders.LOCATION);
@@ -181,17 +189,24 @@ public class HttpNodeExecutor implements NodeExecutor {
                     throw new IllegalArgumentException(
                         "리다이렉트가 " + MAX_REDIRECTS + "회를 넘었습니다 — 마지막 Location: " + location);
                 }
+                URI next;
                 try {
-                    url = URI.create(url).resolve(location).toString();
+                    next = current.resolve(location);
                 } catch (IllegalArgumentException e) {
                     throw new IllegalArgumentException("리다이렉트 Location 형식이 올바르지 않습니다: " + location);
                 }
-                validateUrl(url);
+                validateUrl(next.toString());
+                // 출처(scheme·host·port)가 바뀌면 자격 헤더를 뗀다 — 사용자 토큰이 다른 호스트로 새지 않게(사용자 결정).
+                if (!sameOrigin(current, next)) {
+                    CREDENTIAL_HEADERS.forEach(httpHeaders::remove);
+                }
                 if (status <= 303) {
-                    method = "GET";
+                    httpMethod = HttpMethod.GET;
                     bodyJson = null;
                 }
-                response = sendRequest(method, url, httpHeaders, bodyJson);
+                current = next;
+                response = restTemplate.exchange(
+                    current, httpMethod, new HttpEntity<>(bodyJson, httpHeaders), String.class);
             }
 
             Map<String, Object> output = new HashMap<>();
@@ -234,17 +249,27 @@ public class HttpNodeExecutor implements NodeExecutor {
         return message.replace(secretUrl, "***");
     }
 
-    private ResponseEntity<String> sendRequest(
-        String method, String url, HttpHeaders headers, String bodyJson
-    ) {
-        HttpEntity<String> entity = new HttpEntity<>(bodyJson, headers);
+    private static HttpMethod httpMethod(String method) {
         return switch (method) {
-            case "GET" -> restTemplate.exchange(url, HttpMethod.GET, entity, String.class);
-            case "POST" -> restTemplate.exchange(url, HttpMethod.POST, entity, String.class);
-            case "PUT" -> restTemplate.exchange(url, HttpMethod.PUT, entity, String.class);
-            case "DELETE" -> restTemplate.exchange(url, HttpMethod.DELETE, entity, String.class);
+            case "GET" -> HttpMethod.GET;
+            case "POST" -> HttpMethod.POST;
+            case "PUT" -> HttpMethod.PUT;
+            case "DELETE" -> HttpMethod.DELETE;
             default -> throw new IllegalArgumentException("지원하지 않는 HTTP 메서드: " + method);
         };
+    }
+
+    private static boolean sameOrigin(URI a, URI b) {
+        return a.getScheme().equalsIgnoreCase(b.getScheme())
+            && a.getHost().equalsIgnoreCase(b.getHost())
+            && port(a) == port(b);
+    }
+
+    private static int port(URI uri) {
+        if (uri.getPort() != -1) {
+            return uri.getPort();
+        }
+        return "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
     }
 
     /**
