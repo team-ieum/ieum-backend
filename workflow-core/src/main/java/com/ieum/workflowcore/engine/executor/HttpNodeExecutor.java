@@ -280,7 +280,13 @@ public class HttpNodeExecutor implements NodeExecutor {
      */
     private void validateUrl(String url) {
         try {
-            String host = new URI(url).getHost();
+            URI uri = new URI(url);
+            // scheme 없는 '//host/..'는 reactor-netty가 localhost로 연결한다 — http·https만 통과.
+            String scheme = uri.getScheme();
+            if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+                throw new IllegalArgumentException("http·https URL만 허용됩니다: " + url);
+            }
+            String host = uri.getHost();
             if (host == null || host.isBlank()) {
                 throw new IllegalArgumentException("URL에 호스트가 없습니다: " + url);
             }

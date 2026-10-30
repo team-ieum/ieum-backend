@@ -436,6 +436,44 @@ class HttpNodeExecutorTest {
         assertThat(result.isSuccess()).isTrue();
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "//203.0.113.10/x", "//203.0.113.10:8080/x", "//203.0.113.10",
+        "ftp://203.0.113.10/x", "file:///etc/passwd", "gopher://203.0.113.10/x"
+    })
+    @DisplayName("http·https가 아닌 URL(scheme 없는 '//host' 포함)은 호출 전에 막는다")
+    void nonHttpScheme_blocked(String url) {
+        ExecutorResult result = executor.execute(urlNode(url), Collections.emptyMap(), cursor());
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getErrorMessage()).contains("http·https URL만 허용됩니다");
+        verify(restTemplate, never()).exchange(any(String.class), any(HttpMethod.class), any(HttpEntity.class), eq(String.class));
+        verify(restTemplate, never()).exchange(any(URI.class), any(HttpMethod.class), any(HttpEntity.class), eq(String.class));
+    }
+
+    @Test
+    @DisplayName("scheme 대소문자는 무시한다")
+    void upperCaseScheme_allowed() {
+        String url = "HTTP://203.0.113.10/x";
+        stub(url, HttpMethod.GET, new ResponseEntity<>("{}", HttpStatus.OK));
+
+        ExecutorResult result = executor.execute(urlNode(url), Collections.emptyMap(), cursor());
+
+        assertThat(result.isSuccess()).isTrue();
+    }
+
+    @Test
+    @DisplayName("scheme 상대 Location('//host/..')은 현재 URL의 scheme으로 resolve돼 따라간다")
+    void redirect_schemeRelativeLocation_followed() {
+        stub(URL, HttpMethod.GET, redirect(HttpStatus.FOUND, "//198.51.100.7/next"));
+        stubHop("http://198.51.100.7/next", HttpMethod.GET, new ResponseEntity<>("{\"ok\":true}", HttpStatus.OK));
+
+        ExecutorResult result = executor.execute(httpNode(new HashMap<>()), Collections.emptyMap(), cursor());
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).containsEntry("statusCode", 200);
+    }
+
     private static ResponseEntity<String> redirect(HttpStatus status, String location) {
         HttpHeaders headers = new HttpHeaders();
         headers.set(HttpHeaders.LOCATION, location);
