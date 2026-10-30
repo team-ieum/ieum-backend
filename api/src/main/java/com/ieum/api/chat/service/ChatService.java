@@ -3,7 +3,6 @@ package com.ieum.api.chat.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.api.chat.dto.AgentAction;
 import com.ieum.api.chat.dto.AgentResponseType;
 import com.ieum.api.chat.dto.AvailableMcpServer;
@@ -31,9 +30,6 @@ import com.ieum.workflowcore.chat.domain.ChatSession;
 import com.ieum.workflowcore.chat.domain.MessageType;
 import com.ieum.workflowcore.chat.repository.ChatMessageRepository;
 import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
-import com.ieum.workflowcore.domain.WorkflowVersion;
-import com.ieum.workflowcore.domain.enums.NodeType;
-import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.executor.BetaPlatformProvider;
 import com.ieum.workflowcore.engine.executor.CredentialProvider;
 import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
@@ -66,7 +62,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * <h3>chat() 내부 흐름</h3>
  * <ol>
  *   <li>세션 찾기 or 신규 생성</li>
- *   <li>워크플로우 AI 노드 설정(credentialId, llmProvider, tools) 로드</li>
+ *   <li>채팅 LLM 설정 결정(요청 키 → 최근 키 → self-hosted/베타)</li>
  *   <li>USER 메시지 DB 저장</li>
  *   <li>FE가 보낸 currentNodes를 NodeDerivation으로 파생(type·brand 계산, 옛 키 제거)해 currentEdges와 함께 전달(DB 재조회 없음)</li>
  *   <li>연동 상태 분류 (availableIntegrations / unavailableIntegrations)</li>
@@ -117,7 +113,7 @@ public class ChatService {
         // 1. 세션 찾거나 새로 생성
         ChatSession session = createOrGetSession(workflowId, userId, request.getSessionId());
 
-        // 2. 워크플로우 AI 노드 설정 로드 (소유권 검증 포함)
+        // 2. 채팅 LLM 설정 결정 (소유권 검증 포함)
         AgentConfig agentConfig = resolveAgentConfig(workflowId, userId, request.getCredentialId(), userRole);
 
         // 3. USER 메시지 저장
@@ -294,62 +290,20 @@ public class ChatService {
     // ─────────────────────────────────────── 에이전트 설정 ────────────────────
 
     /**
-     * 워크플로우에서 AI 노드 설정(llmProvider, credentialId, tools)을 추출하고
-     * API Key를 복호화하여 반환한다.
+     * 채팅 LLM 설정(llmProvider, API Key)을 결정한다 — 워크플로우 노드는 보지 않는다.
+     * 순서: 요청 키 → 최근 등록 키 → self-hosted → 베타. 반환 {@code tools}는 항상 null이다.
      *
      * <p>WebSocket 핸들러에서 재사용할 수 있도록 public으로 공개한다.
      *
      * @throws CustomException WORKFLOW_NOT_FOUND — 워크플로우를 찾을 수 없는 경우
-     * @throws CustomException WORKFLOW_HAS_NO_AI_NODE — AI 노드가 없는 경우
-     * @throws CustomException INVALID_WORKFLOW — nodesJson 파싱 실패 시
+     * @throws CustomException CHAT_CREDENTIAL_REQUIRED — 쓸 키가 없고 self-hosted·베타 자격도 없는 경우
      */
-    @SuppressWarnings("unchecked")
     public AgentConfig resolveAgentConfig(UUID workflowId, UUID userId, UUID fallbackCredentialId, String userRole) {
         workflowCrudService.getWorkflowByOwner(userId, workflowId);
 
-        WorkflowVersion version = workflowCrudService.findLatestVersion(workflowId)
-            .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
-
-        List<Node> nodes;
-        try {
-            WorkflowDefinitionDocument definition = workflowCrudService.loadDefinition(version);
-            nodes = objectMapper.convertValue(definition.getNodes(), new TypeReference<>() {});
-        } catch (CustomException ce) {
-            throw ce;
-        } catch (Exception e) {
-            log.error("[ChatService] MongoDB 정의 로드 실패 — workflowId: {}", workflowId, e);
-            throw new CustomException(ErrorCode.INVALID_WORKFLOW);
-        }
-
-        Node aiNode = nodes.stream()
-            .filter(n -> n.getType() == NodeType.AI)
-            .findFirst()
-            .orElse(null);
-
-        if (aiNode != null) {
-            Map<String, Object> config = aiNode.getConfig();
-            String llmProvider = (String) config.get("llmProvider");
-            String credentialId = (String) config.get("credentialId");
-            List<Map<String, Object>> tools = (List<Map<String, Object>>) config.get("tools");
-            // 개발/테스트 계정은 credential 없이 자체 호스팅 LLM을 사용할 수 있다 — 키 없이 전달하면 agent가 라우팅/차단을 판단한다.
-            // self-hosted 자격이 없으면 베타 자격(User.betaAccess + kill-switch)을 확인해 플랫폼 Gemini 키로 폴백한다.
-            // 여기서는 자격(eligibility) 판정만 한다 — 실제 쿼터 예약(INCR)은 agent 호출 직전(chat()/스트림 subscribe 직전)에서
-            // 수행해, 그 사이의 사전작업(메시지 저장/연동 조회/토큰 조회 등) 예외가 불필요한 환불 대상을 만들지 않게 한다.
-            if (credentialId == null || credentialId.isBlank()) {
-                if (UserRoleProvider.isSelfHostedEligible(userRole)) {
-                    return new AgentConfig(llmProvider != null ? llmProvider : "CLAUDE", null, tools, false);
-                }
-                if (isBetaEligible(userId)) {
-                    return new AgentConfig(llmProvider != null ? llmProvider : "CLAUDE", null, tools, true);
-                }
-                // 자격 없는 사용자가 키 없는 AI 노드를 실행하면 명시적 예외 — 복호화 단계의 NPE 방지
-                throw new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE);
-            }
-            String decryptedApiKey = credentialProvider.getDecryptedApiKey(credentialId, userId);
-            return new AgentConfig(llmProvider, decryptedApiKey, tools, false);
-        }
-
-        // AI 노드 없음 → fallbackCredentialId로 기본 설정 사용 (빈 워크플로우 채팅 시)
+        // 채팅 LLM은 워크플로우 노드를 보지 않는다(IEUM-BE-107): 요청 키 → 최근 등록 키 → self-hosted → 베타
+        // 여기서는 자격(eligibility) 판정만 한다 — 실제 쿼터 예약(INCR)은 agent 호출 직전(chat()/스트림 subscribe 직전)에서
+        // 수행해, 그 사이의 사전작업(메시지 저장/연동 조회/토큰 조회 등) 예외가 불필요한 환불 대상을 만들지 않게 한다.
         if (fallbackCredentialId == null) {
             List<Credential> credentials = credentialService.getByUserId(userId);
             if (credentials.isEmpty()) {
@@ -360,13 +314,13 @@ public class ChatService {
                 if (isBetaEligible(userId)) {
                     return new AgentConfig("CLAUDE", null, null, true);
                 }
-                throw new CustomException(ErrorCode.WORKFLOW_HAS_NO_AI_NODE);
+                throw new CustomException(ErrorCode.CHAT_CREDENTIAL_REQUIRED);
             }
             Credential defaultCredential = credentials.get(0);
             fallbackCredentialId = defaultCredential.getId();
             // 크레덴셜 ID는 남기지 않는다 — 자동 적용이 일어났다는 사실만으로 진단은 충분하고,
             // 식별자는 로그 수집기까지 따라간다.
-            log.info("[ChatService] AI 노드가 없고 fallbackCredentialId가 누락되어 사용자의 기본 크레덴셜을 자동 적용합니다.");
+            log.info("[ChatService] 요청 credentialId가 없어 사용자의 기본 크레덴셜을 자동 적용합니다.");
         }
         Credential credential = credentialService.getByIdAndUserId(fallbackCredentialId, userId);
         String decryptedApiKey = credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString(), userId);
