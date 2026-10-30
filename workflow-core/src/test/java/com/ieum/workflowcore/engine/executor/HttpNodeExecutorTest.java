@@ -435,48 +435,123 @@ class HttpNodeExecutorTest {
         assertThat(result.isSuccess()).isTrue();
     }
 
-    @Test
-    @DisplayName("3xx는 따라가지 않은 그대로 결과 — statusCode와 location을 낸다")
-    void redirect_isResultWithLocation() {
+    private static ResponseEntity<String> redirect(HttpStatus status, String location) {
         HttpHeaders headers = new HttpHeaders();
-        headers.setLocation(java.net.URI.create("http://169.254.169.254/latest/meta-data/"));
-        when(restTemplate.exchange(eq(URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class)))
-            .thenReturn(new ResponseEntity<>(null, headers, HttpStatus.FOUND));
+        headers.set(HttpHeaders.LOCATION, location);
+        return new ResponseEntity<>(null, headers, status);
+    }
+
+    private void stub(String url, HttpMethod method, ResponseEntity<String> response) {
+        when(restTemplate.exchange(eq(url), eq(method), any(HttpEntity.class), eq(String.class))).thenReturn(response);
+    }
+
+    @Test
+    @DisplayName("리다이렉트를 직접 따라가 최종 응답의 statusCode·body만 낸다 — 상대 Location은 현재 URL 기준")
+    void redirect_followedOnce() {
+        stub(URL, HttpMethod.GET, redirect(HttpStatus.FOUND, "/next"));
+        stub("http://203.0.113.10/next", HttpMethod.GET, new ResponseEntity<>("{\"ok\":true}", HttpStatus.OK));
 
         ExecutorResult result = executor.execute(httpNode(new HashMap<>()), Collections.emptyMap(), cursor());
 
         assertThat(result.isSuccess()).isTrue();
-        assertThat(result.getOutput())
-            .containsEntry("statusCode", 302)
-            .containsEntry("location", "http://169.254.169.254/latest/meta-data/");
+        assertThat(result.getOutput()).containsOnlyKeys("statusCode", "body").containsEntry("statusCode", 200);
+        assertThat(result.getOutput().get("body")).isEqualTo(Map.of("ok", true));
     }
 
     @Test
-    @DisplayName("3xx가 아니면 location을 싣지 않는다 — 기존 출력 모양 그대로")
-    void nonRedirect_hasNoLocation() {
+    @DisplayName("홉의 Location이 내부망이면 그 홉에서 호출 없이 실패한다")
+    void redirect_toPrivateIp_blocked() {
+        stub(URL, HttpMethod.GET, redirect(HttpStatus.FOUND, "http://169.254.169.254/latest/meta-data/"));
+
+        ExecutorResult result = executor.execute(httpNode(new HashMap<>()), Collections.emptyMap(), cursor());
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getErrorMessage()).contains("내부 네트워크 주소");
+        verify(restTemplate, times(1))
+            .exchange(any(String.class), any(HttpMethod.class), any(HttpEntity.class), eq(String.class));
+    }
+
+    @Test
+    @DisplayName("3xx가 4회 이어지면(따라가기 3회 초과) 마지막 Location을 담아 실패한다")
+    void redirect_moreThanThree_fails() {
+        stub(URL, HttpMethod.GET, redirect(HttpStatus.FOUND, "/a"));
+        stub("http://203.0.113.10/a", HttpMethod.GET, redirect(HttpStatus.FOUND, "/b"));
+        stub("http://203.0.113.10/b", HttpMethod.GET, redirect(HttpStatus.FOUND, "/c"));
+        stub("http://203.0.113.10/c", HttpMethod.GET, redirect(HttpStatus.FOUND, "/d"));
+
+        ExecutorResult result = executor.execute(httpNode(new HashMap<>()), Collections.emptyMap(), cursor());
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getFailureKind()).isEqualTo(FailureKind.CLIENT_ERROR);
+        assertThat(result.getErrorMessage()).contains("/d");
+        verify(restTemplate, times(4))
+            .exchange(any(String.class), any(HttpMethod.class), any(HttpEntity.class), eq(String.class));
+    }
+
+    @Test
+    @DisplayName("3xx 3회 뒤 200이면 성공한다 — 경계")
+    void redirect_exactlyThree_succeeds() {
+        stub(URL, HttpMethod.GET, redirect(HttpStatus.FOUND, "/a"));
+        stub("http://203.0.113.10/a", HttpMethod.GET, redirect(HttpStatus.FOUND, "/b"));
+        stub("http://203.0.113.10/b", HttpMethod.GET, redirect(HttpStatus.FOUND, "/c"));
+        stub("http://203.0.113.10/c", HttpMethod.GET, new ResponseEntity<>("{}", HttpStatus.OK));
+
+        ExecutorResult result = executor.execute(httpNode(new HashMap<>()), Collections.emptyMap(), cursor());
+
+        assertThat(result.isSuccess()).isTrue();
+    }
+
+    @Test
+    @DisplayName("POST에 303이면 다음 홉은 본문 없는 GET")
+    void redirect_303_becomesGet() {
+        stub(URL, HttpMethod.POST, redirect(HttpStatus.SEE_OTHER, "/done"));
+        stub("http://203.0.113.10/done", HttpMethod.GET, new ResponseEntity<>("{}", HttpStatus.OK));
+
+        ExecutorResult result = executor.execute(postNode(Map.of("a", 1)), Collections.emptyMap(), cursor());
+
+        assertThat(result.isSuccess()).isTrue();
+        ArgumentCaptor<HttpEntity> captor = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(eq("http://203.0.113.10/done"), eq(HttpMethod.GET), captor.capture(), eq(String.class));
+        assertThat(captor.getValue().getBody()).isNull();
+    }
+
+    @Test
+    @DisplayName("POST에 307이면 다음 홉도 같은 본문의 POST")
+    void redirect_307_keepsMethodAndBody() {
+        stub(URL, HttpMethod.POST, redirect(HttpStatus.TEMPORARY_REDIRECT, "/again"));
+        stub("http://203.0.113.10/again", HttpMethod.POST, new ResponseEntity<>("{}", HttpStatus.OK));
+
+        ExecutorResult result = executor.execute(postNode(Map.of("a", 1)), Collections.emptyMap(), cursor());
+
+        assertThat(result.isSuccess()).isTrue();
+        ArgumentCaptor<HttpEntity> captor = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(eq("http://203.0.113.10/again"), eq(HttpMethod.POST), captor.capture(), eq(String.class));
+        assertThat(captor.getValue().getBody()).isEqualTo("{\"a\":1}");
+    }
+
+    @Test
+    @DisplayName("Location 있는 201은 따라가지 않고 statusCode·body만 낸다")
+    void nonFollowable_isResultWithoutLocation() {
         HttpHeaders headers = new HttpHeaders();
         headers.set(HttpHeaders.LOCATION, "http://203.0.113.10/created/1");
-        when(restTemplate.exchange(eq(URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class)))
-            .thenReturn(new ResponseEntity<>("{}", headers, HttpStatus.CREATED));
+        stub(URL, HttpMethod.GET, new ResponseEntity<>("{}", headers, HttpStatus.CREATED));
 
         ExecutorResult result = executor.execute(httpNode(new HashMap<>()), Collections.emptyMap(), cursor());
 
-        assertThat(result.getOutput()).containsOnlyKeys("statusCode", "body");
+        assertThat(result.getOutput()).containsOnlyKeys("statusCode", "body").containsEntry("statusCode", 201);
+        verify(restTemplate, times(1))
+            .exchange(any(String.class), any(HttpMethod.class), any(HttpEntity.class), eq(String.class));
     }
 
     @Test
-    @DisplayName("비인코딩 Location(공백)도 3xx는 SUCCESS — location은 헤더 원문 그대로")
-    void redirect_unencodedLocation_isRawString() {
-        HttpHeaders headers = new HttpHeaders();
-        headers.set(HttpHeaders.LOCATION, "/search?q=a b");
-        when(restTemplate.exchange(eq(URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class)))
-            .thenReturn(new ResponseEntity<>(null, headers, HttpStatus.FOUND));
+    @DisplayName("파싱 안 되는 Location(공백)은 예외로 터지지 않고 그 홉에서 노드 실패")
+    void redirect_unparsableLocation_fails() {
+        stub(URL, HttpMethod.GET, redirect(HttpStatus.FOUND, "/search?q=a b"));
 
         ExecutorResult result = executor.execute(httpNode(new HashMap<>()), Collections.emptyMap(), cursor());
 
-        assertThat(result.isSuccess()).isTrue();
-        assertThat(result.getOutput())
-            .containsEntry("statusCode", 302)
-            .containsEntry("location", "/search?q=a b");
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getFailureKind()).isEqualTo(FailureKind.CLIENT_ERROR);
+        assertThat(result.getErrorMessage()).contains("/search?q=a b");
     }
 }

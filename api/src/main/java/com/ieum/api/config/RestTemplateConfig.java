@@ -40,8 +40,8 @@ public class RestTemplateConfig {
     /**
      * HTTP 노드 전용 (IEUM-BE-106). 사용자가 적은 주소를 부르므로 SSRF 경계다.
      * <ul>
-     *   <li>리다이렉트를 따라가지 않는다 — {@code HttpNodeExecutor.validateUrl}은 첫 호스트만 보므로, 따라가면 302 한 번으로
-     *       내부망·클라우드 메타데이터에 닿고 그 본문이 테스트 결과로 돌아온다. 3xx는 그대로 노드 결과다.</li>
+     *   <li>리다이렉트를 따라가지 않는다 — 클라이언트가 따라가면 {@code validateUrl} 없이 302 한 번으로 내부망·클라우드
+     *       메타데이터에 닿는다. {@code HttpNodeExecutor}가 매 홉 검사하며 최대 3회 직접 따라간다.</li>
      *   <li>응답 본문은 {@link HttpNodeExecutor#MAX_RESPONSE_BYTES}까지만 읽는다(오류 응답 본문 포함).</li>
      * </ul>
      */

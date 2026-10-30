@@ -17,9 +17,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
+import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.messaging.simp.SimpMessageSendingOperations;
+import org.springframework.messaging.simp.SimpMessageType;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Controller;
 import reactor.core.publisher.Flux;
@@ -66,12 +69,14 @@ public class WebSocketChatHandler {
      * @param workflowId 워크플로우 ID (경로 변수)
      * @param request    ChatRequest (message + optional sessionId)
      * @param principal  인증된 사용자 (name = userId)
+     * @param wsSessionId 요청한 STOMP 세션 — 바쁨 응답은 이 세션에만 보낸다
      */
     @MessageMapping("/chat/{workflowId}")
     public void handleChat(
         @DestinationVariable UUID workflowId,
         @Payload ChatRequest request,
-        Principal principal
+        Principal principal,
+        @Header(SimpMessageHeaderAccessor.SESSION_ID_HEADER) String wsSessionId
     ) {
         if (principal == null) {
             log.warn("[WS] 인증 정보(principal)가 없어 메시지를 처리할 수 없습니다 — workflowId: {}", workflowId);
@@ -96,7 +101,12 @@ public class WebSocketChatHandler {
             return;
         }
         if (!acquired) {
-            sendToUser(userName, ChatStreamResponse.error(TURN_BUSY_MESSAGE));
+            // 요청한 세션에만 — 사용자 전체로 보내면 진행 중인 다른 탭이 error 프레임을 받고 그 턴을 실패로 끝낸다.
+            SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
+            headers.setSessionId(wsSessionId);
+            headers.setLeaveMutable(true);
+            messagingTemplate.convertAndSendToUser(userName, USER_STREAM_DESTINATION,
+                ChatStreamResponse.error(TURN_BUSY_MESSAGE), headers.getMessageHeaders());
             return;
         }
 

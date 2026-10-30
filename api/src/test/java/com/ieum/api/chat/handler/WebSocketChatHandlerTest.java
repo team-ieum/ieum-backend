@@ -31,6 +31,7 @@ import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import java.security.Principal;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -42,6 +43,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.messaging.simp.SimpMessageSendingOperations;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -52,6 +54,7 @@ import reactor.test.StepVerifier;
 class WebSocketChatHandlerTest {
 
     private static final String DESTINATION = "/queue/chat/stream";
+    private static final String WS_SESSION = "ws-session-1";
     private static final String TEST_RESERVATION_KEY = "beta:calls:test-key";
 
     @Mock private ChatService chatService;
@@ -125,7 +128,7 @@ class WebSocketChatHandlerTest {
             ChatStreamEvent.done(agentResponse)
         );
 
-        handler.handleChat(workflowId, request, principal);
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
 
         // 3개 프레임 전송 완료까지 대기(done 프레임은 finalizeStream 후 전송됨)한 뒤 검증한다.
         List<ChatStreamResponse> sent = captureSent(3);
@@ -147,7 +150,7 @@ class WebSocketChatHandlerTest {
         given(chatService.reserveBetaQuota(setup.config(), userId)).willReturn(TEST_RESERVATION_KEY);
         mockChatStream(ChatStreamEvent.error("AI 응답 중 오류가 발생했습니다."));
 
-        handler.handleChat(workflowId, request, principal);
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
 
         List<ChatStreamResponse> sent = captureSent(1);
         assertThat(sent.get(0).getType()).isEqualTo(StreamType.ERROR);
@@ -166,7 +169,7 @@ class WebSocketChatHandlerTest {
         Mockito.doThrow(new CustomException(ErrorCode.BETA_QUOTA_EXCEEDED))
             .when(chatService).reserveBetaQuota(setup.config(), userId);
 
-        handler.handleChat(workflowId, request, principal);
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
 
         List<ChatStreamResponse> sent = captureSent(1);
         assertThat(sent.get(0).getType()).isEqualTo(StreamType.ERROR);
@@ -184,7 +187,7 @@ class WebSocketChatHandlerTest {
             .when(chatService).reserveBetaQuota(setup.config(), userId);
 
         // @MessageMapping 밖으로 예외가 탈출하면 이 호출 자체가 던지므로, 던지지 않는 것 자체가 핵심 단언이다.
-        handler.handleChat(workflowId, request, principal);
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
 
         List<ChatStreamResponse> sent = captureSent(1);
         assertThat(sent.get(0).getType()).isEqualTo(StreamType.ERROR);
@@ -204,7 +207,7 @@ class WebSocketChatHandlerTest {
             .willThrow(new CustomException(ErrorCode.INVALID_WORKFLOW, guidance));
         mockChatStream(ChatStreamEvent.done(agentResponse));
 
-        handler.handleChat(workflowId, request, principal);
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
 
         List<ChatStreamResponse> sent = captureSent(1);
         assertThat(sent.get(0).getType()).isEqualTo(StreamType.ERROR);
@@ -221,7 +224,7 @@ class WebSocketChatHandlerTest {
             .willThrow(new IllegalStateException("connection reset by peer"));
         mockChatStream(ChatStreamEvent.done(agentResponse));
 
-        handler.handleChat(workflowId, request, principal);
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
 
         List<ChatStreamResponse> sent = captureSent(1);
         assertThat(sent.get(0).getType()).isEqualTo(StreamType.ERROR);
@@ -235,11 +238,17 @@ class WebSocketChatHandlerTest {
     void turnBusy_sendsWaitMessageOnly() {
         given(chatTurnLock.tryAcquire(userId)).willReturn(false);
 
-        handler.handleChat(workflowId, request, principal);
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
 
-        List<ChatStreamResponse> sent = captureSent(1);
-        assertThat(sent.get(0).getType()).isEqualTo(StreamType.ERROR);
-        assertThat(sent.get(0).getContent()).isEqualTo("이전 응답을 기다리는 중입니다. 잠시 후 다시 보내 주세요.");
+        // 요청한 STOMP 세션에만 보낸다 — 사용자 전체로 보내면 진행 중인 다른 탭의 턴이 error로 끝난다.
+        ArgumentCaptor<ChatStreamResponse> sentCaptor = ArgumentCaptor.forClass(ChatStreamResponse.class);
+        @SuppressWarnings("rawtypes") ArgumentCaptor<Map> headersCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(messagingTemplate).convertAndSendToUser(
+            eq(userId.toString()), eq(DESTINATION), sentCaptor.capture(), headersCaptor.capture());
+        verify(messagingTemplate, never()).convertAndSendToUser(any(), any(), any(ChatStreamResponse.class));
+        assertThat(SimpMessageHeaderAccessor.getSessionId(headersCaptor.getValue())).isEqualTo(WS_SESSION);
+        assertThat(sentCaptor.getValue().getType()).isEqualTo(StreamType.ERROR);
+        assertThat(sentCaptor.getValue().getContent()).isEqualTo("이전 응답을 기다리는 중입니다. 잠시 후 다시 보내 주세요.");
         verifyNoInteractions(chatService, agentClient, delegationTokenService);
         verify(chatTurnLock, never()).release(any());
     }
@@ -249,7 +258,7 @@ class WebSocketChatHandlerTest {
     void turnLockFailure_sendsGenericError() {
         given(chatTurnLock.tryAcquire(userId)).willThrow(new RuntimeException("RedisConnectionFailureException"));
 
-        handler.handleChat(workflowId, request, principal);
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
 
         List<ChatStreamResponse> sent = captureSent(1);
         assertThat(sent.get(0).getContent()).isEqualTo("서버 오류가 발생했습니다.");
@@ -266,7 +275,7 @@ class WebSocketChatHandlerTest {
             .willReturn(mock(ChatResponse.class));
         mockChatStream(ChatStreamEvent.done(agentResponse));
 
-        handler.handleChat(workflowId, request, principal);
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
 
         verify(chatTurnLock, timeout(2000)).release(userId);
         // role은 WS Principal authority 문자열 그대로(접두사 포함) — 필터가 SimpleGrantedAuthority에 그대로 넣는다.
@@ -287,7 +296,7 @@ class WebSocketChatHandlerTest {
         given(delegationTokenService.issue(userId, "ROLE_USER", workflowId)).willReturn("deleg-raw");
         mockChatStream(ChatStreamEvent.error("AI 응답 중 오류가 발생했습니다."));
 
-        handler.handleChat(workflowId, request, principal);
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
 
         verify(chatTurnLock, timeout(2000)).release(userId);
         verify(delegationTokenService).revoke("deleg-raw");
@@ -300,7 +309,7 @@ class WebSocketChatHandlerTest {
         given(delegationTokenService.issue(userId, "ROLE_USER", workflowId)).willReturn("deleg-raw");
         given(agentClient.chatStream(any())).willReturn(Flux.never());
 
-        handler.handleChat(workflowId, request, principal);
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
 
         verify(chatTurnLock, never()).release(any());
         verify(delegationTokenService, never()).revoke(any());
@@ -313,7 +322,7 @@ class WebSocketChatHandlerTest {
         given(chatService.prepareStream(eq(workflowId), eq(userId), eq("ROLE_USER"), eq(request)))
             .willThrow(new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
 
-        handler.handleChat(workflowId, request, principal);
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
 
         captureSent(1);
         verify(chatTurnLock).release(userId);
@@ -327,7 +336,7 @@ class WebSocketChatHandlerTest {
         Mockito.doThrow(new CustomException(ErrorCode.BETA_QUOTA_EXCEEDED))
             .when(chatService).reserveBetaQuota(setup.config(), userId);
 
-        handler.handleChat(workflowId, request, principal);
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
 
         captureSent(1);
         verify(chatTurnLock).release(userId);
@@ -342,7 +351,7 @@ class WebSocketChatHandlerTest {
         given(delegationTokenService.issue(userId, "ROLE_USER", workflowId))
             .willThrow(new RuntimeException("RedisConnectionFailureException"));
 
-        handler.handleChat(workflowId, request, principal);
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
 
         List<ChatStreamResponse> sent = captureSent(1);
         assertThat(sent.get(0).getContent()).isEqualTo("서버 오류가 발생했습니다.");
@@ -359,7 +368,7 @@ class WebSocketChatHandlerTest {
         given(chatService.prepareStream(eq(workflowId), eq(userId), Mockito.isNull(), eq(request))).willReturn(setup);
         given(chatService.reserveBetaQuota(setup.config(), userId)).willReturn(TEST_RESERVATION_KEY);
 
-        handler.handleChat(workflowId, request, noRole);
+        handler.handleChat(workflowId, request, noRole, WS_SESSION);
 
         captureSent(1);
         verify(chatService).releaseBetaQuotaOnFailure(TEST_RESERVATION_KEY);

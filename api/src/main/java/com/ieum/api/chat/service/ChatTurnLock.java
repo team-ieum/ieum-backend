@@ -17,7 +17,7 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class ChatTurnLock {
 
-    /** 설정 단계 + 스트림 570초 + DONE 저장보다 길게 — 해제가 유실돼도(프로세스 종료) 11분 뒤 풀린다. */
+    /** 스트림 570초({@code AgentClient.CHAT_STREAM_TIMEOUT})에 설정·저장 여유 90초 — 해제가 유실돼도(프로세스 종료) 11분 뒤 풀린다. */
     static final Duration TTL = Duration.ofSeconds(660);
 
     private final StringRedisTemplate redisTemplate;
@@ -27,9 +27,9 @@ public class ChatTurnLock {
         return Boolean.TRUE.equals(redisTemplate.opsForValue().setIfAbsent(key(userId), "1", TTL));
     }
 
-    // ponytail: 소유자 확인 없는 DEL. 보유 시간 = 설정 단계(Google 토큰 갱신 최대 40초) + 스트림 570초 + DONE 저장 < TTL 660초라
-    // 정상 턴은 TTL 전에 풀린다. 저장이 50초 넘게 걸리는 예외 상황에서만 한 턴이 겹칠 수 있다(빈도 제한일 뿐 데이터 손상 없음).
-    // 문제가 되면 값에 턴 id를 넣고 Lua로 비교 삭제한다.
+    // ponytail: 소유자 확인 없는 DEL. 보유 시간 = 설정 단계(Google·GitHub 토큰 갱신) + 스트림 570초 + DONE 저장(verifyAccess 포함).
+    // 정상 턴은 TTL 660초 전에 풀리지만, 토큰 갱신·저장이 함께 90초 넘게 늘어지면 TTL이 먼저 끝나 최악의 경우 한 턴이 겹칠 수 있다
+    // (빈도 제한일 뿐 데이터 손상 없음). 문제가 되면 값에 턴 id를 넣고 Lua로 비교 삭제한다.
     public void release(UUID userId) {
         redisTemplate.delete(key(userId));
     }

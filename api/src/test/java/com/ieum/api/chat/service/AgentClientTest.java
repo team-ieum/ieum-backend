@@ -299,4 +299,11 @@ class AgentClientTest {
             logger.detachAppender(appender);
         }
     }
+
+    @Test
+    @DisplayName("스트림 상한 570초는 동시 턴 락 TTL보다 짧다 — 거꾸로면 진행 중인 턴의 락이 먼저 풀린다")
+    void chatStreamTimeout_isShorterThanTurnLockTtl() {
+        assertThat(AgentClient.CHAT_STREAM_TIMEOUT).isEqualTo(Duration.ofSeconds(570));
+        assertThat(AgentClient.CHAT_STREAM_TIMEOUT).isLessThan(ChatTurnLock.TTL);
+    }
 }

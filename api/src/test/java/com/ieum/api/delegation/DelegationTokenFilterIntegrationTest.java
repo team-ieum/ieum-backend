@@ -43,7 +43,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import(NoRedisTestConfig.class)
-@TestPropertySource(properties = "aes.secret-key=ieum-test-secret-key-32bytes-ok!")
+@TestPropertySource(properties = {"aes.secret-key=ieum-test-secret-key-32bytes-ok!", "ieum.agent.internal-token="})
 class DelegationTokenFilterIntegrationTest {
 
     private static final String HEADER = "X-Delegation-Token";
@@ -157,5 +157,12 @@ class DelegationTokenFilterIntegrationTest {
             .andExpect(status().isUnauthorized());
 
         verifyNoInteractions(oauthConnectionService);
+    }
+
+    @Test
+    @DisplayName("internal-token 미설정이면 X-Internal-Token 없이도 기존대로 통과")
+    void internalTokenUnset_noHeaderNeeded() throws Exception {
+        mockMvc.perform(get("/api/v1/oauth/connections").header(HEADER, TOKEN).header("X-Internal-Token", "anything"))
+            .andExpect(status().isOk());
     }
 }

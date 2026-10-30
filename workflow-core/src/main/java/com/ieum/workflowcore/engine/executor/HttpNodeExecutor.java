@@ -15,6 +15,7 @@ import java.net.InetAddress;
 import java.net.URI;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -57,12 +58,16 @@ public class HttpNodeExecutor implements NodeExecutor {
 
     private static final String IDEMPOTENCY_HEADER = "Idempotency-Key";
 
+    /** 실행기가 직접 따라가는 리다이렉트 최대 횟수 — 넘으면 노드 실패. */
+    static final int MAX_REDIRECTS = 3;
+    private static final Set<Integer> REDIRECT_STATUSES = Set.of(301, 302, 303, 307, 308);
+
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
     private final IdempotencyStore idempotencyStore;
     private final WebhookCredentialProvider webhookCredentialProvider;
 
-    /** {@code httpNodeRestTemplate} — 리다이렉트를 따라가지 않고 본문을 1MB까지만 읽는 HTTP 노드 전용 클라이언트(IEUM-BE-106). */
+    /** {@code httpNodeRestTemplate} — 리다이렉트를 따라가지 않고(실행기가 매 홉 검사하며 직접 따라간다) 본문을 1MB까지만 읽는 HTTP 노드 전용 클라이언트(IEUM-BE-106). */
     public HttpNodeExecutor(@Qualifier("httpNodeRestTemplate") RestTemplate restTemplate, ObjectMapper objectMapper,
                             IdempotencyStore idempotencyStore, WebhookCredentialProvider webhookCredentialProvider) {
         this.restTemplate = restTemplate;
@@ -164,15 +169,34 @@ public class HttpNodeExecutor implements NodeExecutor {
 
             ResponseEntity<String> response = sendRequest(method, url, httpHeaders, bodyJson);
 
+            // 리다이렉트는 클라이언트(DONT_FOLLOW)가 아니라 여기서 따라간다 — 매 홉 validateUrl을 다시 돌아
+            // 302 한 번으로 내부망에 닿지 못하게 한다(IEUM-BE-106). 301·302·303은 GET·본문 없음, 307·308은 그대로.
+            for (int hops = 0; ; hops++) {
+                int status = response.getStatusCode().value();
+                String location = response.getHeaders().getFirst(HttpHeaders.LOCATION);
+                if (!REDIRECT_STATUSES.contains(status) || location == null) {
+                    break;
+                }
+                if (hops == MAX_REDIRECTS) {
+                    throw new IllegalArgumentException(
+                        "리다이렉트가 " + MAX_REDIRECTS + "회를 넘었습니다 — 마지막 Location: " + location);
+                }
+                try {
+                    url = URI.create(url).resolve(location).toString();
+                } catch (IllegalArgumentException e) {
+                    throw new IllegalArgumentException("리다이렉트 Location 형식이 올바르지 않습니다: " + location);
+                }
+                validateUrl(url);
+                if (status <= 303) {
+                    method = "GET";
+                    bodyJson = null;
+                }
+                response = sendRequest(method, url, httpHeaders, bodyJson);
+            }
+
             Map<String, Object> output = new HashMap<>();
             output.put("statusCode", response.getStatusCode().value());
             output.put("body", parseBody(response.getBody()));
-            // 리다이렉트는 따라가지 않는다 — 3xx는 그대로 결과이고, 갈 곳은 location으로 보여 준다(IEUM-BE-106).
-            // 원문 문자열 그대로 — getLocation()은 URI 파싱이라 공백 등 비인코딩 값에서 예외가 나 정상 3xx가 FAILED 된다.
-            String location = response.getHeaders().getFirst(HttpHeaders.LOCATION);
-            if (response.getStatusCode().is3xxRedirection() && location != null) {
-                output.put("location", location);
-            }
 
             log.info("[HttpExecutor] 응답 수신 — status: {}", response.getStatusCode().value());
             return ExecutorResult.success(output, System.currentTimeMillis() - startTime);
@@ -226,7 +250,7 @@ public class HttpNodeExecutor implements NodeExecutor {
     /**
      * SSRF 방어: 루프백·사이트로컬·링크로컬 등 내부 네트워크 주소 차단.
      * AWS 메타데이터(169.254.169.254), localhost, 10.x/172.16-31.x/192.168.x, CGNAT 100.64.0.0/10,
-     * IPv6 ULA fc00::/7을 포함한다. 첫 호스트만 본다 — 리다이렉트는 클라이언트가 따라가지 않는다(IEUM-BE-106).
+     * IPv6 ULA fc00::/7을 포함한다. 리다이렉트 홉마다 다시 부른다(IEUM-BE-106).
      * DNS 재조회(rebinding)는 막지 않는다(운영 IMDSv2 필수·hop limit 1로 갈음).
      */
     private void validateUrl(String url) {
