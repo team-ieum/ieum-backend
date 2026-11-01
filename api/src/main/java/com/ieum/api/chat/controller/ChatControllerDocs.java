@@ -19,7 +19,7 @@ public interface ChatControllerDocs {
 
     @Operation(
         summary = "채팅 메시지 전송",
-        description = "워크플로우의 AI 노드에 메시지를 전송하고 응답을 받습니다. "
+        description = "워크플로우 채팅 메시지를 전송하고 응답을 받습니다. "
             + "sessionId를 생략하면 새 세션이 자동 생성됩니다."
     )
     @PreAuthorize("hasRole('USER')")

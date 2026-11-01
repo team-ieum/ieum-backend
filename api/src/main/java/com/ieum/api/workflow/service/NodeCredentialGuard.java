@@ -26,8 +26,8 @@ public final class NodeCredentialGuard {
     /**
      * config의 credentialId가 소유 목록에 없으면 400으로 거부한다.
      *
-     * <p>검사 대상은 {@code credentialId} 키의 문자열 값뿐이다. 빈 값은 통과시킨다 — agent가 자리만
-     * 만들고 비워 보내면 {@code ChatService}가 서버가 고른 크레덴셜을 채운다.
+     * <p>검사 대상은 {@code credentialId} 키의 문자열 값뿐이다. 빈 값은 통과시킨다 — 빌더는 사용자가
+     * 모델 카드를 고를 때까지 키를 비워 둔다(agent IEUM-AI-85). 빈 키는 복호화하지 않는다.
      *
      * <p>비교 전에 값을 다듬는다(trim + 소문자). UUID 표기는 대소문자를 가리지 않아
      * {@code UUID.fromString}은 대문자 표기도 같은 크레덴셜로 읽는데, 여기서 문자열을 그대로 맞대면

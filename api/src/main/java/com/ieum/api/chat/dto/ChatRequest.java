@@ -43,9 +43,8 @@ public class ChatRequest {
     private UUID sessionId;
 
     /**
-     * AI 노드가 없는 워크플로우(빈 워크플로우)에서 채팅 시작 시 사용할 Credential ID.
-     * 워크플로우에 AI 노드가 이미 있으면 해당 노드의 설정을 우선 사용하고,
-     * AI 노드가 없을 때만 이 값으로 fallback한다.
+     * 채팅 LLM에 쓸 내 AI 키 ID(선택). 없으면 최근 등록 키 → self-hosted/베타.
+     * 워크플로우 노드 설정은 보지 않는다.
      */
     private UUID credentialId;
 }

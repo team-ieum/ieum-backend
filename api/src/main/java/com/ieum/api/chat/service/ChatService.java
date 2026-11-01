@@ -498,21 +498,21 @@ public class ChatService {
     /**
      * AI가 생성/수정한 노드/엣지를 JSON으로 직렬화하여 새 워크플로우 버전으로 저장한다.
      *
-     * <p>agent가 생성한 AI 노드에는 credentialId가 없으므로,
-     * agentConfig/fallbackCredentialId를 기반으로 AI 노드 config에 주입한다.
+     * <p>AI 노드의 키·제공사·모델은 빌더가 함께 쓴다(IEUM-AI-85) — 여기서 채우지 않는다.
      *
      * <p>여기가 agent 경로의 유일한 저장 지점이다 — {@link #chat}(블로킹)과 {@link #finalizeStream}
      * (스트리밍) 둘 다 이 메서드를 거쳐 {@code WorkflowCrudService.saveAgentVersion}으로 간다. 그
      * 아래는 JSON 문자열만 받으므로 노드 단위 검사는 여기가 마지막 지점이다(IEUM-BE-62 Task 4).
      *
+     * @param agentConfig          쓰지 않음(BE-106 후속 정리에서 삭제)
+     * @param fallbackCredentialId 쓰지 않음(BE-106 후속 정리에서 삭제)
      * @return 저장한 파생 노드(type은 event가 정한 값)
      */
-    @SuppressWarnings("unchecked")
     private List<Map<String, Object>> saveWorkflowVersion(UUID workflowId, ChatAgentResponse agentResponse,
             AgentConfig agentConfig, UUID fallbackCredentialId, UUID userId) {
         try {
             // agent 노드도 REST와 같은 파생을 거친다(IEUM-BE-92). 모르는 event면 CustomException이 나서 WS error·REST 400이 된다.
-            // 아래 주입·가드는 모두 파생된 Map(type은 event가 정한 값, config는 변경 가능한 사본)에 돈다.
+            // 아래 가드는 모두 파생된 Map(type은 event가 정한 값, config는 변경 가능한 사본)에 돈다.
             List<Map<String, Object>> nodes = nodeDerivation.deriveAll(objectMapper.convertValue(
                 agentResponse.getNodes(), new TypeReference<>() {}));
 
@@ -521,41 +521,13 @@ public class ChatService {
                 .map(credential -> credential.getId().toString())
                 .collect(Collectors.toSet());
 
-            // AI 노드에 credentialId / llmProvider 주입 (agent가 생성 시 누락하는 경우 보완)
             for (Map<String, Object> node : nodes) {
                 // agent가 만든 정의도 REST 생성·수정과 같은 웹훅 URL 원문 검사를 받는다. agent에는
                 // webhookCredentialId 목록만 주고 URL은 주지 않지만(resolveAvailableWebhooks),
                 // 사용자가 프롬프트에 URL을 그대로 적으면 그 값이 노드 config로 돌아올 수 있다.
                 RawWebhookUrlGuard.rejectRawWebhookUrl(node.get("config"));
 
-                // 파생 type 기준 — agent가 보낸 type이 아니다
-                String nodeType = (String) node.get("type");
-                if ("AI".equals(nodeType)) {
-                    Map<String, Object> config = (Map<String, Object>) node.get("config");
-                    if (config != null) {
-                        String existingCredentialId = (String) config.get("credentialId");
-                        if ((existingCredentialId == null || existingCredentialId.isBlank())
-                                && fallbackCredentialId != null) {
-                            config.put("credentialId", fallbackCredentialId.toString());
-                            // 크레덴셜 식별자는 남기지 않는다 — 어느 노드에 주입이 일어났는지만 있으면
-                            // "AI 노드인데 키가 비어 왔다"는 진단에 충분하다.
-                            log.info("[ChatService] AI 노드에 기본 credentialId를 주입했습니다 — nodeId: {}",
-                                node.get("id"));
-                        }
-                        String existingProvider = (String) config.get("llmProvider");
-                        if ((existingProvider == null || existingProvider.isBlank())
-                                && agentConfig.llmProvider() != null) {
-                            config.put("llmProvider", agentConfig.llmProvider());
-                        }
-                    }
-                }
-
-                // credentialId 소유 검사는 위 fallback 주입보다 **뒤**다 (IEUM-BE-64 Task 2 수정).
-                // 주입값 fallbackCredentialId는 서버가 고른 값이 아니라 요청 본문의 credentialId
-                // 원본이고(chat: request.getCredentialId(), 스트리밍도 같은 값이 흘러온다),
-                // resolveAgentConfig의 소유 검증(getByIdAndUserId)은 "AI 노드 없음" 분기에서만
-                // 일어난다. 주입 전에 검사하면 AI 노드가 있는 워크플로우에서 남의 UUID가 무검사로
-                // 저장된다. 주입 뒤에 보면 agent가 실어 보낸 값과 주입값을 한 번에 판정한다.
+                // agent가 실어 보낸 credentialId도 소유 검사를 받는다(IEUM-BE-64).
                 NodeCredentialGuard.rejectForeignCredentialId(node.get("config"), ownedCredentialIds);
                 // 참조를 건너뛰고 원문을 config에 박는 길도 막는다 — 사용자가 프롬프트에 API 키를
                 // 그대로 적으면 그 값이 노드 config로 돌아올 수 있다.
@@ -781,6 +753,7 @@ public class ChatService {
      *
      * <p>소유권은 {@link #prepareStream} 시점에 이미 검증되었으므로 재검증하지 않는다.
      *
+     * @param fallbackCredentialId 저장에는 쓰지 않음(BE-106 후속 정리에서 삭제)
      * @return 프론트로 전달할 최종 응답 DTO
      */
     @Transactional

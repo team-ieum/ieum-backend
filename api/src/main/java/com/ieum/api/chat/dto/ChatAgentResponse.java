@@ -54,8 +54,8 @@ public class ChatAgentResponse {
     private List<AgentAction> actions;
 
     /**
-     * 사용자가 고를 수 있는 선택지 목록 (예: GitHub repo, 웹훅).
-     * type이 CLARIFICATION_NEEDED일 때 채워진다.
+     * 사용자가 고를 수 있는 선택지 목록 (예: GitHub repo, 웹훅, 빌더 모델 카드).
+     * CLARIFICATION_NEEDED뿐 아니라 빌더 모델 카드는 어느 type에도 실릴 수 있다.
      */
     private List<AgentOption> options;
 
