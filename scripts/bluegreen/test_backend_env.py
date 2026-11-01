@@ -84,6 +84,17 @@ class BuildEnvironmentTest(unittest.TestCase):
                     self.assertEqual(self.assert_rejected(secret_payload(values)).code,
                                      'missing_required_configuration')
 
+    def test_latest_dev_integrations_fail_before_deploy_if_configuration_is_missing(self):
+        for key in ('SLACK_CLIENT_ID', 'SLACK_CLIENT_SECRET', 'SLACK_REDIRECT_URI',
+                    'SLACK_FRONTEND_REDIRECT_URI', 'DISCORD_CLIENT_ID', 'DISCORD_CLIENT_SECRET',
+                    'DISCORD_BOT_TOKEN', 'DISCORD_REDIRECT_URI', 'DISCORD_FRONTEND_REDIRECT_URI',
+                    'AGENT_INTERNAL_TOKEN'):
+            with self.subTest(key=key):
+                values = valid_env()
+                values.pop(key, None)
+                self.assertEqual(self.assert_rejected(secret_payload(values)).code,
+                                 'missing_required_configuration')
+
     def test_unprefixed_individual_values_and_old_blob_are_not_fallbacks(self):
         values = valid_env()
         values['BACKEND_ENV'] = 'DB_PASSWORD=' + SECRET

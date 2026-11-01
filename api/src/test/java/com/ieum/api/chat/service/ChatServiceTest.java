@@ -1,5 +1,9 @@
 package com.ieum.api.chat.service;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.chat.dto.AgentResponseType;
@@ -22,8 +26,6 @@ import com.ieum.workflowcore.chat.domain.ChatSession;
 import com.ieum.workflowcore.chat.domain.MessageType;
 import com.ieum.workflowcore.chat.repository.ChatMessageRepository;
 import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
-import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
-import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.executor.BetaPlatformProvider;
 import com.ieum.workflowcore.engine.executor.CredentialProvider;
@@ -31,7 +33,6 @@ import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
 import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
 import com.ieum.workflowcore.engine.executor.NotionTokenProvider;
 import com.ieum.workflowcore.service.WorkflowCrudService;
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -40,12 +41,15 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Answers;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -54,6 +58,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -178,27 +183,55 @@ class ChatServiceTest {
     // ─────────────────── resolveAgentConfig ────────────────────────────────
 
     @Test
-    @DisplayName("AI 노드가 없는 워크플로우는 WORKFLOW_HAS_NO_AI_NODE 예외")
-    void resolveAgentConfig_noAiNode_throwsException() {
-        WorkflowVersion version = buildVersionWithNodesJson("[]");
-        given(workflowCrudService.findLatestVersion(workflowId))
-            .willReturn(Optional.of(version));
+    @DisplayName("키가 하나도 없고 self-hosted·베타 자격도 없으면 CHAT_CREDENTIAL_REQUIRED 예외")
+    void resolveAgentConfig_noCredential_notEligible_throwsChatCredentialRequired() {
         given(credentialService.getByUserId(userId))
             .willReturn(List.of());
 
         assertThatThrownBy(() ->
             chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER")
         ).isInstanceOf(CustomException.class)
-            .hasMessageContaining(ErrorCode.WORKFLOW_HAS_NO_AI_NODE.getMessage());
+            .hasMessageContaining(ErrorCode.CHAT_CREDENTIAL_REQUIRED.getMessage());
+    }
+
+    @Test
+    @DisplayName("키가 빈 AI 노드가 있어도 ROLE_USER는 최근 등록 키로 채팅한다 — 노드를 보지 않는다")
+    void resolveAgentConfig_ignoresWorkflowAiNode_usesLatestCredential() {
+        UUID latest = UUID.randomUUID();
+        Credential credential = Mockito.mock(Credential.class);
+        given(credential.getId()).willReturn(latest);
+        given(credential.getProvider()).willReturn(AiProvider.OPENAI);
+        given(credentialService.getByUserId(userId)).willReturn(List.of(credential));
+        given(credentialService.getByIdAndUserId(latest, userId)).willReturn(credential);
+        given(credentialProvider.getDecryptedApiKey(latest.toString(), userId)).willReturn("k");
+
+        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER");
+
+        assertThat(result.llmProvider()).isEqualTo("OPENAI");
+        assertThat(result.decryptedApiKey()).isEqualTo("k");
+        assertThat(result.tools()).isNull();
+        assertThat(result.useBetaPlatformKey()).isFalse();
+        verify(betaPlatformProvider, never()).isBetaEligible(any());
+        verify(workflowCrudService, never()).findLatestVersion(any());
+        verify(workflowCrudService, never()).loadDefinition(any());
+    }
+
+    @Test
+    @DisplayName("요청 credentialId가 남의 것이면 소유 검증에서 막힌다")
+    void resolveAgentConfig_foreignRequestCredential_rejected() {
+        UUID foreign = UUID.randomUUID();
+        given(credentialService.getByIdAndUserId(foreign, userId))
+            .willThrow(new CustomException(ErrorCode.NOT_FOUND));
+
+        assertThatThrownBy(() -> chatService.resolveAgentConfig(workflowId, userId, foreign, "ROLE_USER"))
+            .isInstanceOf(CustomException.class)
+            .satisfies(e -> assertThat(((CustomException) e).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+        verify(credentialProvider, never()).getDecryptedApiKey(any(), any());
     }
 
     @Test
     @DisplayName("크레덴셜이 없어도 ROLE_TESTER는 키 없는 AgentConfig로 채팅할 수 있다 (자체 호스팅 LLM 경로)")
     void resolveAgentConfig_noCredential_selfHostedEligible() {
-        WorkflowVersion version = buildVersionWithNodesJson("[]");
-
-        given(workflowCrudService.findLatestVersion(workflowId))
-            .willReturn(Optional.of(version));
         given(credentialService.getByUserId(userId))
             .willReturn(List.of());
 
@@ -209,60 +242,8 @@ class ChatServiceTest {
     }
 
     @Test
-    @DisplayName("AI 노드의 credentialId가 비어 있어도 ROLE_TESTER는 노드의 llmProvider로 키 없는 AgentConfig를 반환한다")
-    void resolveAgentConfig_aiNodeBlankCredential_selfHostedEligible() {
-        WorkflowVersion version = buildVersionWithNodesJson(
-            "[{\"id\":\"n1\",\"type\":\"AI\",\"label\":\"ai\","
-                + "\"config\":{\"llmProvider\":\"OPENAI\",\"credentialId\":\"\"}}]");
-        given(workflowCrudService.findLatestVersion(workflowId))
-            .willReturn(Optional.of(version));
-
-        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_TESTER");
-
-        assertThat(result.llmProvider()).isEqualTo("OPENAI");
-        assertThat(result.decryptedApiKey()).isNull();
-    }
-
-    @Test
-    @DisplayName("AI 노드의 credentialId가 비어 있고 자격 없는 ROLE_USER면 WORKFLOW_HAS_NO_AI_NODE 예외")
-    void resolveAgentConfig_aiNodeBlankCredential_notEligible_throwsException() {
-        WorkflowVersion version = buildVersionWithNodesJson(
-            "[{\"id\":\"n1\",\"type\":\"AI\",\"label\":\"ai\","
-                + "\"config\":{\"llmProvider\":\"OPENAI\",\"credentialId\":\"\"}}]");
-        given(workflowCrudService.findLatestVersion(workflowId))
-            .willReturn(Optional.of(version));
-
-        assertThatThrownBy(() ->
-            chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER")
-        ).isInstanceOf(CustomException.class)
-            .hasMessageContaining(ErrorCode.WORKFLOW_HAS_NO_AI_NODE.getMessage());
-    }
-
-    @Test
-    @DisplayName("AI 노드의 credentialId가 비어 있고 self-hosted 자격은 없어도 베타 자격이면 platform 키 자격만 표시한다 (INCR 없음)")
-    void resolveAgentConfig_aiNodeBlankCredential_betaEligible() {
-        WorkflowVersion version = buildVersionWithNodesJson(
-            "[{\"id\":\"n1\",\"type\":\"AI\",\"label\":\"ai\","
-                + "\"config\":{\"llmProvider\":\"OPENAI\",\"credentialId\":\"\"}}]");
-        given(workflowCrudService.findLatestVersion(workflowId))
-            .willReturn(Optional.of(version));
-        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
-
-        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER");
-
-        assertThat(result.llmProvider()).isEqualTo("OPENAI");
-        assertThat(result.decryptedApiKey()).isNull();
-        assertThat(result.useBetaPlatformKey()).isTrue();
-        // 쿼터 예약(INCR)은 agent 호출 직전(chat()/reserveBetaQuota)에서만 한다 — resolveAgentConfig는 자격만 판정
-        verify(betaPlatformProvider, never()).reserveQuota(any());
-    }
-
-    @Test
-    @DisplayName("AI 노드가 없고 크레덴셜도 없지만 베타 자격이면 platform 키 자격만 표시한다 (INCR 없음)")
+    @DisplayName("크레덴셜이 없지만 베타 자격이면 platform 키 자격만 표시한다 (INCR 없음)")
     void resolveAgentConfig_noCredential_betaEligible() {
-        WorkflowVersion version = buildVersionWithNodesJson("[]");
-        given(workflowCrudService.findLatestVersion(workflowId))
-            .willReturn(Optional.of(version));
         given(credentialService.getByUserId(userId))
             .willReturn(List.of());
         given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
@@ -276,32 +257,11 @@ class ChatServiceTest {
     }
 
     @Test
-    @DisplayName("credentialId(BYOK)가 있으면 베타 자격이어도 platform 미적용, betaPlatformProvider 미호출")
-    void resolveAgentConfig_credentialPresent_ignoresBetaEligibility() {
-        WorkflowVersion version = buildVersionWithNodesJson(
-            "[{\"id\":\"n1\",\"type\":\"AI\",\"label\":\"ai\","
-                + "\"config\":{\"llmProvider\":\"OPENAI\",\"credentialId\":\"cred-1\"}}]");
-        given(workflowCrudService.findLatestVersion(workflowId))
-            .willReturn(Optional.of(version));
-        given(credentialProvider.getDecryptedApiKey("cred-1", userId)).willReturn("decrypted-key");
-
-        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER");
-
-        assertThat(result.decryptedApiKey()).isEqualTo("decrypted-key");
-        assertThat(result.useBetaPlatformKey()).isFalse();
-        verify(betaPlatformProvider, never()).isBetaEligible(any());
-        verify(betaPlatformProvider, never()).reserveQuota(any());
-    }
-
-    @Test
-    @DisplayName("AI 노드가 없고 fallbackCredentialId가 null일 때, 등록된 크레덴셜이 있으면 자동으로 사용하여 AgentConfig를 반환한다")
-    void resolveAgentConfig_noAiNode_autoFallbackToUserCredential() {
-        WorkflowVersion version = buildVersionWithNodesJson("[]");
+    @DisplayName("요청 credentialId가 null이고 등록된 크레덴셜이 있으면 그 키로 AgentConfig를 반환한다")
+    void resolveAgentConfig_noRequestCredential_autoFallbackToUserCredential() {
         UUID autoCredentialId = UUID.randomUUID();
         Credential credential = Mockito.mock(Credential.class);
 
-        given(workflowCrudService.findLatestVersion(workflowId))
-            .willReturn(Optional.of(version));
         given(credential.getId()).willReturn(autoCredentialId);
         given(credential.getProvider()).willReturn(AiProvider.CLAUDE);
         given(credentialService.getByUserId(userId))
@@ -326,13 +286,10 @@ class ChatServiceTest {
 
         ChatSession session = buildSession(workflowId, userId);
         ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "워크플로우를 생성했습니다");
-        WorkflowVersion version = Mockito.mock(WorkflowVersion.class);
         Credential credential = Mockito.mock(Credential.class);
 
         given(credential.getProvider()).willReturn(AiProvider.CLAUDE);
         given(sessionRepository.save(any())).willReturn(session);
-        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
-        given(workflowCrudService.loadDefinition(version)).willReturn(buildDoc(List.of()));
         given(credentialService.getByIdAndUserId(fallbackCredentialId, userId)).willReturn(credential);
         given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString(), userId)).willReturn("test-api-key");
         given(integrationContextService.resolve(userId))
@@ -354,13 +311,10 @@ class ChatServiceTest {
 
         ChatSession session = buildSession(workflowId, userId);
         ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "수정했습니다");
-        WorkflowVersion version = Mockito.mock(WorkflowVersion.class);
         Credential credential = Mockito.mock(Credential.class);
 
         given(credential.getProvider()).willReturn(AiProvider.CLAUDE);
         given(sessionRepository.save(any())).willReturn(session);
-        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
-        given(workflowCrudService.loadDefinition(version)).willReturn(buildDoc(List.of()));
         given(credentialService.getByIdAndUserId(fallbackCredentialId, userId)).willReturn(credential);
         given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString(), userId)).willReturn("test-api-key");
         given(integrationContextService.resolve(userId))
@@ -382,13 +336,10 @@ class ChatServiceTest {
 
         ChatSession session = buildSession(workflowId, userId);
         ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
-        WorkflowVersion version = Mockito.mock(WorkflowVersion.class);
         Credential credential = Mockito.mock(Credential.class);
 
         given(credential.getProvider()).willReturn(AiProvider.CLAUDE);
         given(sessionRepository.save(any())).willReturn(session);
-        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
-        given(workflowCrudService.loadDefinition(version)).willReturn(buildDoc(List.of()));
         given(credentialService.getByIdAndUserId(fallbackCredentialId, userId)).willReturn(credential);
         given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString(), userId)).willReturn("test-api-key");
         given(integrationContextService.resolve(userId))
@@ -403,27 +354,6 @@ class ChatServiceTest {
         verify(workflowCrudService, never()).updateWorkflowName(any(), any());
     }
 
-    // ─────────────────── Google 토큰 판정 (ToolAuthRule) ────────────────────
-
-    @Test
-    @DisplayName("AI 노드에 builtin:google_ 도구가 있으면 스트림 준비에 Google 토큰을 싣는다")
-    void prepareStream_googleBuiltinTool_attachesGoogleToken() {
-        ChatSession session = buildSession(workflowId, userId);
-        WorkflowVersion version = buildVersionWithNodesJson(
-            "[{\"id\":\"n1\",\"type\":\"AI\",\"label\":\"ai\",\"config\":{\"llmProvider\":\"GEMINI\","
-                + "\"credentialId\":\"\",\"tools\":[{\"name\":\"builtin:google_gmail_send\"}]}}]");
-        given(sessionRepository.save(any())).willReturn(session);
-        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
-        given(integrationContextService.resolve(userId))
-            .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(googleTokenProvider.getValidAccessToken(userId)).willReturn("google-token");
-
-        ChatService.StreamSetupResult result =
-            chatService.prepareStream(workflowId, userId, "ROLE_TESTER", buildRequest("안녕", null));
-
-        assertThat(result.googleToken()).isEqualTo("google-token");
-    }
-
     // ─────────────────── chat() 베타 platform 키 ───────────────────────────
 
     @Test
@@ -431,10 +361,8 @@ class ChatServiceTest {
     void chat_betaPlatformKey_passesFlagToAgentClient() throws Exception {
         ChatSession session = buildSession(workflowId, userId);
         ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
-        WorkflowVersion version = buildVersionWithNodesJson("[]");
 
         given(sessionRepository.save(any())).willReturn(session);
-        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(credentialService.getByUserId(userId)).willReturn(List.of());
         given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
         given(integrationContextService.resolve(userId))
@@ -455,7 +383,6 @@ class ChatServiceTest {
     void chat_betaPlatformKey_recordsTokensWhenUsagePresent() {
         ChatSession session = buildSession(workflowId, userId);
         ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
-        WorkflowVersion version = buildVersionWithNodesJson("[]");
         ChatAgentResponse resp = Mockito.mock(ChatAgentResponse.class);
         given(resp.isWorkflowResult()).willReturn(false);
         given(resp.getType()).willReturn(AgentResponseType.CLARIFICATION_NEEDED);
@@ -464,7 +391,6 @@ class ChatServiceTest {
         given(resp.getOutputTokens()).willReturn(50);
 
         given(sessionRepository.save(any())).willReturn(session);
-        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(credentialService.getByUserId(userId)).willReturn(List.of());
         given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
         given(integrationContextService.resolve(userId))
@@ -483,10 +409,8 @@ class ChatServiceTest {
     void chat_betaPlatformKey_skipsRecordTokensWhenUsageNull() throws Exception {
         ChatSession session = buildSession(workflowId, userId);
         ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
-        WorkflowVersion version = buildVersionWithNodesJson("[]");
 
         given(sessionRepository.save(any())).willReturn(session);
-        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(credentialService.getByUserId(userId)).willReturn(List.of());
         given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
         given(integrationContextService.resolve(userId))
@@ -504,9 +428,7 @@ class ChatServiceTest {
     @Test
     @DisplayName("chat() — 베타 쿼터 초과 시 BETA_QUOTA_EXCEEDED가 그대로 전파되고 agentClient는 호출되지 않는다")
     void chat_betaQuotaExceeded_propagatesException() {
-        WorkflowVersion version = buildVersionWithNodesJson("[]");
         given(sessionRepository.save(any())).willReturn(buildSession(workflowId, userId));
-        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(credentialService.getByUserId(userId)).willReturn(List.of());
         given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
         given(integrationContextService.resolve(userId))
@@ -529,9 +451,7 @@ class ChatServiceTest {
     @Test
     @DisplayName("chat() — 베타 자격이어도 reserve 이전 사전작업에서 예외가 나면 쿼터를 건드리지 않는다 (INCR 자체가 없음)")
     void chat_betaEligible_preReserveStepThrows_neverTouchesQuota() {
-        WorkflowVersion version = buildVersionWithNodesJson("[]");
         given(sessionRepository.save(any())).willReturn(buildSession(workflowId, userId));
-        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(credentialService.getByUserId(userId)).willReturn(List.of());
         given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
         // reserve 이전 사전작업(연동 상태 조회) 단계에서 예외 발생
@@ -550,9 +470,7 @@ class ChatServiceTest {
     @Test
     @DisplayName("chat() — 베타 platform 키 예약 후 agentClient 호출이 실패하면 일일 카운터를 환불한다")
     void chat_betaPlatformKey_agentClientThrows_releasesDailyCall() {
-        WorkflowVersion version = buildVersionWithNodesJson("[]");
         given(sessionRepository.save(any())).willReturn(buildSession(workflowId, userId));
-        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(credentialService.getByUserId(userId)).willReturn(List.of());
         given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
         given(betaPlatformProvider.reserveQuota(userId)).willReturn("beta:calls:" + userId + ":test-key");
@@ -576,10 +494,8 @@ class ChatServiceTest {
     void chat_betaPlatformKey_agentClientSucceeds_doesNotReleaseDailyCall() throws Exception {
         ChatSession session = buildSession(workflowId, userId);
         ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
-        WorkflowVersion version = buildVersionWithNodesJson("[]");
 
         given(sessionRepository.save(any())).willReturn(session);
-        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(credentialService.getByUserId(userId)).willReturn(List.of());
         given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
         given(integrationContextService.resolve(userId))
@@ -655,7 +571,7 @@ class ChatServiceTest {
         ChatResponse result = chatService.finalizeStream(
             workflowId, sessionId, resp, config, UUID.randomUUID(), userId);
 
-        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any(), any(), any());
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any(), any(), any(), eq(false));
         verify(workflowCrudService).updateWorkflowName(workflowId, "테스트 WF");
         verify(messageRepository).save(any(ChatMessage.class));
         assertThat(result.getType()).isEqualTo(AgentResponseType.WORKFLOW_GENERATED);
@@ -701,7 +617,6 @@ class ChatServiceTest {
     void recordTokens_usesAgentTotalTokens() {
         ChatSession session = buildSession(workflowId, userId);
         ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
-        WorkflowVersion version = buildVersionWithNodesJson("[]");
         ChatAgentResponse resp = Mockito.mock(ChatAgentResponse.class);
         given(resp.isWorkflowResult()).willReturn(false);
         given(resp.getType()).willReturn(AgentResponseType.CLARIFICATION_NEEDED);
@@ -710,7 +625,6 @@ class ChatServiceTest {
         given(resp.getTotalTokens()).willReturn(900);
 
         given(sessionRepository.save(any())).willReturn(session);
-        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(credentialService.getByUserId(userId)).willReturn(List.of());
         given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
         given(integrationContextService.resolve(userId))
@@ -728,7 +642,6 @@ class ChatServiceTest {
     void recordTokens_skipsWhenZero() {
         ChatSession session = buildSession(workflowId, userId);
         ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
-        WorkflowVersion version = buildVersionWithNodesJson("[]");
         ChatAgentResponse resp = Mockito.mock(ChatAgentResponse.class);
         given(resp.isWorkflowResult()).willReturn(false);
         given(resp.getType()).willReturn(AgentResponseType.CLARIFICATION_NEEDED);
@@ -736,7 +649,6 @@ class ChatServiceTest {
         given(resp.getTotalTokens()).willReturn(0);
 
         given(sessionRepository.save(any())).willReturn(session);
-        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(credentialService.getByUserId(userId)).willReturn(List.of());
         given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
         given(integrationContextService.resolve(userId))
@@ -767,7 +679,7 @@ class ChatServiceTest {
         ChatResponse result = chatService.finalizeStream(
             workflowId, sessionId, resp, config, UUID.randomUUID(), userId);
 
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
         verify(messageRepository).save(any(ChatMessage.class));
         assertThat(result.getContent()).isEqualTo("좀 더 알려주세요");
     }
@@ -791,7 +703,7 @@ class ChatServiceTest {
                 .isEqualTo(ErrorCode.INVALID_WORKFLOW));
 
         // 거부는 저장 경로에 닿기 전에 끝나야 한다 — 새 버전이 남으면 막은 의미가 없다.
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
         verify(workflowCrudService, never()).updateWorkflowName(any(), any());
         verify(messageRepository, never()).save(any(ChatMessage.class));
     }
@@ -803,9 +715,7 @@ class ChatServiceTest {
             "{ \"method\": \"POST\", \"url\": \"" + SLACK_WEBHOOK + "\" }");
 
         ChatSession session = buildSession(workflowId, userId);
-        WorkflowVersion version = buildVersionWithNodesJson("[]");
         given(sessionRepository.save(any())).willReturn(session);
-        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(credentialService.getByUserId(userId)).willReturn(List.of());
         given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
         given(integrationContextService.resolve(userId))
@@ -818,7 +728,7 @@ class ChatServiceTest {
             .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
                 .isEqualTo(ErrorCode.INVALID_WORKFLOW));
 
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
     }
 
     @Test
@@ -852,7 +762,7 @@ class ChatServiceTest {
 
         chatService.finalizeStream(workflowId, sessionId, resp, config, UUID.randomUUID(), userId);
 
-        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any(), any(), any());
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any(), any(), any(), eq(false));
     }
 
     // ─────────────────── agent 생성 정의의 남의 credentialId 거부 (IEUM-BE-64) ─
@@ -865,9 +775,7 @@ class ChatServiceTest {
             "{ \"credentialId\": \"" + foreignCredentialId + "\" }");
 
         ChatSession session = buildSession(workflowId, userId);
-        WorkflowVersion version = buildVersionWithNodesJson("[]");
         given(sessionRepository.save(any())).willReturn(session);
-        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(credentialService.getByUserId(userId)).willReturn(List.of());
         given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
         given(integrationContextService.resolve(userId))
@@ -883,85 +791,73 @@ class ChatServiceTest {
             .satisfies(e -> assertThat(e.getMessage())
                 .doesNotContain(foreignCredentialId.toString()));
 
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
     }
 
     @Test
-    @DisplayName("소유한 fallback credentialId는 AI 노드에 주입되어 저장된다")
-    void finalizeStream_ownedFallbackCredential_injectedAndSaved() throws Exception {
-        UUID fallbackCredentialId = UUID.randomUUID();
-        ChatAgentResponse resp = buildAiNodeResponse();
-
-        ChatSession session = buildSession(workflowId, userId);
-        given(sessionRepository.findById(sessionId)).willReturn(Optional.of(session));
-        given(messageRepository.save(any(ChatMessage.class)))
-            .willReturn(buildMessage(session, MessageType.AGENT, "완성됐어요"));
+    @DisplayName("빈 credentialId AI 노드는 빈 채로 저장된다 — 요청 키·채팅 제공사를 주입하지 않는다")
+    @SuppressWarnings("unchecked")
+    void finalizeStream_emptyCredentialAiNode_savedEmpty() throws Exception {
+        // 빌더가 모델 카드로 키·제공사·모델을 함께 쓴다(IEUM-AI-85). 채팅 제공사(OPENAI)와 노드 제공사가
+        // 달라도 요청 키를 채우면 제공사가 엇갈린 키가 들어간다.
+        UUID requestCredentialId = UUID.randomUUID();
+        ChatAgentResponse resp = buildNodeResponse(
+            "{ \"id\": \"node-ai\", \"event\": \"ai.agent\", \"type\": \"AI\", \"config\": { \"credentialId\": \"\" } }");
+        givenFinalizeStreamSession();
         given(credentialService.getByUserId(userId))
-            .willReturn(List.of(buildCredential(fallbackCredentialId)));
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+            .willReturn(List.of(buildCredential(requestCredentialId)));
+        ChatService.AgentConfig config = new ChatService.AgentConfig("OPENAI", "key", null, false);
 
-        chatService.finalizeStream(workflowId, sessionId, resp, config, fallbackCredentialId, userId);
+        chatService.finalizeStream(workflowId, sessionId, resp, config, requestCredentialId, userId);
 
-        verify(workflowCrudService).saveAgentVersion(
-            eq(workflowId),
-            argThat(nodesJson -> nodesJson.contains(fallbackCredentialId.toString())),
-            any(), any(), any());
+        Map<String, Object> savedConfig = (Map<String, Object>) captureSavedNodes().get(0).get("config");
+        assertThat(savedConfig).containsEntry("credentialId", "").doesNotContainKey("llmProvider");
     }
 
     @Test
-    @DisplayName("남의 fallback credentialId는 주입 뒤 검사에 걸려 저장되지 않는다")
-    void finalizeStream_foreignFallbackCredential_rejected() throws Exception {
-        // fallbackCredentialId는 서버가 고른 값이 아니라 요청 본문의 credentialId 원본이고,
-        // AI 노드가 있는 워크플로우에서는 resolveAgentConfig가 소유 검증 없이 지나친다.
-        // 검사가 주입보다 앞서면 이 값이 그대로 저장된다(IEUM-BE-64 회귀).
+    @DisplayName("agent 응답 AI 노드가 남의 credentialId를 직접 실으면 저장하지 않는다")
+    void foreignCredentialAiNodeFromAgent_rejected() throws Exception {
+        // agent가 실어 보낸 남의 키는 저장 가드가 막는다(IEUM-BE-64).
         UUID foreignCredentialId = UUID.randomUUID();
-        ChatAgentResponse resp = buildAiNodeResponse();
+        ChatAgentResponse resp = buildAiNodeResponse(foreignCredentialId.toString());
 
         given(credentialService.getByUserId(userId))
             .willReturn(List.of(buildCredential(UUID.randomUUID())));
         ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
 
         assertThatThrownBy(() -> chatService.finalizeStream(
-            workflowId, sessionId, resp, config, foreignCredentialId, userId))
+            workflowId, sessionId, resp, config, null, userId))
             .isInstanceOf(CustomException.class)
             .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
                 .isEqualTo(ErrorCode.INVALID_WORKFLOW))
             .satisfies(e -> assertThat(e.getMessage())
                 .doesNotContain(foreignCredentialId.toString()));
 
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
     }
 
     @Test
-    @DisplayName("blocking chat — AI 노드가 있는 워크플로우에서도 요청의 남의 credentialId는 주입·저장되지 않는다")
-    void chat_foreignRequestCredentialId_notInjectedIntoAiNode() throws Exception {
-        // 공격 경로 재현: 자기 워크플로우(AI 노드 보유)에 남의 credentialId를 실어 채팅하면
-        // resolveAgentConfig는 노드의 credentialId만 쓰고 요청값은 검증 없이 지나친다.
-        UUID ownedCredentialId = UUID.randomUUID();
+    @DisplayName("blocking chat — 요청의 남의 credentialId는 요청 키 소유 검증에서 막혀 agent를 부르지 않는다")
+    void chat_foreignRequestCredentialId_rejectedByOwnershipCheck() throws Exception {
+        // 공격 경로 재현: 자기 워크플로우에 남의 credentialId를 실어 채팅하면
+        // resolveAgentConfig가 요청 키 소유 검증에서 막아 agent를 부르지 않는다.
         UUID foreignCredentialId = UUID.randomUUID();
-        ChatAgentResponse resp = buildAiNodeResponse();
 
         ChatSession session = buildSession(workflowId, userId);
-        WorkflowVersion version = buildVersionWithNodesJson(
-            "[{\"id\":\"n1\",\"type\":\"AI\",\"config\":{\"llmProvider\":\"CLAUDE\","
-                + "\"credentialId\":\"" + ownedCredentialId + "\"}}]");
         given(sessionRepository.save(any())).willReturn(session);
-        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
-        given(credentialProvider.getDecryptedApiKey(ownedCredentialId.toString(), userId))
-            .willReturn("test-api-key");
-        given(credentialService.getByUserId(userId))
-            .willReturn(List.of(buildCredential(ownedCredentialId)));
-        given(integrationContextService.resolve(userId))
-            .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(AgentChatCallParams.class))).willReturn(resp);
+        given(credentialService.getByIdAndUserId(foreignCredentialId, userId))
+            .willThrow(new CustomException(ErrorCode.NOT_FOUND));
+        // 소유 검증에서 끝나므로 prompt·currentNodes는 읽히지 않는다 — credentialId만 스텁(strict stubbing)
+        ChatRequest request = Mockito.mock(ChatRequest.class);
+        given(request.getCredentialId()).willReturn(foreignCredentialId);
 
-        assertThatThrownBy(() -> chatService.chat(workflowId, userId, "ROLE_USER",
-            buildRequest("노드 추가해줘", foreignCredentialId)))
+        assertThatThrownBy(() -> chatService.chat(workflowId, userId, "ROLE_USER", request))
             .isInstanceOf(CustomException.class)
             .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
-                .isEqualTo(ErrorCode.INVALID_WORKFLOW));
+                .isEqualTo(ErrorCode.NOT_FOUND));
 
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(agentClient, never()).chat(any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
     }
 
     @Test
@@ -972,9 +868,7 @@ class ChatServiceTest {
         ChatAgentResponse resp = buildWorkflowResponse("{ \"apiKey\": \"sk-live-not-a-real-key\" }");
 
         ChatSession session = buildSession(workflowId, userId);
-        WorkflowVersion version = buildVersionWithNodesJson("[]");
         given(sessionRepository.save(any())).willReturn(session);
-        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(credentialService.getByUserId(userId)).willReturn(List.of());
         given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
         given(integrationContextService.resolve(userId))
@@ -989,7 +883,7 @@ class ChatServiceTest {
             // 메시지는 WS 핸들러가 사용자에게 그대로 보내고 로그에도 남는다.
             .satisfies(e -> assertThat(e.getMessage()).doesNotContain("sk-live-not-a-real-key"));
 
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
     }
 
     // ─────────────────── 채팅 저장 경로의 엣지 id 채우기 (IEUM-BE-65) ────────
@@ -1053,7 +947,7 @@ class ChatServiceTest {
         chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
 
         ArgumentCaptor<String> edgesJson = ArgumentCaptor.forClass(String.class);
-        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), edgesJson.capture(), any(), any());
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), edgesJson.capture(), any(), any(), eq(false));
         List<Object> saved = objectMapper.readValue(edgesJson.getValue(), new TypeReference<>() {});
         // 비-Map 원소는 그대로 통과하고, Map 원소는 source/target이 없어도 id를 받는다.
         assertThat(saved).hasSize(3);
@@ -1074,13 +968,13 @@ class ChatServiceTest {
         assertThatThrownBy(() -> chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
     }
 
     @Test
-    @DisplayName("크레덴셜 주입은 agent가 보낸 type이 아니라 event로 계산한 type을 본다")
+    @DisplayName("저장 type은 agent가 보낸 type이 아니라 event로 계산한 값이다 — 빈 credentialId는 빈 채로")
     @SuppressWarnings("unchecked")
-    void finalizeStream_injectsByDerivedType() throws Exception {
+    void finalizeStream_savesDerivedType() throws Exception {
         UUID fallbackCredentialId = UUID.randomUUID();
         ChatAgentResponse resp = buildNodeResponse("{ \"id\": \"node-ai\", \"event\": \"ai.agent\","
             + " \"type\": \"HTTP\", \"config\": { \"llmProvider\": \"CLAUDE\" } }");
@@ -1093,8 +987,7 @@ class ChatServiceTest {
 
         Map<String, Object> saved = captureSavedNodes().get(0);
         assertThat(saved).containsEntry("type", "AI");
-        assertThat((Map<String, Object>) saved.get("config"))
-            .containsEntry("credentialId", fallbackCredentialId.toString());
+        assertThat((Map<String, Object>) saved.get("config")).doesNotContainKey("credentialId");
     }
 
     @Test
@@ -1118,7 +1011,7 @@ class ChatServiceTest {
     }
 
     @Test
-    @DisplayName("agent 노드에 type이 없어도 event로 계산한다 — 저장 type AI·credentialId 주입, 응답 nodes도 파생 노드")
+    @DisplayName("agent 노드에 type이 없어도 event로 계산한다 — 저장 type AI·credentialId 빈 채, 응답 nodes도 파생 노드")
     @SuppressWarnings("unchecked")
     void finalizeStream_typeOmitted_derivedFromEvent() throws Exception {
         UUID fallbackCredentialId = UUID.randomUUID();
@@ -1134,8 +1027,7 @@ class ChatServiceTest {
 
         Map<String, Object> saved = captureSavedNodes().get(0);
         assertThat(saved).containsEntry("type", "AI");
-        assertThat((Map<String, Object>) saved.get("config"))
-            .containsEntry("credentialId", fallbackCredentialId.toString());
+        assertThat((Map<String, Object>) saved.get("config")).doesNotContainKey("credentialId");
         // FE는 응답 nodes를 type으로 거른다 — agent 원본(type 없음)이 아니라 저장한 파생 노드가 실린다
         assertThat(response.getNodes()).hasSize(1);
         assertThat((Map<String, Object>) response.getNodes().get(0))
@@ -1223,9 +1115,7 @@ class ChatServiceTest {
 
     /** chat()·prepareStream()이 agent 호출(스트림 준비) 직전까지 가는 데 필요한 스텁. */
     private void givenChatSetup() {
-        WorkflowVersion version = buildVersionWithNodesJson("[]");   // given(...) 밖에서 만든다(중첩 스텁 금지)
         given(sessionRepository.save(any())).willReturn(buildSession(workflowId, userId));
-        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
         given(credentialService.getByUserId(userId)).willReturn(List.of());
         given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
         given(integrationContextService.resolve(userId))
@@ -1242,7 +1132,7 @@ class ChatServiceTest {
     /** saveAgentVersion에 넘어간 nodesJson을 캡처해 파싱한다. */
     private List<Map<String, Object>> captureSavedNodes() throws Exception {
         ArgumentCaptor<String> nodesJson = ArgumentCaptor.forClass(String.class);
-        verify(workflowCrudService).saveAgentVersion(eq(workflowId), nodesJson.capture(), any(), any(), any());
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), nodesJson.capture(), any(), any(), any(), eq(false));
         return objectMapper.readValue(nodesJson.getValue(), new TypeReference<>() {});
     }
 
@@ -1263,7 +1153,7 @@ class ChatServiceTest {
         chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
 
         verify(workflowCrudService).saveAgentVersion(
-            eq(workflowId), any(), any(), eq(TriggerType.SCHEDULE), eq("0 9 * * *"));
+            eq(workflowId), any(), any(), eq(TriggerType.SCHEDULE), eq("0 9 * * *"), eq(false));
     }
 
     @Test
@@ -1277,7 +1167,7 @@ class ChatServiceTest {
         chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
 
         verify(workflowCrudService).saveAgentVersion(
-            eq(workflowId), any(), any(), eq(TriggerType.WEBHOOK), isNull());
+            eq(workflowId), any(), any(), eq(TriggerType.WEBHOOK), isNull(), eq(false));
     }
 
     @Test
@@ -1291,7 +1181,7 @@ class ChatServiceTest {
         chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
 
         verify(workflowCrudService).saveAgentVersion(
-            eq(workflowId), any(), any(), eq(TriggerType.MANUAL), isNull());
+            eq(workflowId), any(), any(), eq(TriggerType.MANUAL), isNull(), eq(false));
     }
 
     @Test
@@ -1306,7 +1196,7 @@ class ChatServiceTest {
         chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
 
         verify(workflowCrudService).saveAgentVersion(
-            eq(workflowId), any(), any(), eq(TriggerType.WEBHOOK), isNull());
+            eq(workflowId), any(), any(), eq(TriggerType.WEBHOOK), isNull(), eq(false));
     }
 
     @Test
@@ -1321,7 +1211,7 @@ class ChatServiceTest {
                 assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW);
                 assertThat(e.getMessage()).contains("schedule.daily").contains("node-trigger");
             });
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
     }
 
     @Test
@@ -1336,7 +1226,80 @@ class ChatServiceTest {
                 assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_CRON_EXPRESSION);
                 assertThat(e.getMessage()).isEqualTo("schedule.every 노드(node-trigger)의 config.cron이 필요합니다");
             });
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any());
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
+    }
+
+    // ─────────────────── 대화형 빌드 중간 저장 buildState (IEUM-BE-106) ───────────
+
+    @Test
+    @DisplayName("BUILDING이면 cron 없는 schedule.every도 저장된다 — 트리거를 계산하지 않고 building=true로 넘긴다")
+    void finalizeStream_building_scheduleWithoutCron_savedAsBuilding() throws Exception {
+        ChatAgentResponse resp = buildStateResponse("BUILDING", """
+            { "id": "node-trigger", "event": "schedule.every", "type": "TRIGGER", "config": {} }""");
+        givenFinalizeStreamSession();
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any(), isNull(), isNull(), eq(true));
+    }
+
+    @Test
+    @DisplayName("BUILDING이어도 저장 가드는 돈다 — 노드 config.url이 웹훅 원문이면 저장하지 않는다")
+    void finalizeStream_building_rawWebhookUrl_notSaved() throws Exception {
+        ChatAgentResponse resp = buildStateResponse("BUILDING", """
+            { "id": "node-http", "event": "http.request", "type": "HTTP", "config": { "method": "POST", "url": "%s" } }"""
+            .formatted(SLACK_WEBHOOK));
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        assertThatThrownBy(() -> chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId))
+            .isInstanceOfSatisfying(CustomException.class, e ->
+                assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
+    }
+
+    @ParameterizedTest(name = "buildState={0}")
+    @ValueSource(strings = {"DONE", "building"})
+    @DisplayName("DONE이나 모르는 값이면 지금 경로 그대로 — 트리거를 계산해 building=false로 넘긴다")
+    void finalizeStream_doneOrUnknownBuildState_computesTrigger(String buildState) throws Exception {
+        ChatAgentResponse resp = buildStateResponse(buildState, """
+            { "id": "node-trigger", "event": "schedule.every", "type": "TRIGGER", "config": { "cron": "0 9 * * *" } }""");
+        givenFinalizeStreamSession();
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+
+        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+
+        verify(workflowCrudService).saveAgentVersion(
+            eq(workflowId), any(), any(), eq(TriggerType.SCHEDULE), eq("0 9 * * *"), eq(false));
+    }
+
+    @Test
+    @DisplayName("DONE인데 WORKFLOW_MODIFIED가 아니면 저장하지 않고 WARN — 트리거가 조용히 안 켜지는 계약 위반을 로그로 드러낸다")
+    void finalizeStream_doneWithoutWorkflowResult_warns() throws Exception {
+        ChatAgentResponse resp = objectMapper.readValue("""
+            { "message": "켜 둘게요", "type": "CLARIFICATION_NEEDED", "buildState": "DONE" }""", ChatAgentResponse.class);
+        givenFinalizeStreamSession();
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        Logger logger = (Logger) LoggerFactory.getLogger(ChatService.class);
+        logger.addAppender(appender);
+        try {
+            chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
+        assertThat(appender.list).anyMatch(e ->
+            e.getLevel() == Level.WARN && e.getFormattedMessage().contains("buildState=DONE"));
+    }
+
+    /** buildState를 실은 WORKFLOW_MODIFIED 응답(대화형 빌드 엔진 모양). */
+    private ChatAgentResponse buildStateResponse(String buildState, String nodeJson) throws Exception {
+        return objectMapper.readValue("""
+            { "message": "진행 중", "type": "WORKFLOW_MODIFIED", "buildState": "%s", "nodes": [ %s ], "edges": [] }
+            """.formatted(buildState, nodeJson), ChatAgentResponse.class);
     }
 
     /** finalizeStream이 메시지를 저장하는 데 필요한 최소 스텁. */
@@ -1350,7 +1313,7 @@ class ChatServiceTest {
     /** saveAgentVersion에 넘어간 edgesJson을 캡처해 파싱한다. */
     private List<Map<String, Object>> captureSavedEdges() throws Exception {
         ArgumentCaptor<String> edgesJson = ArgumentCaptor.forClass(String.class);
-        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), edgesJson.capture(), any(), any());
+        verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), edgesJson.capture(), any(), any(), eq(false));
         return objectMapper.readValue(edgesJson.getValue(), new TypeReference<>() {});
     }
 
@@ -1370,18 +1333,19 @@ class ChatServiceTest {
         return objectMapper.readValue(json, ChatAgentResponse.class);
     }
 
-    /** credentialId가 비어 있는 AI 노드 하나짜리 응답 — fallback 주입이 일어나는 모양이다. */
-    private ChatAgentResponse buildAiNodeResponse() throws Exception {
+    /** config.credentialId를 실은 AI 노드 하나짜리 응답. */
+    private ChatAgentResponse buildAiNodeResponse(String credentialId) throws Exception {
         return objectMapper.readValue("""
             {
                 "message": "완성됐어요",
                 "type": "WORKFLOW_GENERATED",
                 "nodes": [
-                    { "id": "node-ai", "event": "ai.agent", "type": "AI", "config": { "llmProvider": "CLAUDE" } }
+                    { "id": "node-ai", "event": "ai.agent", "type": "AI",
+                      "config": { "llmProvider": "CLAUDE", "credentialId": "%s" } }
                 ],
                 "edges": []
             }
-            """, ChatAgentResponse.class);
+            """.formatted(credentialId), ChatAgentResponse.class);
     }
 
     private Credential buildCredential(UUID credentialId) {
@@ -1462,29 +1426,5 @@ class ChatServiceTest {
             }
             """.formatted(type, nameField);
         return objectMapper.readValue(json, ChatAgentResponse.class);
-    }
-
-    private WorkflowDefinitionDocument buildDoc(List<java.util.Map<String, Object>> nodes) {
-        return WorkflowDefinitionDocument.builder()
-            .nodes(nodes)
-            .edges(List.of())
-            .createdAt(LocalDateTime.now())
-            .build();
-    }
-
-    private WorkflowVersion buildVersionWithNodesJson(String nodesJson) {
-        WorkflowVersion version = Mockito.mock(WorkflowVersion.class);
-        try {
-            WorkflowDefinitionDocument mockDef = WorkflowDefinitionDocument.builder()
-                .nodes(objectMapper.readValue(nodesJson, new TypeReference<>() {}))
-                .edges(List.of())
-                .createdAt(LocalDateTime.now())
-                .build();
-            given(workflowCrudService.loadDefinition(any(WorkflowVersion.class)))
-                .willReturn(mockDef);
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            throw new RuntimeException("Test data setup failed: " + e.getMessage(), e);
-        }
-        return version;
     }
 }

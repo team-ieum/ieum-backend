@@ -32,6 +32,8 @@ import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.engine.executor.NotionTokenProvider;
+import com.ieum.workflowcore.engine.executor.DiscordAccessProvider;
+import com.ieum.workflowcore.engine.executor.SlackTokenProvider;
 import com.ieum.workflowcore.engine.executor.StubWebhookCredentialProvider;
 import com.ieum.workflowcore.engine.executor.ToolAuthResolver;
 import com.ieum.workflowcore.engine.executor.ToolCallPreparer;
@@ -111,12 +113,13 @@ class ActionNodeRuntimeTest {
             new ToolCallPreparer(
                 mock(GoogleTokenProvider.class),
                 new ToolAuthResolver(mock(CredentialProvider.class), mock(NotionTokenProvider.class),
-                    gitHubTokenProvider),
+                    gitHubTokenProvider, mock(SlackTokenProvider.class), mock(DiscordAccessProvider.class)),
                 new StubWebhookCredentialProvider()),
             uid -> "ROLE_USER",
             idempotencyStore,
             30,
-            CATALOG);
+            CATALOG,
+            "");
 
         List<NodeExecutor> executors = List.of(new TriggerNodeExecutor(CATALOG, new TriggerHandlerRegistry(List.of(
             new ManualTriggerHandler(), new ScheduleTriggerHandler(), new WebhookTriggerHandler()))), action);

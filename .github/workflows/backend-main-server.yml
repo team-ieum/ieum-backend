@@ -78,6 +78,7 @@ jobs:
           JWT_REFRESH_EXPIRATION: ${{ secrets.AWS_JWT_REFRESH_EXPIRATION }}
           AES_SECRET_KEY: ${{ secrets.AWS_AES_SECRET_KEY }}
           AGENT_SERVICE_URL: ${{ secrets.AWS_AGENT_SERVICE_URL }}
+          AGENT_INTERNAL_TOKEN: ${{ secrets.AWS_AGENT_INTERNAL_TOKEN }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           OAUTH2_REDIRECT_URI: ${{ secrets.AWS_OAUTH2_REDIRECT_URI }}
@@ -93,6 +94,15 @@ jobs:
           GITHUB_APP_REDIRECT_URI: ${{ secrets.AWS_GH_APP_REDIRECT_URI }}
           GITHUB_APP_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_GH_APP_FRONTEND_REDIRECT_URI }}
           GITHUB_APP_WEBHOOK_SECRET: ${{ secrets.GH_APP_WEBHOOK_SECRET }}
+          SLACK_CLIENT_ID: ${{ secrets.SLACK_CLIENT_ID }}
+          SLACK_CLIENT_SECRET: ${{ secrets.SLACK_CLIENT_SECRET }}
+          SLACK_REDIRECT_URI: ${{ secrets.AWS_SLACK_REDIRECT_URI }}
+          SLACK_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_SLACK_FRONTEND_REDIRECT_URI }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          DISCORD_CLIENT_SECRET: ${{ secrets.DISCORD_CLIENT_SECRET }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_REDIRECT_URI: ${{ secrets.AWS_DISCORD_REDIRECT_URI }}
+          DISCORD_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_DISCORD_FRONTEND_REDIRECT_URI }}
         run: |
           set -euo pipefail
 
@@ -110,6 +120,7 @@ jobs:
             JWT_REFRESH_EXPIRATION \
             AES_SECRET_KEY \
             AGENT_SERVICE_URL \
+            AGENT_INTERNAL_TOKEN \
             GOOGLE_CLIENT_ID \
             GOOGLE_CLIENT_SECRET \
             OAUTH2_REDIRECT_URI \
@@ -124,7 +135,16 @@ jobs:
             GITHUB_APP_TOKEN_URL \
             GITHUB_APP_REDIRECT_URI \
             GITHUB_APP_FRONTEND_REDIRECT_URI \
-            GITHUB_APP_WEBHOOK_SECRET
+            GITHUB_APP_WEBHOOK_SECRET \
+            SLACK_CLIENT_ID \
+            SLACK_CLIENT_SECRET \
+            SLACK_REDIRECT_URI \
+            SLACK_FRONTEND_REDIRECT_URI \
+            DISCORD_CLIENT_ID \
+            DISCORD_CLIENT_SECRET \
+            DISCORD_BOT_TOKEN \
+            DISCORD_REDIRECT_URI \
+            DISCORD_FRONTEND_REDIRECT_URI
           do
             [ -n "${!name}" ] || missing_vars+=("$name")
           done
@@ -193,6 +213,7 @@ jobs:
           JWT_REFRESH_EXPIRATION: ${{ secrets.AWS_JWT_REFRESH_EXPIRATION }}
           AES_SECRET_KEY: ${{ secrets.AWS_AES_SECRET_KEY }}
           AGENT_SERVICE_URL: ${{ secrets.AWS_AGENT_SERVICE_URL }}
+          AGENT_INTERNAL_TOKEN: ${{ secrets.AWS_AGENT_INTERNAL_TOKEN }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           OAUTH2_REDIRECT_URI: ${{ secrets.AWS_OAUTH2_REDIRECT_URI }}
@@ -208,6 +229,15 @@ jobs:
           GITHUB_APP_REDIRECT_URI: ${{ secrets.AWS_GH_APP_REDIRECT_URI }}
           GITHUB_APP_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_GH_APP_FRONTEND_REDIRECT_URI }}
           GITHUB_APP_WEBHOOK_SECRET: ${{ secrets.GH_APP_WEBHOOK_SECRET }}
+          SLACK_CLIENT_ID: ${{ secrets.SLACK_CLIENT_ID }}
+          SLACK_CLIENT_SECRET: ${{ secrets.SLACK_CLIENT_SECRET }}
+          SLACK_REDIRECT_URI: ${{ secrets.AWS_SLACK_REDIRECT_URI }}
+          SLACK_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_SLACK_FRONTEND_REDIRECT_URI }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          DISCORD_CLIENT_SECRET: ${{ secrets.DISCORD_CLIENT_SECRET }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_REDIRECT_URI: ${{ secrets.AWS_DISCORD_REDIRECT_URI }}
+          DISCORD_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_DISCORD_FRONTEND_REDIRECT_URI }}
         run: |
           set -euo pipefail
 
@@ -237,6 +267,7 @@ jobs:
             -e JWT_REFRESH_EXPIRATION="$JWT_REFRESH_EXPIRATION" \
             -e AES_SECRET_KEY="$AES_SECRET_KEY" \
             -e AGENT_SERVICE_URL="$AGENT_SERVICE_URL" \
+            -e AGENT_INTERNAL_TOKEN="$AGENT_INTERNAL_TOKEN" \
             -e GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
             -e GOOGLE_CLIENT_SECRET="$GOOGLE_CLIENT_SECRET" \
             -e OAUTH2_REDIRECT_URI="$OAUTH2_REDIRECT_URI" \
@@ -252,6 +283,15 @@ jobs:
             -e GITHUB_APP_REDIRECT_URI="$GITHUB_APP_REDIRECT_URI" \
             -e GITHUB_APP_FRONTEND_REDIRECT_URI="$GITHUB_APP_FRONTEND_REDIRECT_URI" \
             -e GITHUB_APP_WEBHOOK_SECRET="$GITHUB_APP_WEBHOOK_SECRET" \
+            -e SLACK_CLIENT_ID="$SLACK_CLIENT_ID" \
+            -e SLACK_CLIENT_SECRET="$SLACK_CLIENT_SECRET" \
+            -e SLACK_REDIRECT_URI="$SLACK_REDIRECT_URI" \
+            -e SLACK_FRONTEND_REDIRECT_URI="$SLACK_FRONTEND_REDIRECT_URI" \
+            -e DISCORD_CLIENT_ID="$DISCORD_CLIENT_ID" \
+            -e DISCORD_CLIENT_SECRET="$DISCORD_CLIENT_SECRET" \
+            -e DISCORD_BOT_TOKEN="$DISCORD_BOT_TOKEN" \
+            -e DISCORD_REDIRECT_URI="$DISCORD_REDIRECT_URI" \
+            -e DISCORD_FRONTEND_REDIRECT_URI="$DISCORD_FRONTEND_REDIRECT_URI" \
             "$IMAGE_NAME:latest"
 
       - name: Health check

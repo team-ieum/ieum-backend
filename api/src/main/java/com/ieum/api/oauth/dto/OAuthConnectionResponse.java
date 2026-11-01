@@ -1,6 +1,9 @@
 package com.ieum.api.oauth.dto;
 
 import com.ieum.auth.domain.ConnectedAccount;
+import com.ieum.auth.domain.DiscordGuildLink;
+import com.ieum.auth.domain.SlackInstallation;
+import com.ieum.auth.domain.SlackUserLink;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.LocalDateTime;
 import java.util.Arrays;
@@ -15,35 +18,64 @@ import lombok.Getter;
 @Builder
 public class OAuthConnectionResponse {
 
-    @Schema(description = "연동 계정 ID", example = "550e8400-e29b-41d4-a716-446655440000")
+    @Schema(description = "연동 계정 ID (SLACK은 Slack 링크 ID, DISCORD는 서버 링크 ID)", example = "550e8400-e29b-41d4-a716-446655440000")
     private final UUID id;
 
-    @Schema(description = "OAuth 제공자 (GOOGLE, GITHUB, NOTION)", example = "GOOGLE")
+    @Schema(description = "OAuth 제공자 (GOOGLE, GITHUB, NOTION, SLACK, DISCORD)", example = "GOOGLE")
     private final String provider;
 
-    @Schema(description = "제공자 계정 식별자", example = "1029384756")
+    @Schema(description = "제공자 계정 식별자 (SLACK은 워크스페이스 team id, DISCORD는 서버 guild id — 해제 경로에 쓴다)", example = "1029384756")
     private final String providerAccountId;
 
-    @Schema(description = "부여된 Scopes 목록")
+    @Schema(description = "표시 이름 — SLACK은 워크스페이스 이름, DISCORD는 연결 시점 서버 이름, 다른 제공자는 null", example = "이음 팀", nullable = true)
+    private final String displayName;
+
+    @Schema(description = "부여된 Scopes 목록 (DISCORD는 빈 목록 — 봇 권한은 앱 공통)")
     private final List<String> scopes;
 
     @Schema(description = "연동 일시")
     private final LocalDateTime createdAt;
 
     public static OAuthConnectionResponse from(ConnectedAccount account) {
-        List<String> parsedScopes = Collections.emptyList();
-        if (account.getScopes() != null && !account.getScopes().isBlank()) {
-            parsedScopes = Arrays.stream(account.getScopes().split("[,\\s]+"))
-                .filter(s -> !s.isBlank())
-                .toList();
-        }
-
         return OAuthConnectionResponse.builder()
             .id(account.getId())
             .provider(account.getProvider().name())
             .providerAccountId(account.getProviderAccountId())
-            .scopes(parsedScopes)
+            .scopes(parseScopes(account.getScopes()))
             .createdAt(account.getCreatedAt())
             .build();
+    }
+
+    public static OAuthConnectionResponse fromSlack(SlackUserLink link) {
+        SlackInstallation installation = link.getInstallation();
+        return OAuthConnectionResponse.builder()
+            .id(link.getId())
+            .provider("SLACK")
+            .providerAccountId(installation.getTeamId())
+            .displayName(installation.getTeamName())
+            .scopes(parseScopes(installation.getScopes()))
+            .createdAt(link.getCreatedAt())
+            .build();
+    }
+
+    /** 서버마다 1개. scopes는 빈 목록 — 봇 권한(D6)은 앱 공통이라 링크별 값이 없다 */
+    public static OAuthConnectionResponse fromDiscord(DiscordGuildLink link) {
+        return OAuthConnectionResponse.builder()
+            .id(link.getId())
+            .provider("DISCORD")
+            .providerAccountId(link.getGuildId())
+            .displayName(link.getGuildName())
+            .scopes(List.of())
+            .createdAt(link.getCreatedAt())
+            .build();
+    }
+
+    private static List<String> parseScopes(String scopes) {
+        if (scopes == null || scopes.isBlank()) {
+            return Collections.emptyList();
+        }
+        return Arrays.stream(scopes.split("[,\\s]+"))
+            .filter(s -> !s.isBlank())
+            .toList();
     }
 }

@@ -46,7 +46,7 @@ public class ChatResponse {
     /** 프론트엔드 실행 액션 목록 (INTEGRATION_REQUIRED 전용, oauthUrl 포함) */
     private final List<AgentAction> actions;
 
-    /** 사용자 선택지 목록 (CLARIFICATION_NEEDED 전용, 예: GitHub repo/웹훅 선택) */
+    /** 사용자 선택지 목록 (CLARIFICATION_NEEDED의 GitHub repo/웹훅 선택, 빌더 모델 카드 — type 무관) */
     private final List<AgentOption> options;
 
     private final TokenUsage tokens;

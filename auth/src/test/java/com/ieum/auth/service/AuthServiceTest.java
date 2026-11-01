@@ -45,6 +45,9 @@ class AuthServiceTest {
     @Mock
     private EmailVerificationService emailVerificationService;
 
+    @Mock
+    private LoginAttemptService loginAttemptService;
+
     @InjectMocks
     private AuthService authService;
 
@@ -110,6 +113,7 @@ class AuthServiceTest {
                 .consumeVerification("user@example.com", VerificationPurpose.PASSWORD_RESET);
         assertThat(user.getPasswordHash()).isEqualTo("new-encoded");
         then(refreshTokenRepository).should().deleteById(user.getId().toString());
+        then(loginAttemptService).should().reset("user@example.com");
     }
 
     @Test
@@ -146,6 +150,84 @@ class AuthServiceTest {
         assertThat(googleUser.getPasswordHash()).isNull();
     }
 
+    // ===== changePassword =====
+
+    @Test
+    void changePassword_success_updatesPasswordAndDeletesRefreshToken() {
+        User user = buildUser();
+        given(userRepository.findById(user.getId())).willReturn(Optional.of(user));
+        given(passwordEncoder.matches("OldPassword1!", "encoded-password")).willReturn(true);
+        given(passwordEncoder.matches("NewPassword1!", "encoded-password")).willReturn(false);
+        given(passwordEncoder.encode("NewPassword1!")).willReturn("new-encoded");
+
+        authService.changePassword(user.getId(), "OldPassword1!", "NewPassword1!");
+
+        assertThat(user.getPasswordHash()).isEqualTo("new-encoded");
+        then(refreshTokenRepository).should().deleteById(user.getId().toString());
+        then(loginAttemptService).should().reset("user@example.com");
+    }
+
+    @Test
+    void changePassword_wrongCurrent_throwsCurrentPasswordMismatch() {
+        User user = buildUser();
+        given(userRepository.findById(user.getId())).willReturn(Optional.of(user));
+        given(passwordEncoder.matches("WrongPass1!", "encoded-password")).willReturn(false);
+
+        assertChangePasswordFails(user.getId(), "WrongPass1!", "NewPassword1!", ErrorCode.CURRENT_PASSWORD_MISMATCH);
+        assertThat(user.getPasswordHash()).isEqualTo("encoded-password");
+        then(loginAttemptService).should().recordFailure("user@example.com");
+    }
+
+    @Test
+    void changePassword_locked_throwsLoginLockedWithoutCheckingPassword() {
+        User user = buildUser();
+        given(userRepository.findById(user.getId())).willReturn(Optional.of(user));
+        willThrow(new CustomException(ErrorCode.LOGIN_LOCKED))
+                .given(loginAttemptService).checkNotLocked("user@example.com");
+
+        assertChangePasswordFails(user.getId(), "OldPassword1!", "NewPassword1!", ErrorCode.LOGIN_LOCKED);
+        then(passwordEncoder).should(never()).matches(anyString(), anyString());
+    }
+
+    @Test
+    void changePassword_sameAsCurrent_throwsPasswordSameAsCurrent() {
+        User user = buildUser();
+        given(userRepository.findById(user.getId())).willReturn(Optional.of(user));
+        given(passwordEncoder.matches("OldPassword1!", "encoded-password")).willReturn(true);
+
+        assertChangePasswordFails(user.getId(), "OldPassword1!", "OldPassword1!", ErrorCode.PASSWORD_SAME_AS_CURRENT);
+    }
+
+    @Test
+    void changePassword_socialAccount_throwsNotSupported() {
+        User googleUser = User.builder()
+                .id(UUID.randomUUID())
+                .email("user@example.com")
+                .name("홍길동")
+                .provider(AuthProvider.GOOGLE)
+                .role(UserRole.ROLE_USER)
+                .build();
+        given(userRepository.findById(googleUser.getId())).willReturn(Optional.of(googleUser));
+
+        assertChangePasswordFails(googleUser.getId(), "any", "NewPassword1!", ErrorCode.PASSWORD_CHANGE_NOT_SUPPORTED);
+        assertThat(googleUser.getPasswordHash()).isNull();
+    }
+
+    @Test
+    void changePassword_userNotFound_throwsNotFound() {
+        UUID userId = UUID.randomUUID();
+        given(userRepository.findById(userId)).willReturn(Optional.empty());
+
+        assertChangePasswordFails(userId, "OldPassword1!", "NewPassword1!", ErrorCode.NOT_FOUND);
+    }
+
+    private void assertChangePasswordFails(UUID userId, String current, String next, ErrorCode expected) {
+        assertThatThrownBy(() -> authService.changePassword(userId, current, next))
+                .isInstanceOf(CustomException.class)
+                .satisfies(e -> assertThat(((CustomException) e).getErrorCode()).isEqualTo(expected));
+        then(refreshTokenRepository).should(never()).deleteById(anyString());
+    }
+
     // ===== login =====
 
     @Test
@@ -163,16 +245,32 @@ class AuthServiceTest {
         assertThat(result.refreshToken()).isEqualTo("refresh-token");
         assertThat(result.expiresIn()).isEqualTo(1800L);
         then(refreshTokenRepository).should().save(any(RefreshToken.class));
+        then(loginAttemptService).should().reset(user.getEmail());
     }
 
     @Test
-    void login_userNotFound_throwsInvalidCredentials() {
+    void login_userNotFound_throwsInvalidCredentialsAndRecordsFailure() {
         given(userRepository.findByEmail(anyString())).willReturn(Optional.empty());
 
         assertThatThrownBy(() -> authService.login("notfound@test.com", "Password1!"))
                 .isInstanceOf(CustomException.class)
                 .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
                         .isEqualTo(ErrorCode.INVALID_CREDENTIALS));
+        // 없는 이메일도 똑같이 센다 — 가입 여부 비노출
+        then(loginAttemptService).should().recordFailure("notfound@test.com");
+    }
+
+    @Test
+    void login_locked_throwsLoginLockedWithoutCheckingPassword() {
+        willThrow(new CustomException(ErrorCode.LOGIN_LOCKED))
+                .given(loginAttemptService).checkNotLocked("user@example.com");
+
+        assertThatThrownBy(() -> authService.login("user@example.com", "Password1!"))
+                .isInstanceOf(CustomException.class)
+                .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.LOGIN_LOCKED));
+        then(userRepository).should(never()).findByEmail(anyString());
+        then(passwordEncoder).should(never()).matches(anyString(), anyString());
     }
 
     @Test
@@ -185,6 +283,8 @@ class AuthServiceTest {
                 .isInstanceOf(CustomException.class)
                 .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
                         .isEqualTo(ErrorCode.INVALID_CREDENTIALS));
+        then(loginAttemptService).should().recordFailure(user.getEmail());
+        then(loginAttemptService).should(never()).reset(anyString());
     }
 
     // ===== refresh =====

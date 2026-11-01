@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.chat.repository.ChatMessageRepository;
+import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.document.WorkflowDefinitionRepository;
 import com.ieum.workflowcore.domain.Workflow;
@@ -64,6 +66,8 @@ public class WorkflowCrudService {
     private final ObjectMapper objectMapper;
     private final AppTriggerSubscriptionService appTriggerSubscriptionService;
     private final WorkflowWebhookTokenRepository webhookTokenRepository;
+    private final ChatSessionRepository chatSessionRepository;
+    private final ChatMessageRepository chatMessageRepository;
 
     // ------------------------------------------------------------------ WRITE
 
@@ -120,16 +124,19 @@ public class WorkflowCrudService {
     /**
      * agent가 만든 정의를 새 버전으로 저장한다. 트리거 타입·cron은 호출자가 노드에서 계산한 값이다 — 트리거 노드가 없으면
      * MANUAL·cron null이 와서 기존 스케줄·Quartz Job이 해제된다(null도 {@code Workflow.updateSchedule}이 MANUAL로 저장한다, IEUM-BE-92).
+     *
+     * @param building 대화형 빌드 중간 저장(IEUM-BE-106). true면 넘어온 트리거를 무시하고 MANUAL·cron null로 저장하고
+     *                 앱 트리거 구독을 빈 노드 목록으로 맞춰 지운다 — 빌드가 끝나기 전엔 스케줄·앱 트리거·웹훅 수신이 켜지지 않는다.
      */
     @Transactional
     public WorkflowVersion saveAgentVersion(UUID workflowId, String nodesJson, String edgesJson,
-            TriggerType triggerType, String cronExpression) {
+            TriggerType triggerType, String cronExpression, boolean building) {
         Workflow workflow = workflowRepository.findById(workflowId)
             .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
-        applySchedule(workflow, triggerType, cronExpression);
+        applySchedule(workflow, building ? TriggerType.MANUAL : triggerType, building ? null : cronExpression);
         // 트리거 노드가 없으면 앱 트리거 없음으로 판정돼 구독 행이 지워진다.
         List<Map<String, Object>> nodes = readNodes(nodesJson);
-        appTriggerSubscriptionService.sync(workflow, nodes);
+        appTriggerSubscriptionService.sync(workflow, building ? List.of() : nodes);
 
         int nextVersion = workflowVersionRepository.findMaxVersionByWorkflowId(workflowId) + 1;
         WorkflowVersion version = saveVersionWithCompensation(workflow, nextVersion, nodes, edgesJson);
@@ -153,6 +160,19 @@ public class WorkflowCrudService {
             .orElseThrow(() -> new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
         deleteWorkflowInternal(workflow);
         log.info("[WorkflowCrudService] 스케줄러 자동 정리로 워크플로우 완전 삭제 — workflowId: {}", workflowId);
+    }
+
+    /**
+     * 회원 탈퇴 전용 — 사용자의 워크플로우를 전부 완전 삭제한다. 호출자 트랜잭션에 합류하고,
+     * MongoDB 정의·Quartz 잡은 워크플로우별로 커밋 후 정리된다.
+     */
+    @Transactional
+    public void deleteAllByUserId(UUID userId) {
+        // ponytail: 페이징 없이 한 번에 조회 — 사용자당 워크플로우 수가 많아지면 배치 삭제로 전환
+        List<Workflow> workflows = workflowRepository.findByUserId(userId, Pageable.unpaged());
+        workflows.forEach(this::deleteWorkflowInternal);
+        log.info("[WorkflowCrudService] 회원 탈퇴로 워크플로우 일괄 삭제 — userId: {}, count: {}",
+            userId, workflows.size());
     }
 
     /** AI 생성 워크플로우 이름 자동 업데이트 */
@@ -301,7 +321,13 @@ public class WorkflowCrudService {
         nodeTestSampleRepository.deleteByWorkflow(workflow);
         appTriggerSubscriptionService.deleteByWorkflowId(workflowId);
         webhookTokenRepository.deleteByWorkflowId(workflowId);
+        // 채팅 세션은 workflow_id FK가 없어 지우지 않으면 고아로 남는다. 메시지 → 세션 순서(session_id FK).
+        chatMessageRepository.deleteByWorkflowId(workflowId);
+        chatSessionRepository.deleteByWorkflowId(workflowId);
         workflowRepository.delete(workflow);
+        // 바로 flush한다 — 이어지는 bulk DELETE(clearAutomatically)가 영속성 컨텍스트를 비우면 flush 전의 이 삭제가 버려진다.
+        // 한 트랜잭션에서 여러 워크플로우를 지우는 회원 탈퇴(deleteAllByUserId)에서 실제로 행이 남았다.
+        workflowRepository.flush();
 
         afterCommit(() -> {
             mongoIds.forEach(id -> {

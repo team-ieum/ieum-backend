@@ -64,7 +64,7 @@ DB명·계정·비밀번호·Redis DB 및 Mongo authSource는 기존 실제 DEV 
 
 ## 기존 필수 설정과 이름 매핑
 
-현재 앱에서 기본값이 없는 사용자 설정 24개는 계속 필수로 검증한다. 누락·빈 문자열·공백만 있는
+최신 dev 통합에 맞춰 기존 24개와 Slack·Discord·내부 인증 10개, 총 34개를 필수로 검증한다. 누락·빈 문자열·공백만 있는
 값은 거부한다. `AGENT_SERVICE_URL`는 controller가 같은 색상의 주소를 넣으므로 사용자 입력이 아니다.
 새 Secret 이름은 아래와 같으며 값에는 기존 DEV 값을 등록한다. 표는 실제 값 조회·검증 결과가 아니다.
 
@@ -94,6 +94,16 @@ DB명·계정·비밀번호·Redis DB 및 Mongo authSource는 기존 실제 DEV 
 | `DEV_COM_GH_APP_TOKEN_URL` | `GITHUB_APP_TOKEN_URL` |
 | `DEV_COM_GH_APP_REDIRECT_URI` | `GITHUB_APP_REDIRECT_URI` |
 | `DEV_COM_GH_APP_FRONTEND_REDIRECT_URI` | `GITHUB_APP_FRONTEND_REDIRECT_URI` |
+| `DEV_COM_SLACK_CLIENT_ID` | `SLACK_CLIENT_ID` |
+| `DEV_COM_SLACK_CLIENT_SECRET` | `SLACK_CLIENT_SECRET` |
+| `DEV_COM_SLACK_REDIRECT_URI` | `SLACK_REDIRECT_URI` |
+| `DEV_COM_SLACK_FRONTEND_REDIRECT_URI` | `SLACK_FRONTEND_REDIRECT_URI` |
+| `DEV_COM_DISCORD_CLIENT_ID` | `DISCORD_CLIENT_ID` |
+| `DEV_COM_DISCORD_CLIENT_SECRET` | `DISCORD_CLIENT_SECRET` |
+| `DEV_COM_DISCORD_BOT_TOKEN` | `DISCORD_BOT_TOKEN` |
+| `DEV_COM_DISCORD_REDIRECT_URI` | `DISCORD_REDIRECT_URI` |
+| `DEV_COM_DISCORD_FRONTEND_REDIRECT_URI` | `DISCORD_FRONTEND_REDIRECT_URI` |
+| `DEV_COM_AGENT_INTERNAL_TOKEN` | `AGENT_INTERNAL_TOKEN` |
 
 별칭은 위 RDS 3개와 아래 Webhook을 포함한 GH 6개, 총 9개다. 다른 신규 이름에는 자동으로
 `RDS_`·`GH_` 변환을 확장하지 않는다. 신규 설정은 실제 앱 환경변수 이름에 접두사를 붙인다.

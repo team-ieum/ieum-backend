@@ -9,25 +9,33 @@ import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.chat.dto.ChatAgentResponse;
+import com.ieum.api.chat.dto.ChatStreamEvent;
 import com.ieum.api.chat.service.AgentClient.AgentChatCallParams;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import java.io.IOException;
+import java.time.Duration;
+import java.util.concurrent.TimeoutException;
 import java.util.UUID;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
+import okhttp3.mockwebserver.SocketPolicy;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import reactor.core.publisher.Flux;
+import reactor.test.StepVerifier;
 
 class AgentClientTest {
 
     private MockWebServer mockWebServer;
     private AgentClient agentClient;
     private final UUID userId = UUID.randomUUID();
+
+    private static final String INTERNAL_TOKEN = "internal-secret";
 
     private static final String CHAT_RESPONSE_BODY =
         "{\"message\":\"안녕하세요\",\"type\":\"CLARIFICATION_NEEDED\"}";
@@ -36,7 +44,7 @@ class AgentClientTest {
     void setUp() throws IOException {
         mockWebServer = new MockWebServer();
         mockWebServer.start();
-        agentClient = new AgentClient(mockWebServer.url("/").toString(), 30, new ObjectMapper());
+        agentClient = new AgentClient(mockWebServer.url("/").toString(), 30, new ObjectMapper(), INTERNAL_TOKEN);
     }
 
     @AfterEach
@@ -110,6 +118,97 @@ class AgentClientTest {
         assertThat(recorded.getHeader("X-Key-Mode")).isEqualTo("platform");
         assertThat(recorded.getHeader("X-LLM-Provider")).isEqualTo("GEMINI");
         assertThat(recorded.getHeader("X-LLM-Api-Key")).isNull();
+    }
+
+    @Test
+    @DisplayName("chat·chatStream·getNodeCatalog 모두 X-Internal-Token을 싣는다 (IEUM-BE-106)")
+    void everyAgentCall_carriesInternalToken() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody(CHAT_RESPONSE_BODY));
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "text/event-stream").setBody("event: done\ndata: " + CHAT_RESPONSE_BODY + "\n\n"));
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody("{\"nodes\": []}"));
+
+        agentClient.chat(baseParams().build());
+        agentClient.chatStream(baseParams().build()).blockLast();
+        agentClient.getNodeCatalog();
+
+        for (int i = 0; i < 3; i++) {
+            assertThat(mockWebServer.takeRequest().getHeader("X-Internal-Token")).isEqualTo(INTERNAL_TOKEN);
+        }
+    }
+
+    @Test
+    @DisplayName("위임 토큰은 chatStream에만 X-Delegation-Token으로 싣는다 — 블로킹 chat에는 같은 값이 있어도 싣지 않는다 (IEUM-BE-106)")
+    void delegationToken_streamOnly() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "text/event-stream").setBody("event: done\ndata: " + CHAT_RESPONSE_BODY + "\n\n"));
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody(CHAT_RESPONSE_BODY));
+
+        agentClient.chatStream(baseParams().delegationToken("deleg-raw").build()).blockLast();
+        agentClient.chat(baseParams().delegationToken("deleg-raw").build());
+
+        assertThat(mockWebServer.takeRequest().getHeader("X-Delegation-Token")).isEqualTo("deleg-raw");
+        assertThat(mockWebServer.takeRequest().getHeader("X-Delegation-Token")).isNull();
+    }
+
+    @Test
+    @DisplayName("AgentChatCallParams.toString은 위임 토큰을 가린다")
+    void callParams_toStringMasksDelegationToken() {
+        assertThat(baseParams().delegationToken("deleg-raw").build().toString())
+            .doesNotContain("deleg-raw").contains("delegationToken=***");
+    }
+
+    @Test
+    @DisplayName("턴 시간 상한은 이벤트 사이 간격이 아니라 전체 시간이다 — 300초마다 이벤트가 와도 570초에 끊긴다")
+    void withTurnTimeout_isTotalNotPerEvent() {
+        StepVerifier.withVirtualTime(() -> AgentClient.withTurnTimeout(
+                Flux.interval(Duration.ofSeconds(300)).take(3), Duration.ofSeconds(570)))
+            .expectSubscription()
+            .thenAwait(Duration.ofSeconds(300))
+            .expectNext(0L)
+            .thenAwait(Duration.ofSeconds(270))
+            .expectError(TimeoutException.class)
+            .verify(Duration.ofSeconds(5));
+    }
+
+    @Test
+    @DisplayName("턴 시간 상한 안에 끝나면 그대로 완료된다")
+    void withTurnTimeout_completesWithinLimit() {
+        StepVerifier.withVirtualTime(() -> AgentClient.withTurnTimeout(
+                Flux.interval(Duration.ofSeconds(100)).take(2), Duration.ofSeconds(570)))
+            .expectSubscription()
+            .thenAwait(Duration.ofSeconds(200))
+            .expectNext(0L, 1L)
+            .expectComplete()
+            .verify(Duration.ofSeconds(5));
+    }
+
+    @Test
+    @DisplayName("chatStream은 agent가 응답하지 않아도 570초 턴 상한에서 error 이벤트로 끝난다")
+    void chatStream_appliesTurnTimeout() {
+        mockWebServer.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE));
+
+        StepVerifier.withVirtualTime(() -> agentClient.chatStream(baseParams().build()))
+            .expectSubscription()
+            .thenAwait(AgentClient.CHAT_STREAM_TIMEOUT)
+            .assertNext(e -> assertThat(e.type()).isEqualTo(ChatStreamEvent.EventType.ERROR))
+            .expectComplete()
+            .verify(Duration.ofSeconds(5));
+    }
+
+    @Test
+    @DisplayName("internal-token이 비면 X-Internal-Token을 싣지 않는다 — agent도 값이 없으면 검사를 끈다")
+    void blankInternalToken_headerOmitted() throws InterruptedException {
+        AgentClient noToken = new AgentClient(mockWebServer.url("/").toString(), 30, new ObjectMapper(), "");
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/json").setBody("{\"nodes\": []}"));
+
+        noToken.getNodeCatalog();
+
+        assertThat(mockWebServer.takeRequest().getHeader("X-Internal-Token")).isNull();
     }
 
     @Test
@@ -199,5 +298,12 @@ class AgentClientTest {
         } finally {
             logger.detachAppender(appender);
         }
+    }
+
+    @Test
+    @DisplayName("스트림 상한 570초는 동시 턴 락 TTL보다 짧다 — 거꾸로면 진행 중인 턴의 락이 먼저 풀린다")
+    void chatStreamTimeout_isShorterThanTurnLockTtl() {
+        assertThat(AgentClient.CHAT_STREAM_TIMEOUT).isEqualTo(Duration.ofSeconds(570));
+        assertThat(AgentClient.CHAT_STREAM_TIMEOUT).isLessThan(ChatTurnLock.TTL);
     }
 }

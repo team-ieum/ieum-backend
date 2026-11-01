@@ -34,8 +34,8 @@ public class NotionPagesOptionSource implements OptionSource {
         return new OptionPage(items, NotionApiReader.nextCursor(body));
     }
 
-    /** title 속성 이름은 워크스페이스마다 다르다(Name·이름·제목) — 이름이 아니라 type으로 찾는다. */
-    private static String title(JsonNode page) {
+    /** title 속성 이름은 워크스페이스마다 다르다(Name·이름·제목) — 이름이 아니라 type으로 찾는다. DB 행 드롭다운도 쓴다. */
+    static String title(JsonNode page) {
         for (JsonNode property : page.path("properties")) {
             if ("title".equals(property.path("type").asText())) {
                 return NotionApiReader.plainTextOrUntitled(property.path("title"));

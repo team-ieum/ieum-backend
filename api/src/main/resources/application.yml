@@ -126,6 +126,8 @@ ieum:
   agent:
     url: ${AGENT_SERVICE_URL}
     timeout-seconds: ${AGENT_TIMEOUT_SECONDS:180}
+    # BE→agent 공유 비밀(X-Internal-Token, IEUM-BE-106). 비면 헤더를 싣지 않는다 — 값 등록은 .env(AGENT_INTERNAL_TOKEN)
+    internal-token: ${AGENT_INTERNAL_TOKEN:}
   scheduler:
     thread-count: ${QUARTZ_THREAD_COUNT:10}
     thread-name-prefix: ${QUARTZ_THREAD_NAME_PREFIX:quartz-}
@@ -179,6 +181,27 @@ github:
     frontend-redirect-uri: ${GITHUB_APP_FRONTEND_REDIRECT_URI}
     webhook-secret: ${GITHUB_APP_WEBHOOK_SECRET:}
     slug: ${GITHUB_APP_SLUG:ieum-service}
+
+# Slack 봇 연결 (spec 2026-10-20 §4-4). 기본값 없음 — 빠지면 기동 실패라 .env·secrets가 배포보다 먼저다.
+# bot-scopes는 env가 아니라 코드와 같이 바뀌는 상수다 — Slack scope는 더하면 기존 설치 전원이 재설치해야 한다(D3).
+slack:
+  oauth:
+    client-id: ${SLACK_CLIENT_ID}
+    client-secret: ${SLACK_CLIENT_SECRET}
+    redirect-uri: ${SLACK_REDIRECT_URI}
+    frontend-redirect-uri: ${SLACK_FRONTEND_REDIRECT_URI}
+    bot-scopes: "chat:write,chat:write.public,channels:read,groups:read,im:read,mpim:read,channels:history,groups:history,channels:manage,groups:write,im:write,reactions:read,reactions:write,users:read,users:read.email,files:write,canvases:write,emoji:read"
+
+# Discord 봇 연결 (spec 2026-10-21 §4-4). 기본값 없음 — 빠지면 기동 실패라 .env·secrets가 배포보다 먼저다.
+# permissions는 env가 아니라 코드와 같이 바뀌는 상수(D6) — 십진 문자열. Java int 시프트(1 << 38)로 계산하면 64가 된다.
+discord:
+  bot-token: ${DISCORD_BOT_TOKEN}
+  oauth:
+    client-id: ${DISCORD_CLIENT_ID}
+    client-secret: ${DISCORD_CLIENT_SECRET}
+    redirect-uri: ${DISCORD_REDIRECT_URI}
+    frontend-redirect-uri: ${DISCORD_FRONTEND_REDIRECT_URI}
+    permissions: "275146460176"
 
 google:
   oauth:

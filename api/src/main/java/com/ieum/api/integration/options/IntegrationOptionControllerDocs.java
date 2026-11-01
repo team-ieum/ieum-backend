@@ -6,11 +6,12 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import java.util.List;
 import java.util.Map;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 
-@Tag(name = "연동 옵션", description = "노드 설정 드롭다운 선택지 조회 (도구 필드 스키마의 optionsSource)")
+@Tag(name = "연동 옵션", description = "노드 설정 드롭다운 선택지(optionsSource)·동적 칸 목록(fieldsSource) 조회")
 @SecurityRequirement(name = "BearerAuth")
 public interface IntegrationOptionControllerDocs {
 
@@ -21,22 +22,55 @@ public interface IntegrationOptionControllerDocs {
             + "google/writable_calendars(일정을 쓸 수 있는 캘린더만 — accessRole writerWithoutPrivateAccess·writer·owner, 꼬리표 없음. 걸러진 페이지는 items가 비어도 nextCursor가 있을 수 있음), "
             + "google/events(calendar_id 선택 — 비우면 기본 캘린더, q 선택 — 검색어, 공백이면 무시. 지금 이후 일정만 시작순 20개씩), google/files, google/folders, "
             + "notion/pages, notion/databases(값은 data source id), "
+            + "notion/data_source_items(data_source_id 필수 — 그 DB의 행, 값은 페이지 ID·이름은 제목, 최근 편집순 50개씩. "
+            + "q 선택 — 제목 부분 일치. relation 칸은 /fields 응답의 optionsParams로 대상 DB id가 온다), "
+            + "notion/templates(data_source_id 필수 — 값은 템플릿 ID·이름은 템플릿 이름, 100개씩. q가 없으면 첫 페이지 맨 앞에 "
+            + "default(기본 템플릿 — 기본 템플릿이 없는 DB면 실행 때 실패). q 선택 — 이름 부분 일치), "
+            + "notion/users(입력 없음 — 워크스페이스 사람 사용자(봇·게스트 제외), 값은 사용자 ID, 100명씩. q 미지원. "
+            + "Notion 연동에 사용자 정보 권한이 없으면 INVALID_INPUT), "
             + "ai/models·ieum/credentials(llmProvider 필수 — CLAUDE·OPENAI·GEMINI), "
             + "ieum/webhooks(전체, HTTP 노드용)·slack/webhooks·discord/webhooks, ieum/mcp_servers"
             + "(웹훅·MCP는 활성 항목만, 모두 요청자 소유만). "
             + "github/owners(본인 login + 소속 org), github/repos(owner 필수 — owners의 값. 목록은 GitHub App 설치 범위 안만), "
             + "github/installed_repos(입력 없음, 값은 숫자 repo id 문자열·이름은 owner/name, 설치 범위 전체를 한 번에 — nextCursor 항상 null), "
+            + "slack/channels(연결한 Slack 워크스페이스의 공개 채널, 보관 제외 — 값은 채널 ID·이름은 #이름. q 없으면 20개씩이고 "
+            + "items가 비어도 nextCursor가 있을 수 있음. q 선택 — 이름 부분 일치(대소문자·앞의 # 무시), 최대 1,000개 중 20개, nextCursor 항상 null. "
+            + "못 찾으면 items=[] — 채널 ID 직접 입력으로 안내), "
+            + "discord/guilds(입력 없음 — 연결한 Discord 서버, 값은 서버 ID·이름은 실시간 서버 이름. 봇이 쫓겨난 서버는 "
+            + "'이름 (봇 없음 · 다시 연결)', Discord 일시 장애면 연결 시점 이름. nextCursor 항상 null), "
+            + "discord/channels(guild_id 필수 — 그 서버의 텍스트·공지 채널, 값은 채널 ID·이름은 #이름, 카테고리·위치 순. "
+            + "q 선택 — 이름 부분 일치(대소문자·앞의 # 무시). nextCursor 항상 null. 서버를 고르기 전에는 열지 않는다), "
             + "nextCursor가 있으면 cursor로 다음 페이지를 조회하고, null이면 마지막 페이지입니다. "
             + "오류 code: GOOGLE_SCOPE_REQUIRED(403, Google 권한 증분 동의 필요 — scope_groups는 "
             + "spreadsheets·worksheets=sheets, files·folders=drive, calendars·writable_calendars·events=calendar. "
             + "sheets 그룹은 drive를 포함해 파일·폴더도 충족), "
-            + "ACCOUNT_NOT_CONNECTED(400), "
+            + "ACCOUNT_NOT_CONNECTED(400), SLACK_NOT_CONNECTED(400), DISCORD_NOT_CONNECTED(400), DISCORD_GUILD_NOT_CONNECTED(403, 연결하지 않은 서버), "
             + "AUTHENTICATION_REQUIRED(401, 재연동 필요), GOOGLE_RESOURCE_NOT_FOUND(404), "
-            + "GOOGLE_API_UNAVAILABLE(503), NOTION_API_UNAVAILABLE(503), GITHUB_API_UNAVAILABLE(503), INVALID_INPUT(400), NOT_FOUND(404, 알 수 없는 목록)")
+            + "GOOGLE_API_UNAVAILABLE(503), NOTION_API_UNAVAILABLE(503), GITHUB_API_UNAVAILABLE(503), SLACK_API_UNAVAILABLE(503), DISCORD_API_UNAVAILABLE(503), "
+            + "INVALID_INPUT(400), NOT_FOUND(404, 알 수 없는 목록)")
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<OptionPage>> getOptions(
         CustomUserDetails userDetails,
         @Parameter(description = "연동 앱", example = "google") String app,
         @Parameter(description = "리소스 종류", example = "worksheets") String resource,
-        @Parameter(description = "cursor(선택), 검색어 q(선택 — 지원하는 목록만 읽음), optionsInputs 필드 값. 예: spreadsheet_id=1Bxi…, calendar_id=primary, q=회의") Map<String, String> params);
+        @Parameter(description = "cursor(선택), 검색어 q(선택 — 지원하는 목록만 읽음), optionsInputs 필드 값, /fields 응답 Field의 optionsParams. 예: spreadsheet_id=1Bxi…, calendar_id=primary, q=회의, data_source_id=1f2e…") Map<String, String> params);
+
+    @Operation(
+        summary = "동적 칸 목록 조회",
+        description = "카탈로그 dict 칸의 fieldsSource({app}.{resource})에 해당하는 안쪽 칸 목록을 조회합니다. "
+            + "data.fields는 카탈로그 Field 모양입니다 — key·title·type·required(바깥 칸은 늘 false, date의 start는 true), 있을 때만 description·list·"
+            + "choices([{id,name}] — id가 저장 값)·optionsSource·optionsParams·children. 페이지 넘김 없음. "
+            + "저장은 config.<칸> = {key: 값}이고 key는 받은 그대로 씁니다(다시 인코딩하지 않는다 — '.'은 이미 %2E). "
+            + "optionsParams는 그 칸 드롭다운 요청(GET /api/v1/integrations/{app}/options/{resource})에 고정으로 실을 쿼리입니다. "
+            + "지원: notion/properties(data_source_id 필수 — notion/databases의 값. title 칸이 맨 앞, 나머지 이름순. "
+            + "formula·rollup·files·생성/수정 정보 등 쓸 수 없는 속성은 칸이 없음). "
+            + "오류 code: ACCOUNT_NOT_CONNECTED(400), AUTHENTICATION_REQUIRED(401, 재연동 필요), NOTION_API_UNAVAILABLE(503), "
+            + "INVALID_INPUT(400 — data_source_id 없음·변수 참조·형식 오류, 연동 권한 부족, 공유되지 않은 DB), "
+            + "NOT_FOUND(404, 알 수 없는 목록)")
+    @PreAuthorize("hasRole('USER')")
+    ResponseEntity<ApiResponse<Map<String, List<Map<String, Object>>>>> getFields(
+        CustomUserDetails userDetails,
+        @Parameter(description = "연동 앱", example = "notion") String app,
+        @Parameter(description = "칸 목록 종류", example = "properties") String resource,
+        @Parameter(description = "fieldsInputs 칸 값. 예: data_source_id=1f2e…") Map<String, String> params);
 }

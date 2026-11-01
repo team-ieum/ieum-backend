@@ -39,9 +39,9 @@ class CatalogStartupCheckTest {
              "fixed":{"type":"TRIGGER","config":{}}}""";
 
     @Test
-    @DisplayName("실제 카탈로그 + 전 TriggerType 핸들러 + 카탈로그 optionsSource 합집합 키 → 문제 없음(auth·tool_key 규칙 포함)")
+    @DisplayName("실제 카탈로그 + 전 TriggerType 핸들러 + 카탈로그 optionsSource·fieldsSource 합집합 키 → 문제 없음(auth·tool_key 규칙 포함)")
     void realCatalog_noProblems() {
-        assertThat(CatalogStartupCheck.problems(CATALOG, ALL, catalogSources(CATALOG))).isEmpty();
+        assertThat(CatalogStartupCheck.problems(CATALOG, ALL, catalogSources(CATALOG), catalogFieldSources(CATALOG))).isEmpty();
     }
 
     @Test
@@ -49,7 +49,7 @@ class CatalogStartupCheckTest {
     void missingHandler() {
         Set<TriggerType> handled = EnumSet.complementOf(EnumSet.of(TriggerType.GITHUB_NEW_ISSUE));
 
-        assertThat(CatalogStartupCheck.problems(CATALOG, handled, catalogSources(CATALOG)))
+        assertThat(CatalogStartupCheck.problems(CATALOG, handled, catalogSources(CATALOG), catalogFieldSources(CATALOG)))
                 .containsExactly("트리거 핸들러 없음: GITHUB_NEW_ISSUE");
     }
 
@@ -91,7 +91,7 @@ class CatalogStartupCheckTest {
     @Test
     @DisplayName("문제가 있으면 생성자가 IllegalStateException으로 컨텍스트 로드를 막는다(fail-closed)")
     void constructor_throwsOnProblems() {
-        assertThatThrownBy(() -> new CatalogStartupCheck(CATALOG, new TriggerHandlerRegistry(List.of()), List.of()))
+        assertThatThrownBy(() -> new CatalogStartupCheck(CATALOG, new TriggerHandlerRegistry(List.of()), List.of(), List.of()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("카탈로그 기동 검사 실패");
     }
@@ -105,7 +105,7 @@ class CatalogStartupCheckTest {
         long owners = CATALOG.events().stream().filter(e -> e.optionsSources().contains(removed)).count()
                 + CATALOG.presets().stream().filter(p -> p.optionsSources().contains(removed)).count();
 
-        List<String> problems = CatalogStartupCheck.problems(CATALOG, ALL, keys);
+        List<String> problems = CatalogStartupCheck.problems(CATALOG, ALL, keys, catalogFieldSources(CATALOG));
 
         assertThat(problems).hasSize((int) owners)
                 .allMatch(p -> p.startsWith("optionsSource 공급원 없음: " + removed + " ("));
@@ -122,7 +122,7 @@ class CatalogStartupCheckTest {
                          "fixed":{"type":"TRIGGER","config":{}},
                          "inputFields":[{"key":"t","optionsSource":"nope.event"}]}"""));
 
-        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of())).containsExactly(
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of(), Set.of())).containsExactly(
                 "optionsSource 공급원 없음: nope.event (manual.run)",
                 "optionsSource 공급원 없음: nope.preset (ai.x)");
     }
@@ -134,7 +134,7 @@ class CatalogStartupCheckTest {
                 ,"foo":{"provider":"foo","title":"Foo","brand":"foo","serviceType":"FOO","auth":"foo_token"}""",
                 "[]", Map.of("manual/run.json", TRIGGER));
 
-        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of()))
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of(), Set.of()))
                 .containsExactly("알 수 없는 auth: foo_token (앱 foo)");
     }
 
@@ -143,7 +143,7 @@ class CatalogStartupCheckTest {
     void fixture_toolKeyAuthMismatch(@TempDir Path dir) throws IOException {
         EventCatalog catalog = load(dir, gmailApp(), "[]", Map.of("gmail/send.json", action("builtin:notion_x", "")));
 
-        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of())).containsExactly(
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of(), Set.of())).containsExactly(
                 "tool_key 인증 불일치: gmail.send tool_key=builtin:notion_x 기대 auth=notion_token 앱 auth=google_oauth");
     }
 
@@ -153,7 +153,103 @@ class CatalogStartupCheckTest {
         EventCatalog catalog = load(dir, gmailApp(), "[]",
                 Map.of("gmail/send.json", action("gmail", ",\"builder\":false")));
 
-        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of())).isEmpty();
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of(), Set.of())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("카탈로그 PR 모양 — slack_bot(auth slack_oauth) + builtin:slack_ ACTION + slack.channels 공급원이면 문제 없음")
+    void fixture_slackBotAccepted(@TempDir Path dir) throws IOException {
+        EventCatalog catalog = load(dir, MANUAL_APP + """
+                ,"slack_bot":{"provider":"slack","title":"Slack","brand":"slack","serviceType":"SLACK","auth":"slack_oauth"}""",
+                "[]", Map.of("slack_bot/send_channel_message.json", """
+                        {"node_type":"ACTION","kind":"action","tool_key":"builtin:slack_send_channel_message",
+                         "fixed":{"type":"ACTION","config":{}},
+                         "fields":{"channel":{"title":"채널","required":true,"optionsSource":"slack.channels"}}}"""));
+
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of("slack.channels"), Set.of())).isEmpty();
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of(), Set.of()))
+                .containsExactly("optionsSource 공급원 없음: slack.channels (slack_bot.send_channel_message)");
+    }
+
+    @Test
+    @DisplayName("카탈로그 PR 모양 — discord_bot(auth discord_oauth) + builtin:discord_ ACTION + 공급원 2개(직속 discord.guilds·도구 칸 discord.channels)면 문제 없음")
+    void fixture_discordBotAccepted(@TempDir Path dir) throws IOException {
+        EventCatalog catalog = load(dir, MANUAL_APP + """
+                ,"discord_bot":{"provider":"discord","title":"Discord","brand":"discord","serviceType":"DISCORD","auth":"discord_oauth"}""",
+                "[]", Map.of("discord_bot/send_channel_message.json", """
+                        {"node_type":"ACTION","kind":"action","tool_key":"builtin:discord_send_channel_message",
+                         "builder":true,"generation":false,
+                         "fixed":{"type":"ACTION","config":{}},
+                         "inputFields":[{"key":"guild_id","title":"서버","type":"string","ref":false,"optionsSource":"discord.guilds"}],
+                         "fields":{"channel_id":{"title":"채널","required":true,"optionsSource":"discord.channels","optionsInputs":["guild_id"]},
+                                   "content":{"title":"메시지","type":"text","required":true}},
+                         "outputFields":[{"key":"id","title":"메시지 ID","type":"string"}]}"""));
+
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of("discord.guilds", "discord.channels"), Set.of())).isEmpty();
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of(), Set.of())).containsExactlyInAnyOrder(
+                "optionsSource 공급원 없음: discord.guilds (discord_bot.send_channel_message)",
+                "optionsSource 공급원 없음: discord.channels (discord_bot.send_channel_message)");
+    }
+
+    @Test
+    @DisplayName("discord_bot 앱 auth를 웹훅 것(webhook_credential)으로 두면 'tool_key 인증 불일치' — 앱 하나에 auth 하나(D7)")
+    void fixture_discordBotWrongAuth(@TempDir Path dir) throws IOException {
+        EventCatalog catalog = load(dir, MANUAL_APP + """
+                ,"discord_bot":{"provider":"discord","title":"Discord","brand":"discord","serviceType":"DISCORD","auth":"webhook_credential"}""",
+                "[]", Map.of("discord_bot/send_channel_message.json", action("builtin:discord_send_channel_message", "")));
+
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of(), Set.of())).containsExactly(
+                "tool_key 인증 불일치: discord_bot.send_channel_message tool_key=builtin:discord_send_channel_message"
+                        + " 기대 auth=discord_oauth 앱 auth=webhook_credential");
+    }
+
+    @Test
+    @DisplayName("이벤트·프리셋의 공급원 없는 fieldsSource → 키와 이벤트 이름·프리셋 id. optionsSource 키로는 채워지지 않는다")
+    void fixture_missingFieldsSource(@TempDir Path dir) throws IOException {
+        EventCatalog catalog = load(dir, MANUAL_APP,
+                """
+                [{"id":"ai.x","inputFields":[{"key":"p","type":"dict","fieldsSource":"nope.preset_fields"}]}]""",
+                Map.of("manual/run.json", """
+                        {"node_type":"TRIGGER","kind":"trigger","trigger_type":"MANUAL","tool_key":null,
+                         "fixed":{"type":"TRIGGER","config":{}},
+                         "inputFields":[{"key":"p","type":"dict","fieldsSource":"nope.fields"}]}"""));
+        Set<String> keys = Set.of("nope.fields", "nope.preset_fields");
+
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, keys, Set.of())).containsExactly(
+                "fieldsSource 공급원 없음: nope.fields (manual.run)",
+                "fieldsSource 공급원 없음: nope.preset_fields (ai.x)");
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of(), keys)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("카탈로그 PR 모양 — notion.create_row·update_row(builtin:notion_ = notion_token)는 공급원 4개가 있으면 문제 없음")
+    void fixture_notionRowsAccepted(@TempDir Path dir) throws IOException {
+        EventCatalog catalog = load(dir, MANUAL_APP + """
+                ,"notion":{"provider":"notion","title":"Notion","brand":"notion","serviceType":"NOTION","auth":"notion_token"}""",
+                "[]", Map.of("notion/create_row.json", """
+                        {"node_type":"ACTION","kind":"action","tool_key":"builtin:notion_create_row",
+                         "builder":true,"generation":false,"fixed":{"type":"ACTION","config":{}},
+                         "fields":{"data_source_id":{"optionsSource":"notion.databases","ref":false},
+                                   "properties":{"type":"dict","fieldsSource":"notion.properties","fieldsInputs":["data_source_id"],"ref":false},
+                                   "template":{"optionsSource":"notion.templates","optionsInputs":["data_source_id"],"ref":false},
+                                   "content":{"type":"text"}}}""",
+                        "notion/update_row.json", """
+                        {"node_type":"ACTION","kind":"action","tool_key":"builtin:notion_update_row",
+                         "builder":true,"generation":false,"fixed":{"type":"ACTION","config":{}},
+                         "fields":{"data_source_id":{"type":"string","required":false,"optionsSource":"notion.databases","ref":false},
+                                   "row_id":{"optionsSource":"notion.data_source_items","optionsInputs":["data_source_id"]},
+                                   "properties":{"type":"dict","fieldsSource":"notion.properties","fieldsInputs":["data_source_id"],"ref":false},
+                                   "content":{"type":"text"}}}"""));
+
+        assertThat(CatalogStartupCheck.problems(catalog, ALL,
+                Set.of("notion.databases", "notion.templates", "notion.data_source_items"),
+                Set.of("notion.properties"))).isEmpty();
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of("notion.databases"), Set.of()))
+                .containsExactlyInAnyOrder(
+                        "optionsSource 공급원 없음: notion.templates (notion.create_row)",
+                        "fieldsSource 공급원 없음: notion.properties (notion.create_row)",
+                        "optionsSource 공급원 없음: notion.data_source_items (notion.update_row)",
+                        "fieldsSource 공급원 없음: notion.properties (notion.update_row)");
     }
 
     private static String gmailApp() {
@@ -171,6 +267,13 @@ class CatalogStartupCheckTest {
         Set<String> out = new TreeSet<>();
         catalog.events().stream().map(EventDefinition::optionsSources).forEach(out::addAll);
         catalog.presets().forEach(p -> out.addAll(p.optionsSources()));
+        return out;
+    }
+
+    private static Set<String> catalogFieldSources(EventCatalog catalog) {
+        Set<String> out = new TreeSet<>();
+        catalog.events().stream().map(EventDefinition::fieldsSources).forEach(out::addAll);
+        catalog.presets().forEach(p -> out.addAll(p.fieldsSources()));
         return out;
     }
 

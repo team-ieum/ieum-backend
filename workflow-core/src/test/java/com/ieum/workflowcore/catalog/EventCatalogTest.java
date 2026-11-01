@@ -92,6 +92,20 @@ class EventCatalogTest {
     }
 
     @Test
+    @DisplayName("동적 칸 이벤트 — notion.create_row·update_row는 properties의 fieldsSource와 드롭다운 optionsSource를 따로 모은다")
+    void notionRows_fieldsSourceFromRealCatalog() {
+        EventDefinition create = CATALOG.event("notion.create_row").orElseThrow();
+        EventDefinition update = CATALOG.event("notion.update_row").orElseThrow();
+
+        assertThat(create.toolKey()).isEqualTo("builtin:notion_create_row");
+        assertThat(create.fieldsSources()).containsExactly("notion.properties");
+        assertThat(create.optionsSources()).containsExactlyInAnyOrder("notion.databases", "notion.templates");
+        assertThat(update.toolKey()).isEqualTo("builtin:notion_update_row");
+        assertThat(update.fieldsSources()).containsExactly("notion.properties");
+        assertThat(update.optionsSources()).containsExactlyInAnyOrder("notion.databases", "notion.data_source_items");
+    }
+
+    @Test
     @DisplayName("builder:false 이벤트도 읽는다 — gmail.send_email")
     void gmailSendEmail_nonBuilder() {
         EventDefinition e = CATALOG.event("gmail.send_email").orElseThrow();
@@ -165,6 +179,25 @@ class EventCatalogTest {
                     .containsExactly("manual.run", "manual.send");
             assertThat(catalog.triggerTypeOf("manual.run")).hasValue(TriggerType.MANUAL);
             assertThat(catalog.event("manual.send")).map(EventDefinition::toolKey).hasValue("x");
+        }
+    }
+
+    @Test
+    @DisplayName("fieldsSource를 fields·inputFields에서 children까지 모으고 optionsSource와 섞지 않는다")
+    void fieldsSources_collectedSeparately(@TempDir Path dir) throws IOException {
+        writeCatalog(dir, Map.of("manual/run.json", trigger("MANUAL"), "manual/row.json", """
+                {"node_type":"ACTION","kind":"action","tool_key":"x","fixed":{"type":"ACTION","config":{}},
+                 "fields":{"db":{"optionsSource":"a.dbs"},
+                           "properties":{"type":"dict","fieldsSource":"a.props","fieldsInputs":["db"]}},
+                 "inputFields":[{"key":"o","type":"object","children":[
+                   {"key":"inner","type":"dict","fieldsSource":"a.inner"}]}]}"""));
+
+        try (URLClassLoader loader = loader(dir)) {
+            EventCatalog catalog = EventCatalog.load(loader);
+            EventDefinition row = catalog.event("manual.row").orElseThrow();
+            assertThat(row.fieldsSources()).containsExactly("a.inner", "a.props");
+            assertThat(row.optionsSources()).containsExactly("a.dbs");
+            assertThat(catalog.event("manual.run").orElseThrow().fieldsSources()).isEmpty();
         }
     }
 

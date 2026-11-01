@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import com.ieum.workflowcore.engine.AgentInternalToken;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
@@ -15,7 +16,7 @@ import org.springframework.web.reactive.function.client.WebClient;
  * ieum-agent {@code POST /v1/workflows/validate} 클라이언트 — 워크플로우 정적 검증.
  *
  * <p>런타임(workflow-core)이 쓰므로 api {@code AgentClient}가 아니라 여기서 {@code ${ieum.agent.url}}로 직접 부른다
- * ({@code ActionNodeExecutor}와 같은 이유). 무인증 엔드포인트라 헤더를 싣지 않는다.
+ * ({@code ActionNodeExecutor}와 같은 이유). 사용자 헤더는 싣지 않고 내부 토큰({@link AgentInternalToken})만 싣는다.
  *
  * <p><b>fail-open:</b> 3초 타임아웃·연결 실패·4xx·5xx·빈 본문·파싱 실패는 전부 {@link Optional#empty()}다.
  * 호출자는 empty를 "검증 못 함"으로 보고 실행을 진행한다 — HTTP·조건·변환만 있는 워크플로우가 agent 장애로
@@ -30,8 +31,12 @@ public class WorkflowValidationClient {
 
     private final WebClient webClient;
 
-    public WorkflowValidationClient(@Value("${ieum.agent.url}") String agentBaseUrl) {
-        this.webClient = WebClient.builder().baseUrl(agentBaseUrl).build();
+    public WorkflowValidationClient(@Value("${ieum.agent.url}") String agentBaseUrl,
+                                    @Value("${ieum.agent.internal-token:}") String internalToken) {
+        this.webClient = WebClient.builder()
+            .baseUrl(agentBaseUrl)
+            .defaultHeaders(AgentInternalToken.headers(internalToken))
+            .build();
     }
 
     public Optional<WorkflowValidationResult> validate(List<Map<String, Object>> nodes,

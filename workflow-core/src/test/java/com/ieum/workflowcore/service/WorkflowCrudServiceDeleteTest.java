@@ -1,9 +1,12 @@
 package com.ieum.workflowcore.service;
 
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.inOrder;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.workflowcore.chat.repository.ChatMessageRepository;
+import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
 import com.ieum.workflowcore.document.WorkflowDefinitionRepository;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.repository.NodeTestSampleRepository;
@@ -13,6 +16,7 @@ import com.ieum.workflowcore.repository.WorkflowRepository;
 import com.ieum.workflowcore.repository.WorkflowVersionRepository;
 import com.ieum.workflowcore.repository.WorkflowWebhookTokenRepository;
 import com.ieum.workflowcore.scheduler.WorkflowScheduler;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
@@ -23,6 +27,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Pageable;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -44,6 +49,8 @@ class WorkflowCrudServiceDeleteTest {
     @Mock private NodeTestSampleRepository nodeTestSampleRepository;
     @Mock private AppTriggerSubscriptionService appTriggerSubscriptionService;
     @Mock private WorkflowWebhookTokenRepository webhookTokenRepository;
+    @Mock private ChatSessionRepository chatSessionRepository;
+    @Mock private ChatMessageRepository chatMessageRepository;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
     @InjectMocks private WorkflowCrudService service;
 
@@ -93,6 +100,39 @@ class WorkflowCrudServiceDeleteTest {
         InOrder order = inOrder(webhookTokenRepository, workflowRepository);
         order.verify(webhookTokenRepository).deleteByWorkflowId(workflowId);
         order.verify(workflowRepository).delete(workflow);
+    }
+
+    @Test
+    @DisplayName("삭제 — 채팅 메시지 → 세션 → 워크플로우 순으로 지운다(IEUM-BE-96, 채팅이 고아로 남지 않게)")
+    void delete_removesChatMessagesThenSessionsBeforeWorkflow() {
+        Workflow workflow = workflow();
+        given(workflowRepository.findByIdAndUserId(workflowId, userId)).willReturn(Optional.of(workflow));
+
+        runInTransaction(() -> service.deleteWorkflow(userId, workflowId));
+
+        InOrder order = inOrder(chatMessageRepository, chatSessionRepository, workflowRepository);
+        order.verify(chatMessageRepository).deleteByWorkflowId(workflowId);
+        order.verify(chatSessionRepository).deleteByWorkflowId(workflowId);
+        order.verify(workflowRepository).delete(workflow);
+    }
+
+    @Test
+    @DisplayName("회원 탈퇴 — 사용자의 워크플로우를 전부 같은 삭제 경로로 지우고, 커밋 후 각 스케줄 잡을 해제한다")
+    void deleteAllByUserId_deletesEveryWorkflowOfUser() {
+        Workflow first = workflow();
+        Workflow second = Workflow.builder().userId(userId).name("w2").isActive(true).build();
+        UUID secondId = UUID.randomUUID();
+        ReflectionTestUtils.setField(second, "id", secondId);
+        given(workflowRepository.findByUserId(userId, Pageable.unpaged())).willReturn(List.of(first, second));
+
+        runInTransaction(() -> service.deleteAllByUserId(userId));
+
+        then(workflowRepository).should().delete(first);
+        then(workflowRepository).should().delete(second);
+        then(chatSessionRepository).should().deleteByWorkflowId(workflowId);
+        then(chatSessionRepository).should().deleteByWorkflowId(secondId);
+        then(workflowScheduler).should().deleteJob(workflowId);
+        then(workflowScheduler).should().deleteJob(secondId);
     }
 
     /** afterCommit 콜백 등록에 트랜잭션 동기화가 필요하다 — WorkflowCrudServiceScheduleTest와 같은 방식. */
