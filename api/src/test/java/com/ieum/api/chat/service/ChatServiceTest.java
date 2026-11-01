@@ -210,6 +210,8 @@ class ChatServiceTest {
         assertThat(result.llmProvider()).isEqualTo("OPENAI");
         assertThat(result.decryptedApiKey()).isEqualTo("k");
         assertThat(result.tools()).isNull();
+        assertThat(result.useBetaPlatformKey()).isFalse();
+        verify(betaPlatformProvider, never()).isBetaEligible(any());
         verify(workflowCrudService, never()).findLatestVersion(any());
         verify(workflowCrudService, never()).loadDefinition(any());
     }
@@ -224,6 +226,7 @@ class ChatServiceTest {
         assertThatThrownBy(() -> chatService.resolveAgentConfig(workflowId, userId, foreign, "ROLE_USER"))
             .isInstanceOf(CustomException.class)
             .satisfies(e -> assertThat(((CustomException) e).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+        verify(credentialProvider, never()).getDecryptedApiKey(any(), any());
     }
 
     @Test
@@ -239,7 +242,7 @@ class ChatServiceTest {
     }
 
     @Test
-    @DisplayName("AI 노드가 없고 크레덴셜도 없지만 베타 자격이면 platform 키 자격만 표시한다 (INCR 없음)")
+    @DisplayName("크레덴셜이 없지만 베타 자격이면 platform 키 자격만 표시한다 (INCR 없음)")
     void resolveAgentConfig_noCredential_betaEligible() {
         given(credentialService.getByUserId(userId))
             .willReturn(List.of());
@@ -254,8 +257,8 @@ class ChatServiceTest {
     }
 
     @Test
-    @DisplayName("AI 노드가 없고 fallbackCredentialId가 null일 때, 등록된 크레덴셜이 있으면 자동으로 사용하여 AgentConfig를 반환한다")
-    void resolveAgentConfig_noAiNode_autoFallbackToUserCredential() {
+    @DisplayName("요청 credentialId가 null이고 등록된 크레덴셜이 있으면 그 키로 AgentConfig를 반환한다")
+    void resolveAgentConfig_noRequestCredential_autoFallbackToUserCredential() {
         UUID autoCredentialId = UUID.randomUUID();
         Credential credential = Mockito.mock(Credential.class);
 
@@ -792,42 +795,38 @@ class ChatServiceTest {
     }
 
     @Test
-    @DisplayName("소유한 fallback credentialId는 AI 노드에 주입되어 저장된다")
-    void finalizeStream_ownedFallbackCredential_injectedAndSaved() throws Exception {
-        UUID fallbackCredentialId = UUID.randomUUID();
-        ChatAgentResponse resp = buildAiNodeResponse();
-
-        ChatSession session = buildSession(workflowId, userId);
-        given(sessionRepository.findById(sessionId)).willReturn(Optional.of(session));
-        given(messageRepository.save(any(ChatMessage.class)))
-            .willReturn(buildMessage(session, MessageType.AGENT, "완성됐어요"));
+    @DisplayName("빈 credentialId AI 노드는 빈 채로 저장된다 — 요청 키·채팅 제공사를 주입하지 않는다")
+    @SuppressWarnings("unchecked")
+    void finalizeStream_emptyCredentialAiNode_savedEmpty() throws Exception {
+        // 빌더가 모델 카드로 키·제공사·모델을 함께 쓴다(IEUM-AI-85). 채팅 제공사(OPENAI)와 노드 제공사가
+        // 달라도 요청 키를 채우면 제공사가 엇갈린 키가 들어간다.
+        UUID requestCredentialId = UUID.randomUUID();
+        ChatAgentResponse resp = buildNodeResponse(
+            "{ \"id\": \"node-ai\", \"event\": \"ai.agent\", \"type\": \"AI\", \"config\": { \"credentialId\": \"\" } }");
+        givenFinalizeStreamSession();
         given(credentialService.getByUserId(userId))
-            .willReturn(List.of(buildCredential(fallbackCredentialId)));
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+            .willReturn(List.of(buildCredential(requestCredentialId)));
+        ChatService.AgentConfig config = new ChatService.AgentConfig("OPENAI", "key", null, false);
 
-        chatService.finalizeStream(workflowId, sessionId, resp, config, fallbackCredentialId, userId);
+        chatService.finalizeStream(workflowId, sessionId, resp, config, requestCredentialId, userId);
 
-        verify(workflowCrudService).saveAgentVersion(
-            eq(workflowId),
-            argThat(nodesJson -> nodesJson.contains(fallbackCredentialId.toString())),
-            any(), any(), any(), eq(false));
+        Map<String, Object> savedConfig = (Map<String, Object>) captureSavedNodes().get(0).get("config");
+        assertThat(savedConfig).containsEntry("credentialId", "").doesNotContainKey("llmProvider");
     }
 
     @Test
-    @DisplayName("남의 fallback credentialId는 주입 뒤 검사에 걸려 저장되지 않는다")
-    void finalizeStream_foreignFallbackCredential_rejected() throws Exception {
-        // fallbackCredentialId는 서버가 고른 값이 아니라 요청 본문의 credentialId 원본이고,
-        // AI 노드가 있는 워크플로우에서는 resolveAgentConfig가 소유 검증 없이 지나친다.
-        // 검사가 주입보다 앞서면 이 값이 그대로 저장된다(IEUM-BE-64 회귀).
+    @DisplayName("agent 응답 AI 노드가 남의 credentialId를 직접 실으면 저장하지 않는다")
+    void foreignCredentialAiNodeFromAgent_rejected() throws Exception {
+        // agent가 실어 보낸 남의 키는 저장 가드가 막는다(IEUM-BE-64).
         UUID foreignCredentialId = UUID.randomUUID();
-        ChatAgentResponse resp = buildAiNodeResponse();
+        ChatAgentResponse resp = buildAiNodeResponse(foreignCredentialId.toString());
 
         given(credentialService.getByUserId(userId))
             .willReturn(List.of(buildCredential(UUID.randomUUID())));
         ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
 
         assertThatThrownBy(() -> chatService.finalizeStream(
-            workflowId, sessionId, resp, config, foreignCredentialId, userId))
+            workflowId, sessionId, resp, config, null, userId))
             .isInstanceOf(CustomException.class)
             .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
                 .isEqualTo(ErrorCode.INVALID_WORKFLOW))
@@ -839,7 +838,7 @@ class ChatServiceTest {
 
     @Test
     @DisplayName("blocking chat — 요청의 남의 credentialId는 요청 키 소유 검증에서 막혀 agent를 부르지 않는다")
-    void chat_foreignRequestCredentialId_notInjectedIntoAiNode() throws Exception {
+    void chat_foreignRequestCredentialId_rejectedByOwnershipCheck() throws Exception {
         // 공격 경로 재현: 자기 워크플로우에 남의 credentialId를 실어 채팅하면
         // resolveAgentConfig가 요청 키 소유 검증에서 막아 agent를 부르지 않는다.
         UUID foreignCredentialId = UUID.randomUUID();
@@ -973,9 +972,9 @@ class ChatServiceTest {
     }
 
     @Test
-    @DisplayName("크레덴셜 주입은 agent가 보낸 type이 아니라 event로 계산한 type을 본다")
+    @DisplayName("저장 type은 agent가 보낸 type이 아니라 event로 계산한 값이다 — 빈 credentialId는 빈 채로")
     @SuppressWarnings("unchecked")
-    void finalizeStream_injectsByDerivedType() throws Exception {
+    void finalizeStream_savesDerivedType() throws Exception {
         UUID fallbackCredentialId = UUID.randomUUID();
         ChatAgentResponse resp = buildNodeResponse("{ \"id\": \"node-ai\", \"event\": \"ai.agent\","
             + " \"type\": \"HTTP\", \"config\": { \"llmProvider\": \"CLAUDE\" } }");
@@ -988,8 +987,7 @@ class ChatServiceTest {
 
         Map<String, Object> saved = captureSavedNodes().get(0);
         assertThat(saved).containsEntry("type", "AI");
-        assertThat((Map<String, Object>) saved.get("config"))
-            .containsEntry("credentialId", fallbackCredentialId.toString());
+        assertThat((Map<String, Object>) saved.get("config")).doesNotContainKey("credentialId");
     }
 
     @Test
@@ -1013,7 +1011,7 @@ class ChatServiceTest {
     }
 
     @Test
-    @DisplayName("agent 노드에 type이 없어도 event로 계산한다 — 저장 type AI·credentialId 주입, 응답 nodes도 파생 노드")
+    @DisplayName("agent 노드에 type이 없어도 event로 계산한다 — 저장 type AI·credentialId 빈 채, 응답 nodes도 파생 노드")
     @SuppressWarnings("unchecked")
     void finalizeStream_typeOmitted_derivedFromEvent() throws Exception {
         UUID fallbackCredentialId = UUID.randomUUID();
@@ -1029,8 +1027,7 @@ class ChatServiceTest {
 
         Map<String, Object> saved = captureSavedNodes().get(0);
         assertThat(saved).containsEntry("type", "AI");
-        assertThat((Map<String, Object>) saved.get("config"))
-            .containsEntry("credentialId", fallbackCredentialId.toString());
+        assertThat((Map<String, Object>) saved.get("config")).doesNotContainKey("credentialId");
         // FE는 응답 nodes를 type으로 거른다 — agent 원본(type 없음)이 아니라 저장한 파생 노드가 실린다
         assertThat(response.getNodes()).hasSize(1);
         assertThat((Map<String, Object>) response.getNodes().get(0))
@@ -1336,18 +1333,19 @@ class ChatServiceTest {
         return objectMapper.readValue(json, ChatAgentResponse.class);
     }
 
-    /** credentialId가 비어 있는 AI 노드 하나짜리 응답 — fallback 주입이 일어나는 모양이다. */
-    private ChatAgentResponse buildAiNodeResponse() throws Exception {
+    /** config.credentialId를 실은 AI 노드 하나짜리 응답. */
+    private ChatAgentResponse buildAiNodeResponse(String credentialId) throws Exception {
         return objectMapper.readValue("""
             {
                 "message": "완성됐어요",
                 "type": "WORKFLOW_GENERATED",
                 "nodes": [
-                    { "id": "node-ai", "event": "ai.agent", "type": "AI", "config": { "llmProvider": "CLAUDE" } }
+                    { "id": "node-ai", "event": "ai.agent", "type": "AI",
+                      "config": { "llmProvider": "CLAUDE", "credentialId": "%s" } }
                 ],
                 "edges": []
             }
-            """, ChatAgentResponse.class);
+            """.formatted(credentialId), ChatAgentResponse.class);
     }
 
     private Credential buildCredential(UUID credentialId) {
