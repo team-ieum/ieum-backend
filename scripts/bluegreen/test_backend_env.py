@@ -21,7 +21,7 @@ SCRIPT = Path(__file__).with_name('backend_env.py')
 REPOSITORY = Path(__file__).resolve().parents[2]
 WORKFLOW = REPOSITORY / '.github/workflows/backend-dev-server.yml'
 SECRET = 'synthetic-credential-never-print-this'
-PREFIX = 'DEV_'
+PREFIX = 'DEV_COM_'
 TRANSPORT = 'IEUM_BACKEND_SECRETS_JSON'
 DEFAULT_PAYLOAD = object()
 spec = importlib.util.spec_from_file_location('backend_env_under_test', SCRIPT)
@@ -102,6 +102,23 @@ class BuildEnvironmentTest(unittest.TestCase):
             if key not in valid_env():
                 self.assertNotIn(key, actual)
 
+    def test_legacy_color_and_other_environment_secrets_are_not_fallbacks(self):
+        for prefix in ('DEV_', 'DEV_BLUE_', 'DEV_GREEN_', 'MAIN_COM_', 'AWS_'):
+            with self.subTest(prefix=prefix):
+                old = {prefix + key: value for key, value in valid_env().items()}
+                self.assertEqual(self.assert_rejected(json.dumps(old)).code,
+                                 'missing_required_configuration')
+
+    def test_other_namespaces_cannot_override_or_leak_into_common_candidate(self):
+        extra = {}
+        for prefix in ('DEV_', 'DEV_BLUE_', 'DEV_GREEN_', 'MAIN_COM_', 'AWS_'):
+            for key in ('DB_PASSWORD', 'RDS_DB_URL', 'SPRING_CONFIG_IMPORT',
+                        'AGENT_SERVICE_URL', 'PRIVATE_DEPLOYMENT_VALUE'):
+                extra[prefix + key] = 'unselected-value'
+        actual = records(backend_env.build_environment(secret_payload(extra=extra)))
+        self.assertEqual(actual, {**valid_env(), 'SPRING_PROFILES_ACTIVE': 'dev'})
+        self.assertNotIn('COM_DB_PASSWORD', actual)
+
     def test_empty_known_optional_values_are_omitted_to_keep_app_defaults(self):
         values = valid_env()
         values.update({key: '' for key in backend_env.OPTIONAL_KEYS})
@@ -140,7 +157,7 @@ class BuildEnvironmentTest(unittest.TestCase):
 
     def test_case_insensitive_secret_names_are_normalized_to_uppercase_app_keys(self):
         data = {key.lower(): value for key, value in secret_data().items()}
-        data['Dev_New_Service_Token'] = SECRET
+        data['Dev_Com_New_Service_Token'] = SECRET
         self.assertEqual(records(backend_env.build_environment(json.dumps(data))),
                          {**valid_env(), 'SPRING_PROFILES_ACTIVE': 'dev', 'NEW_SERVICE_TOKEN': SECRET})
 

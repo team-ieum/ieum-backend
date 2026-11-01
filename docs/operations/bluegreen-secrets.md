@@ -1,26 +1,29 @@
 # 개발 Blue/Green 배포의 Backend 설정
 
-이 문서는 2026-10-28 로컬 수정 기준이다. GitHub 설정·서버 파일·배포는 변경하지 않았다.
+이 문서는 2026-11-02 로컬 수정 기준이다. GitHub 설정·서버 파일·배포는 변경하지 않았다.
 
 ## 설정 원본과 접두사
 
-Backend 개발 배포는 **`DEV_` 접두사가 붙은 개별 GitHub Actions Secrets**를 설정 원본으로
+Backend 개발 배포는 **`DEV_COM_` 접두사가 붙은 개별 GitHub Actions Secrets**를 설정 원본으로
 사용한다. 접두사를 제거한 이름을 앱 환경변수로 쓰며 기존 `RDS_DB_*`·`GH_APP_*` 9개 별칭은 유지한다.
-새로운 일반 앱 설정은 `DEV_실제_앱_변수명`으로 등록하면 workflow의 개별 매핑이나
+새로운 일반 앱 설정은 `DEV_COM_실제_앱_변수명`으로 등록하면 workflow의 개별 매핑이나
 도구의 허용 목록을 수정하지 않고 수집된다. 앱이 그 변수를 실제로 읽도록 구현돼 있어야 한다.
 
 ```text
-DEV_RDS_DB_URL       → DB_URL
-DEV_GH_APP_CLIENT_ID → GITHUB_APP_CLIENT_ID
-DEV_NEW_OPTION       → NEW_OPTION
+DEV_COM_RDS_DB_URL       → DB_URL
+DEV_COM_GH_APP_CLIENT_ID → GITHUB_APP_CLIENT_ID
+DEV_COM_NEW_OPTION       → NEW_OPTION
 ```
 
-이 Backend 저장소에서 `DEV_`가 붙은 항목은 앱 설정으로 취급한다. `MAIN_`, `DEVELOPMENT_`,
-`DEVX_`는 선택하지 않는다. 접두사는 한 번만 제거한다. 이전 `DEV_BACKEND_RDS_DB_URL` 이름을
-만들었다면 `DEV_RDS_DB_URL`로 정리해야 하며, 이전 이름을 자동으로 DB_URL에 다시 매핑하지 않는다.
+이 Backend 저장소에서는 **`DEV_COM_`만 앱 설정으로 수집**한다. 기존 `DEV_`, 색상별
+`DEV_BLUE_`·`DEV_GREEN_`, `MAIN_`·`AWS_`, `DEVELOPMENT_`·`DEVX_`는 선택하지 않는다.
+기존 접두사 없는 항목과 예전 `DEV_RDS_DB_URL` 등도 누락값의 fallback이 아니다.
+이 항목들이 함께 있어도 새 공통 설정에 섞거나 덮어쓰지 않는다. `DEV_COM_` 접두사는 한 번만 제거한다.
+예를 들어 `DEV_COM_COM_NEW_OPTION`은 `COM_NEW_OPTION`으로 전달하며 다시 제거하지 않는다.
 
-현재 사용자가 전달한 기존 43개 이름은 접두사가 없다. 실제 적용 전에 필요한 값들을 위 규칙의
-새 이름으로 등록해야 한다. 기존 이름을 자동 재조회·복사·삭제하거나 GitHub 설정을 바꾸지 않았다.
+기존 접두사 없는 Secrets는 유지하고, 이 브랜치 적용 전에 필요한 값들을 새 이름으로 추가한다.
+이전 `DEV_` 이름으로만 등록한 경우에도 `DEV_COM_` 이름으로 이전해야 한다.
+기존 이름을 자동 재조회·복사·삭제하거나 GitHub 설정을 바꾸지 않았다.
 접두사 없는 기존 Secret·서버 `/home/kwung/deploy/ieum-backend/.env`·기존 runtime·`BACKEND_ENV`
 묶음 Secret에서 누락값을 보충하는 fallback은 없다. Main/AWS workflow는 변경하지 않았다.
 
@@ -47,6 +50,18 @@ Secret을 사용하며, environment 전용 Secret은 자동 제공되지 않는�
 최종 snapshot은 `/home/kwung/deploy/bluegreen/runtime/{blue|green}/backend.env`이며,
 Docker는 이 파일을 읽어 컨테이너 환경변수로 전달한다.
 
+Blue·Green은 배포 시점에 같은 `DEV_COM_` 원본을 사용하지만 snapshot은 각 색상에 따로 보존한다.
+색상별 `DEV_BLUE_`·`DEV_GREEN_` 앱 Secret으로 덮어쓰지 않으며, 컨테이너·네트워크·IP는
+공통 controller와 Frontend의 topology 등록이 담당한다. `JAVA_VERSION=21`과
+`IMAGE_NAME=ieum-backend-dev`는 현재 Backend workflow의 고정값이다.
+
+공용 데이터망 전환 시에는 `DEV_COM_RDS_DB_URL`의 host를 `ieum-postgres`,
+`DEV_COM_REDIS_HOST`를 `ieum-redis`, `DEV_COM_MONGO_URI`의 host를 `ieum-mongo`로
+지정할 수 있다. 실제 공용 컨테이너 이름과 데이터망 연결이 일치해야 한다.
+DB명·계정·비밀번호·Redis DB 및 Mongo authSource는 기존 실제 DEV 설정을 유지한다.
+`DEV_COM_AES_SECRET_KEY`·JWT 키를 새 값으로 임의 생성하지 않는다.
+현재 서버의 기존 앱망 IP를 그대로 복사해 공용 데이터망 전환이 완료됐다고 간주하지 않는다.
+
 ## 기존 필수 설정과 이름 매핑
 
 현재 앱에서 기본값이 없는 사용자 설정 24개는 계속 필수로 검증한다. 누락·빈 문자열·공백만 있는
@@ -55,30 +70,30 @@ Docker는 이 파일을 읽어 컨테이너 환경변수로 전달한다.
 
 | 새 GitHub Secret 이름 | 앱 환경변수 이름 |
 |---|---|
-| `DEV_RDS_DB_URL` | `DB_URL` |
-| `DEV_RDS_DB_USERNAME` | `DB_USERNAME` |
-| `DEV_RDS_DB_PASSWORD` | `DB_PASSWORD` |
-| `DEV_REDIS_HOST` | `REDIS_HOST` |
-| `DEV_REDIS_PORT` | `REDIS_PORT` |
-| `DEV_MONGO_URI` | `MONGO_URI` |
-| `DEV_GOOGLE_CLIENT_ID` | `GOOGLE_CLIENT_ID` |
-| `DEV_GOOGLE_CLIENT_SECRET` | `GOOGLE_CLIENT_SECRET` |
-| `DEV_CORS_ALLOWED_ORIGINS` | `CORS_ALLOWED_ORIGINS` |
-| `DEV_JWT_SECRET` | `JWT_SECRET` |
-| `DEV_JWT_EXPIRATION` | `JWT_EXPIRATION` |
-| `DEV_JWT_REFRESH_EXPIRATION` | `JWT_REFRESH_EXPIRATION` |
-| `DEV_AES_SECRET_KEY` | `AES_SECRET_KEY` |
-| `DEV_NOTION_CLIENT_ID` | `NOTION_CLIENT_ID` |
-| `DEV_NOTION_CLIENT_SECRET` | `NOTION_CLIENT_SECRET` |
-| `DEV_NOTION_AUTH_URL` | `NOTION_AUTH_URL` |
-| `DEV_NOTION_TOKEN_URL` | `NOTION_TOKEN_URL` |
-| `DEV_NOTION_REDIRECT_URI` | `NOTION_REDIRECT_URI` |
-| `DEV_NOTION_FRONTEND_REDIRECT_URI` | `NOTION_FRONTEND_REDIRECT_URI` |
-| `DEV_GH_APP_CLIENT_ID` | `GITHUB_APP_CLIENT_ID` |
-| `DEV_GH_APP_CLIENT_SECRET` | `GITHUB_APP_CLIENT_SECRET` |
-| `DEV_GH_APP_TOKEN_URL` | `GITHUB_APP_TOKEN_URL` |
-| `DEV_GH_APP_REDIRECT_URI` | `GITHUB_APP_REDIRECT_URI` |
-| `DEV_GH_APP_FRONTEND_REDIRECT_URI` | `GITHUB_APP_FRONTEND_REDIRECT_URI` |
+| `DEV_COM_RDS_DB_URL` | `DB_URL` |
+| `DEV_COM_RDS_DB_USERNAME` | `DB_USERNAME` |
+| `DEV_COM_RDS_DB_PASSWORD` | `DB_PASSWORD` |
+| `DEV_COM_REDIS_HOST` | `REDIS_HOST` |
+| `DEV_COM_REDIS_PORT` | `REDIS_PORT` |
+| `DEV_COM_MONGO_URI` | `MONGO_URI` |
+| `DEV_COM_GOOGLE_CLIENT_ID` | `GOOGLE_CLIENT_ID` |
+| `DEV_COM_GOOGLE_CLIENT_SECRET` | `GOOGLE_CLIENT_SECRET` |
+| `DEV_COM_CORS_ALLOWED_ORIGINS` | `CORS_ALLOWED_ORIGINS` |
+| `DEV_COM_JWT_SECRET` | `JWT_SECRET` |
+| `DEV_COM_JWT_EXPIRATION` | `JWT_EXPIRATION` |
+| `DEV_COM_JWT_REFRESH_EXPIRATION` | `JWT_REFRESH_EXPIRATION` |
+| `DEV_COM_AES_SECRET_KEY` | `AES_SECRET_KEY` |
+| `DEV_COM_NOTION_CLIENT_ID` | `NOTION_CLIENT_ID` |
+| `DEV_COM_NOTION_CLIENT_SECRET` | `NOTION_CLIENT_SECRET` |
+| `DEV_COM_NOTION_AUTH_URL` | `NOTION_AUTH_URL` |
+| `DEV_COM_NOTION_TOKEN_URL` | `NOTION_TOKEN_URL` |
+| `DEV_COM_NOTION_REDIRECT_URI` | `NOTION_REDIRECT_URI` |
+| `DEV_COM_NOTION_FRONTEND_REDIRECT_URI` | `NOTION_FRONTEND_REDIRECT_URI` |
+| `DEV_COM_GH_APP_CLIENT_ID` | `GITHUB_APP_CLIENT_ID` |
+| `DEV_COM_GH_APP_CLIENT_SECRET` | `GITHUB_APP_CLIENT_SECRET` |
+| `DEV_COM_GH_APP_TOKEN_URL` | `GITHUB_APP_TOKEN_URL` |
+| `DEV_COM_GH_APP_REDIRECT_URI` | `GITHUB_APP_REDIRECT_URI` |
+| `DEV_COM_GH_APP_FRONTEND_REDIRECT_URI` | `GITHUB_APP_FRONTEND_REDIRECT_URI` |
 
 별칭은 위 RDS 3개와 아래 Webhook을 포함한 GH 6개, 총 9개다. 다른 신규 이름에는 자동으로
 `RDS_`·`GH_` 변환을 확장하지 않는다. 신규 설정은 실제 앱 환경변수 이름에 접두사를 붙인다.
@@ -87,14 +102,14 @@ Docker는 이 파일을 읽어 컨테이너 환경변수로 전달한다.
 
 | 새 GitHub Secret 이름 | 앱 환경변수 이름 | 미등록·빈 문자열 처리 |
 |---|---|---|
-| `DEV_SPRING_PROFILES_ACTIVE` | `SPRING_PROFILES_ACTIVE` | 도구에서 `dev` 적용 |
-| `DEV_GOOGLE_REDIRECT_URI` | `GOOGLE_REDIRECT_URI` | 키 생략; 앱 기본 `{baseUrl}/api/v1/oauth2/callback/{registrationId}` |
-| `DEV_GH_APP_WEBHOOK_SECRET` | `GITHUB_APP_WEBHOOK_SECRET` | 키 생략; 앱 기본 빈 문자열 |
-| `DEV_MAIL_HOST` | `MAIL_HOST` | 키 생략; 앱 기본 `smtp.gmail.com` |
-| `DEV_MAIL_PORT` | `MAIL_PORT` | 키 생략; 앱 기본 `587` |
-| `DEV_MAIL_USERNAME` | `MAIL_USERNAME` | 키 생략; 앱 기본 빈 문자열 |
-| `DEV_MAIL_PASSWORD` | `MAIL_PASSWORD` | 키 생략; 앱 기본 빈 문자열 |
-| `DEV_OAUTH2_REDIRECT_URI` | `OAUTH2_REDIRECT_URI` | 키 생략; 앱 기본 `http://localhost:3000/oauth2/callback` |
+| `DEV_COM_SPRING_PROFILES_ACTIVE` | `SPRING_PROFILES_ACTIVE` | 도구에서 `dev` 적용 |
+| `DEV_COM_GOOGLE_REDIRECT_URI` | `GOOGLE_REDIRECT_URI` | 키 생략; 앱 기본 `{baseUrl}/api/v1/oauth2/callback/{registrationId}` |
+| `DEV_COM_GH_APP_WEBHOOK_SECRET` | `GITHUB_APP_WEBHOOK_SECRET` | 키 생략; 앱 기본 빈 문자열 |
+| `DEV_COM_MAIL_HOST` | `MAIL_HOST` | 키 생략; 앱 기본 `smtp.gmail.com` |
+| `DEV_COM_MAIL_PORT` | `MAIL_PORT` | 키 생략; 앱 기본 `587` |
+| `DEV_COM_MAIL_USERNAME` | `MAIL_USERNAME` | 키 생략; 앱 기본 빈 문자열 |
+| `DEV_COM_MAIL_PASSWORD` | `MAIL_PASSWORD` | 키 생략; 앱 기본 빈 문자열 |
+| `DEV_COM_OAUTH2_REDIRECT_URI` | `OAUTH2_REDIRECT_URI` | 키 생략; 앱 기본 `http://localhost:3000/oauth2/callback` |
 
 기존 선택 7개는 정확한 빈 문자열이면 생략하고 profile만 `dev`로 채운다. 선택값의 공백을 trim하지
 않는다. 반면 위 목록에 없는 **신규 키의 빈 값은 `KEY=`로 보존**한다. 신규 선택 설정을 완전히
@@ -113,7 +128,7 @@ controller 담당이며, 사용하지 않는 앱 키를 자동 수집하는 것�
 - Secret 이름은 대소문자를 정규화하되 선택한 원문 이름과 접두사 뒤 이름 모두 ASCII 환경변수
   형식을 만족해야 한다. 이름이 비거나 숫자로 시작하거나 Unicode 변환으로 ASCII가 된 이름은 거부한다.
 - 대소문자·별칭 변환·Spring relaxed binding(underscore를 무시한 동일 이름)의 충돌은 거부한다.
-  예를 들어 `DEV_RDS_DB_URL`과 `DEV_DB_URL`을 동시에 등록하지 않는다.
+  예를 들어 `DEV_COM_RDS_DB_URL`과 `DEV_COM_DB_URL`을 동시에 등록하지 않는다.
   기존 선택값이 빈 문자열이어도 생략 전에 충돌을 확인한다. 결과는 앱 키 이름순으로 기록한다.
 - controller 소유인 `AGENT_SERVICE_URL`, `IEUM_AGENT_URL`, DDL·시간대·종료·관리 endpoint 설정,
   `IEUM_DEPLOYMENT_*`·`IEUM_SCHEDULER_*`와 queue의 consumer/cutoff/expected-zone 키는 거부한다.
