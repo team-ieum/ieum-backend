@@ -88,7 +88,6 @@ class WebSocketChatHandlerTest {
             "워크플로우 만들어줘",
             null, null,
             new IntegrationContext(List.of(), List.of()),
-            null, null, null,
             List.of(), List.of()
         );
     }

@@ -36,7 +36,6 @@ import reactor.core.scheduler.Schedulers;
  *   <li>{@code X-LLM-Provider} — LLM 프로바이더 (OPENAI, CLAUDE, GEMINI)</li>
  *   <li>{@code X-LLM-Api-Key} — 복호화된 API Key</li>
  *   <li>{@code X-User-Id} — 사용자 UUID</li>
- *   <li>{@code X-Google-Access-Token} — Google 빌트인 도구 사용 시 (optional)</li>
  *   <li>{@code X-Key-Mode: platform} — 베타 플랫폼 키 위임 시 (credentialId 없음 + 베타 자격, 키 헤더 생략)</li>
  *   <li>{@code X-Internal-Token} — 모든 agent 호출, {@code ieum.agent.internal-token}이 비면 생략 (IEUM-BE-106)</li>
  * </ul>
@@ -279,17 +278,6 @@ public class AgentClient {
         if (params.userRole() != null) {
             spec = spec.header("X-User-Role", params.userRole());
         }
-        if (params.googleAccessToken() != null) {
-            spec = spec.header("X-Google-Access-Token", params.googleAccessToken());
-        }
-        if (params.githubToken() != null) {
-            spec = spec.header("X-GitHub-Token", params.githubToken());
-            log.debug("[AgentClient] X-GitHub-Token header injected");
-        }
-        if (params.notionToken() != null) {
-            spec = spec.header("X-Notion-Token", params.notionToken());
-            log.debug("[AgentClient] X-Notion-Token header injected");
-        }
         return spec;
     }
 
@@ -306,7 +294,7 @@ public class AgentClient {
     /**
      * {@code chat()}/{@code chatStream()} 공통 파라미터 객체.
      *
-     * <p>nullable String 필드(apiKey/googleAccessToken/githubToken/notionToken/userRole 등)가 많아
+     * <p>nullable String 필드(apiKey/userRole/delegationToken 등)가 많아
      * 위치 인자로 호출하면 인접한 두 인자가 뒤바뀌어도 컴파일러가 잡아주지 못하고, 잘못된 토큰이
      * 엉뚱한 헤더에 실릴 위험이 있었다. 빌더로 이름을 명시해 구성한다.
      */
@@ -320,9 +308,6 @@ public class AgentClient {
         List<IntegrationInfo> unavailableIntegrations,
         String llmProvider,
         String apiKey,
-        String googleAccessToken,
-        String githubToken,
-        String notionToken,
         List<AvailableMcpServer> availableMcpServers,
         List<AvailableWebhook> availableWebhooks,
         UUID userId,
@@ -334,8 +319,7 @@ public class AgentClient {
         @Override
         public String toString() {
             return "AgentChatCallParams[workflowId=" + workflowId + ", userId=" + userId
-                + ", llmProvider=" + llmProvider + ", apiKey=***, googleAccessToken=***, "
-                + "githubToken=***, notionToken=***, userRole=" + userRole
+                + ", llmProvider=" + llmProvider + ", apiKey=***, userRole=" + userRole
                 + ", useBetaPlatformKey=" + useBetaPlatformKey + ", delegationToken=***]";
         }
     }

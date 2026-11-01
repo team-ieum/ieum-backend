@@ -32,15 +32,10 @@ import com.ieum.workflowcore.chat.repository.ChatMessageRepository;
 import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
 import com.ieum.workflowcore.engine.executor.BetaPlatformProvider;
 import com.ieum.workflowcore.engine.executor.CredentialProvider;
-import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
-import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
-import com.ieum.workflowcore.engine.executor.NotionTokenProvider;
-import com.ieum.workflowcore.engine.executor.ToolAuthRule;
 import com.ieum.workflowcore.engine.executor.UserRoleProvider;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -85,9 +80,6 @@ public class ChatService {
     private final WorkflowCrudService workflowCrudService;
     private final CredentialProvider credentialProvider;
     private final CredentialService credentialService;
-    private final GoogleTokenProvider googleTokenProvider;
-    private final GitHubTokenProvider gitHubTokenProvider;
-    private final NotionTokenProvider notionTokenProvider;
     private final IntegrationContextService integrationContextService;
     private final AgentClient agentClient;
     private final ObjectMapper objectMapper;
@@ -127,12 +119,7 @@ public class ChatService {
         // 5. 연동 서비스 상태 조회 (available / unavailable)
         IntegrationContext integrationContext = integrationContextService.resolve(userId);
 
-        // 6. Google 빌트인 도구 → Access Token 조회 (없으면 null)
-        String googleAccessToken = resolveGoogleAccessToken(agentConfig.tools(), userId);
-        String githubToken = resolveGitHubAccessToken(integrationContext, userId);
-        String notionToken = resolveNotionToken(integrationContext, userId);
-
-        // 7. AI 에이전트 호출 (agent 스펙 미지원 provider 제거)
+        // 6. AI 에이전트 호출 (agent 스펙 미지원 provider 제거)
         log.info("[ChatService] AI 응답 요청 — workflowId: {}, sessionId: {}",
             workflowId, session.getId());
         List<IntegrationInfo> agentAvailable = filterAgentSupportedIntegrations(integrationContext.available());
@@ -157,9 +144,6 @@ public class ChatService {
                 .unavailableIntegrations(agentUnavailable)
                 .llmProvider(agentConfig.llmProvider())
                 .apiKey(agentConfig.decryptedApiKey())
-                .googleAccessToken(googleAccessToken)
-                .githubToken(githubToken)
-                .notionToken(notionToken)
                 .availableMcpServers(availableMcpServers)
                 .availableWebhooks(availableWebhooks)
                 .userId(userId)
@@ -175,7 +159,7 @@ public class ChatService {
         }
         recordBetaTokensIfPresent(agentConfig, userId, agentResponse);
 
-        // 8. WORKFLOW_GENERATED/MODIFIED → DB에 새 버전으로 저장
+        // 7. WORKFLOW_GENERATED/MODIFIED → DB에 새 버전으로 저장
         //    첫 생성 여부를 저장 전에 확인 (저장 후에는 version이 증가하므로)
         List<Object> savedNodes = null;   // 저장했으면 파생 노드, 아니면 agent 응답 그대로
         if (agentResponse.isWorkflowResult()) {
@@ -188,12 +172,12 @@ public class ChatService {
             }
         }
 
-        // 9. INTEGRATION_REQUIRED → actions에 oauthUrl 주입
+        // 8. INTEGRATION_REQUIRED → actions에 oauthUrl 주입
         if (agentResponse.getType() == AgentResponseType.INTEGRATION_REQUIRED) {
             injectOAuthUrls(agentResponse.getActions());
         }
 
-        // 10. AGENT 메시지 저장 후 반환 — sessionId를 직접 전달하여 LAZY 로딩 회피
+        // 9. AGENT 메시지 저장 후 반환 — sessionId를 직접 전달하여 LAZY 로딩 회피
         ChatMessage agentMessage = saveAgentMessage(
             session,
             agentResponse.getContent(),
@@ -601,24 +585,6 @@ public class ChatService {
             .toList();
     }
 
-    private String resolveGitHubAccessToken(IntegrationContext integrationContext, UUID userId) {
-        boolean isGitHubConnected = integrationContext.available().stream()
-            .anyMatch(info -> "GITHUB".equals(info.getProvider()));
-        if (!isGitHubConnected) {
-            return null;
-        }
-        return gitHubTokenProvider.getAccessToken(userId).orElse(null);
-    }
-
-    private String resolveNotionToken(IntegrationContext integrationContext, UUID userId) {
-        boolean isNotionConnected = integrationContext.available().stream()
-            .anyMatch(info -> "NOTION".equals(info.getProvider()));
-        if (!isNotionConnected) {
-            return null;
-        }
-        return notionTokenProvider.getAccessToken(userId).orElse(null);
-    }
-
     /**
      * 사용자가 보유한 활성(enabled) MCP 서버 카탈로그를 조회해 agent 생성 요청용 메타로 변환한다.
      *
@@ -653,21 +619,6 @@ public class ChatService {
             .toList();
     }
 
-    private String resolveGoogleAccessToken(List<Map<String, Object>> tools, UUID userId) {
-        if (tools == null || tools.isEmpty()) {
-            return null;
-        }
-        boolean hasGoogleTool = tools.stream()
-            .map(t -> (String) t.get("name"))
-            .filter(Objects::nonNull)
-            .anyMatch(name -> name.startsWith(ToolAuthRule.GOOGLE_BUILTIN_PREFIX));
-        if (!hasGoogleTool) {
-            return null;
-        }
-        log.debug("[ChatService] Google 빌트인 도구 감지 — userId: {} 로 토큰 조회", userId);
-        return googleTokenProvider.getValidAccessToken(userId);
-    }
-
     // ─────────────────────────────────────── WebSocket 스트리밍 ───────────────
 
     /**
@@ -694,9 +645,6 @@ public class ChatService {
         }
 
         IntegrationContext integrationContext = integrationContextService.resolve(userId);
-        String googleToken = resolveGoogleAccessToken(config.tools(), userId);
-        String githubToken = resolveGitHubAccessToken(integrationContext, userId);
-        String notionToken = resolveNotionToken(integrationContext, userId);
 
         log.info("[ChatService] 스트림 준비 완료 — workflowId: {}, sessionId: {}",
             workflowId, session.getId());
@@ -714,9 +662,6 @@ public class ChatService {
             currentNodes,
             request.getCurrentEdges(),
             agentContext,
-            googleToken,
-            githubToken,
-            notionToken,
             resolveAvailableMcpServers(userId),
             resolveAvailableWebhooks(userId)
         );
@@ -818,9 +763,6 @@ public class ChatService {
         List<Object> currentNodes,
         List<Object> currentEdges,
         IntegrationContext integrationContext,
-        String googleToken,
-        String githubToken,
-        String notionToken,
         List<AvailableMcpServer> availableMcpServers,
         List<AvailableWebhook> availableWebhooks
     ) {}
