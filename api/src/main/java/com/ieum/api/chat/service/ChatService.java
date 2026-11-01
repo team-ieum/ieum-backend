@@ -287,7 +287,7 @@ public class ChatService {
 
         // 채팅 LLM은 워크플로우 노드를 보지 않는다(IEUM-BE-107): 요청 키 → 최근 등록 키 → self-hosted → 베타
         // 여기서는 자격(eligibility) 판정만 한다 — 실제 쿼터 예약(INCR)은 agent 호출 직전(chat()/스트림 subscribe 직전)에서
-        // 수행해, 그 사이의 사전작업(메시지 저장/연동 조회/토큰 조회 등) 예외가 불필요한 환불 대상을 만들지 않게 한다.
+        // 수행해, 그 사이의 사전작업(메시지 저장/연동 조회 등) 예외가 불필요한 환불 대상을 만들지 않게 한다.
         if (fallbackCredentialId == null) {
             List<Credential> credentials = credentialService.getByUserId(userId);
             if (credentials.isEmpty()) {

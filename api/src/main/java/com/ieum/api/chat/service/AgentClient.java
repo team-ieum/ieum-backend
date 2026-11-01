@@ -36,6 +36,8 @@ import reactor.core.scheduler.Schedulers;
  *   <li>{@code X-LLM-Provider} — LLM 프로바이더 (OPENAI, CLAUDE, GEMINI)</li>
  *   <li>{@code X-LLM-Api-Key} — 복호화된 API Key</li>
  *   <li>{@code X-User-Id} — 사용자 UUID</li>
+ *   <li>{@code X-User-Role} — 사용자 역할 (optional)</li>
+ *   <li>{@code X-Delegation-Token} — 스트림 전용, agent가 BE를 부를 때 쓰는 위임 토큰 (IEUM-BE-106)</li>
  *   <li>{@code X-Key-Mode: platform} — 베타 플랫폼 키 위임 시 (credentialId 없음 + 베타 자격, 키 헤더 생략)</li>
  *   <li>{@code X-Internal-Token} — 모든 agent 호출, {@code ieum.agent.internal-token}이 비면 생략 (IEUM-BE-106)</li>
  * </ul>
