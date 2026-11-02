@@ -1,5 +1,7 @@
 package com.ieum.api.trigger.gmail;
 
+import com.ieum.workflowcore.deployment.BackgroundOwnership;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.ieum.api.trigger.AppTriggerFirer;
 import com.ieum.common.exception.CustomException;
@@ -33,6 +35,9 @@ import org.springframework.stereotype.Component;
 @Slf4j
 @Component
 public class GmailTriggerSweeper {
+    @Autowired(required = false)
+    private BackgroundOwnership backgroundOwnership;
+
 
     static final int CLAIM_LIMIT = 50;
     static final int MAX_FIRES_PER_POLL = 20;
@@ -56,6 +61,7 @@ public class GmailTriggerSweeper {
     /** 초기 지연은 테스트가 크게 잡는다 — 캐시된 컨텍스트의 스윕러가 공유 H2의 다른 테스트 행을 리스하지 않게. */
     @Scheduled(fixedDelay = 60_000, initialDelayString = "${ieum.trigger.gmail.sweep-initial-delay:PT1M}")
     public void sweep() {
+        if (backgroundOwnership != null && !backgroundOwnership.isOwner()) return;
         List<AppTriggerSubscription> due = subscriptions.claimDue(
             TriggerType.GMAIL_NEW_EMAIL, LocalDateTime.now(), CLAIM_LIMIT, pollInterval);
         due.forEach(this::pollOne);

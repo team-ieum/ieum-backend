@@ -130,6 +130,7 @@ class ExecutionRetryQueueIntegrationTest {
     private WorkflowExecutionLogRepository logRepository;
     private WorkflowCrudService crudService;
     private StreamOperations<String, String, String> streamOperations;
+    private StringRedisTemplate redisTemplate;
     private StreamMessageListenerContainer<String, MapRecord<String, String, String>> container;
 
     private WorkflowExecutionService workflowExecutionService;
@@ -157,7 +158,7 @@ class ExecutionRetryQueueIntegrationTest {
             Mockito.mock(WorkflowQueryRepository.class), objectMapper, aesEncryptor,
             Mockito.mock(AlertNotifier.class));
 
-        StringRedisTemplate redisTemplate = Mockito.mock(StringRedisTemplate.class);
+        redisTemplate = Mockito.mock(StringRedisTemplate.class);
         streamOperations = Mockito.mock(StreamOperations.class);
         container = Mockito.mock(StreamMessageListenerContainer.class);
         when(redisTemplate.opsForStream()).thenReturn((StreamOperations) streamOperations);
@@ -456,7 +457,9 @@ class ExecutionRetryQueueIntegrationTest {
         assertThat(rows.get(retryId).getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
         assertThat(aiCalls).containsExactly("b");
         assertThat(nodeRunOf(retryId, "a").getStatus()).isEqualTo(ExecutionLogStatus.SKIPPED);
-        verify(streamOperations).acknowledge(STREAM_KEY, GROUP, job.getId());
+        verify(redisTemplate).execute(org.mockito.ArgumentMatchers.eq(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE),
+            org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.eq(GROUP),
+            org.mockito.ArgumentMatchers.eq(job.getId().getValue()));
     }
 
     @Test
@@ -553,7 +556,9 @@ class ExecutionRetryQueueIntegrationTest {
         // 종료 상태 가드가 걸려 노드 부작용이 되풀이되지 않고, ack만 다시 나간다.
         assertThat(aiCalls).containsExactly("b");
         assertThat(nodeRuns).hasSize(nodeRunsAfterFirstRun);
-        verify(streamOperations, times(2)).acknowledge(STREAM_KEY, GROUP, job.getId());
+        verify(redisTemplate, times(2)).execute(org.mockito.ArgumentMatchers.eq(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE),
+            org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.eq(GROUP),
+            org.mockito.ArgumentMatchers.eq(job.getId().getValue()));
     }
 
     // ──────────────────────────────────────────────────────────────────────

@@ -28,6 +28,11 @@ import com.ieum.api.chat.service.ChatTurnLock;
 import com.ieum.auth.delegation.DelegationTokenService;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.api.deployment.DeploymentConnections;
+import com.ieum.api.deployment.DeploymentWorkTracker;
+import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
+import reactor.core.publisher.Sinks;
+import java.time.Duration;
 import java.security.Principal;
 import java.util.List;
 import java.util.Map;
@@ -110,26 +115,35 @@ class WebSocketChatHandlerTest {
     @ValueSource(strings = {"   "})
     @DisplayName("prompt가 비면 요청한 세션에만 error 프레임 — 락·세션·메시지·쿼터를 건드리지 않는다")
     void blankPrompt_rejectedBeforeLock(String prompt) {
+        var tracker = new DeploymentWorkTracker(new DeploymentConnections(new ExecutionEventPublisher()));
+        ReflectionTestUtils.setField(handler, "deploymentWorkTracker", tracker);
         handler.handleChat(workflowId, chatRequest(prompt), principal, WS_SESSION);
 
         assertRejectedToSessionOnly("메시지를 입력해주세요.");
+        assertThat(tracker.activeCount()).isZero();
     }
 
     @Test
     @DisplayName("prompt가 2000자를 넘으면 요청한 세션에만 error 프레임 — 2000자는 통과한다")
     void tooLongPrompt_rejectedBeforeLock() {
+        var tracker = new DeploymentWorkTracker(new DeploymentConnections(new ExecutionEventPublisher()));
+        ReflectionTestUtils.setField(handler, "deploymentWorkTracker", tracker);
         handler.handleChat(workflowId, chatRequest("a".repeat(2001)), principal, WS_SESSION);
 
         assertRejectedToSessionOnly("메시지는 2000자를 초과할 수 없습니다.");
         assertThat(VALIDATOR.validate(chatRequest("a".repeat(2000)))).isEmpty();
+        assertThat(tracker.activeCount()).isZero();
     }
 
     @Test
     @DisplayName("공백만 2001자면 두 제약이 다 걸려도 '비었다' 안내가 나간다")
     void blankAndTooLong_reportsBlankFirst() {
+        var tracker = new DeploymentWorkTracker(new DeploymentConnections(new ExecutionEventPublisher()));
+        ReflectionTestUtils.setField(handler, "deploymentWorkTracker", tracker);
         handler.handleChat(workflowId, chatRequest(" ".repeat(2001)), principal, WS_SESSION);
 
         assertRejectedToSessionOnly("메시지를 입력해주세요.");
+        assertThat(tracker.activeCount()).isZero();
     }
 
     private void assertRejectedToSessionOnly(String message) {
@@ -163,6 +177,51 @@ class WebSocketChatHandlerTest {
     }
 
     // ─────────────────── handleChat (전체 흐름) ─────────────────────────────
+
+    @Test
+    void retiredChatReturnsExistingErrorFrameWithoutStartingAgentWork() {
+        var connections = new DeploymentConnections(new ExecutionEventPublisher());
+        var tracker = new DeploymentWorkTracker(connections);
+        ReflectionTestUtils.setField(handler, "deploymentWorkTracker", tracker);
+        connections.retire();
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
+        var sent = captureSent(1);
+        assertThat(sent.getFirst().getType()).isEqualTo(StreamType.ERROR);
+        assertThat(sent.getFirst().getContent()).contains("다시 연결");
+        verify(chatService, never()).prepareStream(any(), any(), any(), any());
+        verify(agentClient, never()).chatStream(any());
+        assertThat(tracker.activeCount()).isZero();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void deploymentTrackingCoversStreamLifetimeAndPreparationFailure(boolean error) throws Exception {
+        var connections = new DeploymentConnections(new ExecutionEventPublisher());
+        var tracker = new DeploymentWorkTracker(connections);
+        ReflectionTestUtils.setField(handler, "deploymentWorkTracker", tracker);
+        mockPrepareStream();
+        var source = Sinks.many().unicast().<ChatStreamEvent>onBackpressureBuffer();
+        given(agentClient.chatStream(any())).willReturn(source.asFlux());
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
+        assertThat(tracker.activeCount()).isEqualTo(1);
+        connections.retire();
+        assertThat(tracker.activeCount()).isEqualTo(1);
+        // A second frame on a closing transport cannot create fresh background work.
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
+        verify(chatService, times(1)).prepareStream(any(), any(), any(), any());
+        if (error) source.tryEmitError(new IllegalStateException("Agent offline"));
+        else source.tryEmitComplete();
+        org.awaitility.Awaitility.await().atMost(Duration.ofSeconds(2))
+            .untilAsserted(() -> assertThat(tracker.activeCount()).isZero());
+        assertThat(tracker.activeCount()).isZero();
+        connections.resume();
+        handler.handleChat(workflowId, request, null, WS_SESSION);
+        assertThat(tracker.activeCount()).isZero();
+        given(chatService.prepareStream(any(), any(), any(), any()))
+            .willThrow(new IllegalStateException("Preparation failed"));
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
+        assertThat(tracker.activeCount()).isZero();
+    }
 
     @Test
     @DisplayName("stage → done 흐름: 진행 프레임 전달 후 done 시 finalizeStream으로 저장하고 최종 프레임 전달")
@@ -287,6 +346,8 @@ class WebSocketChatHandlerTest {
     @Test
     @DisplayName("진행 중인 턴이 있으면 안내 error 프레임만 — 세션·메시지·쿼터·토큰을 건드리지 않고 락도 풀지 않는다")
     void turnBusy_sendsWaitMessageOnly() {
+        var tracker = new DeploymentWorkTracker(new DeploymentConnections(new ExecutionEventPublisher()));
+        ReflectionTestUtils.setField(handler, "deploymentWorkTracker", tracker);
         given(chatTurnLock.tryAcquire(userId)).willReturn(false);
 
         handler.handleChat(workflowId, request, principal, WS_SESSION);
@@ -302,11 +363,14 @@ class WebSocketChatHandlerTest {
         assertThat(sentCaptor.getValue().getContent()).isEqualTo("이전 응답을 기다리는 중입니다. 잠시 후 다시 보내 주세요.");
         verifyNoInteractions(chatService, agentClient, delegationTokenService);
         verify(chatTurnLock, never()).release(any());
+        assertThat(tracker.activeCount()).isZero();
     }
 
     @Test
     @DisplayName("락 확인 중 Redis 장애면 요청한 세션에만 일반 error 프레임 — 다른 탭의 진행 중인 턴을 끊지 않는다")
     void turnLockFailure_sendsGenericErrorToSessionOnly() {
+        var tracker = new DeploymentWorkTracker(new DeploymentConnections(new ExecutionEventPublisher()));
+        ReflectionTestUtils.setField(handler, "deploymentWorkTracker", tracker);
         given(chatTurnLock.tryAcquire(userId)).willThrow(new RuntimeException("RedisConnectionFailureException"));
 
         handler.handleChat(workflowId, request, principal, WS_SESSION);
@@ -319,6 +383,7 @@ class WebSocketChatHandlerTest {
         assertThat(SimpMessageHeaderAccessor.getSessionId(headers.getValue())).isEqualTo(WS_SESSION);
         assertThat(sent.getValue().getContent()).isEqualTo("서버 오류가 발생했습니다.");
         verifyNoInteractions(chatService, agentClient, delegationTokenService);
+        assertThat(tracker.activeCount()).isZero();
     }
 
     @Test
@@ -425,6 +490,8 @@ class WebSocketChatHandlerTest {
     @Test
     @DisplayName("위임 토큰 발급 실패 — 예약을 환불하고 락을 풀고 agent를 부르지 않는다")
     void issueFailure_refundsAndReleases() {
+        var tracker = new DeploymentWorkTracker(new DeploymentConnections(new ExecutionEventPublisher()));
+        ReflectionTestUtils.setField(handler, "deploymentWorkTracker", tracker);
         mockPrepareStream();
         given(chatService.reserveBetaQuota(setup.config(), userId)).willReturn(TEST_RESERVATION_KEY);
         given(delegationTokenService.issue(userId, "ROLE_USER", workflowId))
@@ -437,6 +504,7 @@ class WebSocketChatHandlerTest {
         verify(chatService).releaseBetaQuotaOnFailure(TEST_RESERVATION_KEY);
         verify(chatTurnLock).release(userId);
         verify(agentClient, never()).chatStream(any(AgentChatCallParams.class));
+        assertThat(tracker.activeCount()).isZero();
     }
 
     @Test

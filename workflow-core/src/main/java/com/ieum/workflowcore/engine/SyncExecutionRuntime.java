@@ -15,6 +15,7 @@ import com.ieum.workflowcore.domain.enums.ExecutionLogStatus;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.event.ExecutionEvent;
+import com.ieum.workflowcore.engine.ExecutionOwnershipGuard.OwnershipLostException;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.executor.AlertNotifier;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
@@ -47,6 +48,7 @@ import java.util.random.RandomGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -72,6 +74,19 @@ public class SyncExecutionRuntime {
     private final IdempotencyStore idempotencyStore;
     private final AlertNotifier alertNotifier;
     private final WorkflowValidationClient validationClient;
+    @Autowired(required = false)
+    private ExecutionOwnershipGuard ownershipGuard;
+
+    private void assertOwnership(UUID executionId) {
+        if (ownershipGuard != null) ownershipGuard.assertOwned(executionId);
+    }
+
+    private OwnershipLostException ownershipFailure(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof OwnershipLostException lost) return lost;
+        }
+        return null;
+    }
 
     /** {@code node_runs.error_message} 컬럼 길이(VARCHAR 255). */
     private static final int ERROR_MESSAGE_MAX_LENGTH = 255;
@@ -144,7 +159,7 @@ public class SyncExecutionRuntime {
         Map<String, Object> triggerData,
         Map<String, Map<String, Object>> preCompletedOutputs
     ) throws Exception {
-
+        assertOwnership(executionId);
         Map<String, Map<String, Object>> preCompleted =
             preCompletedOutputs != null ? preCompletedOutputs : Map.<String, Map<String, Object>>of();
 
@@ -179,6 +194,8 @@ public class SyncExecutionRuntime {
                     throw new WorkflowValidationException(result.errors());
                 });
         } catch (Exception e) {
+            if (ownershipFailure(e) != null) throw ownershipFailure(e);
+            assertOwnership(executionId);
             if (e instanceof WorkflowValidationException) {
                 // 사용자 설정 오류라 장애 로그(ERROR)로 올리지 않는다
                 log.warn("[Runtime] 정적 검증 차단 — executionId: {}, workflowId: {}, 사유: {}",
@@ -198,6 +215,7 @@ public class SyncExecutionRuntime {
             throw e;
         }
 
+        boolean ownershipLost = false;
         try {
             // 2. ExecutionCursor 초기화
             ExecutionCursor cursor = new ExecutionCursor();
@@ -233,6 +251,7 @@ public class SyncExecutionRuntime {
             }
 
             // 3. RUNNING 상태로 전환 — 종료 전이와 같은 조건부 UPDATE(save()는 sweeper의 FAILED·사유를 되돌린다)
+            assertOwnership(executionId);
             if (workflowExecutionRepository.startIfNotTerminal(executionId, LocalDateTime.now()) == 0) {
                 publishAlreadyFinished(executionId, workflowId, ExecutionStatus.RUNNING);
                 return;
@@ -265,8 +284,10 @@ public class SyncExecutionRuntime {
                         preCompleted, waitingGates);
 
                     while (inFlight > 0) {
-                        NodeOutcome outcome = completion.take().get();
+                        var completed = completion.take();
                         inFlight--;
+                        NodeOutcome outcome = completed.get();
+                        assertOwnership(executionId);
                         Node node = outcome.node();
                         ExecutorResult result = outcome.result();
                         long durMs = outcome.durationMs();
@@ -355,6 +376,7 @@ public class SyncExecutionRuntime {
             }
 
             // 메모리 엔티티를 save()하면 그사이 sweeper가 확정한 FAILED·사유를 덮어쓴다 — 조건부 전이만 한다.
+            assertOwnership(executionId);
             if (workflowExecutionRepository.finishIfNotTerminal(
                     executionId, ExecutionStatus.SUCCESS, false, LocalDateTime.now()) == 0) {
                 publishAlreadyFinished(executionId, workflowId, ExecutionStatus.SUCCESS);
@@ -365,6 +387,11 @@ public class SyncExecutionRuntime {
                 executionId, workflowId, ExecutionStatus.SUCCESS));
 
         } catch (Exception e) {
+            OwnershipLostException lost = ownershipFailure(e);
+            if (lost != null) {
+                ownershipLost = true;
+                throw lost;
+            }
             log.error("[Runtime] 워크플로우 실행 중 예외 — executionId: {}", execution.getId(), e);
             // 실패 노드를 특정할 수 없는 경로다(위상 검증 실패, Cursor 초기화 실패 등).
             // 이미 종료된 실행이면 finalizeFailure가 상태·알림을 건드리지 않고 종료 이벤트만 흘린다.
@@ -372,7 +399,11 @@ public class SyncExecutionRuntime {
             throw e;
         } finally {
             // 성공·노드 실패(return)·예외 등 모든 종료 경로에서 SSE 스트림을 닫는다.
-            eventPublisher.complete(executionId);
+            if (!ownershipLost) {
+                try { assertOwnership(executionId); }
+                catch (OwnershipLostException lost) { ownershipLost = true; }
+            }
+            if (!ownershipLost) eventPublisher.complete(executionId);
         }
     }
 
@@ -399,6 +430,7 @@ public class SyncExecutionRuntime {
      */
     private void pauseForApproval(UUID executionId, UUID workflowId, List<String> gateIds)
             throws JsonProcessingException {
+        assertOwnership(executionId);
         LocalDateTime now = LocalDateTime.now();
         int paused = workflowExecutionRepository.pauseForApproval(executionId,
             objectMapper.writeValueAsString(gateIds), now.plus(approvalTimeout), now);
@@ -426,6 +458,7 @@ public class SyncExecutionRuntime {
      */
     private void finalizeFailure(WorkflowExecution execution, UUID executionId,
                                  boolean retryExhausted, String failedNodeId, String errorSummary) {
+        assertOwnership(executionId);
         // 메모리 상태가 아니라 DB 상태로 판정한다 — sweeper가 먼저 확정했어도 메모리는 RUNNING이다.
         boolean transitioned = workflowExecutionRepository.finishIfNotTerminal(
             executionId, ExecutionStatus.FAILED, retryExhausted, LocalDateTime.now()) == 1;
@@ -487,6 +520,7 @@ public class SyncExecutionRuntime {
                          List<String> waitingGates) {
         int count = 0;
         while (!ready.isEmpty()) {
+            assertOwnership(executionId);
             Node node = ready.poll();
             Map<String, Object> preOutput = preCompleted.get(node.getId());
             if (preOutput != null) {
@@ -525,6 +559,7 @@ public class SyncExecutionRuntime {
                 ExecutorResult.TokenUsage spent = null;
                 int attempt = 1;
                 while (true) {
+                    assertOwnership(executionId);
                     long attemptStart = System.currentTimeMillis();
                     try {
                         result = executor.execute(node, input, cursor,
@@ -533,6 +568,7 @@ public class SyncExecutionRuntime {
                         result = ExecutorResult.failure(ex.toString(),
                             System.currentTimeMillis() - attemptStart, FailureClassifier.fromException(ex));
                     }
+                    assertOwnership(executionId);
                     spent = ExecutorResult.TokenUsage.sum(spent, result.getUsage());
                     // MARKER는 "재시도를 포기한다"는 모드다(IdempotencyMode.MARKER 참고) — 2회차를
                     // 시작하면 attempt 1의 원 실패가 executor의 마커 차단(CLIENT_ERROR)으로 덮여써져
@@ -695,6 +731,7 @@ public class SyncExecutionRuntime {
         int attemptCount,
         boolean skipped
     ) {
+        assertOwnership(execution.getId());
         try {
             String inputJson = objectMapper.writeValueAsString(SensitiveDataMasker.mask(input));
             String outputJson = result.isSuccess()
@@ -755,6 +792,7 @@ public class SyncExecutionRuntime {
      * {@code attemptCount}는 0이다(재처리 스킵 로그와 같은 규칙).
      */
     private void saveSkippedLog(WorkflowExecution execution, Node node) {
+        assertOwnership(execution.getId());
         try {
             executionLogRepository.save(WorkflowExecutionLog.builder()
                 .execution(execution)

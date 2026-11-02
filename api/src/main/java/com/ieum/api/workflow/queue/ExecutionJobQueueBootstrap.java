@@ -4,6 +4,9 @@ import static com.ieum.api.workflow.queue.ExecutionJobQueue.CONSUMER;
 import static com.ieum.api.workflow.queue.ExecutionJobQueue.GROUP;
 import static com.ieum.api.workflow.queue.ExecutionJobQueue.STREAM_KEY;
 
+import com.ieum.api.deployment.DeploymentControl;
+import org.springframework.beans.factory.annotation.Autowired;
+import jakarta.annotation.PreDestroy;
 import java.time.Duration;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +27,9 @@ import org.springframework.data.redis.core.StreamOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.stream.StreamMessageListenerContainer;
 import org.springframework.data.redis.stream.StreamMessageListenerContainer.StreamReadRequest;
+import org.springframework.data.redis.stream.Subscription;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import jakarta.annotation.PostConstruct;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -31,7 +37,8 @@ import org.springframework.stereotype.Component;
  * 잡 큐를 기동하고(컨슈머 그룹 생성 → 소비 시작) 고아 잡을 주기적으로 회수한다.
  * 부팅 복원이라는 점에서 {@code ScheduleJobRestorer}(Quartz)와 같은 역할이다.
  *
- * <p><b>이 큐는 단일 인스턴스 배포(stop-then-start)를 전제로 한다.</b> 컨슈머 이름이 상수라
+ * <p>분산 배포에서는 인스턴스별 소비자·생존 키·PostgreSQL 실행 잠금을 사용한다.
+ * <p><b>분산 모드가 꺼져 있으면 단일 인스턴스 배포를 전제로 한다.</b> 컨슈머 이름이 상수라
  * 인스턴스를 구분하지 않고, SSE 허브({@code ExecutionEventPublisher})도 in-memory라 애초에
  * 다중 인스턴스가 성립하지 않는다. 롤링 배포처럼 두 인스턴스가 겹치는 순간이 생기면
  * {@link #reclaimOrphanedJobs()}가 살아 있는 인스턴스의 in-flight 잡을 회수해 이중 실행할 수 있다.
@@ -45,11 +52,48 @@ import org.springframework.stereotype.Component;
 @Component
 public class ExecutionJobQueueBootstrap implements ApplicationRunner {
 
-    /**
-     * 한 번에 회수할 pending 엔트리 수 상한.
-     * ponytail: 단순 1회 조회. 이보다 많이 밀렸다면 로그로 알리고 다음 주기에 마저 회수한다.
-     */
+    /** One bounded page per sweep; pendingCursor advances even if all entries have live owners. */
     private static final int RECLAIM_LIMIT = 1_000;
+
+    @Value("${ieum.workflow.queue.consumer-name:runner}")
+    private String consumerName = CONSUMER;
+    @Autowired(required = false)
+    private DeploymentControl deploymentControl;
+    private Subscription subscription;
+    private String pendingCursor;
+    @Value("${ieum.deployment.start-drained:false}")
+    private volatile boolean draining;
+    public boolean isDraining() { return draining; }
+    public void resumeConsuming() {
+        executionJobWorker.resumeConsuming();
+        draining = false;
+        startWhenReady();
+    }
+
+    @PostConstruct
+    void initializeDrain() {
+        if (draining) {
+            executionJobWorker.pauseConsuming();
+            if (deploymentControl != null) deploymentControl.drain();
+        }
+    }
+
+    @PreDestroy
+    public synchronized void stopConsuming() {
+        executionJobWorker.pauseConsuming();
+        draining = true;
+        executionJobQueue.markConsumerUnhealthy(new IllegalStateException("Instance shutting down"));
+        executionJobListenerContainer.stop();
+        // A stopped Spring Data subscription is cancelled, not restartable. Re-register on resume.
+        if (subscription != null) executionJobListenerContainer.remove(subscription);
+        subscription = null;
+    }
+
+    @Scheduled(fixedDelay = 20000, initialDelay = 1000)
+    public void startWhenReady() {
+        if (!draining && (deploymentControl == null || deploymentControl.distributedReady())
+                && !executionJobListenerContainer.isRunning()) run(null);
+    }
 
     private final StringRedisTemplate redisTemplate;
     private final StreamMessageListenerContainer<String, MapRecord<String, String, String>>
@@ -87,16 +131,18 @@ public class ExecutionJobQueueBootstrap implements ApplicationRunner {
     }
 
     @Override
-    public void run(ApplicationArguments args) {
+    public synchronized void run(ApplicationArguments args) {
+        if (draining || (deploymentControl != null && !deploymentControl.distributedReady())) return;
         try {
+            if (deploymentControl != null) deploymentControl.heartbeat();
             createGroupIfAbsent();
             startConsuming();
             log.info("[ExecutionJobQueueBootstrap] 잡 큐 기동 완료 — stream: {}, group: {}, minIdle: {}",
                 STREAM_KEY, GROUP, reclaimMinIdle);
         } catch (DataAccessException e) {
             // 소비 미기동 = healthy 플래그가 false로 남아 enqueue가 폴백을 택한다.
-            log.warn("[ExecutionJobQueueBootstrap] 잡 큐 기동 실패 — 큐 없이 @Async 직접 실행으로 동작한다: {}",
-                e.toString());
+            log.warn("[ExecutionJobQueueBootstrap] 잡 큐 기동 실패 — {}: {}",
+                deploymentControl == null ? "단일 모드 직접 실행 폴백" : "DB PENDING 복구 대기", e.toString());
         }
     }
 
@@ -113,16 +159,22 @@ public class ExecutionJobQueueBootstrap implements ApplicationRunner {
         initialDelayString = "${ieum.workflow.queue.reclaim-interval:PT1M}",
         fixedDelayString = "${ieum.workflow.queue.reclaim-interval:PT1M}")
     void reclaimOrphanedJobs() {
-        if (!executionJobListenerContainer.isRunning()) {
+        if (draining || !executionJobListenerContainer.isRunning()) {
             return;
         }
         try {
             StreamOperations<String, String, String> ops = redisTemplate.opsForStream();
-            PendingMessages pending =
-                ops.pending(STREAM_KEY, GROUP, Range.unbounded(), RECLAIM_LIMIT);
+            // XPENDING with an exclusive cursor preserves the live-consumer filter. XAUTOCLAIM
+            // alone cannot filter live owners and would transfer their in-flight deliveries.
+            Range<String> range = pendingCursor == null ? Range.unbounded()
+                : Range.rightUnbounded(Range.Bound.exclusive(pendingCursor));
+            PendingMessages pending = ops.pending(STREAM_KEY, GROUP, range, RECLAIM_LIMIT);
             // XPENDING 성공 = Redis와 그룹이 살아 있다. 폴링 복구가 실패한 뒤 폴링이 조용히 되살아나면
             // onPollError가 다시 불리지 않으므로, 트래픽과 무관하게 여기서 헬스를 되돌린다.
             executionJobQueue.markConsumerHealthy();
+            pendingCursor = pending.isEmpty() || pending.size() < RECLAIM_LIMIT ? null
+                : pending.get(pending.size() - 1).getId().getValue();
+            cleanupEmptyConsumers(ops);
             if (pending.isEmpty()) {
                 return;
             }
@@ -131,9 +183,15 @@ public class ExecutionJobQueueBootstrap implements ApplicationRunner {
                     RECLAIM_LIMIT);
             }
 
-            List<RecordId> ids = pending.stream().map(PendingMessage::getId).toList();
+            List<RecordId> ids = pending.stream()
+                .filter(message -> !executionJobWorker.isInFlight(message.getId()))
+                .filter(message -> deploymentControl == null
+                    || currentConsumer().equals(message.getConsumerName())
+                    || !deploymentControl.consumerAlive(message.getConsumerName()))
+                .map(PendingMessage::getId).toList();
+            if (ids.isEmpty()) return;
             List<MapRecord<String, String, String>> claimed = ops.claim(
-                STREAM_KEY, GROUP, CONSUMER, XClaimOptions.minIdle(reclaimMinIdle).ids(ids));
+                STREAM_KEY, GROUP, currentConsumer(), XClaimOptions.minIdle(reclaimMinIdle).ids(ids));
             if (claimed.isEmpty()) {
                 return;  // 전부 아직 in-flight — minIdle이 지켜준 경우다
             }
@@ -142,6 +200,31 @@ public class ExecutionJobQueueBootstrap implements ApplicationRunner {
             claimed.forEach(executionJobWorker::onMessage);
         } catch (DataAccessException e) {
             log.warn("[ExecutionJobQueueBootstrap] 고아 잡 회수 실패 — 다음 주기에 재시도: {}", e.toString());
+        }
+    }
+
+    private String currentConsumer() {
+        return deploymentControl == null ? consumerName : deploymentControl.consumerName();
+    }
+
+    private static final DefaultRedisScript<Long> DELETE_EMPTY_CONSUMER = new DefaultRedisScript<>("""
+        if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
+        local pending = redis.call('XPENDING', KEYS[1], ARGV[1], '-', '+', 1, ARGV[2])
+        if #pending ~= 0 then return 0 end
+        return redis.call('XGROUP', 'DELCONSUMER', KEYS[1], ARGV[1], ARGV[2])
+        """, Long.class);
+
+    private void cleanupEmptyConsumers(StreamOperations<String, String, String> ops) {
+        if (deploymentControl == null) return;
+        var consumers = ops.consumers(STREAM_KEY, GROUP);
+        if (consumers == null) return;
+        for (var consumer : consumers) {
+            String name = consumer.consumerName();
+            // Only boot UUID consumers are never reused. Do not delete legacy fixed-name owners.
+            if (name.equals(currentConsumer()) || consumer.pendingCount() != 0
+                    || !name.matches(".+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")) continue;
+            redisTemplate.execute(DELETE_EMPTY_CONSUMER,
+                List.of(STREAM_KEY, "ieum:deployment:alive:" + name), GROUP, name);
         }
     }
 
@@ -175,13 +258,15 @@ public class ExecutionJobQueueBootstrap implements ApplicationRunner {
         // cancelOnError(항상 false): 구독을 살려 두고 onPollError가 복구를 시도한다.
         StreamReadRequest<String> request = StreamReadRequest
             .builder(StreamOffset.create(STREAM_KEY, ReadOffset.lastConsumed()))
-            .consumer(Consumer.from(GROUP, CONSUMER))
+            .consumer(Consumer.from(GROUP, currentConsumer()))
             .autoAcknowledge(false)
             .cancelOnError(t -> false)
             .errorHandler(this::onPollError)
             .build();
 
-        executionJobListenerContainer.register(request, executionJobWorker);
+        if (subscription == null) {
+            subscription = executionJobListenerContainer.register(request, executionJobWorker);
+        }
         executionJobListenerContainer.start();
         executionJobQueue.markConsumerHealthy();
     }
@@ -195,13 +280,17 @@ public class ExecutionJobQueueBootstrap implements ApplicationRunner {
      * 복구될 때까지 {@link ExecutionJobQueue#enqueue}는 폴백을 택한다.
      */
     void onPollError(Throwable t) {
+        if (draining) return;
         executionJobQueue.markConsumerUnhealthy(t);
         sleepQuietly(pollErrorBackoff);
-        try {
-            createGroupIfAbsent();
-            executionJobQueue.markConsumerHealthy();
-        } catch (DataAccessException e) {
-            log.warn("[ExecutionJobQueueBootstrap] 잡 폴링 복구 실패 — 계속 재시도한다: {}", e.toString());
+        synchronized (this) {
+            if (draining) return;
+            try {
+                createGroupIfAbsent();
+                executionJobQueue.markConsumerHealthy();
+            } catch (DataAccessException e) {
+                log.warn("[ExecutionJobQueueBootstrap] 잡 폴링 복구 실패 — 계속 재시도한다: {}", e.toString());
+            }
         }
     }
 

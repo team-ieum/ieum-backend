@@ -201,6 +201,24 @@ class SyncExecutionRuntimeTest {
     }
 
     @Test
+    void lostLeaseStopsNewNodesAndDoesNotWriteTerminalStateOrCompleteRelay() {
+        stubDefinition(List.of(node("t", "TRIGGER"), node("a", "AI"), node("b", "AI")),
+            List.of(edge("t", "a", null), edge("a", "b", null)));
+        SyncExecutionRuntime runtime = runtime();
+        ExecutionOwnershipGuard guard = id -> {
+            if (log.contains("a")) {
+                throw new ExecutionOwnershipGuard.OwnershipLostException("original postgres session lost");
+            }
+        };
+        ReflectionTestUtils.setField(runtime, "ownershipGuard", guard);
+        assertThatThrownBy(() -> runtime.execute(mock(WorkflowVersion.class), executionId, Map.of()))
+            .isInstanceOf(ExecutionOwnershipGuard.OwnershipLostException.class);
+        assertThat(log).containsExactly("t", "a");
+        verify(executionRepository, never()).finishIfNotTerminal(any(), any(), anyBoolean(), any());
+        verify(eventPublisher, never()).complete(executionId);
+    }
+
+    @Test
     @DisplayName("fan-out: 한 노드의 두 분기 모두 실행된다")
     void fanout_runs_all_branches() throws Exception {
         // t -> a, a -> b, a -> c
