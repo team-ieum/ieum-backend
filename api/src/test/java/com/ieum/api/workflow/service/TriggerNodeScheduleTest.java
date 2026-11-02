@@ -79,7 +79,7 @@ class TriggerNodeScheduleTest {
     @DisplayName("새 스케줄 노드는 칸에서 Quartz cron을 계산한다 — schedule.weekly 금 17시")
     void compute_weekly_buildsCronFromFields() {
         assertThat(compute(trigger("schedule.weekly", Map.of("weekday", "FRI", "hour", "17"))))
-            .isEqualTo(new TriggerNodeSchedule(TriggerType.SCHEDULE, "0 0 17 ? * FRI"));
+            .isEqualTo(new TriggerNodeSchedule(TriggerType.SCHEDULE, "0 0 17 ? * FRI", true));
     }
 
     @Test
@@ -162,6 +162,17 @@ class TriggerNodeScheduleTest {
     void assert_cronMismatch_isRejected() {
         assertInvalidWorkflow(() -> SCHEDULE_9AM.assertMatchesRequest(TriggerType.SCHEDULE, "0 0 10 * * ?"),
             "0 9 * * *");
+    }
+
+    @Test
+    @DisplayName("칸에서 계산한 cron은 불일치 메시지에 싣지 않는다(사용자가 쓴 적 없는 값)")
+    void assert_mismatch_hidesComputedCron() {
+        TriggerNodeSchedule weekly = compute(trigger("schedule.weekly", Map.of("weekday", "FRI", "hour", "17")));
+        assertThatThrownBy(() -> weekly.assertMatchesRequest(TriggerType.MANUAL, null))
+            .isInstanceOf(CustomException.class)
+            .hasMessageContaining("SCHEDULE").hasMessageNotContaining("FRI").hasMessageNotContaining("?");
+        assertThatThrownBy(() -> weekly.assertMatchesRequest(null, "0 0 9 * * ?"))
+            .isInstanceOf(CustomException.class).hasMessageNotContaining("FRI");
     }
 
     @Test

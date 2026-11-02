@@ -5,6 +5,7 @@ import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.catalog.NodeDerivation;
 import java.time.ZoneId;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 스케줄 트리거 노드의 칸(hour·weekday·day·weekends)으로 Quartz 6필드 cron을 만든다.
@@ -21,7 +22,15 @@ public final class ScheduleCron {
     private static final String WEEKDAY = "MON|TUE|WED|THU|FRI|SAT|SUN";
     private static final String DAY = "[1-9]|1\\d|2[0-8]|L";
 
+    /** 칸에서 cron을 계산하는 event — 사용자가 cron을 쓴 적이 없다. */
+    private static final Set<String> FROM_FIELDS =
+        Set.of("schedule.hourly", "schedule.daily", "schedule.weekly", "schedule.monthly");
+
     private ScheduleCron() {}
+
+    public static boolean fromFields(String event) {
+        return FROM_FIELDS.contains(event);
+    }
 
     public static String of(Object nodeId, String event, Map<?, ?> config) {
         return switch (event == null ? "" : event) {
