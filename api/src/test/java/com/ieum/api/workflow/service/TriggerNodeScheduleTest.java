@@ -68,8 +68,29 @@ class TriggerNodeScheduleTest {
             .filter(event -> event.triggerType() != null && (event.builder() || event.generation())).toList();
         assertThat(triggers).isNotEmpty();
         for (EventDefinition event : triggers) {
-            assertThat(compute(trigger(event.name(), new HashMap<>())).triggerType())
+            // 새 스케줄 노드(daily·weekly·monthly)는 칸이 비면 400이라 유효한 칸을 준다 — 다른 이벤트는 무시한다
+            Map<String, Object> config = new HashMap<>(Map.of("hour", "9", "weekday", "MON", "day", "1"));
+            assertThat(compute(trigger(event.name(), config)).triggerType())
                 .as(event.name()).isEqualTo(event.triggerType());
+        }
+    }
+
+    @Test
+    @DisplayName("새 스케줄 노드는 칸에서 Quartz cron을 계산한다 — schedule.weekly 금 17시")
+    void compute_weekly_buildsCronFromFields() {
+        assertThat(compute(trigger("schedule.weekly", Map.of("weekday", "FRI", "hour", "17"))))
+            .isEqualTo(new TriggerNodeSchedule(TriggerType.SCHEDULE, "0 0 17 ? * FRI"));
+    }
+
+    @Test
+    @DisplayName("schedule.daily 칸이 비거나 config가 없으면 INVALID_CRON_EXPRESSION(시각) — 500이 아니다")
+    void compute_dailyWithoutHour_isInvalidCron() {
+        for (Object config : new Object[]{new HashMap<>(), null}) {
+            assertThatThrownBy(() -> compute(trigger("schedule.daily", config)))
+                .isInstanceOfSatisfying(CustomException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_CRON_EXPRESSION);
+                    assertThat(e.getMessage()).contains("시각");
+                });
         }
     }
 

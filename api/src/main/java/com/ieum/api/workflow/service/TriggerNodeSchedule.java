@@ -7,6 +7,7 @@ import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.catalog.EventCatalog;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.scheduler.CronConverter;
+import com.ieum.workflowcore.scheduler.ScheduleCron;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -16,8 +17,9 @@ import java.util.Optional;
  * 이 값의 캐시다 — REST 생성·수정({@link WorkflowService})과 AI 저장({@code ChatService})이 같은 계산을 쓴다.
  *
  * <p>트리거 종류 = 첫 번째 TRIGGER 노드의 {@code event} → 카탈로그 {@code trigger_type}. 트리거 노드가 없으면 MANUAL·cron null.
- * {@code cron}은 SCHEDULE일 때 노드 {@code config.cron} 원문이다(Quartz 변환은 저장 쪽 {@code normalizeCronExpression}).
- * 노드에 cron이 없으면 compute는 null을 담고, 호출자가 {@link #assertCronPresent}로 어느 노드인지 밝혀 400을 낸다.
+ * {@code cron}은 SCHEDULE일 때 {@link ScheduleCron#of}가 정한다 — {@code schedule.every}는 노드 {@code config.cron} 원문(Quartz
+ * 변환은 저장 쪽 {@code normalizeCronExpression}), hourly·daily·weekly·monthly는 칸에서 계산한 Quartz cron(칸이 비거나
+ * 범위 밖이면 400 {@code INVALID_CRON_EXPRESSION}). {@code schedule.every} 노드에 cron이 없으면 compute는 null을 담고, 호출자가 {@link #assertCronPresent}로 어느 노드인지 밝혀 400을 낸다.
  */
 public record TriggerNodeSchedule(TriggerType triggerType, String cron) {
 
@@ -31,8 +33,8 @@ public record TriggerNodeSchedule(TriggerType triggerType, String cron) {
             TriggerType type = (event instanceof String name ? catalog.triggerTypeOf(name) : Optional.<TriggerType>empty())
                 .orElseThrow(() -> new CustomException(ErrorCode.INVALID_WORKFLOW,
                     "TRIGGER 노드의 event가 트리거 이벤트가 아닙니다: " + echo(event) + " (노드 " + echo(node.get("id")) + ")"));
-            String cron = type == TriggerType.SCHEDULE && node.get("config") instanceof Map<?, ?> config
-                && config.get("cron") instanceof String value ? value : null;
+            String cron = type != TriggerType.SCHEDULE ? null : ScheduleCron.of(node.get("id"), (String) event,
+                node.get("config") instanceof Map<?, ?> config ? config : Map.of());
             return new TriggerNodeSchedule(type, cron);
         }
         return new TriggerNodeSchedule(TriggerType.MANUAL, null);

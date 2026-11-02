@@ -916,13 +916,13 @@ class ChatServiceTest {
     @DisplayName("TRIGGER 노드의 event를 카탈로그가 모르면 저장하지 않는다 — 메시지에 event·노드 id")
     void finalizeStream_unknownTriggerEvent_notSaved() throws Exception {
         ChatAgentResponse resp = buildNodeResponse("""
-            { "id": "node-trigger", "event": "schedule.daily", "type": "TRIGGER", "config": {} }""");
+            { "id": "node-trigger", "event": "schedule.yearly", "type": "TRIGGER", "config": {} }""");
         ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
         assertThatThrownBy(() -> chatService.finalizeStream(workflowId, sessionId, resp, config, userId))
             .isInstanceOfSatisfying(CustomException.class, e -> {
                 assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW);
-                assertThat(e.getMessage()).contains("schedule.daily").contains("node-trigger");
+                assertThat(e.getMessage()).contains("schedule.yearly").contains("node-trigger");
             });
         verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
     }

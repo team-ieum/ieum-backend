@@ -43,12 +43,24 @@ class EventCatalogTest {
     }
 
     @Test
-    @DisplayName("TriggerType 값마다 트리거 이벤트가 정확히 하나 있다")
+    @DisplayName("TriggerType 값마다 트리거 이벤트가 정확히 하나 있다 — SCHEDULE만 여럿")
     void everyTriggerType_hasExactlyOneEvent() {
         for (TriggerType type : TriggerType.values()) {
+            if (type == TriggerType.SCHEDULE) {
+                continue;
+            }
             assertThat(CATALOG.events()).as(type.name())
                     .filteredOn(e -> e.triggerType() == type).hasSize(1);
         }
+    }
+
+    @Test
+    @DisplayName("SCHEDULE 이벤트는 5개(every·hourly·daily·weekly·monthly)이고 각자 triggerTypeOf가 SCHEDULE이다")
+    void scheduleEvents_shareScheduleTriggerType() {
+        assertThat(CATALOG.events()).filteredOn(e -> e.triggerType() == TriggerType.SCHEDULE)
+                .extracting(EventDefinition::name).containsExactlyInAnyOrder(
+                        "schedule.every", "schedule.hourly", "schedule.daily", "schedule.weekly", "schedule.monthly");
+        assertThat(CATALOG.triggerTypeOf("schedule.weekly")).hasValue(TriggerType.SCHEDULE);
     }
 
     @Test
@@ -263,6 +275,16 @@ class EventCatalogTest {
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("trigger_type")
                     .hasMessageContaining("MANUAL");
+        }
+    }
+
+    @Test
+    @DisplayName("SCHEDULE은 여러 이벤트가 같이 써도 된다")
+    void load_duplicateScheduleTriggerType_allowed(@TempDir Path dir) throws IOException {
+        writeCatalog(dir, Map.of("manual/a.json", trigger("SCHEDULE"), "manual/b.json", trigger("SCHEDULE")));
+
+        try (URLClassLoader loader = loader(dir)) {
+            assertThat(EventCatalog.load(loader).triggerTypeOf("manual.b")).hasValue(TriggerType.SCHEDULE);
         }
     }
 
