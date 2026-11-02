@@ -3,8 +3,6 @@ package com.ieum.api.chat.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.ieum.api.chat.dto.AgentAction;
-import com.ieum.api.chat.dto.AgentResponseType;
 import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.api.chat.dto.ChatRequest;
 import com.ieum.api.chat.dto.ChatResponse;
@@ -301,46 +299,6 @@ public class ChatService {
     }
 
     /**
-     * INTEGRATION_REQUIRED 응답의 actions에 oauthUrl을 주입한다.
-     *
-     * <p>ieum-agent는 OAuth 시작 URL을 알지 못하므로, backend가 응답 후처리 시 주입한다.
-     * type이 "OAUTH"인 action에만 적용되며, 알 수 없는 provider는 oauthUrl을 null로 남긴다.
-     *
-     * @param actions AgentAction 목록 (nullable 허용 — null이면 무처리)
-     */
-    private void injectOAuthUrls(List<AgentAction> actions) {
-        if (actions == null || actions.isEmpty()) {
-            return;
-        }
-        for (AgentAction action : actions) {
-            if ("OAUTH".equals(action.getType()) && action.getProvider() != null) {
-                action.setOauthUrl(resolveOAuthUrl(action.getProvider()));
-            }
-        }
-    }
-
-    /**
-     * 프로바이더명으로 OAuth 시작 URL을 결정한다.
-     *
-     * <p>Spring Security의 OAuth2 authorizationEndpoint baseUri가
-     * {@code /api/v1/oauth2/authorize}이므로 suffix로 프로바이더명(소문자)을 붙인다.
-     *
-     * @param provider 대소문자 무관 프로바이더명 (예: "GOOGLE", "google")
-     * @return OAuth 시작 URL (미지원 프로바이더는 null)
-     */
-    private String resolveOAuthUrl(String provider) {
-        return switch (provider.toUpperCase()) {
-            case "GOOGLE" -> "/api/v1/oauth2/authorize/google";
-            case "GITHUB" -> "/api/v1/github/oauth2/authorize";
-            // TODO: NOTION OAuth 구현 후 추가
-            default -> {
-                log.warn("[ChatService] 알 수 없는 OAuth 프로바이더 — provider: {}", provider);
-                yield null;
-            }
-        };
-    }
-
-    /**
      * FE가 보낸 캔버스 노드를 저장 경로와 같은 파생에 통과시킨다(IEUM-BE-92). null이면 null(신규 생성)이다.
      * 모르는 event나 객체가 아닌 원소는 CustomException(INVALID_WORKFLOW)이다 — 호출부는 쿼터 예약·agent 호출보다 앞에서 부른다.
      */
@@ -507,7 +465,6 @@ public class ChatService {
      *
      * <ol>
      *   <li>WORKFLOW_GENERATED/MODIFIED → 새 워크플로우 버전 저장 (+ 첫 생성 시 이름 설정)</li>
-     *   <li>INTEGRATION_REQUIRED → actions에 oauthUrl 주입</li>
      *   <li>AGENT 메시지 저장</li>
      * </ol>
      *
@@ -534,10 +491,6 @@ public class ChatService {
             // DONE은 WORKFLOW_MODIFIED + 전체 nodes와 함께 와야 저장된다(IEUM-BE-106). 아니면 트리거가 조용히 안 켜지므로 드러낸다.
             log.warn("[ChatService] buildState=DONE인데 저장 대상 응답이 아니라 트리거가 켜지지 않는다 — workflowId: {}, type: {}",
                 workflowId, agentResponse.getType());
-        }
-
-        if (agentResponse.getType() == AgentResponseType.INTEGRATION_REQUIRED) {
-            injectOAuthUrls(agentResponse.getActions());
         }
 
         ChatMessage agentMessage = saveAgentMessageById(

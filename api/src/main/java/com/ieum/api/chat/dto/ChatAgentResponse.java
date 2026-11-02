@@ -11,10 +11,9 @@ import lombok.NoArgsConstructor;
  * <pre>
  * {
  *   "message": "LLM 자연어 응답 텍스트",
- *   "type": "WORKFLOW_GENERATED | WORKFLOW_MODIFIED | INTEGRATION_REQUIRED | CLARIFICATION_NEEDED",
+ *   "type": "WORKFLOW_GENERATED | WORKFLOW_MODIFIED | CLARIFICATION_NEEDED",
  *   "nodes": [...],               // WORKFLOW_GENERATED/MODIFIED 시에만 채워짐
  *   "edges": [...],               // WORKFLOW_GENERATED/MODIFIED 시에만 채워짐
- *   "actions": [...],             // INTEGRATION_REQUIRED 시에만 채워짐
  *   "changeDescription": "...",   // WORKFLOW_MODIFIED 시에만 채워짐
  *   "usage": {                    // 모델이 토큰을 보고하지 않으면 null
  *     "promptTokens": 1200, "completionTokens": 340, "totalTokens": 1540
@@ -45,13 +44,6 @@ public class ChatAgentResponse {
      * type이 WORKFLOW_GENERATED 또는 WORKFLOW_MODIFIED일 때 채워진다.
      */
     private List<Object> edges;
-
-    /**
-     * 프론트엔드 실행 가능한 액션 목록 (예: OAuth 연동 버튼).
-     * type이 INTEGRATION_REQUIRED일 때 채워진다.
-     * oauthUrl은 ieum-backend가 후처리 시 주입한다.
-     */
-    private List<AgentAction> actions;
 
     /**
      * 사용자가 고를 수 있는 선택지 목록 (예: GitHub repo, 웹훅, 빌더 모델 카드).
