@@ -5,19 +5,11 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.chat.dto.AgentAction;
 import com.ieum.api.chat.dto.AgentResponseType;
-import com.ieum.api.chat.dto.AvailableMcpServer;
-import com.ieum.api.chat.dto.AvailableWebhook;
 import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.api.chat.dto.ChatRequest;
 import com.ieum.api.chat.dto.ChatResponse;
-import com.ieum.api.chat.dto.IntegrationInfo;
-import com.ieum.api.chat.service.IntegrationContextService.IntegrationContext;
 import com.ieum.api.credential.domain.Credential;
 import com.ieum.api.credential.service.CredentialService;
-import com.ieum.api.mcp.domain.McpServerCatalog;
-import com.ieum.api.mcp.repository.McpServerCatalogRepository;
-import com.ieum.api.webhookcredential.domain.WebhookCredential;
-import com.ieum.api.webhookcredential.repository.WebhookCredentialRepository;
 import com.ieum.api.workflow.service.NodeCredentialGuard;
 import com.ieum.api.workflow.service.RawWebhookUrlGuard;
 import com.ieum.api.workflow.service.TriggerNodeSchedule;
@@ -54,18 +46,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * <p>이 서비스는 LLM 기반 워크플로우 컴파일러 역할을 한다. 사용자의 자연어 입력을 받아
  * ieum-agent에 전달하고, agent의 응답에 따라 workflow canonical state를 DB에 저장한다.
  *
- * <h3>chat() 내부 흐름</h3>
- * <ol>
- *   <li>세션 찾기 or 신규 생성</li>
- *   <li>채팅 LLM 설정 결정(요청 키 → 최근 키 → self-hosted/베타)</li>
- *   <li>USER 메시지 DB 저장</li>
- *   <li>FE가 보낸 currentNodes를 NodeDerivation으로 파생(type·brand 계산, 옛 키 제거)해 currentEdges와 함께 전달(DB 재조회 없음)</li>
- *   <li>연동 상태 분류 (availableIntegrations / unavailableIntegrations)</li>
- *   <li>Google 빌트인 도구 여부 판단 → Access Token 조회</li>
- *   <li>AgentClient.chat() 호출 (블로킹)</li>
- *   <li>응답 type에 따라 workflow 저장 or oauthUrl 주입</li>
- *   <li>AGENT 응답 메시지 DB 저장</li>
- * </ol>
+ * <p>채팅은 WebSocket 스트림뿐이다 — {@link #prepareStream}(세션·LLM 설정·USER 메시지·currentNodes 파생)
+ * → {@code WebSocketChatHandler}가 agent 스트림 구독 → {@link #finalizeStream}(워크플로우 저장·AGENT 메시지).
  */
 @Slf4j
 @Service
@@ -80,113 +62,10 @@ public class ChatService {
     private final WorkflowCrudService workflowCrudService;
     private final CredentialProvider credentialProvider;
     private final CredentialService credentialService;
-    private final IntegrationContextService integrationContextService;
-    private final AgentClient agentClient;
     private final ObjectMapper objectMapper;
-    private final McpServerCatalogRepository mcpServerCatalogRepository;
-    private final WebhookCredentialRepository webhookCredentialRepository;
     private final BetaPlatformProvider betaPlatformProvider;
     private final NodeDerivation nodeDerivation;
     private final EventCatalog eventCatalog;
-
-    // ─────────────────────────────────────── REST 블로킹 ──────────────────────
-
-    /**
-     * 메시지를 전송하고 AI 응답을 블로킹으로 반환한다 (REST API 전용).
-     *
-     * @param workflowId 워크플로우 ID
-     * @param userId     현재 인증된 사용자 ID
-     * @param request    ChatRequest (prompt + optional currentNodes/currentEdges + optional sessionId)
-     * @return AI AGENT 응답 메시지 DTO
-     */
-    @Transactional
-    public ChatResponse chat(UUID workflowId, UUID userId, String userRole, ChatRequest request) {
-
-        // 1. 세션 찾거나 새로 생성
-        ChatSession session = createOrGetSession(workflowId, userId, request.getSessionId());
-
-        // 2. 채팅 LLM 설정 결정 (소유권 검증 포함)
-        AgentConfig agentConfig = resolveAgentConfig(workflowId, userId, request.getCredentialId(), userRole);
-
-        // 3. USER 메시지 저장
-        saveUserMessage(session, request.getPrompt());
-
-        // 4. 첫 메시지면 세션 제목 자동 설정
-        if (session.getTitle() == null) {
-            autoUpdateTitle(session, request.getPrompt());
-        }
-
-        // 5. 연동 서비스 상태 조회 (available / unavailable)
-        IntegrationContext integrationContext = integrationContextService.resolve(userId);
-
-        // 6. AI 에이전트 호출 (agent 스펙 미지원 provider 제거)
-        log.info("[ChatService] AI 응답 요청 — workflowId: {}, sessionId: {}",
-            workflowId, session.getId());
-        List<IntegrationInfo> agentAvailable = filterAgentSupportedIntegrations(integrationContext.available());
-        List<IntegrationInfo> agentUnavailable = filterAgentSupportedIntegrations(integrationContext.unavailable());
-        List<AvailableMcpServer> availableMcpServers = resolveAvailableMcpServers(userId);
-        List<AvailableWebhook> availableWebhooks = resolveAvailableWebhooks(userId);
-        List<Object> currentNodes = deriveCurrentNodes(request.getCurrentNodes());
-        ChatAgentResponse agentResponse;
-        String betaReservationKey = null;
-        try {
-            // 쿼터 예약(INCR)은 사전작업이 모두 끝난 뒤, agent 호출 바로 직전에 한다 — 그 앞에서 예외가 나면
-            // INCR 자체가 없으므로 환불이 필요 없다. reserveQuota가 쿼터 초과로 거부되면(BETA_QUOTA_EXCEEDED)
-            // BetaQuotaService가 스스로 카운터를 원복하므로 여기서도 별도 환불을 시도하지 않는다
-            // (betaReservationKey는 reserveQuota가 예외 없이 반환했을 때만 세팅된다).
-            betaReservationKey = reserveBetaQuota(agentConfig, userId);
-            agentResponse = agentClient.chat(AgentClient.AgentChatCallParams.builder()
-                .workflowId(workflowId)
-                .prompt(request.getPrompt())
-                .currentNodes(currentNodes)
-                .currentEdges(request.getCurrentEdges())
-                .availableIntegrations(agentAvailable)
-                .unavailableIntegrations(agentUnavailable)
-                .llmProvider(agentConfig.llmProvider())
-                .apiKey(agentConfig.decryptedApiKey())
-                .availableMcpServers(availableMcpServers)
-                .availableWebhooks(availableWebhooks)
-                .userId(userId)
-                .userRole(userRole)
-                .useBetaPlatformKey(agentConfig.useBetaPlatformKey())
-                .build());
-        } catch (RuntimeException e) {
-            // 예약(INCR)까지는 성공했는데 agent 호출 자체가 실패한 경우에만 환불한다(키가 있을 때만 — 없으면
-            // releaseBetaQuotaOnFailure 내부 가드가 no-op). 성공 응답을 받은 뒤의 후처리 실패(메시지 저장 등)는
-            // 이미 실제 호출이 일어났으므로 환불 대상이 아니다.
-            releaseBetaQuotaOnFailure(betaReservationKey);
-            throw e;
-        }
-        recordBetaTokensIfPresent(agentConfig, userId, agentResponse);
-
-        // 7. WORKFLOW_GENERATED/MODIFIED → DB에 새 버전으로 저장
-        //    첫 생성 여부를 저장 전에 확인 (저장 후에는 version이 증가하므로)
-        List<Object> savedNodes = null;   // 저장했으면 파생 노드, 아니면 agent 응답 그대로
-        if (agentResponse.isWorkflowResult()) {
-            int maxVersionBeforeSave = workflowCrudService.findMaxVersionByWorkflowId(workflowId);
-            savedNodes = List.copyOf(
-                saveWorkflowVersion(workflowId, agentResponse, agentConfig, request.getCredentialId(), userId));
-
-            if (maxVersionBeforeSave <= 1 && agentResponse.getWorkflowName() != null) {
-                workflowCrudService.updateWorkflowName(workflowId, agentResponse.getWorkflowName());
-            }
-        }
-
-        // 8. INTEGRATION_REQUIRED → actions에 oauthUrl 주입
-        if (agentResponse.getType() == AgentResponseType.INTEGRATION_REQUIRED) {
-            injectOAuthUrls(agentResponse.getActions());
-        }
-
-        // 9. AGENT 메시지 저장 후 반환 — sessionId를 직접 전달하여 LAZY 로딩 회피
-        ChatMessage agentMessage = saveAgentMessage(
-            session,
-            agentResponse.getContent(),
-            agentResponse.getInputTokens(),
-            agentResponse.getOutputTokens()
-        );
-
-        return ChatResponse.from(agentMessage, session.getId(), agentResponse, savedNodes);
-    }
 
     // ─────────────────────────────────────── 히스토리 ─────────────────────────
 
@@ -211,7 +90,7 @@ public class ChatService {
      * WebSocket 핸들러에서 직접 호출할 수 있도록 public으로 공개한다.
      *
      * <p><b>트랜잭션 참고:</b> 외부(다른 Bean)에서 호출 시 새 트랜잭션을 시작한다.
-     * 같은 클래스 내의 {@code chat()}, {@code prepareStream()} 에서 호출 시에는
+     * 같은 클래스 내의 {@code prepareStream()}에서 호출 시에는
      * Spring AOP 셀프 인보케이션 제약으로 인해 상위 트랜잭션에 참여한다.
      *
      * @param workflowId 워크플로우 ID
@@ -275,7 +154,7 @@ public class ChatService {
 
     /**
      * 채팅 LLM 설정(llmProvider, API Key)을 결정한다 — 워크플로우 노드는 보지 않는다.
-     * 순서: 요청 키 → 최근 등록 키 → self-hosted → 베타. 반환 {@code tools}는 항상 null이다.
+     * 순서: 요청 키 → 최근 등록 키 → self-hosted → 베타.
      *
      * <p>WebSocket 핸들러에서 재사용할 수 있도록 public으로 공개한다.
      *
@@ -286,17 +165,17 @@ public class ChatService {
         workflowCrudService.getWorkflowByOwner(userId, workflowId);
 
         // 채팅 LLM은 워크플로우 노드를 보지 않는다(IEUM-BE-107): 요청 키 → 최근 등록 키 → self-hosted → 베타
-        // 여기서는 자격(eligibility) 판정만 한다 — 실제 쿼터 예약(INCR)은 agent 호출 직전(chat()/스트림 subscribe 직전)에서
+        // 여기서는 자격(eligibility) 판정만 한다 — 실제 쿼터 예약(INCR)은 agent 호출 직전(스트림 subscribe 직전)에서
         // 수행해, 그 사이의 사전작업(메시지 저장/연동 조회 등) 예외가 불필요한 환불 대상을 만들지 않게 한다.
         if (fallbackCredentialId == null) {
             List<Credential> credentials = credentialService.getByUserId(userId);
             if (credentials.isEmpty()) {
                 if (UserRoleProvider.isSelfHostedEligible(userRole)) {
                     // 크레덴셜이 하나도 없어도 개발/테스트 계정은 자체 호스팅 LLM으로 채팅 가능
-                    return new AgentConfig("CLAUDE", null, null, false);
+                    return new AgentConfig("CLAUDE", null, false);
                 }
                 if (isBetaEligible(userId)) {
-                    return new AgentConfig("CLAUDE", null, null, true);
+                    return new AgentConfig("CLAUDE", null, true);
                 }
                 throw new CustomException(ErrorCode.CHAT_CREDENTIAL_REQUIRED);
             }
@@ -308,7 +187,7 @@ public class ChatService {
         }
         Credential credential = credentialService.getByIdAndUserId(fallbackCredentialId, userId);
         String decryptedApiKey = credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString(), userId);
-        return new AgentConfig(credential.getProvider().name(), decryptedApiKey, null, false);
+        return new AgentConfig(credential.getProvider().name(), decryptedApiKey, false);
     }
 
     /** 베타 플랫폼 키(Gemini) 폴백 자격 — self-hosted 자격이 없을 때만 폴백 순위로 확인한다. */
@@ -319,7 +198,7 @@ public class ChatService {
     /**
      * 베타 플랫폼 키를 사용한 호출이면 응답 토큰 수로 사용량을 사후 차감한다 (best-effort).
      *
-     * <p>agent {@code /v1/chat}이 usage를 채우기 시작해(IEUM-AI-48) 이 경로가 실제로 동작한다.
+     * <p>agent 채팅 응답이 usage를 채우기 시작해(IEUM-AI-48) 이 경로가 실제로 동작한다.
      * 모델이 토큰을 보고하지 않으면 usage가 통째로 null이고, 그 경우 차감을 건너뛴다(execute 경로와 동일).
      *
      * <p>차감 기준은 agent가 보낸 {@code totalTokens}다 — 입출력 합산이 아니다. 캐시드·reasoning
@@ -328,9 +207,8 @@ public class ChatService {
      * 보정한다.
      *
      * <p>Redis 기록은 트랜잭션 동기화가 활성이면 <b>커밋 이후</b>로 미룬다. JPA 저장이 롤백되면
-     * Redis 증가분만 남아 사용자가 쓰지도 않은 토큰을 잃기 때문이다. 현재 호출부인 {@link #chat}과
-     * {@link #finalizeStream}은 <b>둘 다 {@code @Transactional}</b>이라 실제로는 항상 지연 경로를
-     * 탄다. 즉시 기록 분기는 트랜잭션 없이 호출될 미래의 경로(또는 단위 테스트)를 위한 폴백이다.
+     * Redis 증가분만 남아 사용자가 쓰지도 않은 토큰을 잃기 때문이다. 현재 호출부인
+     * {@link #finalizeStream}은 {@code @Transactional}이라 실제로는 항상 지연 경로를 탄다. 즉시 기록 분기는 트랜잭션 없이 호출될 미래의 경로(또는 단위 테스트)를 위한 폴백이다.
      */
     private void recordBetaTokensIfPresent(AgentConfig config, UUID userId, ChatAgentResponse agentResponse) {
         if (!config.useBetaPlatformKey() || userId == null) {
@@ -402,8 +280,7 @@ public class ChatService {
      * 일일 호출 카운터를 환불한다(best-effort). reserveQuota 자체가 실패(쿼터 초과)한 경우는
      * 키 자체가 없으므로(null) 이 메서드가 호출돼도 자연히 무시된다.
      *
-     * <p>{@code chat()}(블로킹)에서는 agent 호출 예외 시 직접 호출한다. chatStream(스트리밍)은
-     * {@code WebSocketChatHandler}가 리액티브 체인의 {@code doFinally}에서 정확히 1회 호출해
+     * <p>{@code WebSocketChatHandler}가 리액티브 체인의 {@code doFinally}에서 정확히 1회 호출해
      * error/cancel(클라 disconnect)/비성공-complete를 모두 커버한다.
      *
      * @param reservationKey reserveBetaQuota가 반환한 일일 카운터 키 (null이면 no-op)
@@ -484,18 +361,14 @@ public class ChatService {
      *
      * <p>AI 노드의 키·제공사·모델은 빌더가 함께 쓴다(IEUM-AI-85) — 여기서 채우지 않는다.
      *
-     * <p>여기가 agent 경로의 유일한 저장 지점이다 — {@link #chat}(블로킹)과 {@link #finalizeStream}
-     * (스트리밍) 둘 다 이 메서드를 거쳐 {@code WorkflowCrudService.saveAgentVersion}으로 간다. 그
-     * 아래는 JSON 문자열만 받으므로 노드 단위 검사는 여기가 마지막 지점이다(IEUM-BE-62 Task 4).
+     * <p>여기가 agent 경로의 유일한 저장 지점이다 — {@link #finalizeStream}이 이 메서드를 거쳐
+     * {@code WorkflowCrudService.saveAgentVersion}으로 간다. 그 아래는 JSON 문자열만 받으므로 노드 단위 검사는 여기가 마지막 지점이다(IEUM-BE-62 Task 4).
      *
-     * @param agentConfig          쓰지 않음(BE-106 후속 정리에서 삭제)
-     * @param fallbackCredentialId 쓰지 않음(BE-106 후속 정리에서 삭제)
      * @return 저장한 파생 노드(type은 event가 정한 값)
      */
-    private List<Map<String, Object>> saveWorkflowVersion(UUID workflowId, ChatAgentResponse agentResponse,
-            AgentConfig agentConfig, UUID fallbackCredentialId, UUID userId) {
+    private List<Map<String, Object>> saveWorkflowVersion(UUID workflowId, ChatAgentResponse agentResponse, UUID userId) {
         try {
-            // agent 노드도 REST와 같은 파생을 거친다(IEUM-BE-92). 모르는 event면 CustomException이 나서 WS error·REST 400이 된다.
+            // agent 노드도 REST와 같은 파생을 거친다(IEUM-BE-92). 모르는 event면 CustomException이 나서 WS error가 된다.
             // 아래 가드는 모두 파생된 Map(type은 event가 정한 값, config는 변경 가능한 사본)에 돈다.
             List<Map<String, Object>> nodes = nodeDerivation.deriveAll(objectMapper.convertValue(
                 agentResponse.getNodes(), new TypeReference<>() {}));
@@ -507,8 +380,7 @@ public class ChatService {
 
             for (Map<String, Object> node : nodes) {
                 // agent가 만든 정의도 REST 생성·수정과 같은 웹훅 URL 원문 검사를 받는다. agent에는
-                // webhookCredentialId 목록만 주고 URL은 주지 않지만(resolveAvailableWebhooks),
-                // 사용자가 프롬프트에 URL을 그대로 적으면 그 값이 노드 config로 돌아올 수 있다.
+                // 웹훅 URL을 주지 않지만, 사용자가 프롬프트에 URL을 그대로 적으면 그 값이 노드 config로 돌아올 수 있다.
                 RawWebhookUrlGuard.rejectRawWebhookUrl(node.get("config"));
 
                 // agent가 실어 보낸 credentialId도 소유 검사를 받는다(IEUM-BE-64).
@@ -572,53 +444,6 @@ public class ChatService {
         return edges;
     }
 
-    /**
-     * ieum-agent가 지원하지 않는 provider를 필터링한다.
-     * agent 스펙: GOOGLE, NOTION, SLACK, DISCORD, GITHUB 허용
-     */
-    private static final Set<String> AGENT_SUPPORTED_PROVIDERS =
-        Set.of("GOOGLE", "NOTION", "SLACK", "DISCORD", "GITHUB");
-
-    private List<IntegrationInfo> filterAgentSupportedIntegrations(List<IntegrationInfo> list) {
-        return list.stream()
-            .filter(info -> AGENT_SUPPORTED_PROVIDERS.contains(info.getProvider()))
-            .toList();
-    }
-
-    /**
-     * 사용자가 보유한 활성(enabled) MCP 서버 카탈로그를 조회해 agent 생성 요청용 메타로 변환한다.
-     *
-     * <p>serverUrl/암호화 헤더 등 민감 정보는 제외하고 catalogId/name/description만 전달한다.
-     * agent는 이 목록에 있는 catalogId만 노드의 mcp 도구로 허용한다(환각 차단).
-     */
-    private List<AvailableMcpServer> resolveAvailableMcpServers(UUID userId) {
-        return mcpServerCatalogRepository.findByUserId(userId).stream()
-            .filter(McpServerCatalog::isEnabled)
-            .map(c -> new AvailableMcpServer(
-                c.getId().toString(),
-                c.getDisplayName(),
-                c.getDescription()
-            ))
-            .toList();
-    }
-
-    /**
-     * 사용자가 보유한 활성(enabled) Slack/Discord 웹훅 자격증명을 조회해 agent 생성 요청용 메타로 변환한다.
-     *
-     * <p>webhook URL 등 민감 정보는 제외하고 webhookCredentialId/provider/displayName만 전달한다.
-     * agent는 이 목록에 있는 webhookCredentialId만 노드의 slack/discord 도구에 허용한다(환각 차단).
-     */
-    private List<AvailableWebhook> resolveAvailableWebhooks(UUID userId) {
-        return webhookCredentialRepository.findByUserId(userId).stream()
-            .filter(WebhookCredential::isEnabled)
-            .map(w -> new AvailableWebhook(
-                w.getId().toString(),
-                w.getProvider().name(),
-                w.getDisplayName()
-            ))
-            .toList();
-    }
-
     // ─────────────────────────────────────── WebSocket 스트리밍 ───────────────
 
     /**
@@ -644,15 +469,8 @@ public class ChatService {
             autoUpdateTitle(session, request.getPrompt());
         }
 
-        IntegrationContext integrationContext = integrationContextService.resolve(userId);
-
         log.info("[ChatService] 스트림 준비 완료 — workflowId: {}, sessionId: {}",
             workflowId, session.getId());
-
-        IntegrationContext agentContext = new IntegrationContext(
-            filterAgentSupportedIntegrations(integrationContext.available()),
-            filterAgentSupportedIntegrations(integrationContext.unavailable())
-        );
 
         List<Object> currentNodes = deriveCurrentNodes(request.getCurrentNodes());
         return new StreamSetupResult(
@@ -660,10 +478,7 @@ public class ChatService {
             config,
             request.getPrompt(),
             currentNodes,
-            request.getCurrentEdges(),
-            agentContext,
-            resolveAvailableMcpServers(userId),
-            resolveAvailableWebhooks(userId)
+            request.getCurrentEdges()
         );
     }
 
@@ -688,7 +503,7 @@ public class ChatService {
     }
 
     /**
-     * 스트리밍 완료(done) 시 후처리를 수행한다 — 블로킹 {@link #chat}의 8~10단계와 동일하다.
+     * 스트리밍 완료(done) 시 후처리를 수행한다.
      *
      * <ol>
      *   <li>WORKFLOW_GENERATED/MODIFIED → 새 워크플로우 버전 저장 (+ 첫 생성 시 이름 설정)</li>
@@ -698,19 +513,18 @@ public class ChatService {
      *
      * <p>소유권은 {@link #prepareStream} 시점에 이미 검증되었으므로 재검증하지 않는다.
      *
-     * @param fallbackCredentialId 저장에는 쓰지 않음(BE-106 후속 정리에서 삭제)
      * @return 프론트로 전달할 최종 응답 DTO
      */
     @Transactional
     public ChatResponse finalizeStream(UUID workflowId, UUID sessionId,
-            ChatAgentResponse agentResponse, AgentConfig config, UUID fallbackCredentialId, UUID userId) {
+            ChatAgentResponse agentResponse, AgentConfig config, UUID userId) {
         recordBetaTokensIfPresent(config, userId, agentResponse);
 
         List<Object> savedNodes = null;   // 저장했으면 파생 노드, 아니면 agent 응답 그대로
         if (agentResponse.isWorkflowResult()) {
             int maxVersionBeforeSave = workflowCrudService.findMaxVersionByWorkflowId(workflowId);
             savedNodes = List.copyOf(
-                saveWorkflowVersion(workflowId, agentResponse, config, fallbackCredentialId, userId));
+                saveWorkflowVersion(workflowId, agentResponse, userId));
 
             if (maxVersionBeforeSave <= 1 && agentResponse.getWorkflowName() != null) {
                 workflowCrudService.updateWorkflowName(workflowId, agentResponse.getWorkflowName());
@@ -741,14 +555,13 @@ public class ChatService {
     public record AgentConfig(
         String llmProvider,
         String decryptedApiKey,
-        List<Map<String, Object>> tools,
         boolean useBetaPlatformKey
     ) {
         /** 로그/디버그 출력 시 복호화된 API Key가 노출되지 않도록 마스킹한다. */
         @Override
         public String toString() {
             return "AgentConfig[llmProvider=" + llmProvider
-                + ", decryptedApiKey=***, tools=" + tools + "]";
+                + ", decryptedApiKey=***, useBetaPlatformKey=" + useBetaPlatformKey + "]";
         }
     }
 
@@ -761,9 +574,6 @@ public class ChatService {
         AgentConfig config,
         String prompt,
         List<Object> currentNodes,
-        List<Object> currentEdges,
-        IntegrationContext integrationContext,
-        List<AvailableMcpServer> availableMcpServers,
-        List<AvailableWebhook> availableWebhooks
+        List<Object> currentEdges
     ) {}
 }

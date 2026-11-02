@@ -25,7 +25,6 @@ import com.ieum.api.chat.service.ChatService;
 import com.ieum.api.chat.service.ChatService.AgentConfig;
 import com.ieum.api.chat.service.ChatService.StreamSetupResult;
 import com.ieum.api.chat.service.ChatTurnLock;
-import com.ieum.api.chat.service.IntegrationContextService.IntegrationContext;
 import com.ieum.auth.delegation.DelegationTokenService;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
@@ -84,11 +83,9 @@ class WebSocketChatHandlerTest {
 
         setup = new StreamSetupResult(
             sessionId,
-            new AgentConfig("CLAUDE", "key", null, false),
+            new AgentConfig("CLAUDE", "key", false),
             "워크플로우 만들어줘",
-            null, null,
-            new IntegrationContext(List.of(), List.of()),
-            List.of(), List.of()
+            null, null
         );
     }
 
@@ -118,7 +115,7 @@ class WebSocketChatHandlerTest {
         mockPrepareStream();
         ChatAgentResponse agentResponse = mock(ChatAgentResponse.class);
         ChatResponse finalResponse = mock(ChatResponse.class);
-        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any(), any()))
+        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any()))
             .willReturn(finalResponse);
 
         mockChatStream(
@@ -131,7 +128,7 @@ class WebSocketChatHandlerTest {
 
         // 3개 프레임 전송 완료까지 대기(done 프레임은 finalizeStream 후 전송됨)한 뒤 검증한다.
         List<ChatStreamResponse> sent = captureSent(3);
-        verify(chatService).finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any(), any());
+        verify(chatService).finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any());
         assertThat(sent.get(0).getType()).isEqualTo(StreamType.STAGE);
         assertThat(sent.get(0).getStage()).isEqualTo("designing");
         assertThat(sent.get(1).getType()).isEqualTo(StreamType.STAGE);
@@ -155,7 +152,7 @@ class WebSocketChatHandlerTest {
         assertThat(sent.get(0).getType()).isEqualTo(StreamType.ERROR);
         assertThat(sent.get(0).getContent()).isEqualTo("AI 응답 중 오류가 발생했습니다.");
         verify(chatService, after(300).never())
-            .finalizeStream(any(), any(), any(), any(), any(), any());
+            .finalizeStream(any(), any(), any(), any(), any());
         // ERROR 이벤트 후 스트림이 정상 종료돼도 DONE을 받지 못했으므로 withBetaQuotaRefund의 doFinally가
         // reserveBetaQuota가 반환한 바로 그 키로 환불한다(자정 경계에도 동일 날짜 키를 보장하는 A-2 강건화).
         verify(chatService).releaseBetaQuotaOnFailure(TEST_RESERVATION_KEY);
@@ -202,7 +199,7 @@ class WebSocketChatHandlerTest {
         ChatAgentResponse agentResponse = mock(ChatAgentResponse.class);
         String guidance = "노드 config.url에 Slack·Discord 웹훅 URL을 직접 저장할 수 없습니다. "
             + "웹훅 자격증명을 등록한 뒤 config.webhookCredentialId로 참조하세요.";
-        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any(), any()))
+        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any()))
             .willThrow(new CustomException(ErrorCode.INVALID_WORKFLOW, guidance));
         mockChatStream(ChatStreamEvent.done(agentResponse));
 
@@ -219,7 +216,7 @@ class WebSocketChatHandlerTest {
     void done_unexpectedException_sendsGenericMessage() {
         mockPrepareStream();
         ChatAgentResponse agentResponse = mock(ChatAgentResponse.class);
-        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any(), any()))
+        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any()))
             .willThrow(new IllegalStateException("connection reset by peer"));
         mockChatStream(ChatStreamEvent.done(agentResponse));
 
@@ -270,7 +267,7 @@ class WebSocketChatHandlerTest {
         mockPrepareStream();
         given(delegationTokenService.issue(userId, "ROLE_USER", workflowId)).willReturn("deleg-raw");
         ChatAgentResponse agentResponse = mock(ChatAgentResponse.class);
-        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any(), any()))
+        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any()))
             .willReturn(mock(ChatResponse.class));
         mockChatStream(ChatStreamEvent.done(agentResponse));
 
@@ -283,7 +280,7 @@ class WebSocketChatHandlerTest {
         verify(agentClient).chatStream(params.capture());
         assertThat(params.getValue().delegationToken()).isEqualTo("deleg-raw");
         InOrder order = inOrder(chatService, delegationTokenService, chatTurnLock);
-        order.verify(chatService).finalizeStream(any(), any(), any(), any(), any(), any());
+        order.verify(chatService).finalizeStream(any(), any(), any(), any(), any());
         order.verify(delegationTokenService).revoke("deleg-raw");
         order.verify(chatTurnLock).release(userId);
     }

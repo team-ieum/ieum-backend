@@ -2,12 +2,9 @@ package com.ieum.api.chat.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.ieum.api.chat.dto.AvailableMcpServer;
-import com.ieum.api.chat.dto.AvailableWebhook;
 import com.ieum.api.chat.dto.ChatAgentRequest;
 import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.api.chat.dto.ChatStreamEvent;
-import com.ieum.api.chat.dto.IntegrationInfo;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.engine.AgentInternalToken;
@@ -29,7 +26,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 /**
- * ieum-agent 클라이언트 — {@code POST /v1/chat}(+stream), {@code GET /v1/nodes/catalog}.
+ * ieum-agent 클라이언트 — {@code POST /v1/chat/stream}, {@code GET /v1/nodes/catalog}.
  *
  * <h3>요청 헤더</h3>
  * <ul>
@@ -47,9 +44,7 @@ import reactor.core.scheduler.Schedulers;
  * {
  *   "prompt": "유저 자연어 입력",
  *   "currentNodes": [...],          ← null이면 신규 생성, 있으면 수정
- *   "currentEdges": [...],
- *   "availableIntegrations": [...],
- *   "unavailableIntegrations": [...]
+ *   "currentEdges": [...]
  * }
  * </pre>
  */
@@ -85,54 +80,6 @@ public class AgentClient {
     }
 
     /**
-     * AI 에이전트에 채팅 메시지를 전송하고 전체 응답을 블로킹으로 반환한다.
-     *
-     * @param params 요청 본문 + 크레덴셜/헤더 파라미터 (nullable String 필드가 많아 위치 인자 실수를
-     *               막기 위해 빌더로 이름을 명시해 구성한다)
-     * @return AI 응답
-     */
-    public ChatAgentResponse chat(AgentChatCallParams params) {
-        log.debug("[AgentClient] chat 요청 — provider: {}, prompt: {}자",
-            params.llmProvider(), params.prompt() != null ? params.prompt().length() : 0);
-
-        ChatAgentRequest request = ChatAgentRequest.builder()
-            .workflowId(params.workflowId() != null ? params.workflowId().toString() : null)
-            .prompt(params.prompt())
-            .currentNodes(params.currentNodes())
-            .currentEdges(params.currentEdges())
-            .availableIntegrations(params.availableIntegrations() != null ? params.availableIntegrations() : List.of())
-            .unavailableIntegrations(params.unavailableIntegrations() != null ? params.unavailableIntegrations() : List.of())
-            .availableMcpServers(params.availableMcpServers() != null ? params.availableMcpServers() : List.of())
-            .availableWebhooks(params.availableWebhooks() != null ? params.availableWebhooks() : List.of())
-            .build();
-
-        try {
-            WebClient.RequestBodySpec requestSpec = applyCredentialHeaders(
-                webClient.post().uri("/v1/chat").contentType(MediaType.APPLICATION_JSON), params);
-
-            ChatAgentResponse response = requestSpec
-                .bodyValue(request)
-                .retrieve()
-                .bodyToMono(ChatAgentResponse.class)
-                .timeout(Duration.ofSeconds(timeoutSeconds))
-                .block();
-
-            if (response == null) {
-                log.error("[AgentClient] 에이전트 응답이 null");
-                throw new CustomException(ErrorCode.PROVIDER_ERROR);
-            }
-
-            log.debug("[AgentClient] chat 완료 — type: {}", response.getType());
-            return response;
-
-        } catch (CustomException e) {
-            throw e;
-        } catch (Exception e) {
-            throw toAgentError(e);
-        }
-    }
-
-    /**
      * ieum-agent {@code GET /v1/nodes/catalog} — 노드 종류별 입력·출력 필드 정의를 그대로 받아 온다 (IEUM-BE-75).
      * 크레덴셜 헤더는 싣지 않는다(사용자 인증은 BE 컨트롤러가 한다). 내부 토큰은 모든 호출에 실린다(IEUM-BE-106).
      */
@@ -155,7 +102,7 @@ public class AgentClient {
         }
     }
 
-    /** agent 호출 실패를 ErrorCode로 옮긴다. {@code chat()}과 {@code getNodeCatalog()}가 공유한다. */
+    /** agent 호출 실패를 ErrorCode로 옮긴다. */
     private CustomException toAgentError(Exception e) {
         if (e instanceof WebClientResponseException we) {
             // 4xx 본문은 남기지 않는다 — agent 422 본문(pydantic input)에 노드 config·prompt가 그대로 실린다.
@@ -192,10 +139,6 @@ public class AgentClient {
             .prompt(params.prompt())
             .currentNodes(params.currentNodes())
             .currentEdges(params.currentEdges())
-            .availableIntegrations(params.availableIntegrations() != null ? params.availableIntegrations() : List.of())
-            .unavailableIntegrations(params.unavailableIntegrations() != null ? params.unavailableIntegrations() : List.of())
-            .availableMcpServers(params.availableMcpServers() != null ? params.availableMcpServers() : List.of())
-            .availableWebhooks(params.availableWebhooks() != null ? params.availableWebhooks() : List.of())
             .build();
 
         WebClient.RequestBodySpec spec = applyCredentialHeaders(
@@ -203,7 +146,7 @@ public class AgentClient {
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.TEXT_EVENT_STREAM),
             params);
-        // 위임 토큰은 WS 스트림에만 싣는다(REST 블로킹 chat은 발급하지 않는다) — agent가 이 값으로 BE 허용 경로 5개를 부른다.
+        // agent가 이 값으로 BE 허용 경로 5개를 부른다.
         if (params.delegationToken() != null) {
             spec = spec.header("X-Delegation-Token", params.delegationToken());
         }
@@ -257,7 +200,7 @@ public class AgentClient {
     }
 
     /**
-     * 크레덴셜/사용자 관련 요청 헤더를 조립한다. {@code chat()}/{@code chatStream()}이 공유한다.
+     * 크레덴셜/사용자 관련 요청 헤더를 조립한다.
      *
      * <p>{@code useBetaPlatformKey}가 true면(credentialId 없음 + 베타 자격) provider를 GEMINI로 고정하고
      * {@code X-Key-Mode: platform}을 실어 보내며 키 헤더는 생략한다 — 사용자키/self-hosted 우선순위의
@@ -294,7 +237,7 @@ public class AgentClient {
     }
 
     /**
-     * {@code chat()}/{@code chatStream()} 공통 파라미터 객체.
+     * {@code chatStream()} 파라미터 객체.
      *
      * <p>nullable String 필드(apiKey/userRole/delegationToken 등)가 많아
      * 위치 인자로 호출하면 인접한 두 인자가 뒤바뀌어도 컴파일러가 잡아주지 못하고, 잘못된 토큰이
@@ -306,12 +249,8 @@ public class AgentClient {
         String prompt,
         List<Object> currentNodes,
         List<Object> currentEdges,
-        List<IntegrationInfo> availableIntegrations,
-        List<IntegrationInfo> unavailableIntegrations,
         String llmProvider,
         String apiKey,
-        List<AvailableMcpServer> availableMcpServers,
-        List<AvailableWebhook> availableWebhooks,
         UUID userId,
         String userRole,
         boolean useBetaPlatformKey,

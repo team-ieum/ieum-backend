@@ -171,12 +171,8 @@ public class WebSocketChatHandler {
                 .prompt(setup.prompt())
                 .currentNodes(setup.currentNodes())
                 .currentEdges(setup.currentEdges())
-                .availableIntegrations(setup.integrationContext().available())
-                .unavailableIntegrations(setup.integrationContext().unavailable())
                 .llmProvider(setup.config().llmProvider())
                 .apiKey(setup.config().decryptedApiKey())
-                .availableMcpServers(setup.availableMcpServers())
-                .availableWebhooks(setup.availableWebhooks())
                 .userId(userId)
                 .userRole(userRole)
                 .useBetaPlatformKey(setup.config().useBetaPlatformKey())
@@ -264,7 +260,6 @@ public class WebSocketChatHandler {
                         setup.sessionId(),
                         event.response(),
                         setup.config(),
-                        request.getCredentialId(),
                         UUID.fromString(userName)
                     );
                     sendToUser(userName, ChatStreamResponse.done(response));

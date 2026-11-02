@@ -8,7 +8,6 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.api.chat.dto.ChatStreamEvent;
 import com.ieum.api.chat.service.AgentClient.AgentChatCallParams;
 import com.ieum.common.exception.CustomException;
@@ -61,47 +60,7 @@ class AgentClientTest {
     }
 
     @Test
-    @DisplayName("chat — useBetaPlatformKey=true면 X-Key-Mode:platform, X-LLM-Provider:GEMINI, 키 헤더 없음")
-    void chat_betaPlatformKey_setsHeadersAndOmitsKey() throws InterruptedException {
-        mockWebServer.enqueue(new MockResponse()
-            .setResponseCode(200)
-            .setHeader("Content-Type", "application/json")
-            .setBody(CHAT_RESPONSE_BODY));
-
-        ChatAgentResponse response = agentClient.chat(baseParams()
-            .userRole("ROLE_USER")
-            .useBetaPlatformKey(true)
-            .build());
-
-        assertThat(response.getContent()).isEqualTo("안녕하세요");
-        RecordedRequest recorded = mockWebServer.takeRequest();
-        assertThat(recorded.getHeader("X-Key-Mode")).isEqualTo("platform");
-        assertThat(recorded.getHeader("X-LLM-Provider")).isEqualTo("GEMINI");
-        assertThat(recorded.getHeader("X-LLM-Api-Key")).isNull();
-        assertThat(recorded.getHeader("X-User-Role")).isEqualTo("ROLE_USER");
-    }
-
-    @Test
-    @DisplayName("chat — useBetaPlatformKey=false(BYOK)면 기존 키 헤더 그대로 유지, X-Key-Mode 없음")
-    void chat_byok_keepsExistingHeaders() throws InterruptedException {
-        mockWebServer.enqueue(new MockResponse()
-            .setResponseCode(200)
-            .setHeader("Content-Type", "application/json")
-            .setBody(CHAT_RESPONSE_BODY));
-
-        agentClient.chat(baseParams()
-            .apiKey("decrypted-api-key")
-            .useBetaPlatformKey(false)
-            .build());
-
-        RecordedRequest recorded = mockWebServer.takeRequest();
-        assertThat(recorded.getHeader("X-Key-Mode")).isNull();
-        assertThat(recorded.getHeader("X-LLM-Provider")).isEqualTo("CLAUDE");
-        assertThat(recorded.getHeader("X-LLM-Api-Key")).isEqualTo("decrypted-api-key");
-    }
-
-    @Test
-    @DisplayName("chatStream — useBetaPlatformKey=true면 X-Key-Mode:platform, X-LLM-Provider:GEMINI, 키 헤더 없음")
+    @DisplayName("chatStream — useBetaPlatformKey=true면 X-Key-Mode:platform, X-LLM-Provider:GEMINI, 키 헤더 없음, X-User-Role 실음")
     void chatStream_betaPlatformKey_setsHeadersAndOmitsKey() throws InterruptedException {
         mockWebServer.enqueue(new MockResponse()
             .setResponseCode(200)
@@ -118,37 +77,62 @@ class AgentClientTest {
         assertThat(recorded.getHeader("X-Key-Mode")).isEqualTo("platform");
         assertThat(recorded.getHeader("X-LLM-Provider")).isEqualTo("GEMINI");
         assertThat(recorded.getHeader("X-LLM-Api-Key")).isNull();
+        assertThat(recorded.getHeader("X-User-Role")).isEqualTo("ROLE_USER");
     }
 
     @Test
-    @DisplayName("chat·chatStream·getNodeCatalog 모두 X-Internal-Token을 싣는다 (IEUM-BE-106)")
-    void everyAgentCall_carriesInternalToken() throws InterruptedException {
+    @DisplayName("chatStream — useBetaPlatformKey=false(BYOK)면 키 헤더를 싣고 X-Key-Mode는 없다")
+    void chatStream_byok_keepsKeyHeader() throws InterruptedException {
         mockWebServer.enqueue(new MockResponse().setResponseCode(200)
-            .setHeader("Content-Type", "application/json").setBody(CHAT_RESPONSE_BODY));
+            .setHeader("Content-Type", "text/event-stream").setBody("event: done\ndata: " + CHAT_RESPONSE_BODY + "\n\n"));
+
+        agentClient.chatStream(baseParams().apiKey("decrypted-api-key").build()).blockLast();
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        assertThat(recorded.getHeader("X-Key-Mode")).isNull();
+        assertThat(recorded.getHeader("X-LLM-Provider")).isEqualTo("CLAUDE");
+        assertThat(recorded.getHeader("X-LLM-Api-Key")).isEqualTo("decrypted-api-key");
+    }
+
+    @Test
+    @DisplayName("chatStream 본문은 prompt·노드·엣지만 싣는다 — 연동·MCP·웹훅 목록은 agent가 위임 토큰으로 묻는다")
+    void chatStream_bodyCarriesOnlyPromptNodesEdges() throws Exception {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "text/event-stream").setBody("event: done\ndata: " + CHAT_RESPONSE_BODY + "\n\n"));
+
+        agentClient.chatStream(baseParams().build()).blockLast();
+
+        JsonNode body = new ObjectMapper().readTree(mockWebServer.takeRequest().getBody().readUtf8());
+        assertThat(body.fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("workflowId", "prompt", "currentNodes", "currentEdges");
+    }
+
+    @Test
+    @DisplayName("chatStream·getNodeCatalog 모두 X-Internal-Token을 싣는다 (IEUM-BE-106)")
+    void everyAgentCall_carriesInternalToken() throws InterruptedException {
         mockWebServer.enqueue(new MockResponse().setResponseCode(200)
             .setHeader("Content-Type", "text/event-stream").setBody("event: done\ndata: " + CHAT_RESPONSE_BODY + "\n\n"));
         mockWebServer.enqueue(new MockResponse().setResponseCode(200)
             .setHeader("Content-Type", "application/json").setBody("{\"nodes\": []}"));
 
-        agentClient.chat(baseParams().build());
         agentClient.chatStream(baseParams().build()).blockLast();
         agentClient.getNodeCatalog();
 
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 2; i++) {
             assertThat(mockWebServer.takeRequest().getHeader("X-Internal-Token")).isEqualTo(INTERNAL_TOKEN);
         }
     }
 
     @Test
-    @DisplayName("위임 토큰은 chatStream에만 X-Delegation-Token으로 싣는다 — 블로킹 chat에는 같은 값이 있어도 싣지 않는다 (IEUM-BE-106)")
-    void delegationToken_streamOnly() throws InterruptedException {
+    @DisplayName("위임 토큰은 X-Delegation-Token으로 싣고, 없으면 헤더도 없다 (IEUM-BE-106)")
+    void delegationToken_header() throws InterruptedException {
         mockWebServer.enqueue(new MockResponse().setResponseCode(200)
             .setHeader("Content-Type", "text/event-stream").setBody("event: done\ndata: " + CHAT_RESPONSE_BODY + "\n\n"));
         mockWebServer.enqueue(new MockResponse().setResponseCode(200)
-            .setHeader("Content-Type", "application/json").setBody(CHAT_RESPONSE_BODY));
+            .setHeader("Content-Type", "text/event-stream").setBody("event: done\ndata: " + CHAT_RESPONSE_BODY + "\n\n"));
 
         agentClient.chatStream(baseParams().delegationToken("deleg-raw").build()).blockLast();
-        agentClient.chat(baseParams().delegationToken("deleg-raw").build());
+        agentClient.chatStream(baseParams().build()).blockLast();
 
         assertThat(mockWebServer.takeRequest().getHeader("X-Delegation-Token")).isEqualTo("deleg-raw");
         assertThat(mockWebServer.takeRequest().getHeader("X-Delegation-Token")).isNull();
@@ -233,7 +217,7 @@ class AgentClientTest {
     }
 
     @Test
-    @DisplayName("getNodeCatalog — agent 5xx는 기존 chat과 같은 매핑(PROVIDER_ERROR)")
+    @DisplayName("getNodeCatalog — agent 5xx는 PROVIDER_ERROR")
     void getNodeCatalog_agentErrorMapsLikeChat() {
         mockWebServer.enqueue(new MockResponse().setResponseCode(500));
 
@@ -255,7 +239,7 @@ class AgentClientTest {
     }
 
     @Test
-    @DisplayName("getNodeCatalog — agent 429는 PROVIDER_RATE_LIMITED (chat과 공유하는 매핑)")
+    @DisplayName("getNodeCatalog — agent 429는 PROVIDER_RATE_LIMITED")
     void getNodeCatalog_agent429MapsToRateLimited() {
         mockWebServer.enqueue(new MockResponse().setResponseCode(429));
 
@@ -279,8 +263,8 @@ class AgentClientTest {
     }
 
     @Test
-    @DisplayName("chat — agent 422는 PROVIDER_ERROR이고, 로그에 응답 본문(노드 config·prompt가 실린다)을 남기지 않는다")
-    void chat_agent422_doesNotLogBody() {
+    @DisplayName("agent 422는 PROVIDER_ERROR이고, 로그에 응답 본문(노드 config·prompt가 실린다)을 남기지 않는다")
+    void agent422_doesNotLogBody() {
         String secretBody = "{\"detail\":[{\"input\":{\"prompt\":\"secret-prompt-xyz\"}}]}";
         mockWebServer.enqueue(new MockResponse().setResponseCode(422)
             .setHeader("Content-Type", "application/json").setBody(secretBody));
@@ -289,7 +273,7 @@ class AgentClientTest {
         Logger logger = (Logger) LoggerFactory.getLogger(AgentClient.class);
         logger.addAppender(appender);
         try {
-            assertThatThrownBy(() -> agentClient.chat(baseParams().apiKey("key").build()))
+            assertThatThrownBy(() -> agentClient.getNodeCatalog())
                 .isInstanceOf(CustomException.class)
                 .extracting(e -> ((CustomException) e).getErrorCode())
                 .isEqualTo(ErrorCode.PROVIDER_ERROR);
