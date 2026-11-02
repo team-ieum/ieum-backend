@@ -45,7 +45,7 @@ public record TriggerNodeSchedule(TriggerType triggerType, String cron, boolean 
     }
 
     /**
-     * SCHEDULE인데 노드 {@code config.cron}이 비었으면 400 {@code INVALID_CRON_EXPRESSION}("schedule.every 노드(<id>)의
+     * {@code schedule.every}인데 노드 {@code config.cron}이 비었으면 400 {@code INVALID_CRON_EXPRESSION}("schedule.every 노드(<id>)의
      * config.cron이 필요합니다"). 저장 쪽 {@code validateScheduleConfig}의 일반 문구보다 먼저, 어느 노드인지 싣는다.
      * {@link #compute} 바로 뒤, {@link #assertMatchesRequest}보다 앞에서 부른다.
      *
@@ -63,7 +63,7 @@ public record TriggerNodeSchedule(TriggerType triggerType, String cron, boolean 
 
     /**
      * 요청 최상위 {@code triggerType}·{@code cronExpression}이 계산값과 맞는지 본다. null(cron은 빈 문자열 포함)이면 통과,
-     * 다르면 400 {@code INVALID_WORKFLOW}(메시지에 계산값). cron은 둘 다 {@link CronConverter#toQuartz}로 정규화해 비교하고,
+     * 다르면 400 {@code INVALID_WORKFLOW}(메시지에 계산값, 칸에서 계산한 cron은 빼고). cron은 둘 다 {@link CronConverter#toQuartz}로 정규화해 비교하고,
      * 계산값이 SCHEDULE이 아닌데 cron을 보내면 400이다.
      */
     public void assertMatchesRequest(TriggerType requestedType, String requestedCron) {
