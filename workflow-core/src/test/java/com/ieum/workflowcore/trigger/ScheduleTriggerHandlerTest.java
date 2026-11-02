@@ -6,8 +6,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.ieum.common.exception.CustomException;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.Node;
+import com.ieum.workflowcore.scheduler.ScheduleCron;
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.TimeZone;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -24,6 +28,20 @@ class ScheduleTriggerHandlerTest {
     void weekly_outputsOnlyTriggeredAt() {
         assertThat(output("schedule.weekly", new HashMap<>(Map.of("weekday", "FRI", "hour", "17"))))
             .containsOnlyKeys("triggeredAt");
+    }
+
+    @Test
+    @DisplayName("triggeredAt은 JVM 기본 타임존과 무관하게 KST 벽시계 시각이다")
+    void triggeredAt_isKst() {
+        TimeZone original = TimeZone.getDefault();
+        try {
+            TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
+            Object at = output("schedule.weekly", new HashMap<>(Map.of("weekday", "FRI", "hour", "17"))).get("triggeredAt");
+            Duration gap = Duration.between(LocalDateTime.parse((String) at), LocalDateTime.now(ScheduleCron.ZONE));
+            assertThat(gap.abs()).isLessThan(Duration.ofSeconds(5));
+        } finally {
+            TimeZone.setDefault(original);
+        }
     }
 
     @Test

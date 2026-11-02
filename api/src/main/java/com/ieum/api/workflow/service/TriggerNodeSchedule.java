@@ -21,7 +21,11 @@ import java.util.Optional;
  * 변환은 저장 쪽 {@code normalizeCronExpression}), hourly·daily·weekly·monthly는 칸에서 계산한 Quartz cron(칸이 비거나
  * 범위 밖이면 400 {@code INVALID_CRON_EXPRESSION}). {@code schedule.every} 노드에 cron이 없으면 compute는 null을 담고, 호출자가 {@link #assertCronPresent}로 어느 노드인지 밝혀 400을 낸다.
  */
-public record TriggerNodeSchedule(TriggerType triggerType, String cron) {
+public record TriggerNodeSchedule(TriggerType triggerType, String cron, boolean cronFromFields) {
+
+    public TriggerNodeSchedule(TriggerType triggerType, String cron) {
+        this(triggerType, cron, false);
+    }
 
     /** @param derivedNodes {@code NodeDerivation}을 거친 노드(type이 event로 계산돼 있다). REST 수정은 병합 결과다 */
     public static TriggerNodeSchedule compute(List<Map<String, Object>> derivedNodes, EventCatalog catalog) {
@@ -35,7 +39,7 @@ public record TriggerNodeSchedule(TriggerType triggerType, String cron) {
                     "TRIGGER 노드의 event가 트리거 이벤트가 아닙니다: " + echo(event) + " (노드 " + echo(node.get("id")) + ")"));
             String cron = type != TriggerType.SCHEDULE ? null : ScheduleCron.of(node.get("id"), (String) event,
                 node.get("config") instanceof Map<?, ?> config ? config : Map.of());
-            return new TriggerNodeSchedule(type, cron);
+            return new TriggerNodeSchedule(type, cron, ScheduleCron.fromFields((String) event));
         }
         return new TriggerNodeSchedule(TriggerType.MANUAL, null);
     }
@@ -78,7 +82,8 @@ public record TriggerNodeSchedule(TriggerType triggerType, String cron) {
     private CustomException mismatch(String requested) {
         return new CustomException(ErrorCode.INVALID_WORKFLOW, "요청의 " + requested
             + "이 노드에서 계산한 값과 다릅니다. 계산값: triggerType=" + triggerType
-            + (cron != null ? ", cronExpression=" + echo(cron) : "")
+            // 칸에서 계산한 cron은 사용자가 쓴 적 없는 값이라 싣지 않는다
+            + (cron != null && !cronFromFields ? ", cronExpression=" + echo(cron) : "")
             + " — 최상위 값은 보내지 않거나 계산값과 같게 보내세요.");
     }
 }
