@@ -52,7 +52,7 @@ import reactor.core.scheduler.Schedulers;
 @Component
 public class AgentClient {
 
-    /** LLM을 거치지 않는 카탈로그 GET이라 chat timeout(기본 60초)을 쓰지 않는다 — 폼 열 때 agent가 멈추면 서블릿 스레드를 오래 잡는다. */
+    /** LLM을 거치지 않는 카탈로그 GET이라 짧게 둔다 — 폼 열 때 agent가 멈추면 서블릿 스레드를 오래 잡는다. */
     private static final Duration NODE_CATALOG_TIMEOUT = Duration.ofSeconds(10);
 
     /**
@@ -62,12 +62,10 @@ public class AgentClient {
     static final Duration CHAT_STREAM_TIMEOUT = Duration.ofSeconds(570);
 
     private final WebClient webClient;
-    private final int timeoutSeconds;
     private final ObjectMapper objectMapper;
 
     public AgentClient(
         @Value("${ieum.agent.url}") String agentBaseUrl,
-        @Value("${ieum.agent.chat-timeout-seconds:60}") int timeoutSeconds,
         ObjectMapper objectMapper,
         @Value("${ieum.agent.internal-token:}") String internalToken
     ) {
@@ -75,7 +73,6 @@ public class AgentClient {
             .baseUrl(agentBaseUrl)
             .defaultHeaders(AgentInternalToken.headers(internalToken))
             .build();
-        this.timeoutSeconds = timeoutSeconds;
         this.objectMapper = objectMapper;
     }
 

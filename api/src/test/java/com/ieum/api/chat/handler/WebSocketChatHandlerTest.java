@@ -124,6 +124,14 @@ class WebSocketChatHandlerTest {
         assertThat(VALIDATOR.validate(chatRequest("a".repeat(2000)))).isEmpty();
     }
 
+    @Test
+    @DisplayName("공백만 2001자면 두 제약이 다 걸려도 '비었다' 안내가 나간다")
+    void blankAndTooLong_reportsBlankFirst() {
+        handler.handleChat(workflowId, chatRequest(" ".repeat(2001)), principal, WS_SESSION);
+
+        assertRejectedToSessionOnly("메시지를 입력해주세요.");
+    }
+
     private void assertRejectedToSessionOnly(String message) {
         ArgumentCaptor<ChatStreamResponse> sent = ArgumentCaptor.forClass(ChatStreamResponse.class);
         @SuppressWarnings("rawtypes") ArgumentCaptor<Map> headers = ArgumentCaptor.forClass(Map.class);
@@ -297,14 +305,19 @@ class WebSocketChatHandlerTest {
     }
 
     @Test
-    @DisplayName("락 확인 중 Redis 장애면 일반 error 프레임 — 예외가 @MessageMapping 밖으로 새지 않는다")
-    void turnLockFailure_sendsGenericError() {
+    @DisplayName("락 확인 중 Redis 장애면 요청한 세션에만 일반 error 프레임 — 다른 탭의 진행 중인 턴을 끊지 않는다")
+    void turnLockFailure_sendsGenericErrorToSessionOnly() {
         given(chatTurnLock.tryAcquire(userId)).willThrow(new RuntimeException("RedisConnectionFailureException"));
 
         handler.handleChat(workflowId, request, principal, WS_SESSION);
 
-        List<ChatStreamResponse> sent = captureSent(1);
-        assertThat(sent.get(0).getContent()).isEqualTo("서버 오류가 발생했습니다.");
+        ArgumentCaptor<ChatStreamResponse> sent = ArgumentCaptor.forClass(ChatStreamResponse.class);
+        @SuppressWarnings("rawtypes") ArgumentCaptor<Map> headers = ArgumentCaptor.forClass(Map.class);
+        verify(messagingTemplate).convertAndSendToUser(
+            eq(userId.toString()), eq(DESTINATION), sent.capture(), headers.capture());
+        verify(messagingTemplate, never()).convertAndSendToUser(any(), any(), any(ChatStreamResponse.class));
+        assertThat(SimpMessageHeaderAccessor.getSessionId(headers.getValue())).isEqualTo(WS_SESSION);
+        assertThat(sent.getValue().getContent()).isEqualTo("서버 오류가 발생했습니다.");
         verifyNoInteractions(chatService, agentClient, delegationTokenService);
     }
 

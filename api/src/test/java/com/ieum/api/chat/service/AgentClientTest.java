@@ -45,7 +45,7 @@ class AgentClientTest {
     void setUp() throws IOException {
         mockWebServer = new MockWebServer();
         mockWebServer.start();
-        agentClient = new AgentClient(mockWebServer.url("/").toString(), 30, new ObjectMapper(), INTERNAL_TOKEN);
+        agentClient = new AgentClient(mockWebServer.url("/").toString(), new ObjectMapper(), INTERNAL_TOKEN);
     }
 
     @AfterEach
@@ -194,7 +194,7 @@ class AgentClientTest {
     @Test
     @DisplayName("internal-token이 비면 X-Internal-Token을 싣지 않는다 — agent도 값이 없으면 검사를 끈다")
     void blankInternalToken_headerOmitted() throws InterruptedException {
-        AgentClient noToken = new AgentClient(mockWebServer.url("/").toString(), 30, new ObjectMapper(), "");
+        AgentClient noToken = new AgentClient(mockWebServer.url("/").toString(), new ObjectMapper(), "");
         mockWebServer.enqueue(new MockResponse().setResponseCode(200)
             .setHeader("Content-Type", "application/json").setBody("{\"nodes\": []}"));
 

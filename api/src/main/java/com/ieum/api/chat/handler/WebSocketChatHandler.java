@@ -13,6 +13,7 @@ import com.ieum.auth.delegation.DelegationTokenService;
 import com.ieum.common.exception.CustomException;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
+import jakarta.validation.constraints.NotBlank;
 import java.security.Principal;
 import java.util.Comparator;
 import java.util.UUID;
@@ -97,9 +98,10 @@ public class WebSocketChatHandler {
 
         // ChatRequest 제약(prompt 필수·2000자) — STOMP @Payload는 @Valid가 없으면 검사하지 않는다. @Valid로 던지면
         // 예외가 @MessageMapping 밖으로 새어 응답이 끊기므로 직접 검사해 error 프레임으로 돌려준다. 락·세션·메시지보다 먼저.
+        // 둘 다 걸리면(공백만 2001자) 길이보다 "비었다"가 먼저다.
         String invalid = validator.validate(request).stream()
+            .min(Comparator.comparing(v -> v.getConstraintDescriptor().getAnnotation() instanceof NotBlank ? 0 : 1))
             .map(ConstraintViolation::getMessage)
-            .min(Comparator.naturalOrder())
             .orElse(null);
         if (invalid != null) {
             sendToSession(userName, wsSessionId, ChatStreamResponse.error(invalid));
@@ -112,7 +114,8 @@ public class WebSocketChatHandler {
             acquired = chatTurnLock.tryAcquire(userId);
         } catch (Exception e) {
             log.error("[WS] 동시 턴 락 확인 실패 — userId: {}", userId, e);
-            sendToUser(userName, ChatStreamResponse.error("서버 오류가 발생했습니다."));
+            // 다른 탭이 락을 쥐고 진행 중일 수 있다 — 요청한 세션에만 보낸다.
+            sendToSession(userName, wsSessionId, ChatStreamResponse.error("서버 오류가 발생했습니다."));
             return;
         }
         if (!acquired) {
@@ -196,7 +199,7 @@ public class WebSocketChatHandler {
                 // publishOn 뒤라 DONE 저장(finalizeStream)이 끝난 다음에 돈다 — 저장 중에 다음 턴이 시작되지 않는다.
                 .doFinally(signal -> endTurn(userId, delegationToken))
                 .subscribe(
-                    event -> handleStreamEvent(userName, workflowId, request, setup, event),
+                    event -> handleStreamEvent(userName, workflowId, setup, event),
                     error -> {
                         log.error("[WS] 스트리밍 오류 — sessionId: {}", setup.sessionId(), error);
                         sendToUser(userName, ChatStreamResponse.error("AI 응답 중 오류가 발생했습니다."));
@@ -258,7 +261,7 @@ public class WebSocketChatHandler {
      * agent SSE 이벤트를 사용자 큐로 분기 전달한다.
      * DONE 수신 시 워크플로우/메시지를 저장({@code finalizeStream})하고 최종 응답을 전달한다.
      */
-    private void handleStreamEvent(String userName, UUID workflowId, ChatRequest request,
+    private void handleStreamEvent(String userName, UUID workflowId,
             StreamSetupResult setup, ChatStreamEvent event) {
         switch (event.type()) {
             case STAGE -> sendToUser(userName, ChatStreamResponse.stage(event.stage()));
