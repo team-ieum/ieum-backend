@@ -37,8 +37,13 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import jakarta.validation.Validation;
+import jakarta.validation.Validator;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.mockito.InOrder;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -62,7 +67,9 @@ class WebSocketChatHandlerTest {
     @Mock private ChatTurnLock chatTurnLock;
     @Mock private DelegationTokenService delegationTokenService;
 
-    @InjectMocks private WebSocketChatHandler handler;
+    private static final Validator VALIDATOR = Validation.buildDefaultValidatorFactory().getValidator();
+
+    private WebSocketChatHandler handler;
 
     private UUID workflowId;
     private UUID userId;
@@ -79,7 +86,9 @@ class WebSocketChatHandlerTest {
         principal = new UsernamePasswordAuthenticationToken(
             userId.toString(), null,
             List.of(new SimpleGrantedAuthority("ROLE_USER")));
-        request = mock(ChatRequest.class);
+        request = chatRequest("워크플로우 만들어줘");
+        handler = new WebSocketChatHandler(
+            chatService, agentClient, messagingTemplate, chatTurnLock, delegationTokenService, VALIDATOR);
 
         setup = new StreamSetupResult(
             sessionId,
@@ -87,6 +96,44 @@ class WebSocketChatHandlerTest {
             "워크플로우 만들어줘",
             null, null
         );
+    }
+
+    /** 실물 요청 — 검증기가 필드를 읽으므로 mock이면 prompt가 비어 보인다. */
+    private static ChatRequest chatRequest(String prompt) {
+        ChatRequest r = new ChatRequest();
+        ReflectionTestUtils.setField(r, "prompt", prompt);
+        return r;
+    }
+
+    @ParameterizedTest(name = "prompt={0}")
+    @NullAndEmptySource
+    @ValueSource(strings = {"   "})
+    @DisplayName("prompt가 비면 요청한 세션에만 error 프레임 — 락·세션·메시지·쿼터를 건드리지 않는다")
+    void blankPrompt_rejectedBeforeLock(String prompt) {
+        handler.handleChat(workflowId, chatRequest(prompt), principal, WS_SESSION);
+
+        assertRejectedToSessionOnly("메시지를 입력해주세요.");
+    }
+
+    @Test
+    @DisplayName("prompt가 2000자를 넘으면 요청한 세션에만 error 프레임 — 2000자는 통과한다")
+    void tooLongPrompt_rejectedBeforeLock() {
+        handler.handleChat(workflowId, chatRequest("a".repeat(2001)), principal, WS_SESSION);
+
+        assertRejectedToSessionOnly("메시지는 2000자를 초과할 수 없습니다.");
+        assertThat(VALIDATOR.validate(chatRequest("a".repeat(2000)))).isEmpty();
+    }
+
+    private void assertRejectedToSessionOnly(String message) {
+        ArgumentCaptor<ChatStreamResponse> sent = ArgumentCaptor.forClass(ChatStreamResponse.class);
+        @SuppressWarnings("rawtypes") ArgumentCaptor<Map> headers = ArgumentCaptor.forClass(Map.class);
+        verify(messagingTemplate).convertAndSendToUser(
+            eq(userId.toString()), eq(DESTINATION), sent.capture(), headers.capture());
+        verify(messagingTemplate, never()).convertAndSendToUser(any(), any(), any(ChatStreamResponse.class));
+        assertThat(SimpMessageHeaderAccessor.getSessionId(headers.getValue())).isEqualTo(WS_SESSION);
+        assertThat(sent.getValue().getType()).isEqualTo(StreamType.ERROR);
+        assertThat(sent.getValue().getContent()).isEqualTo(message);
+        verifyNoInteractions(chatTurnLock, chatService, agentClient, delegationTokenService);
     }
 
     /** handleChat() 전체 흐름을 도는 테스트에서만 필요 — withBetaQuotaRefund 단위 테스트는 handleChat을 거치지 않는다. */

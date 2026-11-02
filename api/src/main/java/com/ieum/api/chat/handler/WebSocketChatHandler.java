@@ -11,7 +11,10 @@ import com.ieum.api.chat.service.ChatService.StreamSetupResult;
 import com.ieum.api.chat.service.ChatTurnLock;
 import com.ieum.auth.delegation.DelegationTokenService;
 import com.ieum.common.exception.CustomException;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.Validator;
 import java.security.Principal;
+import java.util.Comparator;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.RequiredArgsConstructor;
@@ -62,6 +65,7 @@ public class WebSocketChatHandler {
     private final SimpMessageSendingOperations messagingTemplate;
     private final ChatTurnLock chatTurnLock;
     private final DelegationTokenService delegationTokenService;
+    private final Validator validator;
 
     /**
      * 채팅 메시지를 수신하고 AI 응답을 스트리밍으로 전송한다.
@@ -91,6 +95,17 @@ public class WebSocketChatHandler {
 
         log.info("[WS] 채팅 메시지 수신 — workflowId: {}, userId: {}", workflowId, userId);
 
+        // ChatRequest 제약(prompt 필수·2000자) — STOMP @Payload는 @Valid가 없으면 검사하지 않는다. @Valid로 던지면
+        // 예외가 @MessageMapping 밖으로 새어 응답이 끊기므로 직접 검사해 error 프레임으로 돌려준다. 락·세션·메시지보다 먼저.
+        String invalid = validator.validate(request).stream()
+            .map(ConstraintViolation::getMessage)
+            .min(Comparator.naturalOrder())
+            .orElse(null);
+        if (invalid != null) {
+            sendToSession(userName, wsSessionId, ChatStreamResponse.error(invalid));
+            return;
+        }
+
         // 0. 사용자당 동시 턴 1개(IEUM-BE-106) — 세션·메시지를 만들기 전에 막는다(바쁠 때 보낸 메시지가 대화에 남지 않게).
         boolean acquired;
         try {
@@ -101,12 +116,7 @@ public class WebSocketChatHandler {
             return;
         }
         if (!acquired) {
-            // 요청한 세션에만 — 사용자 전체로 보내면 진행 중인 다른 탭이 error 프레임을 받고 그 턴을 실패로 끝낸다.
-            SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
-            headers.setSessionId(wsSessionId);
-            headers.setLeaveMutable(true);
-            messagingTemplate.convertAndSendToUser(userName, USER_STREAM_DESTINATION,
-                ChatStreamResponse.error(TURN_BUSY_MESSAGE), headers.getMessageHeaders());
+            sendToSession(userName, wsSessionId, ChatStreamResponse.error(TURN_BUSY_MESSAGE));
             return;
         }
 
@@ -281,5 +291,13 @@ public class WebSocketChatHandler {
 
     private void sendToUser(String userName, ChatStreamResponse response) {
         messagingTemplate.convertAndSendToUser(userName, USER_STREAM_DESTINATION, response);
+    }
+
+    /** 요청한 STOMP 세션에만 — 사용자 전체로 보내면 진행 중인 다른 탭이 error 프레임을 받고 그 턴을 실패로 끝낸다. */
+    private void sendToSession(String userName, String wsSessionId, ChatStreamResponse response) {
+        SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
+        headers.setSessionId(wsSessionId);
+        headers.setLeaveMutable(true);
+        messagingTemplate.convertAndSendToUser(userName, USER_STREAM_DESTINATION, response, headers.getMessageHeaders());
     }
 }
