@@ -13,7 +13,11 @@ import com.ieum.auth.delegation.DelegationTokenService;
 import com.ieum.common.exception.CustomException;
 import com.ieum.api.deployment.DeploymentWorkTracker;
 import org.springframework.beans.factory.annotation.Autowired;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.Validator;
+import jakarta.validation.constraints.NotBlank;
 import java.security.Principal;
+import java.util.Comparator;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.RequiredArgsConstructor;
@@ -64,6 +68,7 @@ public class WebSocketChatHandler {
     private final SimpMessageSendingOperations messagingTemplate;
     private final ChatTurnLock chatTurnLock;
     private final DelegationTokenService delegationTokenService;
+    private final Validator validator;
     @Autowired(required = false)
     private DeploymentWorkTracker deploymentWorkTracker;
 
@@ -106,22 +111,30 @@ public class WebSocketChatHandler {
 
             log.info("[WS] 채팅 메시지 수신 — workflowId: {}, userId: {}", workflowId, userId);
 
+            // ChatRequest 제약(prompt 필수·2000자) — STOMP @Payload는 @Valid가 없으면 검사하지 않는다. @Valid로 던지면
+            // 예외가 @MessageMapping 밖으로 새어 응답이 끊기므로 직접 검사해 error 프레임으로 돌려준다. 락·세션·메시지보다 먼저.
+            // 둘 다 걸리면(공백만 2001자) 길이보다 "비었다"가 먼저다.
+            String invalid = validator.validate(request).stream()
+                .min(Comparator.comparing(v -> v.getConstraintDescriptor().getAnnotation() instanceof NotBlank ? 0 : 1))
+                .map(ConstraintViolation::getMessage)
+                .orElse(null);
+            if (invalid != null) {
+                sendToSession(userName, wsSessionId, ChatStreamResponse.error(invalid));
+                return;
+            }
+
             // 0. 사용자당 동시 턴 1개(IEUM-BE-106) — 세션·메시지를 만들기 전에 막는다(바쁠 때 보낸 메시지가 대화에 남지 않게).
             boolean acquired;
             try {
                 acquired = chatTurnLock.tryAcquire(userId);
             } catch (Exception e) {
                 log.error("[WS] 동시 턴 락 확인 실패 — userId: {}", userId, e);
-                sendToUser(userName, ChatStreamResponse.error("서버 오류가 발생했습니다."));
+                // 다른 탭이 락을 쥐고 진행 중일 수 있다 — 요청한 세션에만 보낸다.
+                sendToSession(userName, wsSessionId, ChatStreamResponse.error("서버 오류가 발생했습니다."));
                 return;
             }
             if (!acquired) {
-                // 요청한 세션에만 — 사용자 전체로 보내면 진행 중인 다른 탭이 error 프레임을 받고 그 턴을 실패로 끝낸다.
-                SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
-                headers.setSessionId(wsSessionId);
-                headers.setLeaveMutable(true);
-                messagingTemplate.convertAndSendToUser(userName, USER_STREAM_DESTINATION,
-                    ChatStreamResponse.error(TURN_BUSY_MESSAGE), headers.getMessageHeaders());
+                sendToSession(userName, wsSessionId, ChatStreamResponse.error(TURN_BUSY_MESSAGE));
                 return;
             }
 
@@ -186,15 +199,8 @@ public class WebSocketChatHandler {
                     .prompt(setup.prompt())
                     .currentNodes(setup.currentNodes())
                     .currentEdges(setup.currentEdges())
-                    .availableIntegrations(setup.integrationContext().available())
-                    .unavailableIntegrations(setup.integrationContext().unavailable())
                     .llmProvider(setup.config().llmProvider())
                     .apiKey(setup.config().decryptedApiKey())
-                    .googleAccessToken(setup.googleToken())
-                    .githubToken(setup.githubToken())
-                    .notionToken(setup.notionToken())
-                    .availableMcpServers(setup.availableMcpServers())
-                    .availableWebhooks(setup.availableWebhooks())
                     .userId(userId)
                     .userRole(userRole)
                     .useBetaPlatformKey(setup.config().useBetaPlatformKey())
@@ -214,7 +220,7 @@ public class WebSocketChatHandler {
                         }
                     })
                     .subscribe(
-                        event -> handleStreamEvent(userName, workflowId, request, setup, event),
+                        event -> handleStreamEvent(userName, workflowId, setup, event),
                         error -> {
                             log.error("[WS] 스트리밍 오류 — sessionId: {}", setup.sessionId(), error);
                             sendToUser(userName, ChatStreamResponse.error("AI 응답 중 오류가 발생했습니다."));
@@ -232,7 +238,6 @@ public class WebSocketChatHandler {
                 }
             }
         } finally {
-            // Early failures own the deployment lease until the stream takes over.
             if (!deploymentHandedOff && deploymentLease != null) deploymentLease.close();
         }
     }
@@ -281,7 +286,7 @@ public class WebSocketChatHandler {
      * agent SSE 이벤트를 사용자 큐로 분기 전달한다.
      * DONE 수신 시 워크플로우/메시지를 저장({@code finalizeStream})하고 최종 응답을 전달한다.
      */
-    private void handleStreamEvent(String userName, UUID workflowId, ChatRequest request,
+    private void handleStreamEvent(String userName, UUID workflowId,
             StreamSetupResult setup, ChatStreamEvent event) {
         switch (event.type()) {
             case STAGE -> sendToUser(userName, ChatStreamResponse.stage(event.stage()));
@@ -293,7 +298,6 @@ public class WebSocketChatHandler {
                         setup.sessionId(),
                         event.response(),
                         setup.config(),
-                        request.getCredentialId(),
                         UUID.fromString(userName)
                     );
                     sendToUser(userName, ChatStreamResponse.done(response));
@@ -315,5 +319,13 @@ public class WebSocketChatHandler {
 
     private void sendToUser(String userName, ChatStreamResponse response) {
         messagingTemplate.convertAndSendToUser(userName, USER_STREAM_DESTINATION, response);
+    }
+
+    /** 요청한 STOMP 세션에만 — 사용자 전체로 보내면 진행 중인 다른 탭이 error 프레임을 받고 그 턴을 실패로 끝낸다. */
+    private void sendToSession(String userName, String wsSessionId, ChatStreamResponse response) {
+        SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
+        headers.setSessionId(wsSessionId);
+        headers.setLeaveMutable(true);
+        messagingTemplate.convertAndSendToUser(userName, USER_STREAM_DESTINATION, response, headers.getMessageHeaders());
     }
 }

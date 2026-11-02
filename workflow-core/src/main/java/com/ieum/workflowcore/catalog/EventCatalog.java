@@ -67,7 +67,10 @@ public final class EventCatalog {
                     new TypeReference<Map<String, Object>>() {
                     }), apps);
             events.put(e.name(), e);
-            if (e.triggerType() != null && triggerOwners.putIfAbsent(e.triggerType(), e.name()) != null) {
+            // SCHEDULE은 여럿 허용 — 스케줄 노드 5종(every·hourly·daily·weekly·monthly)이 같은 Quartz 경로를 쓰고,
+            // TriggerType으로 이벤트를 역조회하는 곳은 없다(triggerTypeOf는 event → type 방향뿐)
+            if (e.triggerType() != null && e.triggerType() != TriggerType.SCHEDULE
+                    && triggerOwners.putIfAbsent(e.triggerType(), e.name()) != null) {
                 throw fail(e.name(), "trigger_type " + e.triggerType() + "가 "
                         + triggerOwners.get(e.triggerType()) + "와 겹친다");
             }

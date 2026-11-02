@@ -1,15 +1,18 @@
 package com.ieum.workflowcore.scheduler;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.never;
 
+import java.util.TimeZone;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -45,6 +48,24 @@ class WorkflowSchedulerTest {
 
         then(scheduler).should().scheduleJob(any(JobDetail.class), any(CronTrigger.class));
         then(scheduler).should(never()).rescheduleJob(any(TriggerKey.class), any());
+    }
+
+    @Test
+    @DisplayName("Cron Trigger는 서버 타임존과 무관하게 Asia/Seoul로 등록")
+    void registerJob_타임존_Asia_Seoul() throws Exception {
+        UUID workflowId = UUID.randomUUID();
+        given(scheduler.checkExists(JobKeyGenerator.jobKey(workflowId))).willReturn(false);
+        ArgumentCaptor<CronTrigger> trigger = ArgumentCaptor.forClass(CronTrigger.class);
+        TimeZone original = TimeZone.getDefault();
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC")); // dev 이미지 기본값 재현
+        try {
+            workflowScheduler.registerJob(workflowId, VALID_CRON);
+        } finally {
+            TimeZone.setDefault(original);
+        }
+
+        then(scheduler).should().scheduleJob(any(JobDetail.class), trigger.capture());
+        assertThat(trigger.getValue().getTimeZone().getID()).isEqualTo("Asia/Seoul");
     }
 
     @Test

@@ -10,13 +10,9 @@ import com.ieum.api.chat.dto.AgentResponseType;
 import com.ieum.api.chat.dto.ChatAgentResponse;
 import com.ieum.api.chat.dto.ChatRequest;
 import com.ieum.api.chat.dto.ChatResponse;
-import com.ieum.api.chat.service.AgentClient.AgentChatCallParams;
-import com.ieum.api.chat.service.IntegrationContextService.IntegrationContext;
 import com.ieum.api.credential.domain.AiProvider;
 import com.ieum.api.credential.domain.Credential;
 import com.ieum.api.credential.service.CredentialService;
-import com.ieum.api.mcp.repository.McpServerCatalogRepository;
-import com.ieum.api.webhookcredential.repository.WebhookCredentialRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.catalog.EventCatalog;
@@ -29,9 +25,6 @@ import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.executor.BetaPlatformProvider;
 import com.ieum.workflowcore.engine.executor.CredentialProvider;
-import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
-import com.ieum.workflowcore.engine.executor.GoogleTokenProvider;
-import com.ieum.workflowcore.engine.executor.NotionTokenProvider;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import java.util.List;
 import java.util.Map;
@@ -60,7 +53,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.given;
@@ -79,13 +71,6 @@ class ChatServiceTest {
     @Mock private WorkflowCrudService workflowCrudService;
     @Mock private CredentialProvider credentialProvider;
     @Mock private CredentialService credentialService;
-    @Mock private GoogleTokenProvider googleTokenProvider;
-    @Mock private GitHubTokenProvider gitHubTokenProvider;
-    @Mock private NotionTokenProvider notionTokenProvider;
-    @Mock private IntegrationContextService integrationContextService;
-    @Mock private AgentClient agentClient;
-    @Mock private McpServerCatalogRepository mcpServerCatalogRepository;
-    @Mock private WebhookCredentialRepository webhookCredentialRepository;
     @Mock(answer = Answers.CALLS_REAL_METHODS) private BetaPlatformProvider betaPlatformProvider;
 
     @InjectMocks
@@ -209,7 +194,6 @@ class ChatServiceTest {
 
         assertThat(result.llmProvider()).isEqualTo("OPENAI");
         assertThat(result.decryptedApiKey()).isEqualTo("k");
-        assertThat(result.tools()).isNull();
         assertThat(result.useBetaPlatformKey()).isFalse();
         verify(betaPlatformProvider, never()).isBetaEligible(any());
         verify(workflowCrudService, never()).findLatestVersion(any());
@@ -277,236 +261,105 @@ class ChatServiceTest {
         assertThat(result.decryptedApiKey()).isEqualTo("auto-decrypted-key");
     }
 
-    // ─────────────────── chat() auto-naming ────────────────────────────────
-
-    @Test
-    @DisplayName("첫 생성(maxVersion == 1)이고 workflowName이 있으면 워크플로우 이름을 업데이트한다")
-    void chat_firstGeneration_autoNamesWorkflow() throws Exception {
-        UUID fallbackCredentialId = UUID.randomUUID();
-
-        ChatSession session = buildSession(workflowId, userId);
-        ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "워크플로우를 생성했습니다");
-        Credential credential = Mockito.mock(Credential.class);
-
-        given(credential.getProvider()).willReturn(AiProvider.CLAUDE);
-        given(sessionRepository.save(any())).willReturn(session);
-        given(credentialService.getByIdAndUserId(fallbackCredentialId, userId)).willReturn(credential);
-        given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString(), userId)).willReturn("test-api-key");
-        given(integrationContextService.resolve(userId))
-            .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(AgentChatCallParams.class)))
-            .willReturn(buildAgentResponse("WORKFLOW_GENERATED", "AI 테스트 워크플로우"));
-        given(workflowCrudService.findMaxVersionByWorkflowId(workflowId)).willReturn(1);
-        given(messageRepository.save(any())).willReturn(agentMsg);
-
-        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("워크플로우 만들어줘", fallbackCredentialId));
-
-        verify(workflowCrudService).updateWorkflowName(workflowId, "AI 테스트 워크플로우");
-    }
+    // ─────────────────── finalizeStream 이름·베타 토큰 ─────────────────────
 
     @Test
     @DisplayName("후속 메시지(maxVersion > 1)이면 workflowName이 있어도 이름을 덮어쓰지 않는다")
-    void chat_subsequentMessage_doesNotOverrideName() throws Exception {
-        UUID fallbackCredentialId = UUID.randomUUID();
-
-        ChatSession session = buildSession(workflowId, userId);
-        ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "수정했습니다");
-        Credential credential = Mockito.mock(Credential.class);
-
-        given(credential.getProvider()).willReturn(AiProvider.CLAUDE);
-        given(sessionRepository.save(any())).willReturn(session);
-        given(credentialService.getByIdAndUserId(fallbackCredentialId, userId)).willReturn(credential);
-        given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString(), userId)).willReturn("test-api-key");
-        given(integrationContextService.resolve(userId))
-            .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(AgentChatCallParams.class)))
-            .willReturn(buildAgentResponse("WORKFLOW_GENERATED", "수정된 이름"));
+    void finalizeStream_subsequentMessage_doesNotOverrideName() throws Exception {
+        ChatAgentResponse resp = buildAgentResponse("WORKFLOW_GENERATED", "수정된 이름");
         given(workflowCrudService.findMaxVersionByWorkflowId(workflowId)).willReturn(2);
-        given(messageRepository.save(any())).willReturn(agentMsg);
+        givenFinalizeStreamSession();
 
-        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("노드 하나 추가해줘", fallbackCredentialId));
+        chatService.finalizeStream(workflowId, sessionId, resp, BYOK, userId);
 
         verify(workflowCrudService, never()).updateWorkflowName(any(), any());
     }
 
     @Test
     @DisplayName("agent가 workflowName을 null로 반환하면 이름 업데이트를 호출하지 않는다")
-    void chat_workflowNameIsNull_doesNotUpdateName() throws Exception {
-        UUID fallbackCredentialId = UUID.randomUUID();
-
-        ChatSession session = buildSession(workflowId, userId);
-        ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
-        Credential credential = Mockito.mock(Credential.class);
-
-        given(credential.getProvider()).willReturn(AiProvider.CLAUDE);
-        given(sessionRepository.save(any())).willReturn(session);
-        given(credentialService.getByIdAndUserId(fallbackCredentialId, userId)).willReturn(credential);
-        given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString(), userId)).willReturn("test-api-key");
-        given(integrationContextService.resolve(userId))
-            .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(AgentChatCallParams.class)))
-            .willReturn(buildAgentResponse("WORKFLOW_GENERATED", null));
+    void finalizeStream_workflowNameIsNull_doesNotUpdateName() throws Exception {
+        ChatAgentResponse resp = buildAgentResponse("WORKFLOW_GENERATED", null);
         given(workflowCrudService.findMaxVersionByWorkflowId(workflowId)).willReturn(1);
-        given(messageRepository.save(any())).willReturn(agentMsg);
+        givenFinalizeStreamSession();
 
-        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("워크플로우 만들어줘", fallbackCredentialId));
+        chatService.finalizeStream(workflowId, sessionId, resp, BYOK, userId);
 
         verify(workflowCrudService, never()).updateWorkflowName(any(), any());
     }
 
-    // ─────────────────── chat() 베타 platform 키 ───────────────────────────
-
     @Test
-    @DisplayName("베타 platform 키 사용 시 agentClient.chat에 useBetaPlatformKey=true로 전달되고 쿼터를 예약한다")
-    void chat_betaPlatformKey_passesFlagToAgentClient() throws Exception {
-        ChatSession session = buildSession(workflowId, userId);
-        ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
+    @DisplayName("베타 platform 키 + totalTokens가 없으면 입출력 합산으로 recordTokens를 호출한다")
+    void finalizeStream_betaPlatformKey_recordsSummedTokens() {
+        ChatAgentResponse resp = clarificationWithUsage(null, 100, 50);
+        givenFinalizeStreamSession();
 
-        given(sessionRepository.save(any())).willReturn(session);
-        given(credentialService.getByUserId(userId)).willReturn(List.of());
-        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
-        given(integrationContextService.resolve(userId))
-            .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(AgentChatCallParams.class)))
-            .willReturn(buildAgentResponse("CLARIFICATION_NEEDED", null));
-        given(messageRepository.save(any())).willReturn(agentMsg);
-
-        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("안녕", null));
-
-        verify(betaPlatformProvider).reserveQuota(userId);
-        verify(agentClient).chat(argThat(params ->
-            userId.equals(params.userId()) && "ROLE_USER".equals(params.userRole()) && params.useBetaPlatformKey()));
-    }
-
-    @Test
-    @DisplayName("베타 platform 키 사용 + 응답에 토큰 정보가 있으면 recordTokens를 호출한다 (agent usage 대비 관용 배선)")
-    void chat_betaPlatformKey_recordsTokensWhenUsagePresent() {
-        ChatSession session = buildSession(workflowId, userId);
-        ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
-        ChatAgentResponse resp = Mockito.mock(ChatAgentResponse.class);
-        given(resp.isWorkflowResult()).willReturn(false);
-        given(resp.getType()).willReturn(AgentResponseType.CLARIFICATION_NEEDED);
-        given(resp.getContent()).willReturn("응답");
-        given(resp.getInputTokens()).willReturn(100);
-        given(resp.getOutputTokens()).willReturn(50);
-
-        given(sessionRepository.save(any())).willReturn(session);
-        given(credentialService.getByUserId(userId)).willReturn(List.of());
-        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
-        given(integrationContextService.resolve(userId))
-            .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(AgentChatCallParams.class)))
-            .willReturn(resp);
-        given(messageRepository.save(any())).willReturn(agentMsg);
-
-        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("안녕", null));
+        chatService.finalizeStream(workflowId, sessionId, resp, BETA, userId);
 
         verify(betaPlatformProvider).recordTokens(userId, 150L);
     }
 
     @Test
-    @DisplayName("베타 platform 키 사용 + 응답 usage가 null(모델이 토큰 미보고)이면 recordTokens를 호출하지 않는다")
-    void chat_betaPlatformKey_skipsRecordTokensWhenUsageNull() throws Exception {
-        ChatSession session = buildSession(workflowId, userId);
-        ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
+    @DisplayName("베타 platform 키 + 응답 usage가 null(모델이 토큰 미보고)이면 recordTokens를 호출하지 않는다")
+    void finalizeStream_betaPlatformKey_skipsRecordTokensWhenUsageNull() throws Exception {
+        ChatAgentResponse resp = buildAgentResponse("CLARIFICATION_NEEDED", null);
+        givenFinalizeStreamSession();
 
-        given(sessionRepository.save(any())).willReturn(session);
-        given(credentialService.getByUserId(userId)).willReturn(List.of());
-        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
-        given(integrationContextService.resolve(userId))
-            .willReturn(new IntegrationContext(List.of(), List.of()));
-        // buildAgentResponse는 실제 ChatAgentResponse — getInputTokens/getOutputTokens는 하드코딩 null
-        given(agentClient.chat(any(AgentChatCallParams.class)))
-            .willReturn(buildAgentResponse("CLARIFICATION_NEEDED", null));
-        given(messageRepository.save(any())).willReturn(agentMsg);
-
-        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("안녕", null));
+        chatService.finalizeStream(workflowId, sessionId, resp, BETA, userId);
 
         verify(betaPlatformProvider, never()).recordTokens(any(), anyLong());
     }
 
     @Test
-    @DisplayName("chat() — 베타 쿼터 초과 시 BETA_QUOTA_EXCEEDED가 그대로 전파되고 agentClient는 호출되지 않는다")
-    void chat_betaQuotaExceeded_propagatesException() {
-        given(sessionRepository.save(any())).willReturn(buildSession(workflowId, userId));
-        given(credentialService.getByUserId(userId)).willReturn(List.of());
-        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
-        given(integrationContextService.resolve(userId))
-            .willReturn(new IntegrationContext(List.of(), List.of()));
-        // reserveQuota는 이제 사전작업(메시지 저장/연동 조회 등) 이후 agent 호출 직전에만 호출되므로
-        // 그 흐름을 그대로 타도록 buildRequest()로 필요한 스텁을 모두 채운다.
-        Mockito.doThrow(new CustomException(ErrorCode.BETA_QUOTA_EXCEEDED))
-            .when(betaPlatformProvider).reserveQuota(userId);
+    @DisplayName("차감 기준은 입출력 합산이 아니라 agent가 보낸 totalTokens다")
+    void recordTokens_usesAgentTotalTokens() {
+        // 캐시드·reasoning 토큰이 있으면 total != prompt + completion이다
+        ChatAgentResponse resp = clarificationWithUsage(900, 100, 50);
+        givenFinalizeStreamSession();
 
-        assertThatThrownBy(() ->
-            chatService.chat(workflowId, userId, "ROLE_USER", buildRequestBeforeReserve("안녕", null))
-        ).isInstanceOf(CustomException.class)
-            .hasFieldOrPropertyWithValue("errorCode", ErrorCode.BETA_QUOTA_EXCEEDED);
+        chatService.finalizeStream(workflowId, sessionId, resp, BETA, userId);
 
-        verify(agentClient, never()).chat(any(AgentChatCallParams.class));
-        // reserveQuota 자체가 실패(쿼터 초과)했으니 INCR이 반영된 요청이 아니다 — 환불 대상 아님
-        verify(betaPlatformProvider, never()).releaseDailyCall(any());
+        verify(betaPlatformProvider).recordTokens(userId, 900L);
     }
 
     @Test
-    @DisplayName("chat() — 베타 자격이어도 reserve 이전 사전작업에서 예외가 나면 쿼터를 건드리지 않는다 (INCR 자체가 없음)")
-    void chat_betaEligible_preReserveStepThrows_neverTouchesQuota() {
-        given(sessionRepository.save(any())).willReturn(buildSession(workflowId, userId));
-        given(credentialService.getByUserId(userId)).willReturn(List.of());
-        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
-        // reserve 이전 사전작업(연동 상태 조회) 단계에서 예외 발생
-        given(integrationContextService.resolve(userId))
-            .willThrow(new RuntimeException("연동 상태 조회 실패"));
+    @DisplayName("토큰 합계가 0이면 recordTokens를 호출하지 않는다 (무의미한 Redis 왕복 방지)")
+    void recordTokens_skipsWhenZero() {
+        ChatAgentResponse resp = clarificationWithUsage(0, null, null);
+        givenFinalizeStreamSession();
 
-        assertThatThrownBy(() ->
-            chatService.chat(workflowId, userId, "ROLE_USER", buildRequestBeforeReserve("안녕", null))
-        ).isInstanceOf(RuntimeException.class);
+        chatService.finalizeStream(workflowId, sessionId, resp, BETA, userId);
 
-        verify(betaPlatformProvider, never()).reserveQuota(any());
-        verify(betaPlatformProvider, never()).releaseDailyCall(any());
-        verify(agentClient, never()).chat(any(AgentChatCallParams.class));
+        verify(betaPlatformProvider, never()).recordTokens(any(), anyLong());
     }
 
     @Test
-    @DisplayName("chat() — 베타 platform 키 예약 후 agentClient 호출이 실패하면 일일 카운터를 환불한다")
-    void chat_betaPlatformKey_agentClientThrows_releasesDailyCall() {
-        given(sessionRepository.save(any())).willReturn(buildSession(workflowId, userId));
-        given(credentialService.getByUserId(userId)).willReturn(List.of());
-        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
-        given(betaPlatformProvider.reserveQuota(userId)).willReturn("beta:calls:" + userId + ":test-key");
-        given(integrationContextService.resolve(userId))
-            .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(AgentChatCallParams.class)))
-            .willThrow(new CustomException(ErrorCode.PROVIDER_ERROR));
+    @DisplayName("BYOK 호출이면 응답에 토큰이 있어도 recordTokens를 호출하지 않는다 — 베타 쿼터는 플랫폼 키 호출만 깎는다")
+    void finalizeStream_byok_doesNotRecordTokens() throws Exception {
+        ChatAgentResponse resp = objectMapper.readValue("""
+            { "message": "응답", "type": "CLARIFICATION_NEEDED",
+              "usage": {"promptTokens": 100, "completionTokens": 50, "totalTokens": 150} }""", ChatAgentResponse.class);
+        givenFinalizeStreamSession();
 
-        assertThatThrownBy(() ->
-            chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("안녕", null))
-        ).isInstanceOf(CustomException.class)
-            .hasFieldOrPropertyWithValue("errorCode", ErrorCode.PROVIDER_ERROR);
+        chatService.finalizeStream(workflowId, sessionId, resp, BYOK, userId);
 
-        verify(betaPlatformProvider).reserveQuota(userId);
-        // reserve가 반환한 바로 그 키로 환불한다(자정 경계에도 동일 날짜 키를 보장하는 A-2 강건화)
-        verify(betaPlatformProvider).releaseDailyCall("beta:calls:" + userId + ":test-key");
+        verify(betaPlatformProvider, never()).recordTokens(any(), anyLong());
     }
 
-    @Test
-    @DisplayName("chat() — 베타 platform 키 예약 후 agentClient 호출이 성공하면 일일 카운터를 환불하지 않는다")
-    void chat_betaPlatformKey_agentClientSucceeds_doesNotReleaseDailyCall() throws Exception {
-        ChatSession session = buildSession(workflowId, userId);
-        ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
+    private static final ChatService.AgentConfig BYOK = new ChatService.AgentConfig("CLAUDE", "key", false);
+    private static final ChatService.AgentConfig BETA = new ChatService.AgentConfig("GEMINI", null, true);
 
-        given(sessionRepository.save(any())).willReturn(session);
-        given(credentialService.getByUserId(userId)).willReturn(List.of());
-        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
-        given(integrationContextService.resolve(userId))
-            .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(AgentChatCallParams.class)))
-            .willReturn(buildAgentResponse("CLARIFICATION_NEEDED", null));
-        given(messageRepository.save(any())).willReturn(agentMsg);
-
-        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("안녕", null));
-
-        verify(betaPlatformProvider, never()).releaseDailyCall(any());
+    /** 토큰 정보만 다른 CLARIFICATION_NEEDED 응답. 쓰지 않는 getter는 스텁하지 않는다(strict stubbing). */
+    private ChatAgentResponse clarificationWithUsage(Integer total, Integer input, Integer output) {
+        ChatAgentResponse resp = Mockito.mock(ChatAgentResponse.class);
+        given(resp.isWorkflowResult()).willReturn(false);
+        given(resp.getType()).willReturn(AgentResponseType.CLARIFICATION_NEEDED);
+        given(resp.getContent()).willReturn("응답");
+        given(resp.getTotalTokens()).willReturn(total);
+        if (total == null || total <= 0) {
+            given(resp.getInputTokens()).willReturn(input);
+            given(resp.getOutputTokens()).willReturn(output);
+        }
+        return resp;
     }
 
     @Test
@@ -528,7 +381,7 @@ class ChatServiceTest {
     @Test
     @DisplayName("reserveBetaQuota — useBetaPlatformKey=false면 위임 없이 null을 반환한다")
     void reserveBetaQuota_nonBetaConfig_returnsNullWithoutDelegating() {
-        ChatService.AgentConfig nonBeta = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig nonBeta = new ChatService.AgentConfig("CLAUDE", "key", false);
 
         String key = chatService.reserveBetaQuota(nonBeta, userId);
 
@@ -539,7 +392,7 @@ class ChatServiceTest {
     @Test
     @DisplayName("reserveBetaQuota — useBetaPlatformKey=true면 BetaPlatformProvider가 반환한 키를 그대로 반환한다")
     void reserveBetaQuota_betaConfig_returnsProviderKey() {
-        ChatService.AgentConfig beta = new ChatService.AgentConfig("GEMINI", null, null, true);
+        ChatService.AgentConfig beta = new ChatService.AgentConfig("GEMINI", null, true);
         given(betaPlatformProvider.reserveQuota(userId)).willReturn("beta:calls:test-key");
 
         String key = chatService.reserveBetaQuota(beta, userId);
@@ -566,10 +419,10 @@ class ChatServiceTest {
         ChatMessage saved = buildMessage(session, MessageType.AGENT, "완성됐어요");
         given(messageRepository.save(any(ChatMessage.class))).willReturn(saved);
 
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
         ChatResponse result = chatService.finalizeStream(
-            workflowId, sessionId, resp, config, UUID.randomUUID(), userId);
+            workflowId, sessionId, resp, config, userId);
 
         verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any(), any(), any(), eq(false));
         verify(workflowCrudService).updateWorkflowName(workflowId, "테스트 WF");
@@ -593,11 +446,11 @@ class ChatServiceTest {
         given(messageRepository.save(any(ChatMessage.class)))
             .willReturn(buildMessage(session, MessageType.AGENT, "응답"));
 
-        ChatService.AgentConfig config = new ChatService.AgentConfig("GEMINI", null, null, true);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("GEMINI", null, true);
 
         TransactionSynchronizationManager.initSynchronization();
         try {
-            chatService.finalizeStream(workflowId, sessionId, resp, config, UUID.randomUUID(), userId);
+            chatService.finalizeStream(workflowId, sessionId, resp, config, userId);
 
             // 트랜잭션이 아직 안 끝났으므로 Redis에 기록되면 안 된다
             // (JPA 저장이 롤백되면 사용자가 쓰지도 않은 토큰을 잃는다)
@@ -613,55 +466,6 @@ class ChatServiceTest {
     }
 
     @Test
-    @DisplayName("차감 기준은 입출력 합산이 아니라 agent가 보낸 totalTokens다")
-    void recordTokens_usesAgentTotalTokens() {
-        ChatSession session = buildSession(workflowId, userId);
-        ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
-        ChatAgentResponse resp = Mockito.mock(ChatAgentResponse.class);
-        given(resp.isWorkflowResult()).willReturn(false);
-        given(resp.getType()).willReturn(AgentResponseType.CLARIFICATION_NEEDED);
-        given(resp.getContent()).willReturn("응답");
-        // 캐시드·reasoning 토큰이 있으면 total != prompt + completion이다
-        given(resp.getTotalTokens()).willReturn(900);
-
-        given(sessionRepository.save(any())).willReturn(session);
-        given(credentialService.getByUserId(userId)).willReturn(List.of());
-        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
-        given(integrationContextService.resolve(userId))
-            .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(AgentChatCallParams.class))).willReturn(resp);
-        given(messageRepository.save(any())).willReturn(agentMsg);
-
-        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("안녕", null));
-
-        verify(betaPlatformProvider).recordTokens(userId, 900L);
-    }
-
-    @Test
-    @DisplayName("토큰 합계가 0이면 recordTokens를 호출하지 않는다 (무의미한 Redis 왕복 방지)")
-    void recordTokens_skipsWhenZero() {
-        ChatSession session = buildSession(workflowId, userId);
-        ChatMessage agentMsg = buildMessage(session, MessageType.AGENT, "응답");
-        ChatAgentResponse resp = Mockito.mock(ChatAgentResponse.class);
-        given(resp.isWorkflowResult()).willReturn(false);
-        given(resp.getType()).willReturn(AgentResponseType.CLARIFICATION_NEEDED);
-        given(resp.getContent()).willReturn("응답");
-        given(resp.getTotalTokens()).willReturn(0);
-
-        given(sessionRepository.save(any())).willReturn(session);
-        given(credentialService.getByUserId(userId)).willReturn(List.of());
-        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
-        given(integrationContextService.resolve(userId))
-            .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(AgentChatCallParams.class))).willReturn(resp);
-        given(messageRepository.save(any())).willReturn(agentMsg);
-
-        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("안녕", null));
-
-        verify(betaPlatformProvider, never()).recordTokens(any(), anyLong());
-    }
-
-    @Test
     @DisplayName("finalizeStream — CLARIFICATION_NEEDED는 워크플로우를 저장하지 않고 메시지만 저장")
     void finalizeStream_clarificationNeeded() {
         ChatAgentResponse resp = Mockito.mock(ChatAgentResponse.class);
@@ -674,10 +478,10 @@ class ChatServiceTest {
         ChatMessage saved = buildMessage(session, MessageType.AGENT, "좀 더 알려주세요");
         given(messageRepository.save(any(ChatMessage.class))).willReturn(saved);
 
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
         ChatResponse result = chatService.finalizeStream(
-            workflowId, sessionId, resp, config, UUID.randomUUID(), userId);
+            workflowId, sessionId, resp, config, userId);
 
         verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
         verify(messageRepository).save(any(ChatMessage.class));
@@ -694,10 +498,10 @@ class ChatServiceTest {
     void finalizeStream_agentNodeWithRawWebhookUrl_notSaved() throws Exception {
         ChatAgentResponse resp = buildWorkflowResponse(
             "{ \"method\": \"POST\", \"url\": \"" + SLACK_WEBHOOK + "\" }");
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
         assertThatThrownBy(() -> chatService.finalizeStream(
-            workflowId, sessionId, resp, config, UUID.randomUUID(), userId))
+            workflowId, sessionId, resp, config, userId))
             .isInstanceOf(CustomException.class)
             .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
                 .isEqualTo(ErrorCode.INVALID_WORKFLOW));
@@ -709,37 +513,14 @@ class ChatServiceTest {
     }
 
     @Test
-    @DisplayName("blocking chat — agent가 만든 노드 config.url이 웹훅 원문이면 저장하지 않는다")
-    void chat_agentNodeWithRawWebhookUrl_notSaved() throws Exception {
-        ChatAgentResponse resp = buildWorkflowResponse(
-            "{ \"method\": \"POST\", \"url\": \"" + SLACK_WEBHOOK + "\" }");
-
-        ChatSession session = buildSession(workflowId, userId);
-        given(sessionRepository.save(any())).willReturn(session);
-        given(credentialService.getByUserId(userId)).willReturn(List.of());
-        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
-        given(integrationContextService.resolve(userId))
-            .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(AgentChatCallParams.class))).willReturn(resp);
-
-        assertThatThrownBy(() ->
-            chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("웹훅으로 보내줘", null)))
-            .isInstanceOf(CustomException.class)
-            .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
-                .isEqualTo(ErrorCode.INVALID_WORKFLOW));
-
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
-    }
-
-    @Test
     @DisplayName("거부 메시지는 대안을 알려주고 URL을 되싣지 않는다 — REST 경로와 같은 문구")
     void agentRejectionMessage_guidesToCredential_withoutEchoingUrl() throws Exception {
         ChatAgentResponse resp = buildWorkflowResponse(
             "{ \"method\": \"POST\", \"url\": \"" + SLACK_WEBHOOK + "\" }");
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
         assertThatThrownBy(() -> chatService.finalizeStream(
-            workflowId, sessionId, resp, config, UUID.randomUUID(), userId))
+            workflowId, sessionId, resp, config, userId))
             // 사용자가 다음에 할 일을 알려준다 — 웹훅을 등록하면 agent가 그 id를 쓴다.
             .hasMessageContaining("webhookCredentialId")
             .hasMessageContaining("웹훅 자격증명")
@@ -758,9 +539,9 @@ class ChatServiceTest {
         given(sessionRepository.findById(sessionId)).willReturn(Optional.of(session));
         given(messageRepository.save(any(ChatMessage.class)))
             .willReturn(buildMessage(session, MessageType.AGENT, "완성됐어요"));
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
-        chatService.finalizeStream(workflowId, sessionId, resp, config, UUID.randomUUID(), userId);
+        chatService.finalizeStream(workflowId, sessionId, resp, config, userId);
 
         verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any(), any(), any(), eq(false));
     }
@@ -768,22 +549,14 @@ class ChatServiceTest {
     // ─────────────────── agent 생성 정의의 남의 credentialId 거부 (IEUM-BE-64) ─
 
     @Test
-    @DisplayName("blocking chat — agent가 만든 노드에 남의 credentialId가 있으면 저장하지 않는다")
-    void chat_agentNodeWithForeignCredentialId_notSaved() throws Exception {
+    @DisplayName("finalizeStream — agent가 만든 노드에 남의 credentialId가 있으면 저장하지 않는다")
+    void finalizeStream_agentNodeWithForeignCredentialId_notSaved() throws Exception {
         UUID foreignCredentialId = UUID.randomUUID();
         ChatAgentResponse resp = buildWorkflowResponse(
             "{ \"credentialId\": \"" + foreignCredentialId + "\" }");
-
-        ChatSession session = buildSession(workflowId, userId);
-        given(sessionRepository.save(any())).willReturn(session);
         given(credentialService.getByUserId(userId)).willReturn(List.of());
-        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
-        given(integrationContextService.resolve(userId))
-            .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(AgentChatCallParams.class))).willReturn(resp);
 
-        assertThatThrownBy(() ->
-            chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("요약해줘", null)))
+        assertThatThrownBy(() -> chatService.finalizeStream(workflowId, sessionId, resp, BYOK, userId))
             .isInstanceOf(CustomException.class)
             .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
                 .isEqualTo(ErrorCode.INVALID_WORKFLOW))
@@ -806,9 +579,9 @@ class ChatServiceTest {
         givenFinalizeStreamSession();
         given(credentialService.getByUserId(userId))
             .willReturn(List.of(buildCredential(requestCredentialId)));
-        ChatService.AgentConfig config = new ChatService.AgentConfig("OPENAI", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("OPENAI", "key", false);
 
-        chatService.finalizeStream(workflowId, sessionId, resp, config, requestCredentialId, userId);
+        chatService.finalizeStream(workflowId, sessionId, resp, config, userId);
 
         Map<String, Object> savedConfig = (Map<String, Object>) captureSavedNodes().get(0).get("config");
         assertThat(savedConfig).containsEntry("credentialId", "").doesNotContainKey("llmProvider");
@@ -823,10 +596,10 @@ class ChatServiceTest {
 
         given(credentialService.getByUserId(userId))
             .willReturn(List.of(buildCredential(UUID.randomUUID())));
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
         assertThatThrownBy(() -> chatService.finalizeStream(
-            workflowId, sessionId, resp, config, null, userId))
+            workflowId, sessionId, resp, config, userId))
             .isInstanceOf(CustomException.class)
             .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
                 .isEqualTo(ErrorCode.INVALID_WORKFLOW))
@@ -837,46 +610,14 @@ class ChatServiceTest {
     }
 
     @Test
-    @DisplayName("blocking chat — 요청의 남의 credentialId는 요청 키 소유 검증에서 막혀 agent를 부르지 않는다")
-    void chat_foreignRequestCredentialId_rejectedByOwnershipCheck() throws Exception {
-        // 공격 경로 재현: 자기 워크플로우에 남의 credentialId를 실어 채팅하면
-        // resolveAgentConfig가 요청 키 소유 검증에서 막아 agent를 부르지 않는다.
-        UUID foreignCredentialId = UUID.randomUUID();
-
-        ChatSession session = buildSession(workflowId, userId);
-        given(sessionRepository.save(any())).willReturn(session);
-        given(credentialService.getByIdAndUserId(foreignCredentialId, userId))
-            .willThrow(new CustomException(ErrorCode.NOT_FOUND));
-        // 소유 검증에서 끝나므로 prompt·currentNodes는 읽히지 않는다 — credentialId만 스텁(strict stubbing)
-        ChatRequest request = Mockito.mock(ChatRequest.class);
-        given(request.getCredentialId()).willReturn(foreignCredentialId);
-
-        assertThatThrownBy(() -> chatService.chat(workflowId, userId, "ROLE_USER", request))
-            .isInstanceOf(CustomException.class)
-            .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
-                .isEqualTo(ErrorCode.NOT_FOUND));
-
-        verify(agentClient, never()).chat(any());
-        verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
-    }
-
-    @Test
-    @DisplayName("blocking chat — agent가 만든 노드 config에 API 키 원문이 있으면 저장하지 않는다")
-    void chat_agentNodeWithInlineSecret_notSaved() throws Exception {
+    @DisplayName("finalizeStream — agent가 만든 노드 config에 API 키 원문이 있으면 저장하지 않는다")
+    void finalizeStream_agentNodeWithInlineSecret_notSaved() throws Exception {
         // 사용자가 프롬프트에 키를 그대로 적으면 그 값이 노드 config로 돌아온다. config는 Mongo에
         // 평문 저장되고 조회 응답에 그대로 실린다.
         ChatAgentResponse resp = buildWorkflowResponse("{ \"apiKey\": \"sk-live-not-a-real-key\" }");
-
-        ChatSession session = buildSession(workflowId, userId);
-        given(sessionRepository.save(any())).willReturn(session);
         given(credentialService.getByUserId(userId)).willReturn(List.of());
-        given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
-        given(integrationContextService.resolve(userId))
-            .willReturn(new IntegrationContext(List.of(), List.of()));
-        given(agentClient.chat(any(AgentChatCallParams.class))).willReturn(resp);
 
-        assertThatThrownBy(() ->
-            chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("요약해줘", null)))
+        assertThatThrownBy(() -> chatService.finalizeStream(workflowId, sessionId, resp, BYOK, userId))
             .isInstanceOf(CustomException.class)
             .satisfies(e -> assertThat(((CustomException) e).getErrorCode())
                 .isEqualTo(ErrorCode.INVALID_WORKFLOW))
@@ -899,9 +640,9 @@ class ChatServiceTest {
             """);
 
         givenFinalizeStreamSession();
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
-        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+        chatService.finalizeStream(workflowId, sessionId, resp, config, userId);
 
         List<Map<String, Object>> saved = captureSavedEdges();
         assertThat(saved).hasSize(2);
@@ -922,9 +663,9 @@ class ChatServiceTest {
             """);
 
         givenFinalizeStreamSession();
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
-        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+        chatService.finalizeStream(workflowId, sessionId, resp, config, userId);
 
         assertThat(captureSavedEdges()).singleElement()
             .satisfies(edge -> assertThat(edge.get("id")).isEqualTo("edge-keep"));
@@ -942,9 +683,9 @@ class ChatServiceTest {
             """);
 
         givenFinalizeStreamSession();
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
-        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+        chatService.finalizeStream(workflowId, sessionId, resp, config, userId);
 
         ArgumentCaptor<String> edgesJson = ArgumentCaptor.forClass(String.class);
         verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), edgesJson.capture(), any(), any(), eq(false));
@@ -963,9 +704,9 @@ class ChatServiceTest {
     void finalizeStream_missingEvent_notSaved() throws Exception {
         ChatAgentResponse resp = buildNodeResponse(
             "{ \"id\": \"node-x\", \"type\": \"HTTP\", \"config\": {} }");
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
-        assertThatThrownBy(() -> chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId))
+        assertThatThrownBy(() -> chatService.finalizeStream(workflowId, sessionId, resp, config, userId))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
         verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
@@ -981,9 +722,9 @@ class ChatServiceTest {
         givenFinalizeStreamSession();
         given(credentialService.getByUserId(userId))
             .willReturn(List.of(buildCredential(fallbackCredentialId)));
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
-        chatService.finalizeStream(workflowId, sessionId, resp, config, fallbackCredentialId, userId);
+        chatService.finalizeStream(workflowId, sessionId, resp, config, userId);
 
         Map<String, Object> saved = captureSavedNodes().get(0);
         assertThat(saved).containsEntry("type", "AI");
@@ -998,9 +739,9 @@ class ChatServiceTest {
             + " \"type\": \"HTTP\", \"config\": { \"method\": \"GET\", \"brand\": \"evil\","
             + " \"serviceType\": \"GOOGLE\", \"triggerType\": \"WEBHOOK\" } }");
         givenFinalizeStreamSession();
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
-        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+        chatService.finalizeStream(workflowId, sessionId, resp, config, userId);
 
         Map<String, Object> saved = captureSavedNodes().get(0);
         assertThat(saved).containsEntry("event", "http.request");
@@ -1020,10 +761,10 @@ class ChatServiceTest {
         givenFinalizeStreamSession();
         given(credentialService.getByUserId(userId))
             .willReturn(List.of(buildCredential(fallbackCredentialId)));
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
         ChatResponse response =
-            chatService.finalizeStream(workflowId, sessionId, resp, config, fallbackCredentialId, userId);
+            chatService.finalizeStream(workflowId, sessionId, resp, config, userId);
 
         Map<String, Object> saved = captureSavedNodes().get(0);
         assertThat(saved).containsEntry("type", "AI");
@@ -1035,91 +776,63 @@ class ChatServiceTest {
     }
 
     @Test
-    @DisplayName("currentNodes에 event가 없으면 INVALID_WORKFLOW — agent 호출·쿼터 예약 없음")
-    void chat_currentNodesWithoutEvent_rejectedBeforeAgentCall() {
+    @DisplayName("currentNodes에 event가 없으면 INVALID_WORKFLOW")
+    void prepareStream_currentNodesWithoutEvent_rejected() {
         givenChatSetup();
-        ChatRequest request = buildRequestBeforeReserve("수정해줘", null);
+        ChatRequest request = buildStreamRequest("수정해줘", null);
         given(request.getCurrentNodes()).willReturn(List.of(Map.of("id", "n1", "type", "HTTP", "config", Map.of())));
 
-        assertThatThrownBy(() -> chatService.chat(workflowId, userId, "ROLE_USER", request))
+        assertThatThrownBy(() -> chatService.prepareStream(workflowId, userId, "ROLE_USER", request))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
-        verify(betaPlatformProvider, never()).reserveQuota(any());
-        verify(agentClient, never()).chat(any(AgentChatCallParams.class));
     }
 
     @Test
-    @DisplayName("currentNodes 원소가 객체가 아니거나 null이면 INVALID_WORKFLOW(500 아님) — agent 호출·쿼터 예약 없음")
-    void chat_currentNodesNotObject_rejectedBeforeAgentCall() {
+    @DisplayName("currentNodes 원소가 객체가 아니면 INVALID_WORKFLOW(500 아님)")
+    void prepareStream_currentNodesNotObject_rejected() {
         givenChatSetup();
-        ChatRequest request = buildRequestBeforeReserve("수정해줘", null);
+        ChatRequest request = buildStreamRequest("수정해줘", null);
         given(request.getCurrentNodes()).willReturn(List.of("x"));
 
-        assertThatThrownBy(() -> chatService.chat(workflowId, userId, "ROLE_USER", request))
+        assertThatThrownBy(() -> chatService.prepareStream(workflowId, userId, "ROLE_USER", request))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
-        verify(betaPlatformProvider, never()).reserveQuota(any());
-        verify(agentClient, never()).chat(any(AgentChatCallParams.class));
     }
 
     @Test
-    @DisplayName("currentNodes에 null 원소가 있으면 INVALID_WORKFLOW(500 아님) — agent 호출·쿼터 예약 없음")
-    void chat_currentNodesNullElement_rejectedBeforeAgentCall() {
+    @DisplayName("currentNodes에 null 원소가 있으면 INVALID_WORKFLOW(500 아님)")
+    void prepareStream_currentNodesNullElement_rejected() {
         givenChatSetup();
-        ChatRequest request = buildRequestBeforeReserve("수정해줘", null);
+        ChatRequest request = buildStreamRequest("수정해줘", null);
         given(request.getCurrentNodes()).willReturn(java.util.Arrays.asList((Object) null));
 
-        assertThatThrownBy(() -> chatService.chat(workflowId, userId, "ROLE_USER", request))
+        assertThatThrownBy(() -> chatService.prepareStream(workflowId, userId, "ROLE_USER", request))
             .isInstanceOfSatisfying(CustomException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
-        verify(betaPlatformProvider, never()).reserveQuota(any());
-        verify(agentClient, never()).chat(any(AgentChatCallParams.class));
     }
 
     @Test
-    @DisplayName("currentNodes는 파생된 모양으로 agent에 간다 — 옛 키 없음·type은 event가 정한다")
+    @DisplayName("prepareStream은 currentNodes를 파생해 넘긴다 — 옛 키 없음·type은 event가 정한다")
     @SuppressWarnings("unchecked")
-    void chat_currentNodes_passedDerived() throws Exception {
+    void prepareStream_currentNodes_derived() {
         givenChatSetup();
-        ChatRequest request = buildRequestBeforeReserve("수정해줘", null);
+        ChatRequest request = buildStreamRequest("수정해줘", null);
         given(request.getCurrentNodes()).willReturn(List.of(Map.of("id", "n1", "event", "http.request", "type", "AI",
             "config", Map.of("method", "GET", "serviceType", "GOOGLE", "triggerType", "MANUAL"))));
-        given(agentClient.chat(any(AgentChatCallParams.class)))
-            .willReturn(buildAgentResponse("CLARIFICATION_NEEDED", null));
-        given(messageRepository.save(any()))
-            .willReturn(buildMessage(buildSession(workflowId, userId), MessageType.AGENT, "응답"));
 
-        chatService.chat(workflowId, userId, "ROLE_USER", request);
+        ChatService.StreamSetupResult setup = chatService.prepareStream(workflowId, userId, "ROLE_USER", request);
 
-        ArgumentCaptor<AgentChatCallParams> params = ArgumentCaptor.forClass(AgentChatCallParams.class);
-        verify(agentClient).chat(params.capture());
-        Map<String, Object> sent = (Map<String, Object>) params.getValue().currentNodes().get(0);
+        Map<String, Object> sent = (Map<String, Object>) setup.currentNodes().get(0);
         assertThat(sent).containsEntry("type", "HTTP").containsEntry("event", "http.request");
         assertThat((Map<String, Object>) sent.get("config")).containsEntry("method", "GET")
             .doesNotContainKeys("serviceType", "triggerType");
     }
 
-    @Test
-    @DisplayName("WS prepareStream도 currentNodes를 파생해 넘긴다")
-    @SuppressWarnings("unchecked")
-    void prepareStream_currentNodes_derived() {
-        givenChatSetup();
-        ChatRequest request = buildRequestBeforeReserve("수정해줘", null);
-        given(request.getCurrentNodes()).willReturn(List.of(Map.of("id", "n1", "event", "http.request", "type", "AI",
-            "config", Map.of())));
-
-        ChatService.StreamSetupResult setup = chatService.prepareStream(workflowId, userId, "ROLE_USER", request);
-
-        assertThat((Map<String, Object>) setup.currentNodes().get(0)).containsEntry("type", "HTTP");
-    }
-
-    /** chat()·prepareStream()이 agent 호출(스트림 준비) 직전까지 가는 데 필요한 스텁. */
+    /** prepareStream()이 스트림 준비를 끝내는 데 필요한 스텁. */
     private void givenChatSetup() {
         given(sessionRepository.save(any())).willReturn(buildSession(workflowId, userId));
         given(credentialService.getByUserId(userId)).willReturn(List.of());
         given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
-        given(integrationContextService.resolve(userId))
-            .willReturn(new IntegrationContext(List.of(), List.of()));
     }
 
     /** WORKFLOW_GENERATED 응답. 노드 JSON 조각(여러 개면 쉼표로 이어 붙인다)을 nodes 배열에 그대로 넣는다. */
@@ -1148,9 +861,9 @@ class ChatServiceTest {
         ChatAgentResponse resp = buildNodeResponse("""
             { "id": "node-trigger", "event": "schedule.every", "type": "TRIGGER", "config": { "cron": "0 9 * * *" } }""");
         givenFinalizeStreamSession();
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
-        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+        chatService.finalizeStream(workflowId, sessionId, resp, config, userId);
 
         verify(workflowCrudService).saveAgentVersion(
             eq(workflowId), any(), any(), eq(TriggerType.SCHEDULE), eq("0 9 * * *"), eq(false));
@@ -1162,9 +875,9 @@ class ChatServiceTest {
         ChatAgentResponse resp = buildNodeResponse("""
             { "id": "node-trigger", "event": "webhook.catch", "type": "TRIGGER", "config": {} }""");
         givenFinalizeStreamSession();
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
-        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+        chatService.finalizeStream(workflowId, sessionId, resp, config, userId);
 
         verify(workflowCrudService).saveAgentVersion(
             eq(workflowId), any(), any(), eq(TriggerType.WEBHOOK), isNull(), eq(false));
@@ -1176,9 +889,9 @@ class ChatServiceTest {
         ChatAgentResponse resp = buildNodeResponse("""
             { "id": "node-http", "event": "http.request", "type": "HTTP", "config": { "method": "GET" } }""");
         givenFinalizeStreamSession();
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
-        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+        chatService.finalizeStream(workflowId, sessionId, resp, config, userId);
 
         verify(workflowCrudService).saveAgentVersion(
             eq(workflowId), any(), any(), eq(TriggerType.MANUAL), isNull(), eq(false));
@@ -1191,9 +904,9 @@ class ChatServiceTest {
             { "id": "node-hook", "event": "webhook.catch", "type": "TRIGGER", "config": {} },
             { "id": "node-cron", "event": "schedule.every", "type": "TRIGGER", "config": { "cron": "0 9 * * *" } }""");
         givenFinalizeStreamSession();
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
-        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+        chatService.finalizeStream(workflowId, sessionId, resp, config, userId);
 
         verify(workflowCrudService).saveAgentVersion(
             eq(workflowId), any(), any(), eq(TriggerType.WEBHOOK), isNull(), eq(false));
@@ -1203,13 +916,13 @@ class ChatServiceTest {
     @DisplayName("TRIGGER 노드의 event를 카탈로그가 모르면 저장하지 않는다 — 메시지에 event·노드 id")
     void finalizeStream_unknownTriggerEvent_notSaved() throws Exception {
         ChatAgentResponse resp = buildNodeResponse("""
-            { "id": "node-trigger", "event": "schedule.daily", "type": "TRIGGER", "config": {} }""");
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+            { "id": "node-trigger", "event": "schedule.yearly", "type": "TRIGGER", "config": {} }""");
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
-        assertThatThrownBy(() -> chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId))
+        assertThatThrownBy(() -> chatService.finalizeStream(workflowId, sessionId, resp, config, userId))
             .isInstanceOfSatisfying(CustomException.class, e -> {
                 assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW);
-                assertThat(e.getMessage()).contains("schedule.daily").contains("node-trigger");
+                assertThat(e.getMessage()).contains("schedule.yearly").contains("node-trigger");
             });
         verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
     }
@@ -1219,9 +932,9 @@ class ChatServiceTest {
     void finalizeStream_scheduleWithoutCron_notSaved() throws Exception {
         ChatAgentResponse resp = buildNodeResponse("""
             { "id": "node-trigger", "event": "schedule.every", "type": "TRIGGER", "config": {} }""");
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
-        assertThatThrownBy(() -> chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId))
+        assertThatThrownBy(() -> chatService.finalizeStream(workflowId, sessionId, resp, config, userId))
             .isInstanceOfSatisfying(CustomException.class, e -> {
                 assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_CRON_EXPRESSION);
                 assertThat(e.getMessage()).isEqualTo("schedule.every 노드(node-trigger)의 config.cron이 필요합니다");
@@ -1237,9 +950,9 @@ class ChatServiceTest {
         ChatAgentResponse resp = buildStateResponse("BUILDING", """
             { "id": "node-trigger", "event": "schedule.every", "type": "TRIGGER", "config": {} }""");
         givenFinalizeStreamSession();
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
-        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+        chatService.finalizeStream(workflowId, sessionId, resp, config, userId);
 
         verify(workflowCrudService).saveAgentVersion(eq(workflowId), any(), any(), isNull(), isNull(), eq(true));
     }
@@ -1250,9 +963,9 @@ class ChatServiceTest {
         ChatAgentResponse resp = buildStateResponse("BUILDING", """
             { "id": "node-http", "event": "http.request", "type": "HTTP", "config": { "method": "POST", "url": "%s" } }"""
             .formatted(SLACK_WEBHOOK));
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
-        assertThatThrownBy(() -> chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId))
+        assertThatThrownBy(() -> chatService.finalizeStream(workflowId, sessionId, resp, config, userId))
             .isInstanceOfSatisfying(CustomException.class, e ->
                 assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW));
         verify(workflowCrudService, never()).saveAgentVersion(any(), any(), any(), any(), any(), anyBoolean());
@@ -1265,9 +978,9 @@ class ChatServiceTest {
         ChatAgentResponse resp = buildStateResponse(buildState, """
             { "id": "node-trigger", "event": "schedule.every", "type": "TRIGGER", "config": { "cron": "0 9 * * *" } }""");
         givenFinalizeStreamSession();
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
 
-        chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+        chatService.finalizeStream(workflowId, sessionId, resp, config, userId);
 
         verify(workflowCrudService).saveAgentVersion(
             eq(workflowId), any(), any(), eq(TriggerType.SCHEDULE), eq("0 9 * * *"), eq(false));
@@ -1279,13 +992,13 @@ class ChatServiceTest {
         ChatAgentResponse resp = objectMapper.readValue("""
             { "message": "켜 둘게요", "type": "CLARIFICATION_NEEDED", "buildState": "DONE" }""", ChatAgentResponse.class);
         givenFinalizeStreamSession();
-        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", null, false);
+        ChatService.AgentConfig config = new ChatService.AgentConfig("CLAUDE", "key", false);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
         appender.start();
         Logger logger = (Logger) LoggerFactory.getLogger(ChatService.class);
         logger.addAppender(appender);
         try {
-            chatService.finalizeStream(workflowId, sessionId, resp, config, null, userId);
+            chatService.finalizeStream(workflowId, sessionId, resp, config, userId);
         } finally {
             logger.detachAppender(appender);
         }
@@ -1389,22 +1102,11 @@ class ChatServiceTest {
         return msg;
     }
 
-    private ChatRequest buildRequest(String prompt, UUID credentialId) {
-        ChatRequest request = Mockito.mock(ChatRequest.class);
-        given(request.getPrompt()).willReturn(prompt);
-        given(request.getSessionId()).willReturn(null);
-        given(request.getCredentialId()).willReturn(credentialId);
-        given(request.getCurrentNodes()).willReturn(null);
-        given(request.getCurrentEdges()).willReturn(null);
-        return request;
-    }
-
     /**
-     * reserveQuota 이전에 예외로 끝나는 시나리오용 — getCurrentNodes()는 reserveQuota 직전 파생에서,
-     * getCurrentEdges()는 AgentChatCallParams 빌드 시점에 읽히고 미스텁이면 빈 리스트라 미리 스텁하면 strict
-     * stubbing에서 미사용으로 실패한다. 필요한 최소 스텁만 둔다.
+     * prepareStream 요청 — getCurrentNodes()는 테스트마다 스텁하고, getCurrentEdges()는 미스텁(null)으로 둔다.
+     * 읽히지 않는 값을 미리 스텁하면 strict stubbing에서 미사용으로 실패한다.
      */
-    private ChatRequest buildRequestBeforeReserve(String prompt, UUID credentialId) {
+    private ChatRequest buildStreamRequest(String prompt, UUID credentialId) {
         ChatRequest request = Mockito.mock(ChatRequest.class);
         given(request.getPrompt()).willReturn(prompt);
         given(request.getSessionId()).willReturn(null);

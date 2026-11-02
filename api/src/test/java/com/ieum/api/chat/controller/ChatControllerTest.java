@@ -1,9 +1,5 @@
 package com.ieum.api.chat.controller;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.ieum.api.chat.dto.AgentResponseType;
-import com.ieum.api.chat.dto.ChatResponse;
-import com.ieum.api.chat.dto.TokenUsage;
 import com.ieum.api.chat.service.ChatService;
 import com.ieum.api.common.GlobalExceptionHandler;
 import com.ieum.auth.security.CustomUserDetails;
@@ -13,7 +9,6 @@ import com.ieum.workflowcore.chat.domain.ChatMessage;
 import com.ieum.workflowcore.chat.domain.ChatSession;
 import com.ieum.workflowcore.chat.domain.MessageType;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -25,7 +20,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -39,7 +33,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -54,7 +47,6 @@ class ChatControllerTest {
     private ChatController chatController;
 
     private MockMvc mockMvc;
-    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private UUID workflowId;
     private UUID userId;
@@ -82,51 +74,6 @@ class ChatControllerTest {
             .setValidator(validator)
             .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
             .build();
-    }
-
-    // ─────────────────── POST /api/v1/workflows/{workflowId}/chat ──────────
-
-    @Test
-    @DisplayName("채팅 메시지 전송 성공 — 200 반환")
-    void chat_success_returns200() throws Exception {
-        ChatResponse response = ChatResponse.builder()
-            .messageId(UUID.randomUUID())
-            .sessionId(sessionId)
-            .type(AgentResponseType.CLARIFICATION_NEEDED)
-            .content("안녕하세요!")
-            .tokens(new TokenUsage(10, 20))
-            .build();
-
-        given(chatService.chat(eq(workflowId), eq(userId), any(), any())).willReturn(response);
-
-        mockMvc.perform(post("/api/v1/workflows/{workflowId}/chat", workflowId)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(Map.of("prompt", "안녕"))))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.success").value(true))
-            .andExpect(jsonPath("$.data.content").value("안녕하세요!"))
-            .andExpect(jsonPath("$.data.sessionId").value(sessionId.toString()))
-            .andExpect(jsonPath("$.data.type").value("CLARIFICATION_NEEDED"));
-    }
-
-    @Test
-    @DisplayName("메시지가 빈 문자열이면 400 반환")
-    void chat_blankMessage_returns400() throws Exception {
-        mockMvc.perform(post("/api/v1/workflows/{workflowId}/chat", workflowId)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(Map.of("prompt", ""))))
-            .andExpect(status().isBadRequest());
-    }
-
-    @Test
-    @DisplayName("메시지가 2000자 초과이면 400 반환")
-    void chat_messageTooLong_returns400() throws Exception {
-        String longMessage = "a".repeat(2001);
-
-        mockMvc.perform(post("/api/v1/workflows/{workflowId}/chat", workflowId)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(Map.of("prompt", longMessage))))
-            .andExpect(status().isBadRequest());
     }
 
     // ─────────────────── GET /api/v1/workflows/{workflowId}/chat/history ───

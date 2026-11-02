@@ -22,6 +22,10 @@ class BuiltinTriggerHandlersTest {
         return new Node("t1", NodeType.TRIGGER, "트리거", config);
     }
 
+    private static Node every(Map<String, Object> config) {
+        return new Node("t1", NodeType.TRIGGER, "트리거", config, "schedule.every");
+    }
+
     @Test
     @DisplayName("MANUAL — 치환된 config(input)를 출력하고 심어 둔 페이로드는 무시한다, 노드 테스트는 RUN")
     void manualEchoesInputAndIgnoresPlanted() {
@@ -43,7 +47,7 @@ class BuiltinTriggerHandlersTest {
         ScheduleTriggerHandler handler = new ScheduleTriggerHandler();
 
         Map<String, Object> output = handler.output(
-            node(new HashMap<>(Map.of("cron", "0 0 9 * * ?"))), Map.of("x", 1), Map.of("planted", true));
+            every(new HashMap<>(Map.of("cron", "0 0 9 * * ?"))), Map.of("x", 1), Map.of("planted", true));
 
         assertThat(handler.type()).isEqualTo(TriggerType.SCHEDULE);
         assertThat(output).containsOnlyKeys("triggeredAt", "cron").containsEntry("cron", "0 0 9 * * ?");
@@ -61,7 +65,7 @@ class BuiltinTriggerHandlersTest {
             config.put("cron", cron);
         }
 
-        assertThatThrownBy(() -> new ScheduleTriggerHandler().output(node(config), Map.of(), Map.of()))
+        assertThatThrownBy(() -> new ScheduleTriggerHandler().output(every(config), Map.of(), Map.of()))
             .isInstanceOf(IllegalStateException.class)
             .hasMessage("SCHEDULE 트리거에 cron 필드가 없습니다. nodeId: t1");
     }
