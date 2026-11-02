@@ -1,13 +1,11 @@
 package com.ieum.api.chat.controller;
 
-import com.ieum.api.chat.dto.ChatRequest;
 import com.ieum.api.chat.dto.ChatResponse;
 import com.ieum.api.chat.service.ChatService;
 import com.ieum.auth.security.CustomUserDetails;
 import com.ieum.common.dto.ApiResponse;
 import com.ieum.common.dto.PageResponse;
 import com.ieum.workflowcore.chat.domain.ChatMessage;
-import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -17,17 +15,14 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 워크플로우 기반 채팅 REST API.
+ * 워크플로우 기반 채팅 REST API — 메시지 전송은 WebSocket({@code /app/chat/{workflowId}})뿐이다.
  *
  * <ul>
- *   <li>POST /api/v1/workflows/{workflowId}/chat — 메시지 전송 + AI 응답 (블로킹)</li>
  *   <li>GET  /api/v1/workflows/{workflowId}/chat/history — 세션 메시지 히스토리</li>
  * </ul>
  */
@@ -37,22 +32,6 @@ import org.springframework.web.bind.annotation.RestController;
 public class ChatController implements ChatControllerDocs {
 
     private final ChatService chatService;
-
-    /**
-     * 메시지 전송 + AI 응답 반환.
-     *
-     * <p>request.sessionId가 null이면 새 세션을 생성한다.
-     * 기존 세션을 이어가려면 이전 응답의 sessionId를 전달한다.
-     */
-    @PostMapping
-    public ResponseEntity<ApiResponse<ChatResponse>> chat(
-        @AuthenticationPrincipal CustomUserDetails userDetails,
-        @PathVariable UUID workflowId,
-        @RequestBody @Valid ChatRequest request
-    ) {
-        ChatResponse response = chatService.chat(workflowId, userDetails.getId(), userDetails.getRole(), request);
-        return ResponseEntity.ok(ApiResponse.ok(response));
-    }
 
     /**
      * 세션의 메시지 히스토리 조회 (최신순, 페이지네이션).

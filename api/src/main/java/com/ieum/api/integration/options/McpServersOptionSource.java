@@ -10,8 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 /**
- * MCP 노드 {@code catalogId} 필드의 선택지 — 요청자의 활성 MCP 서버. 기준은 채팅 가용 목록
- * ({@code ChatService.resolveAvailableMcpServers})·실행({@code DefaultMcpCatalogProvider})과 같다.
+ * MCP 노드 {@code catalogId} 필드의 선택지 — 요청자의 활성 MCP 서버. 기준은 실행({@code DefaultMcpCatalogProvider})과 같다.
  * 서버 URL·헤더는 싣지 않는다.
  */
 @Component

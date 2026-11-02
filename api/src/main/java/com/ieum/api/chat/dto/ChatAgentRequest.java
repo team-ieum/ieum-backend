@@ -5,11 +5,10 @@ import lombok.Builder;
 import lombok.Getter;
 
 /**
- * ieum-agent POST /v1/chat 요청 body.
+ * ieum-agent POST /v1/chat/stream 요청 body.
  *
  * <p>ieum-backend가 FE 요청의 currentNodes를 NodeDerivation으로 파생한 결과(type·brand를 덮고 옛 키를 지움)와
- * currentEdges를 전달하고(DB에서 다시 읽지 않는다),
- * 연동 서비스 상태를 available/unavailable 두 목록으로 분리하여 전달한다.
+ * currentEdges를 전달한다(DB에서 다시 읽지 않는다). 연동·MCP·웹훅은 agent가 위임 토큰으로 BE에 직접 묻는다.
  */
 @Getter
 @Builder
@@ -32,22 +31,4 @@ public class ChatAgentRequest {
 
     /** 현재 워크플로우 엣지 목록 */
     private final List<Object> currentEdges;
-
-    /** 연동 완료된 서비스 목록 (provider + type + scopes) */
-    private final List<IntegrationInfo> availableIntegrations;
-
-    /** 미연동 서비스 목록 (provider + type) */
-    private final List<IntegrationInfo> unavailableIntegrations;
-
-    /**
-     * 사용자가 보유한 MCP 서버 카탈로그 메타(catalogId/name/description).
-     * Designer가 적절한 AI 노드에 mcp 도구를 배정하는 데 사용한다(환각 방지).
-     */
-    private final List<AvailableMcpServer> availableMcpServers;
-
-    /**
-     * 사용자가 보유한 Slack/Discord 웹훅 자격증명 메타(webhookCredentialId/provider/displayName).
-     * Designer가 slack/discord 노드에 webhookCredentialId를 배정하는 데 사용한다(환각 방지).
-     */
-    private final List<AvailableWebhook> availableWebhooks;
 }

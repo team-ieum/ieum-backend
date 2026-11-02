@@ -25,7 +25,6 @@ import com.ieum.api.chat.service.ChatService;
 import com.ieum.api.chat.service.ChatService.AgentConfig;
 import com.ieum.api.chat.service.ChatService.StreamSetupResult;
 import com.ieum.api.chat.service.ChatTurnLock;
-import com.ieum.api.chat.service.IntegrationContextService.IntegrationContext;
 import com.ieum.auth.delegation.DelegationTokenService;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
@@ -38,8 +37,13 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import jakarta.validation.Validation;
+import jakarta.validation.Validator;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.mockito.InOrder;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -63,7 +67,9 @@ class WebSocketChatHandlerTest {
     @Mock private ChatTurnLock chatTurnLock;
     @Mock private DelegationTokenService delegationTokenService;
 
-    @InjectMocks private WebSocketChatHandler handler;
+    private static final Validator VALIDATOR = Validation.buildDefaultValidatorFactory().getValidator();
+
+    private WebSocketChatHandler handler;
 
     private UUID workflowId;
     private UUID userId;
@@ -80,17 +86,62 @@ class WebSocketChatHandlerTest {
         principal = new UsernamePasswordAuthenticationToken(
             userId.toString(), null,
             List.of(new SimpleGrantedAuthority("ROLE_USER")));
-        request = mock(ChatRequest.class);
+        request = chatRequest("워크플로우 만들어줘");
+        handler = new WebSocketChatHandler(
+            chatService, agentClient, messagingTemplate, chatTurnLock, delegationTokenService, VALIDATOR);
 
         setup = new StreamSetupResult(
             sessionId,
-            new AgentConfig("CLAUDE", "key", null, false),
+            new AgentConfig("CLAUDE", "key", false),
             "워크플로우 만들어줘",
-            null, null,
-            new IntegrationContext(List.of(), List.of()),
-            null, null, null,
-            List.of(), List.of()
+            null, null
         );
+    }
+
+    /** 실물 요청 — 검증기가 필드를 읽으므로 mock이면 prompt가 비어 보인다. */
+    private static ChatRequest chatRequest(String prompt) {
+        ChatRequest r = new ChatRequest();
+        ReflectionTestUtils.setField(r, "prompt", prompt);
+        return r;
+    }
+
+    @ParameterizedTest(name = "prompt={0}")
+    @NullAndEmptySource
+    @ValueSource(strings = {"   "})
+    @DisplayName("prompt가 비면 요청한 세션에만 error 프레임 — 락·세션·메시지·쿼터를 건드리지 않는다")
+    void blankPrompt_rejectedBeforeLock(String prompt) {
+        handler.handleChat(workflowId, chatRequest(prompt), principal, WS_SESSION);
+
+        assertRejectedToSessionOnly("메시지를 입력해주세요.");
+    }
+
+    @Test
+    @DisplayName("prompt가 2000자를 넘으면 요청한 세션에만 error 프레임 — 2000자는 통과한다")
+    void tooLongPrompt_rejectedBeforeLock() {
+        handler.handleChat(workflowId, chatRequest("a".repeat(2001)), principal, WS_SESSION);
+
+        assertRejectedToSessionOnly("메시지는 2000자를 초과할 수 없습니다.");
+        assertThat(VALIDATOR.validate(chatRequest("a".repeat(2000)))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("공백만 2001자면 두 제약이 다 걸려도 '비었다' 안내가 나간다")
+    void blankAndTooLong_reportsBlankFirst() {
+        handler.handleChat(workflowId, chatRequest(" ".repeat(2001)), principal, WS_SESSION);
+
+        assertRejectedToSessionOnly("메시지를 입력해주세요.");
+    }
+
+    private void assertRejectedToSessionOnly(String message) {
+        ArgumentCaptor<ChatStreamResponse> sent = ArgumentCaptor.forClass(ChatStreamResponse.class);
+        @SuppressWarnings("rawtypes") ArgumentCaptor<Map> headers = ArgumentCaptor.forClass(Map.class);
+        verify(messagingTemplate).convertAndSendToUser(
+            eq(userId.toString()), eq(DESTINATION), sent.capture(), headers.capture());
+        verify(messagingTemplate, never()).convertAndSendToUser(any(), any(), any(ChatStreamResponse.class));
+        assertThat(SimpMessageHeaderAccessor.getSessionId(headers.getValue())).isEqualTo(WS_SESSION);
+        assertThat(sent.getValue().getType()).isEqualTo(StreamType.ERROR);
+        assertThat(sent.getValue().getContent()).isEqualTo(message);
+        verifyNoInteractions(chatTurnLock, chatService, agentClient, delegationTokenService);
     }
 
     /** handleChat() 전체 흐름을 도는 테스트에서만 필요 — withBetaQuotaRefund 단위 테스트는 handleChat을 거치지 않는다. */
@@ -119,7 +170,7 @@ class WebSocketChatHandlerTest {
         mockPrepareStream();
         ChatAgentResponse agentResponse = mock(ChatAgentResponse.class);
         ChatResponse finalResponse = mock(ChatResponse.class);
-        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any(), any()))
+        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any()))
             .willReturn(finalResponse);
 
         mockChatStream(
@@ -132,7 +183,7 @@ class WebSocketChatHandlerTest {
 
         // 3개 프레임 전송 완료까지 대기(done 프레임은 finalizeStream 후 전송됨)한 뒤 검증한다.
         List<ChatStreamResponse> sent = captureSent(3);
-        verify(chatService).finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any(), any());
+        verify(chatService).finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any());
         assertThat(sent.get(0).getType()).isEqualTo(StreamType.STAGE);
         assertThat(sent.get(0).getStage()).isEqualTo("designing");
         assertThat(sent.get(1).getType()).isEqualTo(StreamType.STAGE);
@@ -156,7 +207,7 @@ class WebSocketChatHandlerTest {
         assertThat(sent.get(0).getType()).isEqualTo(StreamType.ERROR);
         assertThat(sent.get(0).getContent()).isEqualTo("AI 응답 중 오류가 발생했습니다.");
         verify(chatService, after(300).never())
-            .finalizeStream(any(), any(), any(), any(), any(), any());
+            .finalizeStream(any(), any(), any(), any(), any());
         // ERROR 이벤트 후 스트림이 정상 종료돼도 DONE을 받지 못했으므로 withBetaQuotaRefund의 doFinally가
         // reserveBetaQuota가 반환한 바로 그 키로 환불한다(자정 경계에도 동일 날짜 키를 보장하는 A-2 강건화).
         verify(chatService).releaseBetaQuotaOnFailure(TEST_RESERVATION_KEY);
@@ -203,7 +254,7 @@ class WebSocketChatHandlerTest {
         ChatAgentResponse agentResponse = mock(ChatAgentResponse.class);
         String guidance = "노드 config.url에 Slack·Discord 웹훅 URL을 직접 저장할 수 없습니다. "
             + "웹훅 자격증명을 등록한 뒤 config.webhookCredentialId로 참조하세요.";
-        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any(), any()))
+        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any()))
             .willThrow(new CustomException(ErrorCode.INVALID_WORKFLOW, guidance));
         mockChatStream(ChatStreamEvent.done(agentResponse));
 
@@ -220,7 +271,7 @@ class WebSocketChatHandlerTest {
     void done_unexpectedException_sendsGenericMessage() {
         mockPrepareStream();
         ChatAgentResponse agentResponse = mock(ChatAgentResponse.class);
-        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any(), any()))
+        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any()))
             .willThrow(new IllegalStateException("connection reset by peer"));
         mockChatStream(ChatStreamEvent.done(agentResponse));
 
@@ -254,14 +305,19 @@ class WebSocketChatHandlerTest {
     }
 
     @Test
-    @DisplayName("락 확인 중 Redis 장애면 일반 error 프레임 — 예외가 @MessageMapping 밖으로 새지 않는다")
-    void turnLockFailure_sendsGenericError() {
+    @DisplayName("락 확인 중 Redis 장애면 요청한 세션에만 일반 error 프레임 — 다른 탭의 진행 중인 턴을 끊지 않는다")
+    void turnLockFailure_sendsGenericErrorToSessionOnly() {
         given(chatTurnLock.tryAcquire(userId)).willThrow(new RuntimeException("RedisConnectionFailureException"));
 
         handler.handleChat(workflowId, request, principal, WS_SESSION);
 
-        List<ChatStreamResponse> sent = captureSent(1);
-        assertThat(sent.get(0).getContent()).isEqualTo("서버 오류가 발생했습니다.");
+        ArgumentCaptor<ChatStreamResponse> sent = ArgumentCaptor.forClass(ChatStreamResponse.class);
+        @SuppressWarnings("rawtypes") ArgumentCaptor<Map> headers = ArgumentCaptor.forClass(Map.class);
+        verify(messagingTemplate).convertAndSendToUser(
+            eq(userId.toString()), eq(DESTINATION), sent.capture(), headers.capture());
+        verify(messagingTemplate, never()).convertAndSendToUser(any(), any(), any(ChatStreamResponse.class));
+        assertThat(SimpMessageHeaderAccessor.getSessionId(headers.getValue())).isEqualTo(WS_SESSION);
+        assertThat(sent.getValue().getContent()).isEqualTo("서버 오류가 발생했습니다.");
         verifyNoInteractions(chatService, agentClient, delegationTokenService);
     }
 
@@ -271,7 +327,7 @@ class WebSocketChatHandlerTest {
         mockPrepareStream();
         given(delegationTokenService.issue(userId, "ROLE_USER", workflowId)).willReturn("deleg-raw");
         ChatAgentResponse agentResponse = mock(ChatAgentResponse.class);
-        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any(), any()))
+        given(chatService.finalizeStream(eq(workflowId), eq(sessionId), eq(agentResponse), any(), any()))
             .willReturn(mock(ChatResponse.class));
         mockChatStream(ChatStreamEvent.done(agentResponse));
 
@@ -283,8 +339,13 @@ class WebSocketChatHandlerTest {
         ArgumentCaptor<AgentChatCallParams> params = ArgumentCaptor.forClass(AgentChatCallParams.class);
         verify(agentClient).chatStream(params.capture());
         assertThat(params.getValue().delegationToken()).isEqualTo("deleg-raw");
+        assertThat(params.getValue().userId()).isEqualTo(userId);
+        assertThat(params.getValue().userRole()).isEqualTo("ROLE_USER");
+        assertThat(params.getValue().llmProvider()).isEqualTo("CLAUDE");
+        assertThat(params.getValue().apiKey()).isEqualTo("key");
+        assertThat(params.getValue().useBetaPlatformKey()).isFalse();
         InOrder order = inOrder(chatService, delegationTokenService, chatTurnLock);
-        order.verify(chatService).finalizeStream(any(), any(), any(), any(), any(), any());
+        order.verify(chatService).finalizeStream(any(), any(), any(), any(), any());
         order.verify(delegationTokenService).revoke("deleg-raw");
         order.verify(chatTurnLock).release(userId);
     }
@@ -326,7 +387,25 @@ class WebSocketChatHandlerTest {
 
         captureSent(1);
         verify(chatTurnLock).release(userId);
+        // 준비가 실패하면 쿼터를 예약하지 않는다 — 환불할 INCR 자체가 없어야 한다
+        verify(chatService, never()).reserveBetaQuota(any(), any());
         verifyNoInteractions(delegationTokenService, agentClient);
+    }
+
+    @Test
+    @DisplayName("베타 platform 키 설정이면 chatStream에 useBetaPlatformKey=true로 넘긴다")
+    void betaConfig_passesBetaFlagToAgent() {
+        setup = new StreamSetupResult(sessionId, new AgentConfig("CLAUDE", null, true), "안녕", null, null);
+        mockPrepareStream();
+        given(delegationTokenService.issue(userId, "ROLE_USER", workflowId)).willReturn("deleg-raw");
+        given(agentClient.chatStream(any())).willReturn(Flux.never());
+
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
+
+        ArgumentCaptor<AgentChatCallParams> params = ArgumentCaptor.forClass(AgentChatCallParams.class);
+        verify(agentClient).chatStream(params.capture());
+        assertThat(params.getValue().useBetaPlatformKey()).isTrue();
+        assertThat(params.getValue().apiKey()).isNull();
     }
 
     @Test

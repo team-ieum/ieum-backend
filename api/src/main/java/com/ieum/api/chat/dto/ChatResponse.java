@@ -14,7 +14,6 @@ import lombok.Getter;
  *
  * <ul>
  *   <li>{@code WORKFLOW_GENERATED/MODIFIED} — message + nodes + edges (+ changeDescription)</li>
- *   <li>{@code INTEGRATION_REQUIRED} — message + actions (oauthUrl 포함)</li>
  *   <li>{@code CLARIFICATION_NEEDED} — message만</li>
  * </ul>
  */
@@ -43,9 +42,6 @@ public class ChatResponse {
     /** 생성/수정된 엣지 목록 (WORKFLOW_GENERATED/MODIFIED 전용) */
     private final List<Object> edges;
 
-    /** 프론트엔드 실행 액션 목록 (INTEGRATION_REQUIRED 전용, oauthUrl 포함) */
-    private final List<AgentAction> actions;
-
     /** 사용자 선택지 목록 (CLARIFICATION_NEEDED의 GitHub repo/웹훅 선택, 빌더 모델 카드 — type 무관) */
     private final List<AgentOption> options;
 
@@ -59,7 +55,7 @@ public class ChatResponse {
      *
      * @param message       저장된 AGENT 메시지 엔티티
      * @param sessionId     세션 ID (LAZY 로딩 회피)
-     * @param agentResponse 원본 agent 응답 (nodes/edges/actions 포함)
+     * @param agentResponse 원본 agent 응답 (nodes/edges 포함)
      * @param savedNodes    저장한 파생 노드(null이면 agent 응답 노드)
      */
     public static ChatResponse from(ChatMessage message, UUID sessionId, ChatAgentResponse agentResponse,
@@ -73,7 +69,6 @@ public class ChatResponse {
             .workflowName(agentResponse.getWorkflowName())
             .nodes(savedNodes != null ? savedNodes : agentResponse.getNodes())
             .edges(agentResponse.getEdges())
-            .actions(agentResponse.getActions())
             .options(agentResponse.getOptions())
             .tokens(new TokenUsage(
                 message.getInputTokens() != null ? message.getInputTokens() : 0,
