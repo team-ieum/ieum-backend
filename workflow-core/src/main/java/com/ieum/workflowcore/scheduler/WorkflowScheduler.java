@@ -1,5 +1,6 @@
 package com.ieum.workflowcore.scheduler;
 
+import java.util.TimeZone;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -46,6 +47,7 @@ public class WorkflowScheduler {
             CronTrigger trigger = TriggerBuilder.newTrigger()
                 .withIdentity(triggerKey)
                 .withSchedule(CronScheduleBuilder.cronSchedule(cronExpression)
+                    .inTimeZone(TimeZone.getTimeZone(ScheduleCron.ZONE))
                     .withMisfireHandlingInstructionDoNothing())
                 .build();
 

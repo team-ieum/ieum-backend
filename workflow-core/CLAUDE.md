@@ -152,7 +152,7 @@ enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROV
 ## 트리거 추가 절차 (IEUM-BE-93)
 새 트리거 종류는 아래만 손댄다. 실행기(`TriggerNodeExecutor`)·구독(`AppTriggerSubscriptionService`)·활성화(`WorkflowCrudService.activateWorkflow`)·노드 테스트(api `NodeTestService`)에는 종류별 분기가 없고 `TriggerHandlerRegistry.get(type)`에 위임한다. SCHEDULE(Quartz)·WEBHOOK(토큰 주소)·Gmail 폴링·GitHub 수신은 각 종류의 고유 수신 경로라 새 트리거가 고치지 않는다.
 
-1. **카탈로그 이벤트** — ieum-node-catalog에 `events/<앱>/<이벤트>.json`(`node_type: TRIGGER`, `trigger_type: <새 값>`)을 머지한다. BE는 **서브모듈 갱신과 enum 상수 추가를 같은 커밋**으로 한다. 카탈로그만 먼저 올리면 `EventCatalog` 로더가 모르는 trigger_type으로 기동을 막고, enum만 먼저 올리면 `EventCatalogTest.everyTriggerType_hasExactlyOneEvent`가 깨진다. agent 서브모듈도 같은 카탈로그 커밋이어야 한다. 다르면 기동 뒤 `AgentCatalogDiffReporter`가 `[CatalogDiff]` warn을 남긴다.
+1. **카탈로그 이벤트** — ieum-node-catalog에 `events/<앱>/<이벤트>.json`(`node_type: TRIGGER`, `trigger_type: <새 값>`)을 머지한다. BE는 **서브모듈 갱신과 enum 상수 추가를 같은 커밋**으로 한다. 카탈로그만 먼저 올리면 `EventCatalog` 로더가 모르는 trigger_type으로 기동을 막고, enum만 먼저 올리면 `EventCatalogTest.everyTriggerType_hasExactlyOneEvent`가 깨진다(SCHEDULE은 예외 — every·hourly·daily·weekly·monthly 여러 이벤트가 공유한다). agent 서브모듈도 같은 카탈로그 커밋이어야 한다. 다르면 기동 뒤 `AgentCatalogDiffReporter`가 `[CatalogDiff]` warn을 남긴다.
    - agent는 **서브모듈 갱신과 `ieum-agent/api/schemas/generate_workflow.py`의 `TRIGGER_TYPES` 추가를 같은 커밋**으로 한다 — 빠지면 agent 로더(`core/template_registry.py` `validate_registry`)가 모르는 trigger_type으로 기동을 막는다.
    - 카탈로그에 **새 auth 값이나 새 ACTION tool_key 접두사**를 올릴 땐 BE `ToolAuthRule`·실행기 변경을 먼저 머지·배포한다 — 순서가 뒤집히면 api `CatalogStartupCheck`가 dev 부팅을 막는다.
 2. **`TriggerType` 상수** — 이름은 **20자 이하**다. `workflows.trigger_type`이 `VARCHAR(20)`(`Workflow.java` `@Column(length = 20)`)이다. `app_trigger_subscriptions`는 30자, `workflow_runs`는 255자다.
@@ -178,7 +178,7 @@ enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROV
    적용 전에 `\d workflows`·`\d workflow_runs`·`\d app_trigger_subscriptions`로 실제 제약 이름을 확인한다. 특히 `app_trigger_subscriptions`는 docs/schema에 DDL 선례가 없다. Hibernate가 만든 이름 없는 CHECK에 PG가 붙이는 기본 이름(`<테이블>_<컬럼>_check`)으로 추정한 이름이므로, 다르면 DROP 이름만 바꾼다.
 
 ## 스케줄러 (scheduler/, config/)
-Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `ScheduleJobRestorer`(부팅 시 복원), `WorkflowCleanupScheduler`, `JobKeyGenerator`.
+Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `ScheduleJobRestorer`(부팅 시 복원), `WorkflowCleanupScheduler`, `JobKeyGenerator`. Cron Trigger는 JVM 기본 타임존과 무관하게 `ScheduleCron.ZONE`(Asia/Seoul)으로 등록하고, 스케줄 트리거 출력 `triggeredAt`도 같은 존 시각이다.
 `WorkflowScheduleJob`은 `ExecutionJobEnqueuer`로 api의 잡 큐에 넣고 바로 반환한다(IEUM-BE-51) — 수동·웹훅·재처리와 같은 재시작 복구를 받는다. 투입이 실패하면(Redis 장애·Stub) 유실되지 않게 `SyncExecutionRuntime`을 직접 부르고, 이 경우만 내구성이 없다.
 **겹침 방지는 `@DisallowConcurrentExecution`만으로 성립하지 않는다** — 잡이 실행 끝까지 블록하지 않으니 다음 발화가 그대로 들어온다. 그래서 같은 워크플로우에 끝나지 않은(PENDING/RUNNING) SCHEDULE 실행이 있으면 `prepareExecution` 전에 스킵한다(`WorkflowExecutionService.hasUnfinishedScheduleRun`). 판정은 `startedAt > now - workflow.execution.stuck.threshold`로 하한을 둔다 — sweeper는 `RUNNING`만 정리하므로 준비만 되고 버려진 고아 `PENDING`이 하한 없이 잡히면 그 스케줄이 **영구히 멈춘다.** `@DisallowConcurrentExecution`은 여전히 필요하다(JobKey가 워크플로우당 1개라 판정↔레코드 생성 사이에 다른 발화가 끼지 않게 직렬화). 재처리 API가 만든 실행도 원본의 `triggerType`(SCHEDULE)을 물려받으므로 겹침 판정에 걸린다.
 

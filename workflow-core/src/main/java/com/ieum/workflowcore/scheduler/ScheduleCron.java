@@ -3,6 +3,7 @@ package com.ieum.workflowcore.scheduler;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.catalog.NodeDerivation;
+import java.time.ZoneId;
 import java.util.Map;
 
 /**
@@ -12,6 +13,9 @@ import java.util.Map;
  * {@code schedule.every} 등 그 밖의 event는 {@code config.cron} 원문을 돌려주고 변환·검증은 기존 경로에 맡긴다.
  */
 public final class ScheduleCron {
+
+    /** 스케줄 시각의 기준 타임존 — 서버(JVM) 기본값과 무관하게 KST. */
+    public static final ZoneId ZONE = ZoneId.of("Asia/Seoul");
 
     private static final String HOUR = "1?\\d|2[0-3]";
     private static final String WEEKDAY = "MON|TUE|WED|THU|FRI|SAT|SUN";

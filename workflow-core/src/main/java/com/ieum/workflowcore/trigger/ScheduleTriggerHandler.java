@@ -26,7 +26,7 @@ public class ScheduleTriggerHandler implements TriggerHandler {
             throw new IllegalStateException("SCHEDULE 트리거에 cron 필드가 없습니다. nodeId: " + node.getId());
         }
         Map<String, Object> output = new HashMap<>();
-        output.put("triggeredAt", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+        output.put("triggeredAt", LocalDateTime.now(ScheduleCron.ZONE).format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
         if ("schedule.every".equals(node.getEvent())) {
             output.put("cron", cron);   // 칸으로 만든 노드는 cron을 사용자가 쓴 적이 없어 내지 않는다
         }
