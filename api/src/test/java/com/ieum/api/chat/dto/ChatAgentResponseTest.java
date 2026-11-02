@@ -7,7 +7,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * ieum-agent {@code /v1/chat} 응답의 usage 역직렬화 계약 테스트.
+ * ieum-agent {@code /v1/chat/stream} done 응답의 usage 역직렬화 계약 테스트.
  *
  * <p>agent(IEUM-AI-48)가 designer·reviewer의 모든 LLM 호출을 합산한 usage를 보내기 시작했다.
  * 이 매핑이 깨지면 베타 chat 토큰 차감이 조용히 비활성화되므로 실제 JSON으로 검증한다.

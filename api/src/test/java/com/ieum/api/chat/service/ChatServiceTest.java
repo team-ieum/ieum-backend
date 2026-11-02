@@ -332,6 +332,19 @@ class ChatServiceTest {
         verify(betaPlatformProvider, never()).recordTokens(any(), anyLong());
     }
 
+    @Test
+    @DisplayName("BYOK 호출이면 응답에 토큰이 있어도 recordTokens를 호출하지 않는다 — 베타 쿼터는 플랫폼 키 호출만 깎는다")
+    void finalizeStream_byok_doesNotRecordTokens() throws Exception {
+        ChatAgentResponse resp = objectMapper.readValue("""
+            { "message": "응답", "type": "CLARIFICATION_NEEDED",
+              "usage": {"promptTokens": 100, "completionTokens": 50, "totalTokens": 150} }""", ChatAgentResponse.class);
+        givenFinalizeStreamSession();
+
+        chatService.finalizeStream(workflowId, sessionId, resp, BYOK, userId);
+
+        verify(betaPlatformProvider, never()).recordTokens(any(), anyLong());
+    }
+
     private static final ChatService.AgentConfig BYOK = new ChatService.AgentConfig("CLAUDE", "key", false);
     private static final ChatService.AgentConfig BETA = new ChatService.AgentConfig("GEMINI", null, true);
 

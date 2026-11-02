@@ -14,6 +14,8 @@ import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import java.io.IOException;
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeoutException;
 import java.util.UUID;
 import okhttp3.mockwebserver.MockResponse;
@@ -100,11 +102,17 @@ class AgentClientTest {
         mockWebServer.enqueue(new MockResponse().setResponseCode(200)
             .setHeader("Content-Type", "text/event-stream").setBody("event: done\ndata: " + CHAT_RESPONSE_BODY + "\n\n"));
 
-        agentClient.chatStream(baseParams().build()).blockLast();
+        agentClient.chatStream(baseParams()
+            .currentNodes(List.<Object>of(Map.of("id", "n1", "event", "http.request")))
+            .currentEdges(List.<Object>of(Map.of("id", "e1", "source", "n1", "target", "n2")))
+            .build()).blockLast();
 
         JsonNode body = new ObjectMapper().readTree(mockWebServer.takeRequest().getBody().readUtf8());
         assertThat(body.fieldNames()).toIterable()
             .containsExactlyInAnyOrder("workflowId", "prompt", "currentNodes", "currentEdges");
+        assertThat(body.path("prompt").asText()).isEqualTo("요약해줘");
+        assertThat(body.path("currentNodes").get(0).path("event").asText()).isEqualTo("http.request");
+        assertThat(body.path("currentEdges").get(0).path("id").asText()).isEqualTo("e1");
     }
 
     @Test

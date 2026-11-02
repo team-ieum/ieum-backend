@@ -1,7 +1,7 @@
 package com.ieum.api.chat.dto;
 
 /**
- * ieum-agent /v1/chat 응답 타입.
+ * ieum-agent /v1/chat/stream 응답 타입.
  *
  * <ul>
  *   <li>{@link #WORKFLOW_GENERATED} — 신규 워크플로우 생성 완료. nodes/edges 포함.</li>

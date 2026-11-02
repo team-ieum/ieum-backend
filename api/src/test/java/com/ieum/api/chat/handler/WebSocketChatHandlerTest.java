@@ -279,6 +279,11 @@ class WebSocketChatHandlerTest {
         ArgumentCaptor<AgentChatCallParams> params = ArgumentCaptor.forClass(AgentChatCallParams.class);
         verify(agentClient).chatStream(params.capture());
         assertThat(params.getValue().delegationToken()).isEqualTo("deleg-raw");
+        assertThat(params.getValue().userId()).isEqualTo(userId);
+        assertThat(params.getValue().userRole()).isEqualTo("ROLE_USER");
+        assertThat(params.getValue().llmProvider()).isEqualTo("CLAUDE");
+        assertThat(params.getValue().apiKey()).isEqualTo("key");
+        assertThat(params.getValue().useBetaPlatformKey()).isFalse();
         InOrder order = inOrder(chatService, delegationTokenService, chatTurnLock);
         order.verify(chatService).finalizeStream(any(), any(), any(), any(), any());
         order.verify(delegationTokenService).revoke("deleg-raw");
@@ -322,7 +327,25 @@ class WebSocketChatHandlerTest {
 
         captureSent(1);
         verify(chatTurnLock).release(userId);
+        // 준비가 실패하면 쿼터를 예약하지 않는다 — 환불할 INCR 자체가 없어야 한다
+        verify(chatService, never()).reserveBetaQuota(any(), any());
         verifyNoInteractions(delegationTokenService, agentClient);
+    }
+
+    @Test
+    @DisplayName("베타 platform 키 설정이면 chatStream에 useBetaPlatformKey=true로 넘긴다")
+    void betaConfig_passesBetaFlagToAgent() {
+        setup = new StreamSetupResult(sessionId, new AgentConfig("CLAUDE", null, true), "안녕", null, null);
+        mockPrepareStream();
+        given(delegationTokenService.issue(userId, "ROLE_USER", workflowId)).willReturn("deleg-raw");
+        given(agentClient.chatStream(any())).willReturn(Flux.never());
+
+        handler.handleChat(workflowId, request, principal, WS_SESSION);
+
+        ArgumentCaptor<AgentChatCallParams> params = ArgumentCaptor.forClass(AgentChatCallParams.class);
+        verify(agentClient).chatStream(params.capture());
+        assertThat(params.getValue().useBetaPlatformKey()).isTrue();
+        assertThat(params.getValue().apiKey()).isNull();
     }
 
     @Test

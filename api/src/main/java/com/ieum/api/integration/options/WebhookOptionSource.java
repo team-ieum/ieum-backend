@@ -14,8 +14,7 @@ import lombok.RequiredArgsConstructor;
  * 아니면 그 서비스만(Slack·Discord 액션). 키를 서비스별로 나눈 이유: 카탈로그 {@code optionsInputs}는
  * 같은 노드의 필드만 가리켜 "서비스" 같은 고정 조건을 넘길 수 없다. 빈은 {@link WebhookOptionSourceConfig}가 만든다.
  *
- * <p>기준은 채팅 가용 목록({@code ChatService.resolveAvailableWebhooks})과 같다 — 요청자 것 중 활성만.
- * 실행({@code DefaultWebhookCredentialProvider})이 비활성을 건너뛰므로 보여 주면 조용히 실패한다. URL은 싣지 않는다.
+ * <p>기준은 요청자 것 중 활성만이다 — 실행({@code DefaultWebhookCredentialProvider})이 비활성을 건너뛰므로 보여 주면 조용히 실패한다. URL은 싣지 않는다.
  */
 @RequiredArgsConstructor
 public class WebhookOptionSource implements OptionSource {

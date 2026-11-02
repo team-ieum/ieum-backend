@@ -6,7 +6,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 /**
- * ieum-agent POST /v1/chat 응답 body.
+ * ieum-agent POST /v1/chat/stream의 done 프레임 body.
  *
  * <pre>
  * {
