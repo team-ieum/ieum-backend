@@ -676,7 +676,16 @@ class GoogleOptionSourcesTest {
     }
 
     @Test
-    @DisplayName("gmail scope가 없으면 보낸 사람은 토큰·Google 호출 없이 GOOGLE_SCOPE_REQUIRED")
+    @DisplayName("gmail.readonly만 있어도 라벨 목록이 조회된다 — 트리거와 같은 허용 scope")
+    void gmailLabelsAcceptsReadonlyScope() {
+        connected("openid https://www.googleapis.com/auth/gmail.readonly");
+        server.expect(requestTo(LABELS_URL)).andRespond(withSuccess("{\"labels\":[]}", MediaType.APPLICATION_JSON));
+
+        assertThat(gmailLabels.fetch(userId, Map.of(), null).items()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("gmail scope가 없으면 보낸 사람·라벨 모두 토큰·Google 호출 없이 GOOGLE_SCOPE_REQUIRED")
     void gmailSourcesRequireGmailScope() {
         connected("openid " + SHEETS + " " + DRIVE + " " + CALENDAR);
 
