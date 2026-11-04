@@ -36,6 +36,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import com.ieum.api.usage.domain.AiTokenUsage.UsageSource;
+import com.ieum.api.usage.service.AiTokenUsageRecorder;
 import org.mockito.Answers;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
@@ -72,6 +74,7 @@ class ChatServiceTest {
     @Mock private CredentialProvider credentialProvider;
     @Mock private CredentialService credentialService;
     @Mock(answer = Answers.CALLS_REAL_METHODS) private BetaPlatformProvider betaPlatformProvider;
+    @Mock private AiTokenUsageRecorder aiTokenUsageRecorder;
 
     @InjectMocks
     private ChatService chatService;
@@ -1128,5 +1131,61 @@ class ChatServiceTest {
             }
             """.formatted(type, nameField);
         return objectMapper.readValue(json, ChatAgentResponse.class);
+    }
+
+    // ─────────────────── AI 토큰 사용량 기록 (IEUM-BE-98) ──────────────────
+
+    private ChatAgentResponse responseWithUsage() throws Exception {
+        return objectMapper.readValue("""
+            {"message": "응답", "type": "CLARIFICATION_NEEDED",
+             "usage": {"promptTokens": 100, "completionTokens": 40, "totalTokens": 140}}
+            """, ChatAgentResponse.class);
+    }
+
+    @Test
+    @DisplayName("사용량 — finalizeStream 1회 = 기록 1건(CHAT, workflowId, 요청 모델 없음 → 기본 모델은 기록기가 채움)")
+    void usage_streamRecordsOnce() throws Exception {
+        givenFinalizeStreamSession();
+
+        chatService.finalizeStream(workflowId, sessionId, responseWithUsage(), BYOK, userId);
+
+        ArgumentCaptor<AiTokenUsageRecorder.UsageCall> captor =
+            ArgumentCaptor.forClass(AiTokenUsageRecorder.UsageCall.class);
+        verify(aiTokenUsageRecorder).record(captor.capture());
+        AiTokenUsageRecorder.UsageCall call = captor.getValue();
+        assertThat(call.source()).isEqualTo(UsageSource.CHAT);
+        assertThat(call.userId()).isEqualTo(userId);
+        assertThat(call.workflowId()).isEqualTo(workflowId);
+        assertThat(call.provider()).isEqualTo("CLAUDE");
+        assertThat(call.requestedModel()).isNull();
+        assertThat(call.platformKey()).isFalse();
+        assertThat(call.inputTokens()).isEqualTo(100);
+        assertThat(call.outputTokens()).isEqualTo(40);
+        assertThat(call.totalTokens()).isEqualTo(140);
+    }
+
+    @Test
+    @DisplayName("사용량 — 베타 platform 키 채팅은 platformKey=true로 기록한다")
+    void usage_streamRecordsWithPlatformFlag() throws Exception {
+        givenFinalizeStreamSession();
+
+        chatService.finalizeStream(workflowId, sessionId, responseWithUsage(), BETA, userId);
+
+        ArgumentCaptor<AiTokenUsageRecorder.UsageCall> captor =
+            ArgumentCaptor.forClass(AiTokenUsageRecorder.UsageCall.class);
+        verify(aiTokenUsageRecorder).record(captor.capture());
+        assertThat(captor.getValue().platformKey()).isTrue();
+        assertThat(captor.getValue().totalTokens()).isEqualTo(140);
+    }
+
+    @Test
+    @DisplayName("사용량 — 키 없는 self-hosted 채팅은 기록하지 않는다")
+    void usage_selfHostedNotRecorded() throws Exception {
+        givenFinalizeStreamSession();
+
+        chatService.finalizeStream(workflowId, sessionId, responseWithUsage(),
+            new ChatService.AgentConfig("CLAUDE", null, false), userId);
+
+        verify(aiTokenUsageRecorder, never()).record(any());
     }
 }
