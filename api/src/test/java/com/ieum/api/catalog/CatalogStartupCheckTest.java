@@ -148,7 +148,7 @@ class CatalogStartupCheckTest {
     }
 
     @Test
-    @DisplayName("builder=false ACTION은 인증 대조에서 빠진다 — gmail.send_email(tool_key gmail) 같은 경우")
+    @DisplayName("builder=false ACTION은 인증 대조에서 빠진다")
     void fixture_nonBuilderActionSkipped(@TempDir Path dir) throws IOException {
         EventCatalog catalog = load(dir, gmailApp(), "[]",
                 Map.of("gmail/send.json", action("gmail", ",\"builder\":false")));
