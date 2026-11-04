@@ -63,6 +63,8 @@ class GoogleOptionSourcesTest {
     private static final String CALENDAR = "https://www.googleapis.com/auth/calendar";
     private static final String CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
     private static final String EVENTS_PREFIX = "https://www.googleapis.com/calendar/v3/calendars/";
+    private static final String GMAIL = "https://www.googleapis.com/auth/gmail.modify";
+    private static final String SEND_AS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs";
 
     private final RestTemplate restTemplate = new RestTemplate();
     private final MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
@@ -77,6 +79,7 @@ class GoogleOptionSourcesTest {
     private final GoogleEventsOptionSource events = new GoogleEventsOptionSource(reader);
     private final GoogleFilesOptionSource files = new GoogleFilesOptionSource(reader);
     private final GoogleFoldersOptionSource folders = new GoogleFoldersOptionSource(reader);
+    private final GmailSendAsOptionSource gmailSendAs = new GmailSendAsOptionSource(reader);
     private final UUID userId = UUID.randomUUID();
 
     @AfterEach
@@ -594,5 +597,87 @@ class GoogleOptionSourcesTest {
                 events.key(), files.key(), folders.key()))
             .containsExactly("google.spreadsheets", "google.worksheets", "google.calendars",
                 "google.writable_calendars", "google.events", "google.files", "google.folders");
+    }
+
+    @Test
+    @DisplayName("보낸 사람 — accepted·기본 주소만, pending 제외, 이름은 'displayName <주소>', isDefault가 맨 앞, nextCursor null")
+    void gmailSendAsListsVerifiedAliasesDefaultFirst() {
+        connected("openid " + GMAIL);
+        server.expect(requestTo(SEND_AS_URL))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Authorization", "Bearer g-token"))
+            .andRespond(withSuccess("""
+                {"sendAs":[
+                  {"sendAsEmail":"me@gmail.com","displayName":"윤도훈","isPrimary":true,"isDefault":false},
+                  {"sendAsEmail":"wait@ex.com","displayName":"대기","verificationStatus":"pending"},
+                  {"sendAsEmail":"work@ex.com","displayName":"회사","verificationStatus":"accepted","isDefault":true}]}
+                """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailSendAs.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(
+            new OptionItem("work@ex.com", "회사 <work@ex.com>"),
+            new OptionItem("me@gmail.com", "윤도훈 <me@gmail.com>"));
+        assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("보낸 사람 — displayName이 없거나 빈 문자열이면 주소만")
+    void gmailSendAsBlankDisplayNameIsAddressOnly() {
+        connected(GMAIL);
+        server.expect(requestTo(SEND_AS_URL)).andRespond(withSuccess("""
+            {"sendAs":[{"sendAsEmail":"a@ex.com","isPrimary":true},
+              {"sendAsEmail":"b@ex.com","displayName":"","verificationStatus":"verificationStatusUnspecified"}]}
+            """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailSendAs.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(
+            new OptionItem("a@ex.com", "a@ex.com"), new OptionItem("b@ex.com", "b@ex.com"));
+    }
+
+    @Test
+    @DisplayName("보낸 사람 — isDefault가 하나도 없으면 API 순서 그대로")
+    void gmailSendAsWithoutDefaultKeepsApiOrder() {
+        connected(GMAIL);
+        server.expect(requestTo(SEND_AS_URL)).andRespond(withSuccess("""
+            {"sendAs":[{"sendAsEmail":"c@ex.com","verificationStatus":"accepted"},
+              {"sendAsEmail":"a@ex.com","isPrimary":true},
+              {"sendAsEmail":"b@ex.com","verificationStatus":"accepted"}]}
+            """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailSendAs.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).extracting(OptionItem::id).containsExactly("c@ex.com", "a@ex.com", "b@ex.com");
+    }
+
+    @Test
+    @DisplayName("보낸 사람 — cursor가 와도 pageToken 없이 같은 URL, 빈 본문이면 items=[]·nextCursor null")
+    void gmailSendAsIgnoresCursorAndEmptyBody() {
+        connected(GMAIL);
+        server.expect(requestTo(SEND_AS_URL)).andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailSendAs.fetch(userId, Map.of(), "x&pageToken=y");
+
+        assertThat(page.items()).isEmpty();
+        assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("gmail.readonly만 있어도 보낸 사람 목록이 조회된다 — 트리거와 같은 허용 scope")
+    void gmailSendAsAcceptsReadonlyScope() {
+        connected("openid https://www.googleapis.com/auth/gmail.readonly");
+        server.expect(requestTo(SEND_AS_URL)).andRespond(withSuccess("{\"sendAs\":[]}", MediaType.APPLICATION_JSON));
+
+        assertThat(gmailSendAs.fetch(userId, Map.of(), null).items()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("gmail scope가 없으면 보낸 사람은 토큰·Google 호출 없이 GOOGLE_SCOPE_REQUIRED")
+    void gmailSourcesRequireGmailScope() {
+        connected("openid " + SHEETS + " " + DRIVE + " " + CALENDAR);
+
+        assertErrorCode(() -> gmailSendAs.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
+        verify(tokenService, never()).getValidAccessToken(any());
     }
 }

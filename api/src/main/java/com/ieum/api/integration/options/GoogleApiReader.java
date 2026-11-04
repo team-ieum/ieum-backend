@@ -43,6 +43,9 @@ public class GoogleApiReader {
     static final String DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
     static final String SPREADSHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
     static final String CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar";
+    /** 기존 scope 그룹 {@code gmail}(application.yml {@code google.oauth.scopes.gmail}). readonly도 읽기엔 충분하다 */
+    public static final String GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
+    public static final String GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
     private static final String DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files";
 
     private final GoogleTokenService googleTokenService;
