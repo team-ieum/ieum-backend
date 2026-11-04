@@ -34,6 +34,13 @@ public class ExecutionContext {
     @Setter
     private String traceId;
 
+    /**
+     * 워크플로우 실행 ID. AI 노드가 사용량 기록({@code ai_token_usage.execution_id})에 싣는다.
+     * 실행 동안 바뀌지 않는 값이라 워커 스레드가 공유해도 된다. 노드 단일 테스트 컨텍스트에선 null.
+     */
+    @Setter
+    private UUID executionId;
+
     /** key: nodeId, value: 해당 노드의 output Map */
     private final Map<String, Map<String, Object>> nodeOutputs = new ConcurrentHashMap<>();
 

@@ -12,6 +12,7 @@ import com.ieum.api.usage.domain.AiTokenUsage.KeySource;
 import com.ieum.api.usage.domain.AiTokenUsage.UsageSource;
 import com.ieum.api.usage.repository.AiTokenUsageRepository;
 import com.ieum.api.usage.service.AiTokenUsageRecorder.UsageCall;
+import com.ieum.workflowcore.engine.executor.AiUsageRecorder;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
@@ -33,6 +34,7 @@ class AiTokenUsageRecorderTest {
     @Autowired private AiTokenUsageRepository repository;
     @Autowired private ProviderRegistry providerRegistry;
     @Autowired private TransactionTemplate transactionTemplate;
+    @Autowired private AiUsageRecorder workflowRecorder;
 
     private final UUID userId = UUID.randomUUID();
 
@@ -133,6 +135,20 @@ class AiTokenUsageRecorderTest {
         });
 
         assertThat(repository.count()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("워크플로우 포트 어댑터 — WORKFLOW로 기록하고, 없는 실행 ID면 workflowId는 null로 둔 채 행을 남긴다")
+    void workflowPortAdapter() {
+        UUID executionId = UUID.randomUUID();
+        workflowRecorder.record(new AiUsageRecorder.AiUsageCall(
+            userId, "CLAUDE", null, null, false, executionId, 1, 2, 3));
+
+        AiTokenUsage row = single();
+        assertThat(row.getSource()).isEqualTo(UsageSource.WORKFLOW);
+        assertThat(row.getExecutionId()).isEqualTo(executionId);
+        assertThat(row.getWorkflowId()).isNull();
+        assertThat(row.getOutputTokens()).isEqualTo(2);
     }
 
     @Test
