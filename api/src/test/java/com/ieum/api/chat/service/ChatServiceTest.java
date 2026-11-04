@@ -40,6 +40,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import com.ieum.api.usage.domain.AiTokenUsage.UsageSource;
+import com.ieum.api.usage.service.AiTokenUsageRecorder;
 import org.mockito.Answers;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
@@ -82,6 +84,7 @@ class ChatServiceTest {
     @Mock private McpServerCatalogRepository mcpServerCatalogRepository;
     @Mock private WebhookCredentialRepository webhookCredentialRepository;
     @Mock(answer = Answers.CALLS_REAL_METHODS) private BetaPlatformProvider betaPlatformProvider;
+    @Mock private AiTokenUsageRecorder aiTokenUsageRecorder;
 
     @InjectMocks
     private ChatService chatService;
@@ -1486,5 +1489,81 @@ class ChatServiceTest {
             throw new RuntimeException("Test data setup failed: " + e.getMessage(), e);
         }
         return version;
+    }
+
+    // ─────────────────── AI 토큰 사용량 기록 (IEUM-BE-98) ──────────────────
+
+    private ChatAgentResponse responseWithUsage() throws Exception {
+        return objectMapper.readValue("""
+            {"message": "응답", "type": "CLARIFICATION_NEEDED",
+             "usage": {"promptTokens": 100, "completionTokens": 40, "totalTokens": 140}}
+            """, ChatAgentResponse.class);
+    }
+
+    private void stubFinalizeSave() {
+        ChatSession session = buildSession(workflowId, userId);
+        given(sessionRepository.findById(sessionId)).willReturn(Optional.of(session));
+        given(messageRepository.save(any(ChatMessage.class)))
+            .willReturn(buildMessage(session, MessageType.AGENT, "응답"));
+    }
+
+    @Test
+    @DisplayName("사용량 — REST chat() 1회 = 기록 1건(CHAT, workflowId, 요청 모델 없음 → 기본 모델은 기록기가 채움)")
+    void usage_restChatRecordsOnce() throws Exception {
+        UUID fallbackCredentialId = UUID.randomUUID();
+        ChatSession session = buildSession(workflowId, userId);
+        WorkflowVersion version = Mockito.mock(WorkflowVersion.class);
+        Credential credential = Mockito.mock(Credential.class);
+        given(credential.getProvider()).willReturn(AiProvider.OPENAI);
+        given(sessionRepository.save(any())).willReturn(session);
+        given(workflowCrudService.findLatestVersion(workflowId)).willReturn(Optional.of(version));
+        given(workflowCrudService.loadDefinition(version)).willReturn(buildDoc(List.of()));
+        given(credentialService.getByIdAndUserId(fallbackCredentialId, userId)).willReturn(credential);
+        given(credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString(), userId)).willReturn("k");
+        given(integrationContextService.resolve(userId)).willReturn(new IntegrationContext(List.of(), List.of()));
+        given(agentClient.chat(any(AgentChatCallParams.class))).willReturn(responseWithUsage());
+        given(messageRepository.save(any())).willReturn(buildMessage(session, MessageType.AGENT, "응답"));
+
+        chatService.chat(workflowId, userId, "ROLE_USER", buildRequest("안녕", fallbackCredentialId));
+
+        ArgumentCaptor<AiTokenUsageRecorder.UsageCall> captor =
+            ArgumentCaptor.forClass(AiTokenUsageRecorder.UsageCall.class);
+        verify(aiTokenUsageRecorder).record(captor.capture());
+        AiTokenUsageRecorder.UsageCall call = captor.getValue();
+        assertThat(call.source()).isEqualTo(UsageSource.CHAT);
+        assertThat(call.userId()).isEqualTo(userId);
+        assertThat(call.workflowId()).isEqualTo(workflowId);
+        assertThat(call.provider()).isEqualTo("OPENAI");
+        assertThat(call.requestedModel()).isNull();
+        assertThat(call.platformKey()).isFalse();
+        assertThat(call.inputTokens()).isEqualTo(100);
+        assertThat(call.outputTokens()).isEqualTo(40);
+        assertThat(call.totalTokens()).isEqualTo(140);
+    }
+
+    @Test
+    @DisplayName("사용량 — WebSocket finalizeStream도 기록하고, 베타 platform이면 platformKey=true")
+    void usage_streamRecordsWithPlatformFlag() throws Exception {
+        stubFinalizeSave();
+
+        chatService.finalizeStream(workflowId, sessionId, responseWithUsage(),
+            new ChatService.AgentConfig("CLAUDE", null, null, true), null, userId);
+
+        ArgumentCaptor<AiTokenUsageRecorder.UsageCall> captor =
+            ArgumentCaptor.forClass(AiTokenUsageRecorder.UsageCall.class);
+        verify(aiTokenUsageRecorder).record(captor.capture());
+        assertThat(captor.getValue().platformKey()).isTrue();
+        assertThat(captor.getValue().totalTokens()).isEqualTo(140);
+    }
+
+    @Test
+    @DisplayName("사용량 — 키 없는 self-hosted 채팅은 기록하지 않는다")
+    void usage_selfHostedNotRecorded() throws Exception {
+        stubFinalizeSave();
+
+        chatService.finalizeStream(workflowId, sessionId, responseWithUsage(),
+            new ChatService.AgentConfig("CLAUDE", null, null, false), null, userId);
+
+        verify(aiTokenUsageRecorder, never()).record(any());
     }
 }

@@ -34,6 +34,8 @@ import com.ieum.workflowcore.chat.repository.ChatSessionRepository;
 import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.Node;
+import com.ieum.api.usage.domain.AiTokenUsage.UsageSource;
+import com.ieum.api.usage.service.AiTokenUsageRecorder;
 import com.ieum.workflowcore.engine.executor.BetaPlatformProvider;
 import com.ieum.workflowcore.engine.executor.CredentialProvider;
 import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
@@ -98,6 +100,7 @@ public class ChatService {
     private final McpServerCatalogRepository mcpServerCatalogRepository;
     private final WebhookCredentialRepository webhookCredentialRepository;
     private final BetaPlatformProvider betaPlatformProvider;
+    private final AiTokenUsageRecorder aiTokenUsageRecorder;
     private final NodeDerivation nodeDerivation;
     private final EventCatalog eventCatalog;
 
@@ -178,6 +181,7 @@ public class ChatService {
             throw e;
         }
         recordBetaTokensIfPresent(agentConfig, userId, agentResponse);
+        recordUsage(workflowId, userId, agentConfig, agentResponse);
 
         // 8. WORKFLOW_GENERATED/MODIFIED → DB에 새 버전으로 저장
         //    첫 생성 여부를 저장 전에 확인 (저장 후에는 version이 증가하므로)
@@ -371,6 +375,29 @@ public class ChatService {
         Credential credential = credentialService.getByIdAndUserId(fallbackCredentialId, userId);
         String decryptedApiKey = credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString(), userId);
         return new AgentConfig(credential.getProvider().name(), decryptedApiKey, null, false);
+    }
+
+    /**
+     * agent 응답 1건 = 사용량 1행(IEUM-BE-98). REST·WebSocket 두 경로가 모두 여기를 지난다.
+     * 채팅은 모델을 보내지 않아 agent가 provider 기본 모델을 쓴다 — 요청 모델 null로 넘기면 기록기가
+     * 카탈로그 기본 모델로 채운다. 키 없는 self-hosted 호출(ADMIN·TESTER)은 기록하지 않는다.
+     * 기록기는 별도 트랜잭션에서 저장하고 실패를 삼키므로 채팅 응답·저장에 영향이 없다.
+     */
+    private void recordUsage(UUID workflowId, UUID userId, AgentConfig config, ChatAgentResponse agentResponse) {
+        if (!config.useBetaPlatformKey() && config.decryptedApiKey() == null) {
+            return;
+        }
+        aiTokenUsageRecorder.record(AiTokenUsageRecorder.UsageCall.builder()
+            .userId(userId)
+            .provider(config.llmProvider())
+            .reportedModel(agentResponse.getModel())
+            .platformKey(config.useBetaPlatformKey())
+            .source(UsageSource.CHAT)
+            .workflowId(workflowId)
+            .inputTokens(agentResponse.getInputTokens())
+            .outputTokens(agentResponse.getOutputTokens())
+            .totalTokens(agentResponse.getTotalTokens())
+            .build());
     }
 
     /** 베타 플랫폼 키(Gemini) 폴백 자격 — self-hosted 자격이 없을 때만 폴백 순위로 확인한다. */
@@ -827,6 +854,7 @@ public class ChatService {
     public ChatResponse finalizeStream(UUID workflowId, UUID sessionId,
             ChatAgentResponse agentResponse, AgentConfig config, UUID fallbackCredentialId, UUID userId) {
         recordBetaTokensIfPresent(config, userId, agentResponse);
+        recordUsage(workflowId, userId, config, agentResponse);
 
         List<Object> savedNodes = null;   // 저장했으면 파생 노드, 아니면 agent 응답 그대로
         if (agentResponse.isWorkflowResult()) {

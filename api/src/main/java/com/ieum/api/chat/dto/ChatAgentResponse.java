@@ -76,6 +76,12 @@ public class ChatAgentResponse {
      */
     private Usage usage;
 
+    /**
+     * agent가 실제로 호출한 모델. 현재 agent는 싣지 않아 null이고, 그 경우 사용량 기록은
+     * provider 기본 모델로 대신한다. 싣기 시작하면 이 값이 우선한다(IEUM-BE-98).
+     */
+    private String model;
+
     /** agent 응답의 usage 필드. {@code /v1/execute}의 동명 구조와 같은 형태다. */
     @Getter
     @NoArgsConstructor
