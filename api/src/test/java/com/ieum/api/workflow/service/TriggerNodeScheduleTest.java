@@ -63,9 +63,9 @@ class TriggerNodeScheduleTest {
     @Test
     @DisplayName("트리거 종류는 카탈로그 trigger_type이다 — 카탈로그의 실행 가능한 모든 트리거 이벤트")
     void compute_triggerTypeComesFromCatalog() {
-        // 실행 가능한 트리거만 돈다 — 실행 불가 이벤트는 파생(NodeDerivation)이 먼저 거부한다. TRIGGER는 builder·generation 중 하나
+        // 실행 가능한 트리거만 돈다 — 실행 불가 이벤트는 파생(NodeDerivation)이 먼저 거부한다(실행 가능 = builder)
         List<EventDefinition> triggers = CATALOG.events().stream()
-            .filter(event -> event.triggerType() != null && (event.builder() || event.generation())).toList();
+            .filter(event -> event.triggerType() != null && event.builder()).toList();
         assertThat(triggers).isNotEmpty();
         for (EventDefinition event : triggers) {
             // 새 스케줄 노드(daily·weekly·monthly)는 칸이 비면 400이라 유효한 칸을 준다 — 다른 이벤트는 무시한다

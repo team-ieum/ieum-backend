@@ -28,13 +28,12 @@ public final class NodeDerivation {
      * @return 새 Map. type은 event의 node_type이다. config는 변경 가능한 LinkedHashMap 사본으로,
      *         triggerType·serviceType이 지워지고 ACTION이면 tools도 지워진다. 비AI 노드는 brand가 앱 brand로 덮인다
      * @throws CustomException INVALID_WORKFLOW: event가 없거나 카탈로그에 없는 값일 때("알 수 없는"), 또는 실행할 수 없는 이벤트
-     *         (ACTION인데 builder가 아님, 그 밖은 builder·generation 둘 다 false — agent {@code /v1/actions/execute}가
-     *         builder ACTION의 tool_key만 받는다)일 때("실행할 수 없는")
+     *         (builder가 아님 — agent {@code /v1/actions/execute}가 builder ACTION의 tool_key만 받는다)일 때("실행할 수 없는")
      */
     public Map<String, Object> derive(Map<String, Object> node) {
         Object event = node.get("event");
         EventDefinition definition = event instanceof String name ? catalog.event(name).orElse(null) : null;
-        if (definition == null || !executable(definition)) {
+        if (definition == null || !definition.builder()) {
             throw new CustomException(ErrorCode.INVALID_WORKFLOW,
                 (definition == null ? "알 수 없는" : "실행할 수 없는") + " 노드 종류입니다: " + echo(event)
                     + " (노드 " + echo(node.get("id")) + ")");
@@ -60,16 +59,6 @@ public final class NodeDerivation {
 
     public List<Map<String, Object>> deriveAll(List<Map<String, Object>> nodes) {
         return nodes.stream().map(this::derive).toList();
-    }
-
-    /**
-     * agent {@code /v1/actions/execute}는 builder ACTION의 tool_key만 받는다. 그래서 ACTION은 builder여야 하고,
-     * 그 밖은 builder·generation 중 하나면 된다.
-     */
-    private static boolean executable(EventDefinition definition) {
-        return definition.nodeType() == NodeType.ACTION
-            ? definition.builder()
-            : definition.builder() || definition.generation();
     }
 
     /**
