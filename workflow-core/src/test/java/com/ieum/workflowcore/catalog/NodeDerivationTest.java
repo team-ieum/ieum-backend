@@ -31,9 +31,9 @@ class NodeDerivationTest {
         return node;
     }
 
-    /** 실행 가능한 이벤트 — ACTION은 builder여야 하고, 그 밖은 builder·generation 중 하나다. 운영 규칙(NodeDerivation)과 같다. */
+    /** 실행 가능한 이벤트 = builder. 운영 규칙(NodeDerivation)과 같다. */
     private static boolean executable(EventDefinition event) {
-        return event.nodeType() == NodeType.ACTION ? event.builder() : (event.builder() || event.generation());
+        return event.builder();
     }
 
     private static EventDefinition firstOf(NodeType type) {
@@ -191,7 +191,7 @@ class NodeDerivationTest {
     }
 
     @Test
-    @DisplayName("실행할 수 없는 이벤트(ACTION은 builder 아님, 그 밖은 builder·generation 둘 다 false)는 같은 400이되 \"실행할 수 없는\" 문구 — agent가 실행할 수 없다")
+    @DisplayName("실행할 수 없는 이벤트(builder 아님)는 같은 400이되 \"실행할 수 없는\" 문구 — agent가 실행할 수 없다")
     void unexecutableEventIsRejected() {
         // agent /v1/actions/execute는 builder ACTION의 tool_key만 받는다. 이름은 카탈로그에서 고른다(하드코딩 금지).
         List<EventDefinition> targets = CATALOG.events().stream().filter(e -> !executable(e)).toList();

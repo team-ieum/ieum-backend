@@ -178,7 +178,7 @@ class CatalogStartupCheckTest {
                 ,"discord_bot":{"provider":"discord","title":"Discord","brand":"discord","serviceType":"DISCORD","auth":"discord_oauth"}""",
                 "[]", Map.of("discord_bot/send_channel_message.json", """
                         {"node_type":"ACTION","kind":"action","tool_key":"builtin:discord_send_channel_message",
-                         "builder":true,"generation":false,
+                         "builder":true,
                          "fixed":{"type":"ACTION","config":{}},
                          "inputFields":[{"key":"guild_id","title":"서버","type":"string","ref":false,"optionsSource":"discord.guilds"}],
                          "fields":{"channel_id":{"title":"채널","required":true,"optionsSource":"discord.channels","optionsInputs":["guild_id"]},
@@ -228,14 +228,14 @@ class CatalogStartupCheckTest {
                 ,"notion":{"provider":"notion","title":"Notion","brand":"notion","serviceType":"NOTION","auth":"notion_token"}""",
                 "[]", Map.of("notion/create_row.json", """
                         {"node_type":"ACTION","kind":"action","tool_key":"builtin:notion_create_row",
-                         "builder":true,"generation":false,"fixed":{"type":"ACTION","config":{}},
+                         "builder":true,"fixed":{"type":"ACTION","config":{}},
                          "fields":{"data_source_id":{"optionsSource":"notion.databases","ref":false},
                                    "properties":{"type":"dict","fieldsSource":"notion.properties","fieldsInputs":["data_source_id"],"ref":false},
                                    "template":{"optionsSource":"notion.templates","optionsInputs":["data_source_id"],"ref":false},
                                    "content":{"type":"text"}}}""",
                         "notion/update_row.json", """
                         {"node_type":"ACTION","kind":"action","tool_key":"builtin:notion_update_row",
-                         "builder":true,"generation":false,"fixed":{"type":"ACTION","config":{}},
+                         "builder":true,"fixed":{"type":"ACTION","config":{}},
                          "fields":{"data_source_id":{"type":"string","required":false,"optionsSource":"notion.databases","ref":false},
                                    "row_id":{"optionsSource":"notion.data_source_items","optionsInputs":["data_source_id"]},
                                    "properties":{"type":"dict","fieldsSource":"notion.properties","fieldsInputs":["data_source_id"],"ref":false},

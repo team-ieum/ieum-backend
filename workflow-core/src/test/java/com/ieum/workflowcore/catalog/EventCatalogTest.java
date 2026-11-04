@@ -87,7 +87,6 @@ class EventCatalogTest {
         assertThat(e.triggerType()).isEqualTo(TriggerType.GMAIL_NEW_EMAIL);
         assertThat(e.toolKey()).isNull();
         assertThat(e.builder()).isTrue();
-        assertThat(e.generation()).isFalse();
         assertThat(CATALOG.triggerTypeOf("gmail.new_email")).hasValue(TriggerType.GMAIL_NEW_EMAIL);
     }
 
