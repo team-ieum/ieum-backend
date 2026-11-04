@@ -58,6 +58,31 @@ def records(content):
     return dict(line.split('=', 1) for line in content.decode('utf-8').splitlines())
 
 
+def isolated_subprocess_environment():
+    environment = {'PATH': os.defpath}
+    # setup-python's shared interpreter needs this loader path even in isolated tests.
+    library_path = os.environ.get('LD_LIBRARY_PATH')
+    if library_path:
+        environment['LD_LIBRARY_PATH'] = library_path
+    return environment
+
+
+class IsolatedSubprocessEnvironmentTest(unittest.TestCase):
+    def test_inherits_only_the_required_loader_path(self):
+        ambient = {'PATH': '/ambient/bin', 'LD_LIBRARY_PATH': '/setup-python/lib:/runtime/lib',
+            'PYTHONPATH': '/untrusted/modules', 'PYTHONHOME': '/untrusted/python',
+            'LD_PRELOAD': '/untrusted/preload.so', 'GITHUB_TOKEN': SECRET,
+            TRANSPORT: secret_payload(), 'DB_PASSWORD': SECRET}
+        with patch.dict(os.environ, ambient, clear=True):
+            self.assertEqual(isolated_subprocess_environment(),
+                {'PATH': os.defpath, 'LD_LIBRARY_PATH': ambient['LD_LIBRARY_PATH']})
+
+    def test_missing_or_empty_loader_path_is_not_added(self):
+        for ambient in ({}, {'LD_LIBRARY_PATH': ''}):
+            with self.subTest(ambient=ambient), patch.dict(os.environ, ambient, clear=True):
+                self.assertEqual(isolated_subprocess_environment(), {'PATH': os.defpath})
+
+
 class BuildEnvironmentTest(unittest.TestCase):
     def assert_rejected(self, payload):
         with self.assertRaises(backend_env.BackendEnvironmentError) as caught:
@@ -380,7 +405,7 @@ class WriteCandidateTest(unittest.TestCase):
         self.assertNotIn(SECRET, str(caught.exception))
 
     def invoke_cli(self, payload=DEFAULT_PAYLOAD, destination=None):
-        environment = {'PATH': os.defpath}
+        environment = isolated_subprocess_environment()
         if payload is DEFAULT_PAYLOAD:
             payload = secret_payload()
         if payload is not None:
@@ -552,9 +577,10 @@ class BackendWorkflowTest(unittest.TestCase):
                 'sys.exit(' + str(controller_exit) + ')\n')
             script = self.shell.replace('/home/kwung/deploy/bluegreen/bluegreen.py', shlex.quote(str(controller)))
             script = script.replace('scripts/bluegreen/backend_env.py', shlex.quote(str(SCRIPT)))
-            environment = {'PATH': str(Path(sys.executable).parent) + os.pathsep + os.defpath,
+            environment = isolated_subprocess_environment()
+            environment.update({'PATH': str(Path(sys.executable).parent) + os.pathsep + os.defpath,
                 'RUNNER_TEMP': str(runner), 'IMAGE_NAME': 'ieum-backend-dev', 'IMAGE_TAG': 'synthetic-sha',
-                'IEUM_BLUEGREEN_JOB_DEADLINE_EPOCH': str(int(time.time()) + 21600)}
+                'IEUM_BLUEGREEN_JOB_DEADLINE_EPOCH': str(int(time.time()) + 21600)})
             if values is None:
                 values = valid_env()
             elif callable(values):
