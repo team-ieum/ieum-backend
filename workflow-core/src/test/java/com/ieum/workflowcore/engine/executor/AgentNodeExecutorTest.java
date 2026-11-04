@@ -43,6 +43,7 @@ class AgentNodeExecutorTest {
     private GoogleTokenProvider googleTokenProvider;
     private BetaPlatformProvider betaPlatformProvider;
     private IdempotencyStore idempotencyStore;
+    private AiUsageRecorder aiUsageRecorder;
 
     @BeforeEach
     void setUp() throws IOException {
@@ -54,6 +55,7 @@ class AgentNodeExecutorTest {
         googleTokenProvider = mock(GoogleTokenProvider.class);
         betaPlatformProvider = new StubBetaPlatformProvider();
         idempotencyStore = mock(IdempotencyStore.class);
+        aiUsageRecorder = mock(AiUsageRecorder.class);
         when(idempotencyStore.markInFlight(any(), any())).thenReturn(true);
         when(credentialProvider.getDecryptedApiKey(any(), any())).thenReturn("decrypted-api-key");
         executor = new AgentNodeExecutor(
@@ -64,6 +66,7 @@ class AgentNodeExecutorTest {
             uid -> null,
             betaPlatformProvider,
             idempotencyStore,
+            aiUsageRecorder,
             30
         );
     }
@@ -535,6 +538,7 @@ class AgentNodeExecutorTest {
             uid -> null,
             betaPlatformProvider,
             idempotencyStore,
+            aiUsageRecorder,
             30
         );
 
@@ -658,6 +662,7 @@ class AgentNodeExecutorTest {
             roleProvider,
             betaProvider,
             idempotencyStore,
+            aiUsageRecorder,
             30
         );
     }
@@ -867,6 +872,7 @@ class AgentNodeExecutorTest {
             uid -> null,
             betaProvider,
             idempotencyStore,
+            aiUsageRecorder,
             5
         );
 
@@ -1218,5 +1224,111 @@ class AgentNodeExecutorTest {
         assertThat(result.isSuccess()).isFalse();
         verify(betaProvider).releaseDailyCall("beta:calls:" + userId + ":test-key");
         verify(betaProvider, never()).recordTokens(any(), org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    // ── AI 토큰 사용량 기록 (IEUM-BE-98) ─────────────────────────────────────
+
+    private static final String FAILURE_RESPONSE_WITH_USAGE =
+        "{\"success\":false,\"output\":null,\"errorMessage\":\"구조화 출력 불일치\","
+            + "\"errorCode\":\"AGENT_EXECUTION_FAILED\","
+            + "\"usage\":{\"promptTokens\":7,\"completionTokens\":3,\"totalTokens\":10}}";
+
+    private AiUsageRecorder.AiUsageCall singleRecordedCall() {
+        org.mockito.ArgumentCaptor<AiUsageRecorder.AiUsageCall> captor =
+            org.mockito.ArgumentCaptor.forClass(AiUsageRecorder.AiUsageCall.class);
+        verify(aiUsageRecorder).record(captor.capture());
+        return captor.getValue();
+    }
+
+    @Test
+    @DisplayName("사용량 — BYOK 호출 1회 = 기록 1건, 실행 ID·provider·요청 모델·토큰을 싣는다")
+    void usage_byokCallRecordsOnce() {
+        UUID userId = UUID.randomUUID();
+        UUID executionId = UUID.randomUUID();
+        ExecutionCursor cursor = buildCursorWithUserId(userId);
+        cursor.getContext().setExecutionId(executionId);
+        enqueueJson(SUCCESS_RESPONSE_WITH_USAGE);
+
+        executor.execute(buildAgentNodeWithModel("요약", "CLAUDE", "cred-1", "claude-opus-5"),
+            Collections.emptyMap(), cursor);
+
+        AiUsageRecorder.AiUsageCall call = singleRecordedCall();
+        assertThat(call.userId()).isEqualTo(userId);
+        assertThat(call.executionId()).isEqualTo(executionId);
+        assertThat(call.provider()).isEqualTo("CLAUDE");
+        assertThat(call.requestedModel()).isEqualTo("claude-opus-5");
+        assertThat(call.platformKey()).isFalse();
+        assertThat(call.promptTokens()).isEqualTo(100);
+        assertThat(call.completionTokens()).isEqualTo(50);
+        assertThat(call.totalTokens()).isEqualTo(150);
+    }
+
+    @Test
+    @DisplayName("사용량 — 재시도 2회차는 fallback 모델로 기록된다(회차마다 1건)")
+    void usage_fallbackAttemptRecordsFallbackModel() {
+        enqueueJson(FAILURE_RESPONSE_WITH_USAGE);
+        enqueueJson(SUCCESS_RESPONSE_WITH_USAGE);
+        RetryPolicy fallback = new RetryPolicy(3, 0, 1.0, 0, false, null,
+            List.of("claude-haiku-4-5"), IdempotencyMode.NONE);
+        Node node = buildAgentNodeWithModel("요약", "CLAUDE", "cred-1", "claude-opus-5");
+
+        executor.execute(node, Collections.emptyMap(), buildCursor(), new NodeExecutor.NodeAttempt(1, "k", fallback));
+        executor.execute(node, Collections.emptyMap(), buildCursor(), new NodeExecutor.NodeAttempt(2, "k", fallback));
+
+        org.mockito.ArgumentCaptor<AiUsageRecorder.AiUsageCall> captor =
+            org.mockito.ArgumentCaptor.forClass(AiUsageRecorder.AiUsageCall.class);
+        verify(aiUsageRecorder, org.mockito.Mockito.times(2)).record(captor.capture());
+        assertThat(captor.getAllValues()).extracting(AiUsageRecorder.AiUsageCall::requestedModel)
+            .containsExactly("claude-opus-5", "claude-haiku-4-5");
+        assertThat(captor.getAllValues().get(0).totalTokens()).isEqualTo(10);
+    }
+
+    @Test
+    @DisplayName("사용량 — agent 응답에 실린 실제 모델을 함께 넘긴다")
+    void usage_passesReportedModel() {
+        enqueueJson("{\"success\":true,\"output\":\"완료\",\"model\":\"anthropic/claude-sonnet-5\"}");
+
+        executor.execute(buildAgentNode("요약", "CLAUDE", "cred-1"), Collections.emptyMap(), buildCursor());
+
+        assertThat(singleRecordedCall().reportedModel()).isEqualTo("anthropic/claude-sonnet-5");
+    }
+
+    @Test
+    @DisplayName("사용량 — 베타 platform 키 호출은 platformKey=true로 기록된다")
+    void usage_platformKeyFlag() {
+        UUID userId = UUID.randomUUID();
+        BetaPlatformProvider betaProvider = mock(BetaPlatformProvider.class, CALLS_REAL_METHODS);
+        when(betaProvider.isBetaEligible(userId)).thenReturn(true);
+        enqueueJson(SUCCESS_RESPONSE_WITH_USAGE);
+
+        buildExecutorWithBetaProvider(betaProvider).execute(
+            buildAgentNodeNoCredential("요약", "CLAUDE"), Collections.emptyMap(), buildCursorWithUserId(userId));
+
+        assertThat(singleRecordedCall().platformKey()).isTrue();
+    }
+
+    @Test
+    @DisplayName("사용량 — 키 없는 self-hosted 호출과 agent HTTP 오류는 기록하지 않는다")
+    void usage_skipsSelfHostedAndHttpError() {
+        enqueueJson(SUCCESS_RESPONSE_WITH_USAGE);
+        mockWebServer.enqueue(new MockResponse().setResponseCode(503).setBody("{}"));
+
+        executor.execute(buildAgentNodeNoCredential("요약", "CLAUDE"), Collections.emptyMap(),
+            buildCursorWithUserId(UUID.randomUUID()));
+        executor.execute(buildAgentNode("요약", "CLAUDE", "cred-1"), Collections.emptyMap(), buildCursor());
+
+        verify(aiUsageRecorder, never()).record(any());
+    }
+
+    @Test
+    @DisplayName("사용량 — 기록이 예외를 던져도 노드 실행은 성공한다")
+    void usage_recorderFailureDoesNotBreakExecution() {
+        org.mockito.Mockito.doThrow(new RuntimeException("db down")).when(aiUsageRecorder).record(any());
+        enqueueJson(SUCCESS_RESPONSE_WITH_USAGE);
+
+        ExecutorResult result = executor.execute(
+            buildAgentNode("요약", "CLAUDE", "cred-1"), Collections.emptyMap(), buildCursor());
+
+        assertThat(result.isSuccess()).isTrue();
     }
 }

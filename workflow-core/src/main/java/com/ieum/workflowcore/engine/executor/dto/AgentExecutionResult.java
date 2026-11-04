@@ -30,6 +30,12 @@ public class AgentExecutionResult {
      */
     private String errorCode;
 
+    /**
+     * agent가 실제로 호출한 모델(폐기 모델 강등·platform 강등 반영). 현재 agent는 싣지 않아 null이고,
+     * 그 경우 사용량 기록은 BE가 요청한 모델로 대신한다. 싣기 시작하면 이 값이 우선한다(IEUM-BE-98).
+     */
+    private String model;
+
     /** ieum-agent 응답의 usage 필드. node_runs 토큰 기록(실패 응답 포함)과 베타 토큰 사후 차감(성공만)에 쓴다. */
     @Getter
     @NoArgsConstructor

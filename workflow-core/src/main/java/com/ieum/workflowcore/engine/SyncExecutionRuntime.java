@@ -206,6 +206,7 @@ public class SyncExecutionRuntime {
             ExecutionContext context = new ExecutionContext();
             context.setUserId(execution.getWorkflow().getUserId());
             context.setTraceId(execution.getTraceId());
+            context.setExecutionId(executionId);
             cursor.setContext(context);
 
             // 트리거 입력 데이터 보존(트리거 노드 실행 입력으로 사용)
