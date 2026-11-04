@@ -117,12 +117,13 @@ class EventCatalogTest {
     }
 
     @Test
-    @DisplayName("builder:false 이벤트도 읽는다 — gmail.send_email")
-    void gmailSendEmail_nonBuilder() {
+    @DisplayName("gmail.send_email은 Gmail API 도구 builder 이벤트다 — 공급원 두 개")
+    void gmailSendEmail_builder() {
         EventDefinition e = CATALOG.event("gmail.send_email").orElseThrow();
 
-        assertThat(e.builder()).isFalse();
-        assertThat(e.toolKey()).isEqualTo("gmail");
+        assertThat(e.builder()).isTrue();
+        assertThat(e.toolKey()).isEqualTo("builtin:google_gmail_send_email");
+        assertThat(e.optionsSources()).containsExactlyInAnyOrder("google.gmail_send_as", "google.gmail_labels");
     }
 
     @Test
@@ -300,7 +301,7 @@ class EventCatalogTest {
         }
     }
 
-    private static String trigger(String triggerType) {
+    static String trigger(String triggerType) {
         return """
                 {"node_type":"TRIGGER","kind":"trigger","trigger_type":"%s","tool_key":null,
                  "fixed":{"type":"TRIGGER","config":{}}}""".formatted(triggerType);
@@ -312,12 +313,12 @@ class EventCatalogTest {
                 .formatted(toolKey);
     }
 
-    private static URLClassLoader loader(Path dir) throws IOException {
+    static URLClassLoader loader(Path dir) throws IOException {
         return new URLClassLoader(new URL[]{dir.toUri().toURL()}, null);
     }
 
     /** dir/catalog/ 아래에 앱 manual 하나짜리 카탈로그를 쓴다. index.txt는 경로를 정렬해서 만든다(빌드와 같은 규칙). */
-    private static void writeCatalog(Path dir, Map<String, String> events) throws IOException {
+    static void writeCatalog(Path dir, Map<String, String> events) throws IOException {
         Path root = dir.resolve("catalog");
         Files.createDirectories(root);
         Map<String, String> sorted = new TreeMap<>(events);

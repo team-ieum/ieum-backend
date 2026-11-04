@@ -26,7 +26,7 @@ class ToolAuthRuleTest {
         "builtin:slack,",
         // 웹훅 도구 discord(정확 일치)와 봇 접두사 builtin:discord_는 겹치지 않는다
         "builtin:discord,",
-        // gmail.send_email(builder=false)의 tool_key — 실행기 어디서도 토큰을 싣지 않는다
+        // "gmail"은 builtin:google_ 접두사가 아닌 키라 null
         "gmail,",
         "builtin:google,",
         ","
