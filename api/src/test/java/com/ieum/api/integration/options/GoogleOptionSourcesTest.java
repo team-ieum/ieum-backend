@@ -65,6 +65,7 @@ class GoogleOptionSourcesTest {
     private static final String EVENTS_PREFIX = "https://www.googleapis.com/calendar/v3/calendars/";
     private static final String GMAIL = "https://www.googleapis.com/auth/gmail.modify";
     private static final String SEND_AS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs";
+    private static final String LABELS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/labels";
 
     private final RestTemplate restTemplate = new RestTemplate();
     private final MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
@@ -80,6 +81,7 @@ class GoogleOptionSourcesTest {
     private final GoogleFilesOptionSource files = new GoogleFilesOptionSource(reader);
     private final GoogleFoldersOptionSource folders = new GoogleFoldersOptionSource(reader);
     private final GmailSendAsOptionSource gmailSendAs = new GmailSendAsOptionSource(reader);
+    private final GmailLabelsOptionSource gmailLabels = new GmailLabelsOptionSource(reader);
     private final UUID userId = UUID.randomUUID();
 
     @AfterEach
@@ -594,9 +596,10 @@ class GoogleOptionSourcesTest {
     @DisplayName("공급원 키는 카탈로그 optionsSource와 1:1 계약")
     void keysMatchAgentOptionsSource() {
         assertThat(List.of(spreadsheets.key(), worksheets.key(), calendars.key(), writableCalendars.key(),
-                events.key(), files.key(), folders.key()))
+                events.key(), files.key(), folders.key(), gmailSendAs.key(), gmailLabels.key()))
             .containsExactly("google.spreadsheets", "google.worksheets", "google.calendars",
-                "google.writable_calendars", "google.events", "google.files", "google.folders");
+                "google.writable_calendars", "google.events", "google.files", "google.folders",
+                "google.gmail_send_as", "google.gmail_labels");
     }
 
     @Test
@@ -678,6 +681,75 @@ class GoogleOptionSourcesTest {
         connected("openid " + SHEETS + " " + DRIVE + " " + CALENDAR);
 
         assertErrorCode(() -> gmailSendAs.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
+        assertErrorCode(() -> gmailLabels.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
         verify(tokenService, never()).getValidAccessToken(any());
+    }
+
+    @Test
+    @DisplayName("라벨 — SENT·DRAFT·모르는 시스템 라벨 제외, 시스템 라벨은 한국어 이름, 사용자 라벨은 그대로, API 순서, nextCursor null")
+    void gmailLabelsListsAssignableLabels() {
+        connected(GMAIL);
+        server.expect(requestTo(LABELS_URL))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Authorization", "Bearer g-token"))
+            .andRespond(withSuccess("""
+                {"labels":[
+                  {"id":"INBOX","name":"INBOX","type":"system"},
+                  {"id":"SENT","name":"SENT","type":"system"},
+                  {"id":"DRAFT","name":"DRAFT","type":"system"},
+                  {"id":"CHAT","name":"CHAT","type":"system"},
+                  {"id":"CATEGORY_PERSONAL","name":"CATEGORY_PERSONAL","type":"system"},
+                  {"id":"Label_1","name":"프로젝트/IEUM","type":"user"}]}
+                """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailLabels.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(
+            new OptionItem("INBOX", "받은편지함"),
+            new OptionItem("CATEGORY_PERSONAL", "기본"),
+            new OptionItem("Label_1", "프로젝트/IEUM"));
+        assertThat(page.nextCursor()).isNull();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"INBOX,받은편지함", "STARRED,별표", "IMPORTANT,중요", "UNREAD,읽지 않음", "SPAM,스팸", "TRASH,휴지통",
+        "CATEGORY_PERSONAL,기본", "CATEGORY_SOCIAL,소셜", "CATEGORY_PROMOTIONS,프로모션",
+        "CATEGORY_UPDATES,업데이트", "CATEGORY_FORUMS,포럼"})
+    @DisplayName("라벨 — 시스템 라벨 11개의 한국어 이름")
+    void gmailLabelsSystemNames(String id, String name) {
+        connected(GMAIL);
+        server.expect(requestTo(LABELS_URL)).andRespond(withSuccess(
+            "{\"labels\":[{\"id\":\"" + id + "\",\"name\":\"" + id + "\",\"type\":\"system\"}]}",
+            MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailLabels.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(new OptionItem(id, name));
+    }
+
+    @Test
+    @DisplayName("라벨 — 시스템/사용자 구분은 type으로만: 이름이 INBOX인 사용자 라벨은 그대로, type 없는 항목은 사용자 라벨")
+    void gmailLabelsClassifyByTypeNotId() {
+        connected(GMAIL);
+        server.expect(requestTo(LABELS_URL)).andRespond(withSuccess("""
+            {"labels":[{"id":"Label_7","name":"INBOX","type":"user"},{"id":"Label_8","name":"메모"}]}
+            """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailLabels.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(
+            new OptionItem("Label_7", "INBOX"), new OptionItem("Label_8", "메모"));
+    }
+
+    @Test
+    @DisplayName("라벨 — cursor가 와도 pageToken 없이 같은 URL, 빈 본문이면 items=[]·nextCursor null")
+    void gmailLabelsIgnoresCursorAndEmptyBody() {
+        connected(GMAIL);
+        server.expect(requestTo(LABELS_URL)).andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailLabels.fetch(userId, Map.of(), "c-2");
+
+        assertThat(page.items()).isEmpty();
+        assertThat(page.nextCursor()).isNull();
     }
 }
