@@ -63,6 +63,9 @@ class GoogleOptionSourcesTest {
     private static final String CALENDAR = "https://www.googleapis.com/auth/calendar";
     private static final String CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
     private static final String EVENTS_PREFIX = "https://www.googleapis.com/calendar/v3/calendars/";
+    private static final String GMAIL = "https://www.googleapis.com/auth/gmail.modify";
+    private static final String SEND_AS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs";
+    private static final String LABELS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/labels";
 
     private final RestTemplate restTemplate = new RestTemplate();
     private final MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
@@ -77,6 +80,8 @@ class GoogleOptionSourcesTest {
     private final GoogleEventsOptionSource events = new GoogleEventsOptionSource(reader);
     private final GoogleFilesOptionSource files = new GoogleFilesOptionSource(reader);
     private final GoogleFoldersOptionSource folders = new GoogleFoldersOptionSource(reader);
+    private final GmailSendAsOptionSource gmailSendAs = new GmailSendAsOptionSource(reader);
+    private final GmailLabelsOptionSource gmailLabels = new GmailLabelsOptionSource(reader);
     private final UUID userId = UUID.randomUUID();
 
     @AfterEach
@@ -591,8 +596,169 @@ class GoogleOptionSourcesTest {
     @DisplayName("공급원 키는 카탈로그 optionsSource와 1:1 계약")
     void keysMatchAgentOptionsSource() {
         assertThat(List.of(spreadsheets.key(), worksheets.key(), calendars.key(), writableCalendars.key(),
-                events.key(), files.key(), folders.key()))
+                events.key(), files.key(), folders.key(), gmailSendAs.key(), gmailLabels.key()))
             .containsExactly("google.spreadsheets", "google.worksheets", "google.calendars",
-                "google.writable_calendars", "google.events", "google.files", "google.folders");
+                "google.writable_calendars", "google.events", "google.files", "google.folders",
+                "google.gmail_send_as", "google.gmail_labels");
+    }
+
+    @Test
+    @DisplayName("보낸 사람 — accepted·기본 주소만, pending 제외, 이름은 'displayName <주소>', isDefault가 맨 앞, nextCursor null")
+    void gmailSendAsListsVerifiedAliasesDefaultFirst() {
+        connected("openid " + GMAIL);
+        server.expect(requestTo(SEND_AS_URL))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Authorization", "Bearer g-token"))
+            .andRespond(withSuccess("""
+                {"sendAs":[
+                  {"sendAsEmail":"me@gmail.com","displayName":"윤도훈","isPrimary":true,"isDefault":false},
+                  {"sendAsEmail":"wait@ex.com","displayName":"대기","verificationStatus":"pending"},
+                  {"sendAsEmail":"work@ex.com","displayName":"회사","verificationStatus":"accepted","isDefault":true}]}
+                """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailSendAs.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(
+            new OptionItem("work@ex.com", "회사 <work@ex.com>"),
+            new OptionItem("me@gmail.com", "윤도훈 <me@gmail.com>"));
+        assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("보낸 사람 — displayName이 없거나 빈 문자열이면 주소만")
+    void gmailSendAsBlankDisplayNameIsAddressOnly() {
+        connected(GMAIL);
+        server.expect(requestTo(SEND_AS_URL)).andRespond(withSuccess("""
+            {"sendAs":[{"sendAsEmail":"a@ex.com","isPrimary":true},
+              {"sendAsEmail":"b@ex.com","displayName":"","verificationStatus":"verificationStatusUnspecified"}]}
+            """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailSendAs.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(
+            new OptionItem("a@ex.com", "a@ex.com"), new OptionItem("b@ex.com", "b@ex.com"));
+    }
+
+    @Test
+    @DisplayName("보낸 사람 — isDefault가 하나도 없으면 API 순서 그대로")
+    void gmailSendAsWithoutDefaultKeepsApiOrder() {
+        connected(GMAIL);
+        server.expect(requestTo(SEND_AS_URL)).andRespond(withSuccess("""
+            {"sendAs":[{"sendAsEmail":"c@ex.com","verificationStatus":"accepted"},
+              {"sendAsEmail":"a@ex.com","isPrimary":true},
+              {"sendAsEmail":"b@ex.com","verificationStatus":"accepted"}]}
+            """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailSendAs.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).extracting(OptionItem::id).containsExactly("c@ex.com", "a@ex.com", "b@ex.com");
+    }
+
+    @Test
+    @DisplayName("보낸 사람 — cursor가 와도 pageToken 없이 같은 URL, 빈 본문이면 items=[]·nextCursor null")
+    void gmailSendAsIgnoresCursorAndEmptyBody() {
+        connected(GMAIL);
+        server.expect(requestTo(SEND_AS_URL)).andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailSendAs.fetch(userId, Map.of(), "x&pageToken=y");
+
+        assertThat(page.items()).isEmpty();
+        assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("gmail.readonly만 있어도 보낸 사람 목록이 조회된다 — 트리거와 같은 허용 scope")
+    void gmailSendAsAcceptsReadonlyScope() {
+        connected("openid https://www.googleapis.com/auth/gmail.readonly");
+        server.expect(requestTo(SEND_AS_URL)).andRespond(withSuccess("{\"sendAs\":[]}", MediaType.APPLICATION_JSON));
+
+        assertThat(gmailSendAs.fetch(userId, Map.of(), null).items()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("gmail.readonly만 있어도 라벨 목록이 조회된다 — 트리거와 같은 허용 scope")
+    void gmailLabelsAcceptsReadonlyScope() {
+        connected("openid https://www.googleapis.com/auth/gmail.readonly");
+        server.expect(requestTo(LABELS_URL)).andRespond(withSuccess("{\"labels\":[]}", MediaType.APPLICATION_JSON));
+
+        assertThat(gmailLabels.fetch(userId, Map.of(), null).items()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("gmail scope가 없으면 보낸 사람·라벨 모두 토큰·Google 호출 없이 GOOGLE_SCOPE_REQUIRED")
+    void gmailSourcesRequireGmailScope() {
+        connected("openid " + SHEETS + " " + DRIVE + " " + CALENDAR);
+
+        assertErrorCode(() -> gmailSendAs.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
+        assertErrorCode(() -> gmailLabels.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
+        verify(tokenService, never()).getValidAccessToken(any());
+    }
+
+    @Test
+    @DisplayName("라벨 — SENT·DRAFT·모르는 시스템 라벨 제외, 시스템 라벨은 한국어 이름, 사용자 라벨은 그대로, API 순서, nextCursor null")
+    void gmailLabelsListsAssignableLabels() {
+        connected(GMAIL);
+        server.expect(requestTo(LABELS_URL))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Authorization", "Bearer g-token"))
+            .andRespond(withSuccess("""
+                {"labels":[
+                  {"id":"INBOX","name":"INBOX","type":"system"},
+                  {"id":"SENT","name":"SENT","type":"system"},
+                  {"id":"DRAFT","name":"DRAFT","type":"system"},
+                  {"id":"CHAT","name":"CHAT","type":"system"},
+                  {"id":"CATEGORY_PERSONAL","name":"CATEGORY_PERSONAL","type":"system"},
+                  {"id":"Label_1","name":"프로젝트/IEUM","type":"user"}]}
+                """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailLabels.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(
+            new OptionItem("INBOX", "받은편지함"),
+            new OptionItem("CATEGORY_PERSONAL", "기본"),
+            new OptionItem("Label_1", "프로젝트/IEUM"));
+        assertThat(page.nextCursor()).isNull();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"INBOX,받은편지함", "STARRED,별표", "IMPORTANT,중요", "UNREAD,읽지 않음", "SPAM,스팸", "TRASH,휴지통",
+        "CATEGORY_PERSONAL,기본", "CATEGORY_SOCIAL,소셜", "CATEGORY_PROMOTIONS,프로모션",
+        "CATEGORY_UPDATES,업데이트", "CATEGORY_FORUMS,포럼"})
+    @DisplayName("라벨 — 시스템 라벨 11개의 한국어 이름")
+    void gmailLabelsSystemNames(String id, String name) {
+        connected(GMAIL);
+        server.expect(requestTo(LABELS_URL)).andRespond(withSuccess(
+            "{\"labels\":[{\"id\":\"" + id + "\",\"name\":\"" + id + "\",\"type\":\"system\"}]}",
+            MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailLabels.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(new OptionItem(id, name));
+    }
+
+    @Test
+    @DisplayName("라벨 — 시스템/사용자 구분은 type으로만: 이름이 INBOX인 사용자 라벨은 그대로, type 없는 항목은 사용자 라벨")
+    void gmailLabelsClassifyByTypeNotId() {
+        connected(GMAIL);
+        server.expect(requestTo(LABELS_URL)).andRespond(withSuccess("""
+            {"labels":[{"id":"Label_7","name":"INBOX","type":"user"},{"id":"Label_8","name":"메모"}]}
+            """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailLabels.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(
+            new OptionItem("Label_7", "INBOX"), new OptionItem("Label_8", "메모"));
+    }
+
+    @Test
+    @DisplayName("라벨 — cursor가 와도 pageToken 없이 같은 URL, 빈 본문이면 items=[]·nextCursor null")
+    void gmailLabelsIgnoresCursorAndEmptyBody() {
+        connected(GMAIL);
+        server.expect(requestTo(LABELS_URL)).andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailLabels.fetch(userId, Map.of(), "c-2");
+
+        assertThat(page.items()).isEmpty();
+        assertThat(page.nextCursor()).isNull();
     }
 }
