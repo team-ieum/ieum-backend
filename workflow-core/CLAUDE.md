@@ -69,6 +69,7 @@
 `NodeExecutor` 인터페이스 + 타입별 구현체(`AgentNodeExecutor`, `ActionNodeExecutor`, `ConditionNodeExecutor`, `HttpNodeExecutor`, `TransformNodeExecutor`, `TriggerNodeExecutor`). 결과는 `ExecutorResult`. 트리거 종류는 노드 event → `EventCatalog.triggerTypeOf`(없으면 MANUAL). WEBHOOK·앱 트리거는 심어 둔 페이로드를 그대로 출력한다(config 에코 아님 — config `{}`인 WEBHOOK도 페이로드).
 
 **`AgentNodeExecutor`**(`AI`) — `/v1/execute` body `workflowContext` = `{nodes:{<id>:{output, status:"COMPLETED", type}}, trigger:<TRIGGER 노드 출력>}`(agent `tools/workflow_context.py` 계약, 평평한 `{<id>:output}` 아님). `nodeOutputs`를 감싼 것이라 성공·재사용 노드만 있고, trigger는 원 페이로드가 아니라 트리거 노드 출력이다. 노드 테스트에선 직접 참조한 샘플만 들어가 type은 null, trigger는 없다. 요청에 `outputFields`(노드 `config.outputFields` 원값 — 캐스트·검사 없음, 검사는 agent `INVALID_OUTPUT_FIELDS`)를 싣는다. 응답 `output`은 `Object`: Map이면 그 칸이 곧 노드 출력(`{output, metadata}` 래퍼 없음), 문자열이면 `{output: 문자열}`, null이면 `{output: null}`. 칸 선언 노드(비어 있지 않은 목록)인데 문자열·null이면 CLIENT_ERROR(재시도 없음 — 옛 agent는 결정적이고 멱등 캐시로 같은 응답을 되풀이한다) — 롤백된 agent의 문장이 하류에서 `""`로 조용히 분기하는 걸 막는다. 배열·숫자·불은 agent 계약 버그라 CLIENT_ERROR. 가드 실패는 agent 실패 응답과 같이 베타 일일 호출 환불·토큰 차감 없음. 실패 응답 usage도 `ExecutorResult`에 실린다.
+**사용량 기록(IEUM-BE-98)** — agent가 응답 본문을 돌려줄 때마다 `AiUsageRecorder`로 1건(성공·실패 응답 모두, 회차마다 불리므로 재시도·fallback도 각각). 요청 모델은 회차 fallback이 반영된 `resolvedModel`, 응답 `model`(선택 필드 — agent가 아직 안 실음)이 있으면 그게 우선. agent HTTP 오류(4xx·5xx, 본문 usage 없음)와 키 없는 self-hosted 호출(ADMIN·TESTER)은 기록하지 않는다. 기록 실패는 try/catch로 삼켜 실행에 영향 없음. 노드 단일 테스트도 실제 호출이라 기록된다(`executionId` null).
 **`ActionNodeExecutor`**(`ACTION`) — 노드 `event` → `EventCatalog`의 `tool_key`로 합성 도구 `{name: tool_key, config: 노드 config에서 brand 제외}` 하나를 만들어 `ToolCallPreparer`로 전처리(Google 토큰·Notion/GitHub 헤더·slack/discord `webhookCredentialId` → `webhook_url`)한 뒤 ieum-agent `POST ${ieum.agent.url}/v1/actions/execute`에 위임한다(body `{nodeId, toolKey, config}` = `ActionNodeRequest`, 응답 `ActionExecutionResult{success, output(dict), errorMessage, errorCode}`). 노드 출력은 agent `output` dict 그대로(AI 노드 객체 출력과 같은 모양). LLM 헤더(`X-LLM-*`·`X-Key-Mode`)·쿼터·토큰 차감·모델 fallback이 **없다**(과금 0). 헤더는 `X-User-Id`·`X-User-Role`·`X-Node-Id`·`X-Trace-Id`·`X-Idempotency-Key`(HEADER이고 재시도가 켜졌을 때)·`X-Google-Access-Token`·도구 인증 헤더. 실패 분류: `ACTION_TOOL_FAILED`→CLIENT_ERROR(재시도 안 함), 알 수 없는 toolKey(HTTP 400)→`AGENT_BAD_REQUEST`→CLIENT_ERROR, 5xx·429·타임아웃은 재시도 대상. 쓸 수 없는 정의(event 없음·카탈로그에 없음·ACTION 아님·tool_key 없음)는 agent 호출 없이 CLIENT_ERROR "ACTION 노드에 카탈로그 ACTION event가 필요합니다.". ACTION BYOK(`tools[].auth`·`credentialId`)는 없다.
 **`ToolCallPreparer`**(AI·ACTION 공유) — `tools` 참조식 치환(`renderDeep` 복사본)·Google 토큰·`ToolAuthResolver` 인증 헤더·slack/discord 웹훅 URL 주입. 웹훅 URL 원문은 이 복사본에만 있고 노드 원본·`node_runs` 입력에 남지 않는다. MCP 서버 해석은 AI 노드 전용이라 `AgentNodeExecutor`에 남아 있다. HTTP 상태→errorCode 합성은 `FailureClassifier.agentServiceErrorCode`.
 **`ConditionNodeExecutor`**(`CONDITION`) — `equals`·`notEquals`는 문자열 비교다(둘 다 null이면 같음, 한쪽만 null이면 다름, 그 밖은 `String.valueOf` 일치). 참조식 치환 결과는 항상 문자열이라 우변을 JSON `true`·`4`로 저장해도 `"true"`·`"4"`와 같다. 대소문자·숫자 표기(`4`≠`4.0`)는 구분한다 — AI 구조화 출력의 number 칸은 agent가 정수값을 `int`로 정규화해 보낸다.
@@ -76,7 +77,7 @@
 3-인자 `execute(node, input, cursor)`가 기본이고, 외부 호출이 멱등 가드를 적용해야 하는 Executor(HTTP·AI·ACTION)만 4-인자 오버로드 `execute(node, input, cursor, NodeAttempt)`를 override한다. `NodeAttempt(attempt, idempotencyKey, policy)`가 회차·멱등성 키·재시도 정책을 실어 온다 — **`ExecutionCursor`/`ExecutionContext`에 attempt 정보를 넣지 말 것**(워커 스레드 간 공유 객체다).
 
 ### Provider 포트 + Stub 패턴
-workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능은 **포트 인터페이스**로 선언하고 api 모듈이 구현체를 제공한다. 포트마다 `@ConditionalOnMissingBean` Stub이 있어 workflow-core 단독 테스트가 가능하다 (현재 11개).
+workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능은 **포트 인터페이스**로 선언하고 api 모듈이 구현체를 제공한다. 포트마다 `@ConditionalOnMissingBean` Stub이 있어 workflow-core 단독 테스트가 가능하다 (현재 12개).
 
 | 포트 | 실구현 위치 |
 |------|------------|
@@ -91,9 +92,10 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 | `IdempotencyStore` | api (Redis SETNX in-flight 마커) |
 | `AlertNotifier` | api (실행 실패 Discord 알림) |
 | `ExecutionJobEnqueuer` | api (스케줄 실행을 Redis Stream 잡 큐에 투입) |
+| `AiUsageRecorder` | api (AI 호출 1회 = `ai_token_usage` 1행, IEUM-BE-98) |
 
 새 포트 추가 시 Stub도 같이 만들 것 — 없으면 workflow-core 테스트 컨텍스트가 깨진다.
-`IdempotencyStore`·`AlertNotifier` 구현체는 **저장소·발신 장애를 삼켜야 한다** — 실행 종료 처리를 깨는 것보다 중복 호출·알림 유실을 감수한다(의도적 트레이드오프).
+`IdempotencyStore`·`AlertNotifier`·`AiUsageRecorder` 구현체는 **저장소·발신 장애를 삼켜야 한다** — 실행 종료 처리를 깨는 것보다 중복 호출·알림 유실을 감수한다(의도적 트레이드오프).
 
 ### 변수 참조 시스템
 - 문법: `{{nodes.<node_uuid>.output.<field>}}`
@@ -103,7 +105,7 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 `ExecutionEventPublisher` — executionId 키의 in-memory `Sinks.Many` 멀티캐스트 허브. SSE 구독(HTTP 스레드)과 실행 스레드를 **같은 JVM 안에서** 연결한다 — 그래서 api의 잡 큐 워커를 별도 프로세스로 뺄 수 없다.
 - **단일 인스턴스 전제** — 다중 인스턴스로 가면 Redis Pub/Sub 등으로 교체 필요
 - 늦은 구독 보완: `WorkflowExecutionService.loadEventSnapshot()`이 DB 로그를 이벤트로 변환해 먼저 흘림
-- `ExecutionEvent`는 모든 이벤트에 `type`·`executionId`·`workflowId`·`occurredAt`(ISO-8601)을 싣는다. **`type` 키 이름은 프론트가 읽고 있어 바꾸면 깨진다.** `workflowId`는 지역 변수/파라미터로만 흐른다 — `ExecutionCursor`·`ExecutionContext`에 넣지 말 것
+- `ExecutionEvent`는 모든 이벤트에 `type`·`executionId`·`workflowId`·`occurredAt`(ISO-8601)을 싣는다. **`type` 키 이름은 프론트가 읽고 있어 바꾸면 깨진다.** `workflowId`는 지역 변수/파라미터로만 흐른다 — `ExecutionCursor`·`ExecutionContext`에 넣지 말 것. (`ExecutionContext.executionId`는 있다 — 실행 동안 불변이라 워커 공유가 안전하고, AI 사용량 기록의 참조값이다. 노드 단일 테스트 컨텍스트에선 null. 사용량의 workflowId는 api 어댑터가 `findWorkflowIdById`로 찾는다)
 - `status` 필드의 enum은 SSE 전용 `NodeEventStatus`(PENDING/RUNNING/SUCCESS/FAILED/SKIPPED)다. 영속용 `ExecutionLogStatus`와 **분리**돼 있고, 이름이 겹치는 값은 직렬화 문자열이 같아야 한다(`ExecutionEventSerializationTest`가 검증). 진행 상태가 필요하다고 `ExecutionLogStatus`에 값을 더하면 `node_runs.status` 의미가 오염된다
 - 스냅샷 재생 이벤트는 `ExecutionEvent.withOccurredAt()`으로 기록 시각(`node_runs.created_at`·`workflow_runs.finished_at`)을 되씌운다
 - 건너뛴 노드는 `ExecutionEvent.nodeSkipped()` — **`type`은 `NODE_COMPLETED`이고 `status`만 `SKIPPED`다.** 새 `type` 값을 만들면 이미 배포된 프론트(`nodeId + type` 멱등 처리)가 그 노드의 종료를 못 받는다. 죽은 조건 분기 스킵과 재처리 스킵 둘 다 이 모양으로 나간다
