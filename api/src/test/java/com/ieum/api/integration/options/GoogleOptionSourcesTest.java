@@ -88,6 +88,7 @@ class GoogleOptionSourcesTest {
     private final GmailLabelsOptionSource gmailLabels = new GmailLabelsOptionSource(reader);
     private final GoogleSheetColumnsReader columnsReader = new GoogleSheetColumnsReader(reader);
     private final GoogleSheetColumnsOptionSource sheetColumns = new GoogleSheetColumnsOptionSource(columnsReader);
+    private final GoogleSheetColumnsFieldSource sheetColumnFields = new GoogleSheetColumnsFieldSource(columnsReader);
     private final UUID userId = UUID.randomUUID();
 
     @AfterEach
@@ -463,6 +464,39 @@ class GoogleOptionSourcesTest {
     }
 
     @Test
+    @DisplayName("열 칸 목록 — 열마다 {key:열 문자, title:'헤더 (B)', type:string, required:false}, 빈 헤더는 '(제목 없음) (C)'")
+    void sheetColumnFieldsShape() {
+        connected(SHEETS);
+        expectSheet(sheet("\"sheetId\":42,", "응답", 26),
+            "{\"values\":[[\"이름\",\"이메일\",\"\",\"전화\"]]}", headerRange("'응답'!1:1"));
+
+        assertThat(sheetColumnFields.fetch(userId, columnInput("1Bxi_-9", "42"))).containsExactly(
+            Map.of("key", "A", "title", "이름 (A)", "type", "string", "required", false),
+            Map.of("key", "B", "title", "이메일 (B)", "type", "string", "required", false),
+            Map.of("key", "C", "title", "(제목 없음) (C)", "type", "string", "required", false),
+            Map.of("key", "D", "title", "전화 (D)", "type", "string", "required", false));
+    }
+
+    @Test
+    @DisplayName("헤더 행이 비면 칸 title도 열 문자만")
+    void sheetColumnFieldsAllBlankLetterOnly() {
+        connected(SHEETS);
+        expectSheet(sheet("\"sheetId\":42,", "응답", 2), "{}", request -> { });
+
+        assertThat(sheetColumnFields.fetch(userId, columnInput("1Bxi_-9", "42"))).containsExactly(
+            Map.of("key", "A", "title", "A", "type", "string", "required", false),
+            Map.of("key", "B", "title", "B", "type", "string", "required", false));
+    }
+
+    @Test
+    @DisplayName("칸 목록도 참조식 sheet_id는 토큰 조회 없이 INVALID_INPUT")
+    void sheetColumnFieldsRejectReferenceSheetId() {
+        assertErrorCode(() -> sheetColumnFields.fetch(userId, columnInput("1Bxi_-9", "{{nodes.a.output.sheet}}")),
+            ErrorCode.INVALID_INPUT);
+        verify(tokenService, never()).getValidAccessToken(any());
+    }
+
+    @Test
     @DisplayName("캘린더 목록 — calendarList 250개씩, summaryOverride가 있으면 그 이름, 읽기 전용 캘린더도 포함")
     void calendarsListsCalendarList() {
         connected(CALENDAR);
@@ -758,6 +792,12 @@ class GoogleOptionSourcesTest {
             .containsExactly("google.spreadsheets", "google.worksheets", "google.calendars",
                 "google.writable_calendars", "google.events", "google.files", "google.folders",
                 "google.gmail_send_as", "google.gmail_labels", "google.sheet_columns");
+    }
+
+    @Test
+    @DisplayName("칸 목록 공급원 키는 카탈로그 fieldsSource와 1:1 계약")
+    void fieldSourceKeyMatchesCatalog() {
+        assertThat(sheetColumnFields.key()).isEqualTo("google.sheet_columns");
     }
 
     @Test

@@ -66,14 +66,17 @@ public interface IntegrationOptionControllerDocs {
             + "저장은 config.<칸> = {key: 값}이고 key는 받은 그대로 씁니다(다시 인코딩하지 않는다 — '.'은 이미 %2E). "
             + "optionsParams는 그 칸 드롭다운 요청(GET /api/v1/integrations/{app}/options/{resource})에 고정으로 실을 쿼리입니다. "
             + "지원: notion/properties(data_source_id 필수 — notion/databases의 값. title 칸이 맨 앞, 나머지 이름순. "
-            + "formula·rollup·files·생성/수정 정보 등 쓸 수 없는 속성은 칸이 없음). "
+            + "formula·rollup·files·생성/수정 정보 등 쓸 수 없는 속성은 칸이 없음), "
+            + "google/sheet_columns(spreadsheet_id·sheet_id 필수 — 1행 헤더 열마다 string 칸, key는 열 문자·title은 '헤더 (B)'. "
+            + "빈 헤더 '(제목 없음) (C)', 헤더 행이 비면 A~ 열 수(최대 Z)까지 열 문자만). "
             + "오류 code: ACCOUNT_NOT_CONNECTED(400), AUTHENTICATION_REQUIRED(401, 재연동 필요), NOTION_API_UNAVAILABLE(503), "
-            + "INVALID_INPUT(400 — data_source_id 없음·변수 참조·형식 오류, 연동 권한 부족, 공유되지 않은 DB), "
+            + "GOOGLE_SCOPE_REQUIRED(403, scope_groups=sheets), GOOGLE_RESOURCE_NOT_FOUND(404 — 없는 파일·시트), GOOGLE_API_UNAVAILABLE(503), "
+            + "INVALID_INPUT(400 — data_source_id·spreadsheet_id·sheet_id 없음·변수 참조·형식 오류, 연동 권한 부족, 공유되지 않은 DB), "
             + "NOT_FOUND(404, 알 수 없는 목록)")
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<Map<String, List<Map<String, Object>>>>> getFields(
         CustomUserDetails userDetails,
         @Parameter(description = "연동 앱", example = "notion") String app,
         @Parameter(description = "칸 목록 종류", example = "properties") String resource,
-        @Parameter(description = "fieldsInputs 칸 값. 예: data_source_id=1f2e…") Map<String, String> params);
+        @Parameter(description = "fieldsInputs 칸 값. 예: data_source_id=1f2e…, spreadsheet_id=1Bxi…, sheet_id=0") Map<String, String> params);
 }
