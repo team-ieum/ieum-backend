@@ -18,7 +18,8 @@ public interface IntegrationOptionControllerDocs {
     @Operation(
         summary = "드롭다운 선택지 조회",
         description = "도구 필드 스키마의 optionsSource({app}.{resource})에 해당하는 선택지를 조회합니다. "
-            + "지원: google/spreadsheets, google/worksheets(spreadsheet_id 필수), google/calendars(읽기 전용 포함 — 이름 뒤 (읽기 전용)), "
+            + "지원: google/spreadsheets, google/worksheets(spreadsheet_id 필수), google/sheet_columns(spreadsheet_id·sheet_id 필수 — sheet_id는 워크시트의 sheetId 숫자 문자열(첫 시트는 보통 \"0\"). 1행 헤더 열, 값은 열 문자·이름은 'B · 헤더'(빈 헤더 '(제목 없음)', 헤더 행이 비면 A~ 열 수(최대 Z)까지 열 문자만). nextCursor 항상 null. 그 파일에 없는 sheet_id는 GOOGLE_RESOURCE_NOT_FOUND), "
+            + "google/calendars(읽기 전용 포함 — 이름 뒤 (읽기 전용)), "
             + "google/writable_calendars(일정을 쓸 수 있는 캘린더만 — accessRole writerWithoutPrivateAccess·writer·owner, 꼬리표 없음. 걸러진 페이지는 items가 비어도 nextCursor가 있을 수 있음), "
             + "google/events(calendar_id 선택 — 비우면 기본 캘린더, q 선택 — 검색어, 공백이면 무시. 지금 이후 일정만 시작순 20개씩), google/files, google/folders, "
             + "google/gmail_send_as(입력 없음 — 보낼 수 있는 주소: 검증된 별칭과 기본 주소, pending 제외. 값은 주소·이름은 '표시 이름 <주소>'(표시 이름 없으면 주소), 기본 주소가 맨 앞. nextCursor 항상 null), "
@@ -44,7 +45,7 @@ public interface IntegrationOptionControllerDocs {
             + "q 선택 — 이름 부분 일치(대소문자·앞의 # 무시). nextCursor 항상 null. 서버를 고르기 전에는 열지 않는다), "
             + "nextCursor가 있으면 cursor로 다음 페이지를 조회하고, null이면 마지막 페이지입니다. "
             + "오류 code: GOOGLE_SCOPE_REQUIRED(403, Google 권한 증분 동의 필요 — scope_groups는 "
-            + "spreadsheets·worksheets=sheets, files·folders=drive, calendars·writable_calendars·events=calendar, gmail_send_as·gmail_labels=gmail. "
+            + "spreadsheets·worksheets·sheet_columns=sheets, files·folders=drive, calendars·writable_calendars·events=calendar, gmail_send_as·gmail_labels=gmail. "
             + "sheets 그룹은 drive를 포함해 파일·폴더도 충족), "
             + "ACCOUNT_NOT_CONNECTED(400), SLACK_NOT_CONNECTED(400), DISCORD_NOT_CONNECTED(400), DISCORD_GUILD_NOT_CONNECTED(403, 연결하지 않은 서버), "
             + "AUTHENTICATION_REQUIRED(401, 재연동 필요), GOOGLE_RESOURCE_NOT_FOUND(404), "
@@ -55,7 +56,7 @@ public interface IntegrationOptionControllerDocs {
         CustomUserDetails userDetails,
         @Parameter(description = "연동 앱", example = "google") String app,
         @Parameter(description = "리소스 종류", example = "worksheets") String resource,
-        @Parameter(description = "cursor(선택), 검색어 q(선택 — 지원하는 목록만 읽음), optionsInputs 필드 값, /fields 응답 Field의 optionsParams. 예: spreadsheet_id=1Bxi…, calendar_id=primary, q=회의, data_source_id=1f2e…") Map<String, String> params);
+        @Parameter(description = "cursor(선택), 검색어 q(선택 — 지원하는 목록만 읽음), optionsInputs 필드 값, /fields 응답 Field의 optionsParams. 예: spreadsheet_id=1Bxi…, sheet_id=0, calendar_id=primary, q=회의, data_source_id=1f2e…") Map<String, String> params);
 
     @Operation(
         summary = "동적 칸 목록 조회",
