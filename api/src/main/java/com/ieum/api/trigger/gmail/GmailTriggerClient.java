@@ -29,9 +29,6 @@ import org.springframework.web.util.UriComponentsBuilder;
 @RequiredArgsConstructor
 public class GmailTriggerClient implements TriggerHandler {
 
-    /** 기존 scope 그룹 {@code gmail}(application.yml). readonly도 읽기엔 충분하다 */
-    static final String GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
-    static final String GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
     private static final String MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
 
     static final String DEFAULT_QUERY = "in:inbox -in:sent";
@@ -95,14 +92,14 @@ public class GmailTriggerClient implements TriggerHandler {
             vars.put("pageToken", pageToken);
         }
         URI uri = builder.encode().buildAndExpand(vars).toUri();
-        return reader.get(userId, uri, GMAIL_MODIFY_SCOPE, GMAIL_READONLY_SCOPE);
+        return reader.get(userId, uri, GoogleApiReader.GMAIL_MODIFY_SCOPE, GoogleApiReader.GMAIL_READONLY_SCOPE);
     }
 
     public JsonNode getMessage(UUID userId, String messageId) {
         URI uri = UriComponentsBuilder.fromUriString(MESSAGES_URL + "/{id}")
             .queryParam("format", "full")
             .encode().buildAndExpand(Map.of("id", messageId)).toUri();
-        return reader.get(userId, uri, GMAIL_MODIFY_SCOPE, GMAIL_READONLY_SCOPE);
+        return reader.get(userId, uri, GoogleApiReader.GMAIL_MODIFY_SCOPE, GoogleApiReader.GMAIL_READONLY_SCOPE);
     }
 
     @Override

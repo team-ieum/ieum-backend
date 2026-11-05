@@ -68,7 +68,7 @@ public class CatalogStartupCheck {
                 problems.add("알 수 없는 auth: " + app.auth() + " (앱 " + app.key() + ")");
             }
         }
-        // 실행 가능한 ACTION만(= builder. ACTION은 전부 generation=false) — builder=false인 gmail.send_email(tool_key gmail)은 빠진다
+        // 실행 가능한 ACTION만(= builder)
         for (EventDefinition e : catalog.events()) {
             if (e.nodeType() != NodeType.ACTION || !e.builder()) {
                 continue;

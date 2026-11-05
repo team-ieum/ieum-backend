@@ -50,7 +50,7 @@ class AgentCatalogDiffReporterTest {
     }
 
     @Test
-    @DisplayName("agent가 BE builder 이벤트와 같은 id를 주면 경고 없음 — builder=false(gmail.send_email)는 비교에서 빠진다")
+    @DisplayName("agent가 BE builder 이벤트와 같은 id를 주면 경고 없음 — builder=false는 비교에서 빠진다")
     void report_sameIds_noWarn(CapturedOutput output) {
         given(agentClient.getNodeCatalog()).willReturn(entries(BUILDER));
 

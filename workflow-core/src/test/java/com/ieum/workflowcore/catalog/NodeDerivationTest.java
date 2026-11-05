@@ -2,11 +2,13 @@ package com.ieum.workflowcore.catalog;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assumptions.assumeThat;
 
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.enums.NodeType;
+import java.io.IOException;
+import java.net.URLClassLoader;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -14,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /** event → type·brand 계산과 옛 키 삭제 (IEUM-BE-92). 이벤트 이름·개수는 카탈로그에서 꺼낸다(하드코딩 금지). */
 class NodeDerivationTest {
@@ -31,9 +34,9 @@ class NodeDerivationTest {
         return node;
     }
 
-    /** 실행 가능한 이벤트 — ACTION은 builder여야 하고, 그 밖은 builder·generation 중 하나다. 운영 규칙(NodeDerivation)과 같다. */
+    /** 실행 가능한 이벤트 = builder. 운영 규칙(NodeDerivation)과 같다. */
     private static boolean executable(EventDefinition event) {
-        return event.nodeType() == NodeType.ACTION ? event.builder() : (event.builder() || event.generation());
+        return event.builder();
     }
 
     private static EventDefinition firstOf(NodeType type) {
@@ -191,18 +194,17 @@ class NodeDerivationTest {
     }
 
     @Test
-    @DisplayName("실행할 수 없는 이벤트(ACTION은 builder 아님, 그 밖은 builder·generation 둘 다 false)는 같은 400이되 \"실행할 수 없는\" 문구 — agent가 실행할 수 없다")
-    void unexecutableEventIsRejected() {
-        // agent /v1/actions/execute는 builder ACTION의 tool_key만 받는다. 이름은 카탈로그에서 고른다(하드코딩 금지).
-        List<EventDefinition> targets = CATALOG.events().stream().filter(e -> !executable(e)).toList();
-        assumeThat(targets).as("실행 불가 이벤트가 카탈로그에 없다").isNotEmpty();
-        for (EventDefinition event : targets) {
-            assertThatThrownBy(() -> derivation.derive(node(event.name(), Map.of())))
-                .as(event.name())
+    @DisplayName("실행할 수 없는 이벤트(builder 아님)는 같은 400이되 \"실행할 수 없는\" 문구 — agent가 실행할 수 없다")
+    void unexecutableEventIsRejected(@TempDir Path dir) throws IOException {
+        EventCatalogTest.writeCatalog(dir, Map.of("manual/run.json", EventCatalogTest.trigger("MANUAL"), "manual/off.json", """
+                {"node_type":"ACTION","kind":"action","tool_key":"x","builder":false,"fixed":{"type":"ACTION","config":{}}}"""));
+        try (URLClassLoader loader = EventCatalogTest.loader(dir)) {
+            NodeDerivation offline = new NodeDerivation(EventCatalog.load(loader));
+            assertThatThrownBy(() -> offline.derive(node("manual.off", Map.of())))
                 .isInstanceOfSatisfying(CustomException.class, e -> {
                     assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_WORKFLOW);
                     assertThat(e.getMessage()).startsWith("실행할 수 없는 노드 종류입니다: ")
-                        .contains(event.name()).contains("node-1");
+                        .contains("manual.off").contains("node-1");
                 });
         }
     }

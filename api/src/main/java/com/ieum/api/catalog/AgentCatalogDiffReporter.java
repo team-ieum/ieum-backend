@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component;
  * 차이를 경고로만 남긴다 (IEUM-BE-93). 두 서버가 다른 카탈로그 서브모듈 커밋으로 배포됐는지 알아채는 용도다.
  *
  * <p>기동을 막지 않는다 — agent가 늦게 뜨거나 내려가 있어도 BE는 떠야 하므로 예외는 전부 삼킨다. 비교 기준이 builder인
- * 이유: agent 응답은 builder 항목만 싣는다(builder=false인 gmail.send_email은 늘 빠진다). 응답에 버전·해시가 없어 id 집합으로만 본다.
+ * 이유: agent 응답은 builder 항목만 싣는다. 응답에 버전·해시가 없어 id 집합으로만 본다.
  * 테스트 컨텍스트는 agent가 없으므로 {@code ieum.catalog.agent-diff-check: false}로 끈다.
  */
 @Slf4j

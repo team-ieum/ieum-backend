@@ -12,6 +12,6 @@ import java.util.Set;
  * @param fieldsSources 동적 칸(dict 칸의 안쪽 칸 목록) 공급원 — {@code GET /api/v1/integrations/{app}/fields/{resource}}
  */
 public record EventDefinition(String name, String app, NodeType nodeType, String kind, TriggerType triggerType,
-                              String toolKey, boolean builder, boolean generation, Set<String> optionsSources,
+                              String toolKey, boolean builder, Set<String> optionsSources,
                               Set<String> fieldsSources) {
 }

@@ -142,7 +142,7 @@ public final class EventCatalog {
             throw fail(name, "ACTION 이벤트에 tool_key가 없다");
         }
         return new EventDefinition(name, app, nodeType, kind, triggerType, toolKey,
-                !Boolean.FALSE.equals(raw.get("builder")), !Boolean.FALSE.equals(raw.get("generation")),
+                !Boolean.FALSE.equals(raw.get("builder")),
                 sources(raw, "optionsSource"), sources(raw, "fieldsSource"));
     }
 
