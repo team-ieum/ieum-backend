@@ -32,6 +32,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -47,6 +49,7 @@ import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.test.web.client.RequestMatcher;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
+import org.springframework.web.util.UriUtils;
 
 /**
  * 드롭다운 공급원 6종의 Google 호출 모양과 오류 매핑을 고정한다 (IEUM-BE-71·72).
@@ -66,6 +69,7 @@ class GoogleOptionSourcesTest {
     private static final String GMAIL = "https://www.googleapis.com/auth/gmail.modify";
     private static final String SEND_AS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs";
     private static final String LABELS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/labels";
+    private static final String SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets/1Bxi_-9";
 
     private final RestTemplate restTemplate = new RestTemplate();
     private final MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
@@ -82,6 +86,9 @@ class GoogleOptionSourcesTest {
     private final GoogleFoldersOptionSource folders = new GoogleFoldersOptionSource(reader);
     private final GmailSendAsOptionSource gmailSendAs = new GmailSendAsOptionSource(reader);
     private final GmailLabelsOptionSource gmailLabels = new GmailLabelsOptionSource(reader);
+    private final GoogleSheetColumnsReader columnsReader = new GoogleSheetColumnsReader(reader);
+    private final GoogleSheetColumnsOptionSource sheetColumns = new GoogleSheetColumnsOptionSource(columnsReader);
+    private final GoogleSheetColumnsFieldSource sheetColumnFields = new GoogleSheetColumnsFieldSource(columnsReader);
     private final UUID userId = UUID.randomUUID();
 
     @AfterEach
@@ -107,6 +114,42 @@ class GoogleOptionSourcesTest {
         Map<String, String> inputs = new HashMap<>();
         inputs.put("spreadsheet_id", spreadsheetId);
         return inputs;
+    }
+
+    private Map<String, String> columnInput(String spreadsheetId, String sheetId) {
+        Map<String, String> inputs = new HashMap<>();
+        inputs.put("spreadsheet_id", spreadsheetId);
+        inputs.put("sheet_id", sheetId);
+        return inputs;
+    }
+
+    private static String sheet(String idJson, String title, int columnCount) {
+        return "{\"properties\":{" + idJson + "\"title\":\"" + title + "\","
+            + "\"gridProperties\":{\"columnCount\":" + columnCount + "}}}";
+    }
+
+    /** 메타 → 헤더 두 요청을 순서대로 기대한다. headerJson이 null이면 헤더 요청이 나가면 안 된다 */
+    private void expectSheet(String sheetsJson, String headerJson, RequestMatcher headerCheck) {
+        server.expect(requestTo(startsWith(SHEETS_API + "?")))
+            .andExpect(header("Authorization", "Bearer g-token"))
+            .andExpect(queryValues("fields", "sheets.properties(sheetId,title,gridProperties.columnCount)"))
+            .andRespond(withSuccess("{\"sheets\":[" + sheetsJson + "]}", MediaType.APPLICATION_JSON));
+        if (headerJson != null) {
+            server.expect(requestTo(startsWith(SHEETS_API + "/values/")))
+                .andExpect(headerCheck)
+                .andRespond(withSuccess(headerJson, MediaType.APPLICATION_JSON));
+        }
+    }
+
+    /** values.get 경로 마지막 조각 — 날것은 엄격 인코딩, 퍼센트 디코드하면 기대 A1 범위.
+     *  URLDecoder(폼 디코딩)는 '+'를 공백으로 바꿔 '+'로 보낸 구현도 통과시키므로 UriUtils.decode를 쓴다 */
+    private static RequestMatcher headerRange(String expected) {
+        return request -> {
+            String raw = request.getURI().getRawPath();
+            String segment = raw.substring(raw.lastIndexOf('/') + 1);
+            assertThat(raw).startsWith("/v4/spreadsheets/1Bxi_-9/values/");
+            assertThat(UriUtils.decode(segment, StandardCharsets.UTF_8)).isEqualTo(expected);
+        };
     }
 
     private Map<String, String> calendarInput(String calendarId) {
@@ -302,6 +345,155 @@ class GoogleOptionSourcesTest {
         server.expect(requestTo(WORKSHEETS_URL)).andRespond(withException(new SocketTimeoutException("read timed out")));
 
         assertErrorCode(() -> worksheets.fetch(userId, sheetInput("1Bxi_-9"), null), ErrorCode.GOOGLE_API_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("열 드롭다운 — sheetId로 시트를 찾아 1행 헤더를 열 문자 id·'B · 이메일' 이름으로, 중간 빈 헤더는 (제목 없음)")
+    void sheetColumnsListsHeadersByLetter() {
+        connected(SHEETS);
+        expectSheet(sheet("\"sheetId\":7,", "다른 시트", 26) + "," + sheet("\"sheetId\":42,", "응답", 26),
+            "{\"values\":[[\"이름\",\"이메일\",\"\",\"전화\"]]}", headerRange("'응답'!1:1"));
+
+        OptionPage page = sheetColumns.fetch(userId, columnInput("1Bxi_-9", "42"), "ignored-cursor");
+
+        assertThat(page.items()).containsExactly(
+            new OptionItem("A", "A · 이름"), new OptionItem("B", "B · 이메일"),
+            new OptionItem("C", "C · (제목 없음)"), new OptionItem("D", "D · 전화"));
+        assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("열 드롭다운 — 마지막 비지 않은 헤더 뒤의 빈 칸·공백뿐인 칸은 열이 아니다")
+    void sheetColumnsDropTrailingBlankHeaders() {
+        connected(SHEETS);
+        expectSheet(sheet("\"sheetId\":42,", "응답", 26), "{\"values\":[[\"이름\",\"\",\"  \"]]}", request -> { });
+
+        assertThat(sheetColumns.fetch(userId, columnInput("1Bxi_-9", "42"), null).items())
+            .containsExactly(new OptionItem("A", "A · 이름"));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"3, C, 3", "40, Z, 26"})
+    @DisplayName("헤더 행이 비면(values 없음) A부터 min(열 수, 26)까지 열 문자만")
+    void sheetColumnsAllBlankUseColumnCountUpToZ(int columnCount, String last, int size) {
+        connected(SHEETS);
+        expectSheet(sheet("\"sheetId\":42,", "응답", columnCount), "{\"range\":\"'응답'!1:1\"}", request -> { });
+
+        List<OptionItem> items = sheetColumns.fetch(userId, columnInput("1Bxi_-9", "42"), null).items();
+
+        assertThat(items).hasSize(size).first().isEqualTo(new OptionItem("A", "A"));
+        assertThat(items.get(size - 1)).isEqualTo(new OptionItem(last, last));
+    }
+
+    @Test
+    @DisplayName("헤더 행이 빈 문자열·공백뿐이어도(values는 있음) 전부 빈 헤더로 본다")
+    void sheetColumnsWhitespaceOnlyHeaderRowIsAllBlank() {
+        connected(SHEETS);
+        expectSheet(sheet("\"sheetId\":42,", "응답", 3), "{\"values\":[[\"\",\"  \"]]}", request -> { });
+
+        assertThat(sheetColumns.fetch(userId, columnInput("1Bxi_-9", "42"), null).items()).containsExactly(
+            new OptionItem("A", "A"), new OptionItem("B", "B"), new OptionItem("C", "C"));
+    }
+
+    @Test
+    @DisplayName("헤더가 있으면 26개 상한이 없다 — 27번째 헤더는 AA")
+    void sheetColumnsBeyondZ() {
+        connected(SHEETS);
+        String headers = IntStream.rangeClosed(1, 27).mapToObj(i -> "\"h" + i + "\"")
+            .collect(Collectors.joining(","));
+        expectSheet(sheet("\"sheetId\":42,", "응답", 30), "{\"values\":[[" + headers + "]]}", request -> { });
+
+        List<OptionItem> items = sheetColumns.fetch(userId, columnInput("1Bxi_-9", "42"), null).items();
+
+        assertThat(items).hasSize(27).last().isEqualTo(new OptionItem("AA", "AA · h27"));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"0, A", "25, Z", "26, AA", "27, AB", "51, AZ", "52, BA", "701, ZZ", "702, AAA"})
+    @DisplayName("열 문자는 A…Z 다음 AA(bijective base-26)")
+    void columnLetterIsBijectiveBase26(int index, String letter) {
+        assertThat(GoogleSheetColumnsReader.columnLetter(index)).isEqualTo(letter);
+    }
+
+    @Test
+    @DisplayName("sheet_id \"0\"은 정상 값 — 응답에서 sheetId가 생략된 첫 시트를 찾는다 (drive scope만으로도)")
+    void sheetColumnsFirstSheetIdZero() {
+        connected(DRIVE);
+        expectSheet(sheet("", "Sheet1", 26) + "," + sheet("\"sheetId\":5,", "Other", 26),
+            "{\"values\":[[\"이름\"]]}", headerRange("'Sheet1'!1:1"));
+
+        assertThat(sheetColumns.fetch(userId, columnInput("1Bxi_-9", "0"), null).items())
+            .containsExactly(new OptionItem("A", "A · 이름"));
+    }
+
+    @Test
+    @DisplayName("시트 제목의 '·/·#·?·공백은 A1 이스케이프('')와 경로 엄격 인코딩(%2F·%20)으로 보낸다")
+    void sheetColumnsEscapesTitleAndEncodesRange() {
+        connected(SHEETS);
+        expectSheet(sheet("\"sheetId\":3,", "Q1/Q2 '요약' #1?", 26), "{\"values\":[[\"이름\"]]}",
+            request -> {
+                assertThat(request.getURI().getRawPath()).contains("%2F").doesNotContain("#", "?", "+");
+                headerRange("'Q1/Q2 ''요약'' #1?'!1:1").match(request);
+            });
+
+        assertThat(sheetColumns.fetch(userId, columnInput("1Bxi_-9", "3"), null).items()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("그 파일에 없는 sheetId는 헤더를 읽지 않고 GOOGLE_RESOURCE_NOT_FOUND")
+    void sheetColumnsUnknownSheetIdIsNotFound() {
+        connected(SHEETS);
+        expectSheet(sheet("\"sheetId\":1,", "응답", 26), null, null);
+
+        assertErrorCode(() -> sheetColumns.fetch(userId, columnInput("1Bxi_-9", "9"), null),
+            ErrorCode.GOOGLE_RESOURCE_NOT_FOUND);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        ", 0", "'  ', 0", "'{{nodes.a.output.id}}', 0", "../x, 0",
+        "1Bxi_-9, ", "1Bxi_-9, ''", "1Bxi_-9, '{{nodes.a.output.sheet}}'", "1Bxi_-9, -1",
+        "1Bxi_-9, 1.5", "1Bxi_-9, 매출", "1Bxi_-9, 12345678901"
+    })
+    @DisplayName("spreadsheet_id·sheet_id가 비었거나 참조식·형식 오류면 계정·토큰·Google 조회 없이 INVALID_INPUT")
+    void sheetColumnsRejectBadInputBeforeTokenLookup(String spreadsheetId, String sheetId) {
+        assertErrorCode(() -> sheetColumns.fetch(userId, columnInput(spreadsheetId, sheetId), null),
+            ErrorCode.INVALID_INPUT);
+        verify(accounts, never()).findByUserIdAndProvider(any(), any());
+        verify(tokenService, never()).getValidAccessToken(any());
+    }
+
+    @Test
+    @DisplayName("열 칸 목록 — 열마다 {key:열 문자, title:'헤더 (B)', type:string, required:false}, 빈 헤더는 '(제목 없음) (C)'")
+    void sheetColumnFieldsShape() {
+        connected(SHEETS);
+        expectSheet(sheet("\"sheetId\":42,", "응답", 26),
+            "{\"values\":[[\"이름\",\"이메일\",\"\",\"전화\"]]}", headerRange("'응답'!1:1"));
+
+        assertThat(sheetColumnFields.fetch(userId, columnInput("1Bxi_-9", "42"))).containsExactly(
+            Map.of("key", "A", "title", "이름 (A)", "type", "string", "required", false),
+            Map.of("key", "B", "title", "이메일 (B)", "type", "string", "required", false),
+            Map.of("key", "C", "title", "(제목 없음) (C)", "type", "string", "required", false),
+            Map.of("key", "D", "title", "전화 (D)", "type", "string", "required", false));
+    }
+
+    @Test
+    @DisplayName("헤더 행이 비면 칸 title도 열 문자만")
+    void sheetColumnFieldsAllBlankLetterOnly() {
+        connected(SHEETS);
+        expectSheet(sheet("\"sheetId\":42,", "응답", 2), "{}", request -> { });
+
+        assertThat(sheetColumnFields.fetch(userId, columnInput("1Bxi_-9", "42"))).containsExactly(
+            Map.of("key", "A", "title", "A", "type", "string", "required", false),
+            Map.of("key", "B", "title", "B", "type", "string", "required", false));
+    }
+
+    @Test
+    @DisplayName("칸 목록도 참조식 sheet_id는 토큰 조회 없이 INVALID_INPUT")
+    void sheetColumnFieldsRejectReferenceSheetId() {
+        assertErrorCode(() -> sheetColumnFields.fetch(userId, columnInput("1Bxi_-9", "{{nodes.a.output.sheet}}")),
+            ErrorCode.INVALID_INPUT);
+        verify(tokenService, never()).getValidAccessToken(any());
     }
 
     @Test
@@ -596,10 +788,16 @@ class GoogleOptionSourcesTest {
     @DisplayName("공급원 키는 카탈로그 optionsSource와 1:1 계약")
     void keysMatchAgentOptionsSource() {
         assertThat(List.of(spreadsheets.key(), worksheets.key(), calendars.key(), writableCalendars.key(),
-                events.key(), files.key(), folders.key(), gmailSendAs.key(), gmailLabels.key()))
+                events.key(), files.key(), folders.key(), gmailSendAs.key(), gmailLabels.key(), sheetColumns.key()))
             .containsExactly("google.spreadsheets", "google.worksheets", "google.calendars",
                 "google.writable_calendars", "google.events", "google.files", "google.folders",
-                "google.gmail_send_as", "google.gmail_labels");
+                "google.gmail_send_as", "google.gmail_labels", "google.sheet_columns");
+    }
+
+    @Test
+    @DisplayName("칸 목록 공급원 키는 카탈로그 fieldsSource와 1:1 계약")
+    void fieldSourceKeyMatchesCatalog() {
+        assertThat(sheetColumnFields.key()).isEqualTo("google.sheet_columns");
     }
 
     @Test
