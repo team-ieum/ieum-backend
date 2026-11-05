@@ -18,7 +18,7 @@ public interface IntegrationOptionControllerDocs {
     @Operation(
         summary = "드롭다운 선택지 조회",
         description = "도구 필드 스키마의 optionsSource({app}.{resource})에 해당하는 선택지를 조회합니다. "
-            + "지원: google/spreadsheets, google/worksheets(spreadsheet_id 필수), google/sheet_columns(spreadsheet_id·sheet_id 필수 — sheet_id는 워크시트의 sheetId 숫자 문자열(첫 시트는 보통 \"0\"). 1행 헤더 열, 값은 열 문자·이름은 'B · 헤더'(빈 헤더 '(제목 없음)', 헤더 행이 비면 A~ 열 수(최대 Z)까지 열 문자만). nextCursor 항상 null. 그 파일에 없는 sheet_id는 GOOGLE_RESOURCE_NOT_FOUND), "
+            + "지원: google/spreadsheets, google/worksheets(spreadsheet_id 필수 — 값은 sheetId 문자열(첫 시트는 보통 \"0\")·이름은 탭 제목), google/sheet_columns(spreadsheet_id·sheet_id 필수 — sheet_id는 워크시트의 sheetId 숫자 문자열(첫 시트는 보통 \"0\"). 1행 헤더 열, 값은 열 문자·이름은 'B · 헤더'(빈 헤더 '(제목 없음)', 헤더 행이 비면 A~ 열 수(최대 Z)까지 열 문자만). nextCursor 항상 null. 그 파일에 없는 sheet_id는 GOOGLE_RESOURCE_NOT_FOUND), "
             + "google/calendars(읽기 전용 포함 — 이름 뒤 (읽기 전용)), "
             + "google/writable_calendars(일정을 쓸 수 있는 캘린더만 — accessRole writerWithoutPrivateAccess·writer·owner, 꼬리표 없음. 걸러진 페이지는 items가 비어도 nextCursor가 있을 수 있음), "
             + "google/events(calendar_id 선택 — 비우면 기본 캘린더, q 선택 — 검색어, 공백이면 무시. 지금 이후 일정만 시작순 20개씩), google/files, google/folders, "
