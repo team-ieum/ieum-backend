@@ -417,4 +417,139 @@ class ConditionNodeExecutorTest {
         assertThat(run(shape(List.of(branch(" ", "A", null, rule("x", "isNotEmpty", null))), null, null)).isSuccess()).isTrue();
         assertThat(run(shape(List.of(branch("Else", "A", null, rule("x", "isNotEmpty", null))), null, null)).isSuccess()).isTrue();
     }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // 상세·경고 (Part B)
+    // ──────────────────────────────────────────────────────────────────────
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> firstRule(ExecutorResult r) {
+        Map<String, Object> branch = ((List<Map<String, Object>>) r.getDetail().get("branches")).get(0);
+        return ((List<Map<String, Object>>) branch.get("rules")).get(0);
+    }
+
+    @SafeVarargs
+    private ExecutorResult runRules(String match, Map<String, Object>... rules) {
+        return run(shape(List.of(branch("b_7f3a9c21", "긴급", match, rules)), null, null));
+    }
+
+    @Test
+    @DisplayName("상세: 전 갈래·전 조건의 판단 근거를 spec 예 그대로 남긴다")
+    void detail_recordsEveryBranchAndRule() {
+        ExecutorResult r = run(shape(List.of(
+            branch("b_7f3a9c21", "긴급", "all",
+                rule("{{nodes.ai.output.subject}}", "contains", "긴급"),
+                rule("{{nodes.ai.output.amount}}", "greaterThan", "100000")),
+            branch("b_0d44e8f3", "일반 문의", "any", rule("{{nodes.ai.output.subject}}", "in", "문의, 질문"))),
+            null, null));
+        assertThat(r.getDetail()).isEqualTo(Map.of(
+            "picked", List.of("b_7f3a9c21"),
+            "branches", List.of(
+                Map.of("key", "b_7f3a9c21", "name", "긴급", "matched", true, "rules", List.of(
+                    Map.of("left", "[긴급] 서버 다운", "operator", "contains", "right", "긴급", "passed", true),
+                    Map.of("left", "120,000원", "operator", "greaterThan", "right", "100000", "passed", true))),
+                Map.of("key", "b_0d44e8f3", "name", "일반 문의", "matched", false, "rules", List.of(
+                    Map.of("left", "[긴급] 서버 다운", "operator", "in", "right", "문의, 질문", "passed", false)))),
+            "warnings", List.of()));
+    }
+
+    @Test
+    @DisplayName("상세: 레거시는 key true·이름 참, otherwise stop 불일치는 picked가 빈 목록")
+    @SuppressWarnings("unchecked")
+    void detail_legacyAndStop() {
+        ExecutorResult legacy = run(new HashMap<>(Map.of("operator", "equals", "left", "a", "right", "a")));
+        assertThat(legacy.getDetail()).containsEntry("picked", List.of("true"));
+        Map<String, Object> b0 = ((List<Map<String, Object>>) legacy.getDetail().get("branches")).get(0);
+        assertThat(b0).containsEntry("key", "true").containsEntry("name", "참");
+
+        ExecutorResult stop = run(shape(List.of(branch("b_aaaaaaa1", "A", null, rule("", "isNotEmpty", null))), null, "stop"));
+        assertThat(stop.getDetail()).containsEntry("picked", List.of());
+    }
+
+    @Test
+    @DisplayName("상세: 설정 오류로 실패하면 null")
+    void detail_nullOnConfigError() {
+        ExecutorResult r = run(badConfigs().findFirst().orElseThrow());
+        assertThat(r.isSuccess()).isFalse();
+        assertThat(r.getDetail()).isNull();
+    }
+
+    @Test
+    @DisplayName("경고: 숫자로 못 읽은 값")
+    void warning_unreadableNumber() {
+        ExecutorResult r = runRules(null, rule("약 1천", "greaterThan", "100000"));
+        assertThat(r.getDetail()).containsEntry("warnings",
+            List.of("갈래 '긴급' 1번째 조건: '약 1천'을(를) 숫자로 읽지 못해 거짓으로 봤어요."));
+        assertThat(firstRule(r)).containsEntry("passed", false);
+    }
+
+    @Test
+    @DisplayName("경고: 날짜로 못 읽은 값")
+    void warning_unreadableDate() {
+        ExecutorResult r = runRules("any", rule("x", "isNotEmpty", null), rule("언젠가", "after", "오늘"));
+        assertThat(r.getDetail()).containsEntry("warnings",
+            List.of("갈래 '긴급' 2번째 조건: '언젠가'을(를) 날짜로 읽지 못해 거짓으로 봤어요."));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"contains", "notContains", "startsWith", "endsWith", "in", "notIn"})
+    @DisplayName("경고: 기준값이 비면 — notContains·notIn 포함 — 거짓 + 경고")
+    void warning_emptyRight(String operator) {
+        ExecutorResult r = runRules(null, rule("x", operator, "{{nodes.missing.output.v}}"));
+        assertThat(r.getDetail()).containsEntry("warnings",
+            List.of("갈래 '긴급' 1번째 조건: 기준값이 비어 있어 거짓으로 봤어요."));
+        assertThat(firstRule(r)).containsEntry("passed", false);
+    }
+
+    @Test
+    @DisplayName("경고: 참거짓으로 못 읽는 값은 경고 없이 거짓")
+    void warning_noneForUnknownBoolean() {
+        assertThat(runRules(null, rule("maybe", "isTrue", null)).getDetail()).containsEntry("warnings", List.of());
+    }
+
+    @Test
+    @DisplayName("상세: 앞 조건이 거짓이어도 뒤 조건까지 평가한다")
+    @SuppressWarnings("unchecked")
+    void detail_evaluatesEveryRuleEvenAfterFalse() {
+        ExecutorResult r = runRules("all", rule("a", "equals", "b"), rule("x", "isNotEmpty", null));
+        Map<String, Object> b0 = ((List<Map<String, Object>>) r.getDetail().get("branches")).get(0);
+        List<Map<String, Object>> rules = (List<Map<String, Object>>) b0.get("rules");
+        assertThat(rules).hasSize(2);
+        assertThat(rules.get(0)).containsEntry("passed", false);
+        assertThat(rules.get(1)).containsEntry("passed", true);
+        assertThat(b0).containsEntry("matched", false);
+    }
+
+    @Test
+    @DisplayName("상세: right를 안 쓰는 연산자는 right null을 그대로 둔다")
+    void detail_keepsNullRightForUnaryOperators() {
+        Map<String, Object> noRight = new HashMap<>(Map.of("left", "예", "operator", "isTrue"));
+        ExecutorResult r = runRules(null, noRight);
+        assertThat(r.isSuccess()).isTrue();
+        assertThat(firstRule(r)).containsEntry("right", null);
+    }
+
+    @Test
+    @DisplayName("상세·경고: 긴 값은 200자 + …")
+    void detail_truncatesLongValues() {
+        String longValue = "가".repeat(300);
+        String cut = "가".repeat(200) + "…";
+        assertThat(firstRule(runRules(null, rule(longValue, "isNotEmpty", null)))).containsEntry("left", cut);
+        assertThat(runRules(null, rule(longValue, "greaterThan", "1")).getDetail()).containsEntry("warnings",
+            List.of("갈래 '긴급' 1번째 조건: '" + cut + "'을(를) 숫자로 읽지 못해 거짓으로 봤어요."));
+    }
+
+    @Test
+    @DisplayName("상세: 자르기는 서로게이트 쌍을 가르지 않는다")
+    void detail_truncationKeepsSurrogatePairs() {
+        String left = "a".repeat(199) + "😀" + "b".repeat(10);
+        assertThat(firstRule(runRules(null, rule(left, "isNotEmpty", null)))).containsEntry("left", "a".repeat(199) + "…");
+    }
+
+    @Test
+    @DisplayName("상세: 문자열이 아닌 값(JSON boolean)은 그대로")
+    void detail_keepsNonStringValues() {
+        ExecutorResult r = run(new HashMap<>(Map.of("operator", "equals", "left", "true", "right", true)));
+        assertThat(firstRule(r)).containsEntry("right", Boolean.TRUE);
+    }
 }
