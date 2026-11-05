@@ -23,6 +23,8 @@ public class EdgeDto {
     @NotBlank(message = "엣지 target은 필수입니다.")
     private String target;
 
-    /** CONDITION 노드의 분기 값("true"/"false"). 일반 연결에서는 비어 있다. */
+    /**
+     * CONDITION(branch.if) 노드에서 나가는 엣지의 갈래 — 그 노드 config.branches[].key("b_"+hex 8자) 또는 "else"(아무 갈래도 안 맞을 때). branches가 없는 레거시 노드는 "true"/"false". 일반 연결에서는 비어 있다.
+     */
     private String conditionType;
 }
