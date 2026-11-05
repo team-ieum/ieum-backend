@@ -27,6 +27,9 @@ import lombok.extern.slf4j.Slf4j;
 @Setter
 public class ExecutionCursor {
 
+    /** CONDITION 노드 출력의 예약 키 — live로 고른 갈래 key 목록 */
+    public static final String BRANCH_KEYS = "_branchKeys";
+
     /** {{nodes.<nodeId>.output.<fieldPath>}} 패턴 */
     private static final Pattern VARIABLE_PATTERN =
         Pattern.compile("\\{\\{nodes\\.([a-zA-Z0-9-]+)\\.output\\.([a-zA-Z0-9_.]+)\\}\\}");
@@ -67,7 +70,9 @@ public class ExecutionCursor {
     /**
      * 방금 실행을 마친 노드의 '살아있는(live)' outgoing 엣지를 반환한다.
      *
-     * <p>CONDITION 노드는 컨텍스트의 {@code result}(true/false)와 일치하는 conditionType 엣지만 live이고,
+     * <p>CONDITION은 출력 예약 키 {@code _branchKeys}(갈래 key·{@code else}·레거시 {@code true}/{@code false},
+     * 멈춤이면 빈 목록)에 든 {@code conditionType} 엣지만 live. 이 키가 없는 출력(배포 전 실행을 재처리할 때
+     * 저장된 {@code {result}})은 {@code result}로 {@code true}/{@code false}를 고른다.
      * 그 외 노드는 모든 outgoing 엣지가 live다. 죽은(dead) 엣지의 타깃은 스케줄러가 가지치기한다.
      */
     public List<Edge> liveOutgoingEdges(Node node) {
@@ -75,11 +80,16 @@ public class ExecutionCursor {
         if (node.getType() != NodeType.CONDITION) {
             return outgoing;
         }
-        Object conditionResult = context.getNodeOutput(node.getId()).get("result");
-        String conditionType = Boolean.TRUE.equals(conditionResult) ? "true" : "false";
-        log.debug("[Cursor] CONDITION 노드 '{}' 분기 방향: {}", node.getId(), conditionType);
+        Map<String, Object> output = context.getNodeOutput(node.getId());
+        Set<String> keys = new LinkedHashSet<>();
+        if (output.get(BRANCH_KEYS) instanceof List<?> list) {
+            list.forEach(k -> keys.add(String.valueOf(k)));
+        } else {
+            keys.add(Boolean.TRUE.equals(output.get("result")) ? "true" : "false");
+        }
+        log.debug("[Cursor] CONDITION 노드 '{}' 분기 방향: {}", node.getId(), keys);
         return outgoing.stream()
-            .filter(e -> conditionType.equals(e.getConditionType()))
+            .filter(e -> e.getConditionType() != null && keys.contains(e.getConditionType()))
             .toList();
     }
 
