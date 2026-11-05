@@ -62,7 +62,7 @@ class GoogleOptionSourcesTest {
     private static final String DRIVE = "https://www.googleapis.com/auth/drive";
     private static final String SHEETS = "https://www.googleapis.com/auth/spreadsheets";
     private static final String WORKSHEETS_URL =
-        "https://sheets.googleapis.com/v4/spreadsheets/1Bxi_-9?fields=sheets.properties.title";
+        "https://sheets.googleapis.com/v4/spreadsheets/1Bxi_-9?fields=sheets.properties(sheetId,title,sheetType)";
     private static final String CALENDAR = "https://www.googleapis.com/auth/calendar";
     private static final String CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
     private static final String EVENTS_PREFIX = "https://www.googleapis.com/calendar/v3/calendars/";
@@ -268,23 +268,42 @@ class GoogleOptionSourcesTest {
     }
 
     @Test
-    @DisplayName("워크시트 목록 — 탭 제목을 id·name 둘 다로, 특수문자 그대로, nextCursor는 null")
-    void worksheetsListsTabTitles() {
+    @DisplayName("워크시트 목록 — id는 sheetId 문자열(생략된 sheetId는 0), name은 제목 그대로, nextCursor는 null")
+    void worksheetsListsSheetIdAndTitle() {
         connected(SHEETS);
         server.expect(requestTo(WORKSHEETS_URL))
             .andExpect(method(HttpMethod.GET))
             .andExpect(header("Authorization", "Bearer g-token"))
             .andRespond(withSuccess(
-                "{\"sheets\":[{\"properties\":{\"title\":\"매출\"}},"
-                    + "{\"properties\":{\"title\":\"Q1/Q2 '요약' #1\"}}]}",
+                "{\"sheets\":[{\"properties\":{\"title\":\"첫 시트\"}},"
+                    + "{\"properties\":{\"sheetId\":5,\"title\":\"매출\"}},"
+                    + "{\"properties\":{\"sheetId\":1234567,\"title\":\"Q1/Q2 '요약' #1\"}}]}",
                 MediaType.APPLICATION_JSON));
 
         OptionPage page = worksheets.fetch(userId, sheetInput("1Bxi_-9"), "ignored-cursor");
 
         assertThat(page.items()).containsExactly(
-            new OptionItem("매출", "매출"),
-            new OptionItem("Q1/Q2 '요약' #1", "Q1/Q2 '요약' #1"));
+            new OptionItem("0", "첫 시트"),
+            new OptionItem("5", "매출"),
+            new OptionItem("1234567", "Q1/Q2 '요약' #1"));
         assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("워크시트 목록 — GRID가 아닌 시트(차트 시트 OBJECT 등)는 뺀다, sheetType이 없으면 GRID")
+    void worksheetsSkipNonGridSheets() {
+        connected(SHEETS);
+        server.expect(requestTo(WORKSHEETS_URL))
+            .andRespond(withSuccess(
+                "{\"sheets\":[{\"properties\":{\"sheetId\":1,\"title\":\"데이터\",\"sheetType\":\"GRID\"}},"
+                    + "{\"properties\":{\"sheetId\":2,\"title\":\"차트\",\"sheetType\":\"OBJECT\"}},"
+                    + "{\"properties\":{\"sheetId\":3,\"title\":\"연결\",\"sheetType\":\"DATA_SOURCE\"}},"
+                    + "{\"properties\":{\"sheetId\":4,\"title\":\"타입 생략\"}}]}",
+                MediaType.APPLICATION_JSON));
+
+        assertThat(worksheets.fetch(userId, sheetInput("1Bxi_-9"), null).items()).containsExactly(
+            new OptionItem("1", "데이터"),
+            new OptionItem("4", "타입 생략"));
     }
 
     @Test

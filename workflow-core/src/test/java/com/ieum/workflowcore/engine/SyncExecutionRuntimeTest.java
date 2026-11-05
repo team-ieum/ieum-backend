@@ -27,6 +27,7 @@ import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.event.ExecutionEventType;
 import com.ieum.workflowcore.engine.event.NodeEventStatus;
 import com.ieum.workflowcore.engine.executor.AlertNotifier;
+import com.ieum.workflowcore.engine.executor.ConditionNodeExecutor;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.engine.validation.WorkflowValidationClient;
@@ -57,6 +58,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -144,17 +147,41 @@ class SyncExecutionRuntimeTest {
     }
 
     private SyncExecutionRuntime runtime() {
-        List<NodeExecutor> executors = List.of(
-            new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults),
-            new RecordingExecutor(NodeType.AI, log, failNodeIds, conditionResults),
-            new RecordingExecutor(NodeType.CONDITION, log, failNodeIds, conditionResults)
-        );
+        return runtimeWith(trigger(), ai(), new RecordingExecutor(NodeType.CONDITION, log, failNodeIds, conditionResults));
+    }
+
+    private SyncExecutionRuntime runtimeWith(NodeExecutor... executors) {
         SyncExecutionRuntime runtime = new SyncExecutionRuntime(
-            objectMapper, logRepository, executionRepository, crudService, eventPublisher, executors,
+            objectMapper, logRepository, executionRepository, crudService, eventPublisher, List.of(executors),
             new RetryProperties(), idempotencyStore, alertNotifier, validationClient);
         runtime.initExecutorMap();
         ReflectionTestUtils.setField(runtime, "parallelism", 4);
         return runtime;
+    }
+
+    private RecordingExecutor trigger() {
+        return new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults);
+    }
+
+    private RecordingExecutor ai() {
+        return new RecordingExecutor(NodeType.AI, log, failNodeIds, conditionResults);
+    }
+
+    private Map<String, Object> conditionNode(String id, Map<String, Object> config) {
+        Map<String, Object> n = node(id, "CONDITION");
+        n.put("config", config);
+        return n;
+    }
+
+    private List<WorkflowExecutionLog> savedLogs() {
+        ArgumentCaptor<WorkflowExecutionLog> captor =
+            ArgumentCaptor.forClass(WorkflowExecutionLog.class);
+        verify(logRepository, atLeastOnce()).save(captor.capture());
+        return captor.getAllValues();
+    }
+
+    private WorkflowExecutionLog logOf(List<WorkflowExecutionLog> logs, String nodeId) {
+        return logs.stream().filter(l -> nodeId.equals(l.getNodeId())).findFirst().orElseThrow();
     }
 
     private Map<String, Object> node(String id, String type) {
@@ -260,6 +287,86 @@ class SyncExecutionRuntimeTest {
         run();
         assertThat(log).contains("t", "cond", "yes");
         assertThat(log).doesNotContain("no");
+        verifyFinished(ExecutionStatus.SUCCESS, false);
+    }
+
+    /** t → cond, cond --b_aaaaaaa1--> yes, cond --else|b_bbbbbbb2--> no. RecordingExecutor TRIGGER 출력 = {output: "t"}. */
+    private void stubRealCondition(Map<String, Object> condConfig, String noEdge) {
+        stubDefinition(
+            List.of(node("t", "TRIGGER"), conditionNode("cond", condConfig), node("yes", "AI"), node("no", "AI")),
+            List.of(edge("t", "cond", null), edge("cond", "yes", "b_aaaaaaa1"), edge("cond", "no", noEdge)));
+    }
+
+    @Test
+    @DisplayName("실 CONDITION 실행기: 치환된 config로 갈래를 골라 그 key 엣지만 실행한다")
+    void realCondition_newShape_routesByBranchKey() throws Exception {
+        stubRealCondition(Map.of("branches", List.of(Map.of(
+            "key", "b_aaaaaaa1", "name", "긴급",
+            "rules", List.of(Map.of("left", "{{nodes.t.output.output}}", "operator", "equals", "right", " T "))))),
+            "else");
+
+        runtimeWith(trigger(), ai(), new ConditionNodeExecutor())
+            .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+        assertThat(log).contains("t", "yes").doesNotContain("no");
+        assertThat(logOf(savedLogs(), "cond").getOutputJson()).contains("\"_branchKeys\":[\"b_aaaaaaa1\"]");
+        verifyFinished(ExecutionStatus.SUCCESS, false);
+    }
+
+    @Test
+    @DisplayName("실 CONDITION 실행기: otherwise stop이면 뒤 노드를 전부 건너뛰고 실행은 성공")
+    void realCondition_stop_skipsEverythingAndSucceeds() throws Exception {
+        stubRealCondition(Map.of("otherwise", "stop", "branches", List.of(Map.of(
+            "key", "b_aaaaaaa1", "name", "긴급",
+            "rules", List.of(Map.of("left", "{{nodes.t.output.output}}", "operator", "equals", "right", "x"))))),
+            "else");
+
+        runtimeWith(trigger(), ai(), new ConditionNodeExecutor())
+            .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+        assertThat(log).doesNotContain("yes", "no");
+        List<WorkflowExecutionLog> logs = savedLogs();
+        assertThat(logOf(logs, "cond").getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
+        assertThat(logOf(logs, "cond").getOutputJson()).contains("\"branch\":null");
+        assertThat(logOf(logs, "yes").getStatus()).isEqualTo(ExecutionLogStatus.SKIPPED);
+        assertThat(logOf(logs, "no").getStatus()).isEqualTo(ExecutionLogStatus.SKIPPED);
+        verifyFinished(ExecutionStatus.SUCCESS, false);
+    }
+
+    @Test
+    @DisplayName("실 CONDITION 실행기: pick all이면 맞은 갈래 엣지를 전부 실행한다")
+    void realCondition_pickAll_runsEveryMatchedBranch() throws Exception {
+        stubRealCondition(Map.of("pick", "all", "branches", List.of(
+            Map.of("key", "b_aaaaaaa1", "name", "A",
+                "rules", List.of(Map.of("left", "{{nodes.t.output.output}}", "operator", "isNotEmpty"))),
+            Map.of("key", "b_bbbbbbb2", "name", "B",
+                "rules", List.of(Map.of("left", "{{nodes.t.output.output}}", "operator", "isNotEmpty"))))),
+            "b_bbbbbbb2");
+
+        runtimeWith(trigger(), ai(), new ConditionNodeExecutor())
+            .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+        assertThat(log).contains("t", "yes", "no");
+        verifyFinished(ExecutionStatus.SUCCESS, false);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"first", "all"})
+    @DisplayName("실 CONDITION 실행기: 두 갈래 엣지가 같은 노드로 가면 pick first·all 모두 그 노드는 한 번만 실행된다")
+    void realCondition_twoBranchEdgesToSameNode_runsOnce(String pick) throws Exception {
+        Map<String, Object> rule = Map.of("left", "{{nodes.t.output.output}}", "operator", "isNotEmpty");
+        stubDefinition(
+            List.of(node("t", "TRIGGER"), conditionNode("cond", Map.of("pick", pick, "branches", List.of(
+                Map.of("key", "b_aaaaaaa1", "name", "A", "rules", List.of(rule)),
+                Map.of("key", "b_bbbbbbb2", "name", "B", "rules", List.of(rule))))), node("x", "AI")),
+            List.of(edge("t", "cond", null), edge("cond", "x", "b_aaaaaaa1"), edge("cond", "x", "b_bbbbbbb2")));
+
+        runtimeWith(trigger(), ai(), new ConditionNodeExecutor())
+            .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+        assertThat(log.stream().filter("x"::equals).count()).isEqualTo(1);
+        assertThat(savedLogs()).filteredOn(l -> "x".equals(l.getNodeId()))
+            .singleElement().extracting(WorkflowExecutionLog::getStatus).isEqualTo(ExecutionLogStatus.SUCCESS);
         verifyFinished(ExecutionStatus.SUCCESS, false);
     }
 
@@ -620,13 +727,6 @@ class SyncExecutionRuntimeTest {
             return captor.getAllValues();
         }
 
-        private List<WorkflowExecutionLog> savedLogs() {
-            ArgumentCaptor<WorkflowExecutionLog> captor =
-                ArgumentCaptor.forClass(WorkflowExecutionLog.class);
-            verify(logRepository, atLeastOnce()).save(captor.capture());
-            return captor.getAllValues();
-        }
-
         private ExecutionEvent terminalEventOf(List<ExecutionEvent> events, String nodeId) {
             return events.stream()
                 .filter(e -> nodeId.equals(e.nodeId()) && e.type() != ExecutionEventType.NODE_STARTED)
@@ -762,10 +862,6 @@ class SyncExecutionRuntimeTest {
             return captor.getAllValues();
         }
 
-        private WorkflowExecutionLog logOf(List<WorkflowExecutionLog> logs, String nodeId) {
-            return logs.stream().filter(l -> nodeId.equals(l.getNodeId())).findFirst().orElseThrow();
-        }
-
         @Test
         @DisplayName("주입된 노드는 executor 호출 없이 SKIPPED로 기록되고, 나머지는 실행된다")
         void preCompleted_node_is_skipped_and_logged() throws Exception {
@@ -833,6 +929,19 @@ class SyncExecutionRuntimeTest {
 
             assertThat(log).containsExactlyInAnyOrder("t", "no");
             assertThat(log).doesNotContain("cond", "yes");
+            verifyFinished(ExecutionStatus.SUCCESS, false);
+        }
+
+        @Test
+        @DisplayName("스킵된 CONDITION 노드는 저장된 _branchKeys로 원 실행과 같은 갈래를 탄다")
+        void skipped_condition_restores_branch_by_branchKeys() throws Exception {
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("cond", "CONDITION"), node("yes", "AI"), node("no", "AI")),
+                List.of(edge("t", "cond", null), edge("cond", "yes", "b_aaaaaaa1"), edge("cond", "no", "else")));
+
+            runWith(Map.of("cond", Map.of("_branchKeys", List.of("else"), "result", false)));
+
+            assertThat(log).containsExactlyInAnyOrder("t", "no");
             verifyFinished(ExecutionStatus.SUCCESS, false);
         }
 

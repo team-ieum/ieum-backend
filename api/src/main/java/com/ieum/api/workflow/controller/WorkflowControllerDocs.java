@@ -115,7 +115,7 @@ public interface WorkflowControllerDocs {
             ),
             @ExampleObject(
                 name = "WEBHOOK 트리거",
-                summary = "외부 시스템이 POST /api/v1/hooks/{token} 로 호출 — 토큰은 POST /api/v1/workflows/{id}/webhook-token으로 발급",
+                summary = "외부 시스템이 POST /api/v1/hooks/{token} 로 호출 — 토큰은 POST /api/v1/workflows/{id}/webhook-token으로 발급 — 레거시 분기(branches 없음, 엣지 true/false)",
                 value = """
                     {
                       "name": "WEBHOOK 주문 알림 워크플로우",
@@ -208,8 +208,8 @@ public interface WorkflowControllerDocs {
                     }"""
             ),
             @ExampleObject(
-                name = "TRIGGER → CONDITION → TRANSFORM 분기",
-                summary = "score 값으로 합격/불합격 분기",
+                name = "TRIGGER → CONDITION(갈래) → TRANSFORM 분기",
+                summary = "score 60 이상이면 '합격' 갈래, 아니면 그 외 갈래",
                 value = """
                     {
                       "name": "CONDITION 분기 테스트",
@@ -221,7 +221,11 @@ public interface WorkflowControllerDocs {
                         { "id": "node-condition", "event": "branch.if", "type": "CONDITION", "label": "점수 판정",
                           "description": "점수가 60점 이상인지 확인해요.",
                           "position": { "x": 420, "y": 120 },
-                          "config": { "left": "{{nodes.node-trigger.output.score}}", "operator": "greaterThanOrEqual", "right": "60" }},
+                          "config": {
+                            "branches": [ { "key": "b_5c0a9e12", "name": "합격", "match": "all",
+                                            "rules": [ { "left": "{{nodes.node-trigger.output.score}}", "operator": "greaterThanOrEqual", "right": "60" } ] } ],
+                            "pick": "first", "otherwise": "branch"
+                          }},
                         { "id": "node-pass", "event": "transform.map", "type": "TRANSFORM", "label": "합격 처리",
                           "description": "60점 이상이면 합격으로 표시해요.",
                           "position": { "x": 800, "y": 40 },
@@ -233,8 +237,8 @@ public interface WorkflowControllerDocs {
                       ],
                       "edges": [
                         { "source": "node-trigger",   "target": "node-condition" },
-                        { "source": "node-condition", "target": "node-pass", "conditionType": "true" },
-                        { "source": "node-condition", "target": "node-fail", "conditionType": "false" }
+                        { "source": "node-condition", "target": "node-pass", "conditionType": "b_5c0a9e12" },
+                        { "source": "node-condition", "target": "node-fail", "conditionType": "else" }
                       ]
                     }"""
             ),

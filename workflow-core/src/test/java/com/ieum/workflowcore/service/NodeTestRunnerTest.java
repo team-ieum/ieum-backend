@@ -185,7 +185,7 @@ class NodeTestRunnerTest {
     }
 
     @Test
-    @DisplayName("CONDITION도 같은 경로로 돌고 result 불리언이 샘플이 된다")
+    @DisplayName("CONDITION도 같은 경로로 돌고 분기 출력이 샘플이 된다")
     void conditionNodeRuns() {
         seed(workflow, "up", SampleStatus.SUCCESS, "{\"status\":\"ok\"}");
         Node condition = new Node("node-c", NodeType.CONDITION, "c", new HashMap<>(Map.of(
@@ -193,7 +193,8 @@ class NodeTestRunnerTest {
 
         NodeTestResult result = runner.run(workflow, condition, Map.of());
 
-        assertThat(result.output()).isEqualTo(Map.of("result", true));
+        assertThat(result.output()).containsEntry("result", true).containsEntry("branch", "참")
+            .containsEntry("_branchKeys", List.of("true"));
     }
 
     @Test
