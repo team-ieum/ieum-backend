@@ -52,9 +52,21 @@ class ConditionValuesTest {
         }
     }
 
+    @Test void numberRejectsOver1000CharsAfterCleanup() {
+        assertThat(ConditionValues.number("1".repeat(1000) + ",원 ")).isPresent();
+        assertThat(ConditionValues.number("1".repeat(1001))).isEmpty();
+    }
+
+    @Test void numberStripsUnicodeSpaces() {
+        for (String raw : new String[]{"1 000", "1　000"}) {
+            assertThat(ConditionValues.number(raw)).as(raw).hasValueSatisfying(n -> assertThat(n).isEqualByComparingTo("1000"));
+        }
+    }
+
     @ParameterizedTest
     @CsvSource(delimiter = '|', value = {
         "2026-11-05T09:00:00+09:00|2026-11-05T00:00:00Z|false",
+        "2026-11-05 09:00:00+09:00|2026-11-05T00:00:00Z|false",
         "2026-11-05T00:00:00.123Z|2026-11-05T00:00:00.123Z|false",
         "2026-11-05T09:00|2026-11-05T00:00:00Z|false",
         "2026-11-05 09:00:30|2026-11-05T00:00:30Z|false",

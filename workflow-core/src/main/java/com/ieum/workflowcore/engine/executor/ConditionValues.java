@@ -84,11 +84,12 @@ final class ConditionValues {
         if (value instanceof Number n) {
             s = n.toString();
         } else if (value instanceof String str) {
-            s = str.replaceAll("[\\s,원%]", "");
+            s = str.replaceAll("(?U)[\\s,원%]", "");
         } else {
             return Optional.empty();
         }
-        if (s.isEmpty()) {
+        // BigDecimal(String)은 자릿수 제곱 — 거대 입력 차단(Jackson maxNumberLength와 같은 1000)
+        if (s.isEmpty() || s.length() > 1000) {
             return Optional.empty();
         }
         try {
@@ -112,13 +113,13 @@ final class ConditionValues {
         if (s.equals("지금")) {
             return Optional.of(When.at(now.toInstant()));
         }
+        String t = s.length() > 10 && s.charAt(10) == ' ' ? s.substring(0, 10) + 'T' + s.substring(11) : s;
         try {
-            return Optional.of(When.at(OffsetDateTime.parse(s).toInstant()));
+            return Optional.of(When.at(OffsetDateTime.parse(t).toInstant()));
         } catch (DateTimeParseException ignored) {
             // 다음 형식
         }
         try {
-            String t = s.length() > 10 && s.charAt(10) == ' ' ? s.substring(0, 10) + 'T' + s.substring(11) : s;
             return Optional.of(When.at(LocalDateTime.parse(t).atZone(KST).toInstant()));
         } catch (DateTimeParseException ignored) {
             // 다음 형식

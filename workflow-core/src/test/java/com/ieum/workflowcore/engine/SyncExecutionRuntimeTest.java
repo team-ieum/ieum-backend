@@ -58,6 +58,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -345,6 +347,26 @@ class SyncExecutionRuntimeTest {
             .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
 
         assertThat(log).contains("t", "yes", "no");
+        verifyFinished(ExecutionStatus.SUCCESS, false);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"first", "all"})
+    @DisplayName("실 CONDITION 실행기: 두 갈래 엣지가 같은 노드로 가면 pick first·all 모두 그 노드는 한 번만 실행된다")
+    void realCondition_twoBranchEdgesToSameNode_runsOnce(String pick) throws Exception {
+        Map<String, Object> rule = Map.of("left", "{{nodes.t.output.output}}", "operator", "isNotEmpty");
+        stubDefinition(
+            List.of(node("t", "TRIGGER"), conditionNode("cond", Map.of("pick", pick, "branches", List.of(
+                Map.of("key", "b_aaaaaaa1", "name", "A", "rules", List.of(rule)),
+                Map.of("key", "b_bbbbbbb2", "name", "B", "rules", List.of(rule))))), node("x", "AI")),
+            List.of(edge("t", "cond", null), edge("cond", "x", "b_aaaaaaa1"), edge("cond", "x", "b_bbbbbbb2")));
+
+        runtimeWith(trigger(), ai(), new ConditionNodeExecutor())
+            .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+        assertThat(log.stream().filter("x"::equals).count()).isEqualTo(1);
+        assertThat(savedLogs()).filteredOn(l -> "x".equals(l.getNodeId()))
+            .singleElement().extracting(WorkflowExecutionLog::getStatus).isEqualTo(ExecutionLogStatus.SUCCESS);
         verifyFinished(ExecutionStatus.SUCCESS, false);
     }
 
