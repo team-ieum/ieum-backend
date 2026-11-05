@@ -837,6 +837,19 @@ class SyncExecutionRuntimeTest {
         }
 
         @Test
+        @DisplayName("스킵된 CONDITION 노드는 저장된 _branchKeys로 원 실행과 같은 갈래를 탄다")
+        void skipped_condition_restores_branch_by_branchKeys() throws Exception {
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("cond", "CONDITION"), node("yes", "AI"), node("no", "AI")),
+                List.of(edge("t", "cond", null), edge("cond", "yes", "b_aaaaaaa1"), edge("cond", "no", "else")));
+
+            runWith(Map.of("cond", Map.of("_branchKeys", List.of("else"), "result", false)));
+
+            assertThat(log).containsExactlyInAnyOrder("t", "no");
+            verifyFinished(ExecutionStatus.SUCCESS, false);
+        }
+
+        @Test
         @DisplayName("TRIGGER 노드는 주입돼 있어도 스킵하지 않고 다시 실행한다(마스킹된 로그값 대신 복호본)")
         void trigger_node_is_never_skipped() throws Exception {
             stubDefinition(

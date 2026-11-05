@@ -12,6 +12,6 @@ public class Edge {
 
     private String source;
     private String target;
-    /** CONDITION 노드의 분기 타입 — "true" 또는 "false". 일반 엣지는 null */
+    /** CONDITION 노드에서 나가는 엣지의 갈래 — 갈래 key | "else" | 레거시 "true"/"false". 일반 엣지는 null */
     private String conditionType;
 }

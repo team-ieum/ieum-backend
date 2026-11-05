@@ -60,6 +60,51 @@ class ExecutionCursorTest {
     }
 
     @Test
+    @DisplayName("CONDITION 출력에 _branchKeys가 있으면 그 key의 엣지만 live — 여러 개면 전부, null 엣지는 dead")
+    void live_edges_follow_branchKeys() {
+        ExecutionCursor c = cursor(
+            List.of(node("cond", NodeType.CONDITION), node("a", NodeType.AI), node("b", NodeType.AI),
+                node("e", NodeType.AI), node("n", NodeType.AI)),
+            List.of(new Edge("cond", "a", "b_aaaaaaa1"), new Edge("cond", "b", "b_bbbbbbb2"),
+                new Edge("cond", "e", "else"), new Edge("cond", "n", null)));
+        c.getContext().setNodeOutput("cond", Map.of("_branchKeys", List.of("b_aaaaaaa1", "b_bbbbbbb2"), "result", true));
+
+        assertThat(c.liveOutgoingEdges(c.findNode("cond"))).extracting(Edge::getTarget).containsExactly("a", "b");
+    }
+
+    @Test
+    @DisplayName("_branchKeys가 result보다 먼저다 — [\"else\"]면 true 엣지는 dead")
+    void live_edges_branchKeys_winOverResult() {
+        ExecutionCursor c = cursor(
+            List.of(node("cond", NodeType.CONDITION), node("t", NodeType.AI), node("e", NodeType.AI)),
+            List.of(new Edge("cond", "t", "true"), new Edge("cond", "e", "else")));
+        c.getContext().setNodeOutput("cond", Map.of("_branchKeys", List.of("else"), "result", true));
+
+        assertThat(c.liveOutgoingEdges(c.findNode("cond"))).extracting(Edge::getTarget).containsExactly("e");
+    }
+
+    @Test
+    @DisplayName("멈춤(_branchKeys 빈 목록)이면 live 엣지가 없다 — result로 되돌아가 false 엣지를 고르지 않는다")
+    void live_edges_emptyBranchKeys_noneLive() {
+        ExecutionCursor c = cursor(
+            List.of(node("cond", NodeType.CONDITION), node("e", NodeType.AI), node("f", NodeType.AI)),
+            List.of(new Edge("cond", "e", "else"), new Edge("cond", "f", "false")));
+        c.getContext().setNodeOutput("cond", Map.of("_branchKeys", List.of(), "result", false));
+
+        assertThat(c.liveOutgoingEdges(c.findNode("cond"))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("_branchKeys 없는 배포 전 출력 — result가 true가 아니면(없음 포함) false 엣지")
+    void live_edges_legacyResultFalseOrMissing() {
+        ExecutionCursor c = cursor(
+            List.of(node("cond", NodeType.CONDITION), node("t", NodeType.AI), node("f", NodeType.AI)),
+            List.of(new Edge("cond", "t", "true"), new Edge("cond", "f", "false")));
+
+        assertThat(c.liveOutgoingEdges(c.findNode("cond"))).extracting(Edge::getTarget).containsExactly("f");
+    }
+
+    @Test
     @DisplayName("renderDeep은 중첩 Map·List의 참조식을 치환한 가변 복사본을 돌려주고 원본은 그대로 둔다")
     @SuppressWarnings("unchecked")
     void renderDeep_rendersNestedAndReturnsMutableCopy() {
