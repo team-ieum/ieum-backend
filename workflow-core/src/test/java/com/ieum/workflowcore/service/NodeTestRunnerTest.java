@@ -508,13 +508,13 @@ class NodeTestRunnerTest {
     }
 
     @Test
-    @DisplayName("manual — 샘플은 원 페이로드가 아니라 치환된 트리거 config다: 자기 참조 없으면 페이로드 필드가 안 남는다(런타임과 같다)")
-    void manualSampleIsRenderedConfigNotRawPayload() {
+    @DisplayName("manual — 샘플은 페이로드에 치환된 트리거 config를 더한 것이다: 자기 참조 없이도 페이로드 필드가 남는다(런타임과 같다)")
+    void manualSampleIsPayloadPlusRenderedConfig() {
         NodeTestResult result = runner.run(workflow, trigger("manual.run", Map.of("memo", "고정")),
             Map.of("score", 5));
 
         assertThat(result.status()).isEqualTo(SampleStatus.SUCCESS);
-        assertThat(result.output()).isEqualTo(Map.of("memo", "고정"));
+        assertThat(result.output()).isEqualTo(Map.of("memo", "고정", "score", 5));
     }
 
     @Test

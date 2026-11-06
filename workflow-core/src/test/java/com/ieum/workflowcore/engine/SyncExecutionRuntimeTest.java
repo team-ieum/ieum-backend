@@ -14,6 +14,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.workflowcore.catalog.EventCatalog;
 import com.ieum.workflowcore.config.RetryProperties;
 import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.Workflow;
@@ -22,6 +23,7 @@ import com.ieum.workflowcore.domain.WorkflowExecutionLog;
 import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.domain.enums.ExecutionLogStatus;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
+import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.event.ExecutionEventType;
@@ -30,13 +32,16 @@ import com.ieum.workflowcore.engine.executor.AlertNotifier;
 import com.ieum.workflowcore.engine.executor.ConditionNodeExecutor;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
+import com.ieum.workflowcore.engine.executor.TriggerNodeExecutor;
 import com.ieum.workflowcore.engine.validation.WorkflowValidationClient;
 import com.ieum.workflowcore.engine.validation.WorkflowValidationException;
 import com.ieum.workflowcore.engine.validation.WorkflowValidationResult;
-import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.service.WorkflowCrudService;
+import com.ieum.workflowcore.trigger.ManualTriggerHandler;
+import com.ieum.workflowcore.trigger.TriggerHandler;
+import com.ieum.workflowcore.trigger.TriggerHandlerRegistry;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -310,6 +315,30 @@ class SyncExecutionRuntimeTest {
 
         assertThat(log).contains("t", "yes").doesNotContain("no");
         assertThat(logOf(savedLogs(), "cond").getOutputJson()).contains("\"_branchKeys\":[\"b_aaaaaaa1\"]");
+        verifyFinished(ExecutionStatus.SUCCESS, false);
+    }
+
+    @Test
+    @DisplayName("실 manual 트리거: 실행 입력(triggerData)이 자기 참조 없이 트리거 출력이 되어 뒤 노드 참조에 닿는다")
+    void realManualTrigger_triggerDataReachesDownstream() throws Exception {
+        Map<String, Object> t = node("t", "TRIGGER");
+        t.put("event", "manual.run");
+        stubDefinition(
+            List.of(t, conditionNode("cond", Map.of("branches", List.of(Map.of(
+                "key", "b_aaaaaaa1", "name", "긴급",
+                "rules", List.of(Map.of("left", "{{nodes.t.output.subject}}", "operator", "contains", "right", "긴급")))))),
+                node("yes", "AI"), node("no", "AI")),
+            List.of(edge("t", "cond", null), edge("cond", "yes", "b_aaaaaaa1"), edge("cond", "no", "else")));
+        TriggerNodeExecutor manual = new TriggerNodeExecutor(EventCatalog.loadFromClasspath(),
+            new TriggerHandlerRegistry(List.<TriggerHandler>of(new ManualTriggerHandler())));
+
+        runtimeWith(manual, ai(), new ConditionNodeExecutor())
+            .execute(mock(WorkflowVersion.class), executionId, new HashMap<>(Map.of("subject", "[긴급] 서버")));
+
+        assertThat(log).contains("yes").doesNotContain("no");
+        List<WorkflowExecutionLog> logs = savedLogs();
+        assertThat(logOf(logs, "t").getOutputJson()).contains("\"subject\":\"[긴급] 서버\"");
+        assertThat(logOf(logs, "cond").getOutputJson()).contains("\"_branchKeys\":[\"b_aaaaaaa1\"]");
         verifyFinished(ExecutionStatus.SUCCESS, false);
     }
 

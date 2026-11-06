@@ -27,17 +27,17 @@ class BuiltinTriggerHandlersTest {
     }
 
     @Test
-    @DisplayName("MANUAL — 치환된 config(input)를 출력하고 심어 둔 페이로드는 무시한다, 노드 테스트는 RUN")
-    void manualEchoesInputAndIgnoresPlanted() {
+    @DisplayName("MANUAL — 심어 둔 실행 입력에 치환된 config(input)를 덮어 출력한다(겹치면 config), 노드 테스트는 RUN")
+    void manualMergesPlantedAndInput() {
         ManualTriggerHandler handler = new ManualTriggerHandler();
         Map<String, Object> input = Map.of("x", "rendered");
 
         Map<String, Object> output = handler.output(
-            node(new HashMap<>(Map.of("x", "{{nodes.t1.output.a}}"))), input, Map.of("planted", true));
+            node(new HashMap<>(Map.of("x", "{{nodes.t1.output.a}}"))), input, Map.of("planted", true, "x", "raw"));
 
         assertThat(handler.type()).isEqualTo(TriggerType.MANUAL);
-        assertThat(output).isEqualTo(input);
-        output.put("extra", 1);   // 출력은 input 사본이다 — 수정해도 input이 바뀌지 않는다(Map.of라면 예외)
+        assertThat(output).isEqualTo(Map.of("planted", true, "x", "rendered"));
+        output.put("extra", 1);   // 출력은 사본이다 — 수정해도 input·planted가 바뀌지 않는다(Map.of라면 예외)
         assertThat(handler.nodeTestMode()).isEqualTo(NodeTestMode.RUN);
     }
 

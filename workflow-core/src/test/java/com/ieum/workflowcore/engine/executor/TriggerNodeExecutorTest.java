@@ -83,8 +83,8 @@ class TriggerNodeExecutorTest {
     }
 
     @Test
-    @DisplayName("manual.run은 치환된 config(input)를 출력한다 — 회귀")
-    void manualStillEchoesInput() {
+    @DisplayName("manual.run은 심어 둔 실행 입력에 치환된 config(input)를 더해 출력한다")
+    void manualMergesPlantedAndInput() {
         Map<String, Object> config = new HashMap<>(Map.of("x", "{{nodes.t1.output.a}}"));
         Node node = new Node("t1", NodeType.TRIGGER, "트리거", config, "manual.run");
         Map<String, Object> input = Map.of("x", "rendered");
@@ -92,13 +92,13 @@ class TriggerNodeExecutorTest {
         ExecutorResult result = executor.execute(node, input, cursorWith("t1", Map.of("a", "rendered")));
 
         assertThat(result.isSuccess()).isTrue();
-        assertThat(result.getOutput()).isEqualTo(input);
+        assertThat(result.getOutput()).isEqualTo(Map.of("a", "rendered", "x", "rendered"));
     }
 
     @ParameterizedTest
     @NullSource
     @ValueSource(strings = {"nope.unknown", "gmail.send_email"})
-    @DisplayName("event 없음·모르는 event·트리거가 아닌 event → MANUAL처럼 input을 낸다(심어 둔 페이로드를 내지 않는다)")
+    @DisplayName("event 없음·모르는 event·트리거가 아닌 event → MANUAL처럼 심어 둔 페이로드 + input을 낸다")
     void eventWithoutTriggerTypeFallsBackToManual(String event) {
         Node node = new Node("t1", NodeType.TRIGGER, "트리거", new HashMap<>(), event);
         Map<String, Object> input = Map.of("k", "v");
@@ -106,7 +106,7 @@ class TriggerNodeExecutorTest {
         ExecutorResult result = executor.execute(node, input, cursorWith("t1", Map.of("planted", true)));
 
         assertThat(result.isSuccess()).isTrue();
-        assertThat(result.getOutput()).isEqualTo(input);
+        assertThat(result.getOutput()).isEqualTo(Map.of("planted", true, "k", "v"));
     }
 
     @Test
