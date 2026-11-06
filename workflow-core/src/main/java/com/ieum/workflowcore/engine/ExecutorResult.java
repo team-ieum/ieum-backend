@@ -21,6 +21,8 @@ public class ExecutorResult {
     private TokenUsage usage;
     /** 실패 원인 분류(재시도 판단용). 성공 시 null, 분류 근거가 없으면 {@link FailureKind#UNKNOWN} */
     private FailureKind failureKind;
+    /** 판단 근거·경고. CONDITION 노드 성공 때만 채워지고 그 밖은 null — node_runs.detail_json·노드 테스트 응답으로 나간다 */
+    private Map<String, Object> detail;
 
     /** 노드 실행의 토큰 사용량. agent 응답에 usage가 없으면 각 필드가 null일 수 있다. */
     public record TokenUsage(Integer promptTokens, Integer completionTokens, Integer totalTokens) {
@@ -51,11 +53,11 @@ public class ExecutorResult {
     }
 
     public static ExecutorResult success(Map<String, Object> output, long durationMs) {
-        return new ExecutorResult(true, output, null, durationMs, null, null);
+        return new ExecutorResult(true, output, null, durationMs, null, null, null);
     }
 
     public static ExecutorResult success(Map<String, Object> output, long durationMs, TokenUsage usage) {
-        return new ExecutorResult(true, output, null, durationMs, usage, null);
+        return new ExecutorResult(true, output, null, durationMs, usage, null, null);
     }
 
     /** 실패 원인을 분류할 근거가 없는 경우. 재시도하지 않는다. */
@@ -71,6 +73,6 @@ public class ExecutorResult {
     public static ExecutorResult failure(String errorMessage, long durationMs, FailureKind kind,
                                          TokenUsage usage) {
         return new ExecutorResult(false, null, errorMessage, durationMs, usage,
-            kind == null ? FailureKind.UNKNOWN : kind);
+            kind == null ? FailureKind.UNKNOWN : kind, null);
     }
 }

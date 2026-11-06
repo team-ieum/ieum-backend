@@ -182,6 +182,7 @@ class NodeTestRunnerTest {
         assertThat(result.error()).isNull();
         assertThat(stored("node-2").getStatus()).isEqualTo(SampleStatus.SUCCESS);
         assertThat(stored("node-2").getOutputJson()).isEqualTo("{\"v\":\"안녕 철수\"}");
+        assertThat(result.detail()).isNull();
     }
 
     @Test
@@ -195,6 +196,21 @@ class NodeTestRunnerTest {
 
         assertThat(result.output()).containsEntry("result", true).containsEntry("branch", "참")
             .containsEntry("_branchKeys", List.of("true"));
+    }
+
+    @Test
+    @DisplayName("CONDITION 테스트 응답에만 판단 근거가 실리고 샘플·샘플 조회에는 없다")
+    void conditionDetailIsReturnedButNotStored() {
+        seed(workflow, "up", SampleStatus.SUCCESS, "{\"status\":\"ok\"}");
+        Node condition = new Node("node-c", NodeType.CONDITION, "c", new HashMap<>(Map.of(
+            "operator", "equals", "left", "{{nodes.up.output.status}}", "right", "https://hooks.slack.com/services/T0/B0/xyz")));
+
+        NodeTestResult result = runner.run(workflow, condition, Map.of());
+
+        assertThat(result.detail()).containsEntry("picked", List.of("false")).containsEntry("warnings", List.of());
+        assertThat(result.detail().toString()).doesNotContain("T0/B0/xyz").contains("hooks.slack.com/services/***");
+        assertThat(stored("node-c").getOutputJson()).doesNotContain("picked");
+        assertThat(runner.findSample(workflow.getId(), "node-c").orElseThrow().detail()).isNull();
     }
 
     @Test

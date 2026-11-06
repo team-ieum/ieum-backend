@@ -22,6 +22,7 @@ import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.enums.SampleStatus;
 import com.ieum.workflowcore.service.NodeTestResult;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
@@ -78,11 +79,25 @@ class NodeTestControllerTest {
             .andExpect(jsonPath("$.data.status").value("SUCCESS"))
             .andExpect(jsonPath("$.data.output.ok").value(true))
             .andExpect(jsonPath("$.data.testedAt").exists())
-            .andExpect(jsonPath("$.data.webhookUrl").doesNotExist());
+            .andExpect(jsonPath("$.data.webhookUrl").doesNotExist())
+            .andExpect(jsonPath("$.data.detail").doesNotExist());
 
         ArgumentCaptor<NodeTestRequest> request = ArgumentCaptor.forClass(NodeTestRequest.class);
         verify(service).test(eq(userId), eq(workflowId), eq("node-1"), request.capture());
         assertThat(request.getValue().getInput()).isEqualTo(Map.of("a", 1));
+    }
+
+    @Test
+    @DisplayName("CONDITION 판단 근거(detail)가 응답에 직렬화된다")
+    void conditionDetailIsSerialized() throws Exception {
+        given(service.test(eq(userId), eq(workflowId), eq("node-c"), any(NodeTestRequest.class)))
+            .willReturn(NodeTestResponse.from(new NodeTestResult(SampleStatus.SUCCESS, Map.of("result", true), null,
+                LocalDateTime.of(2026, 10, 6, 12, 0), Map.of("picked", List.of("true"), "warnings", List.of("w")))));
+
+        mockMvc.perform(post("/api/v1/workflows/{workflowId}/nodes/{nodeId}/test", workflowId, "node-c"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.detail.picked[0]").value("true"))
+            .andExpect(jsonPath("$.data.detail.warnings[0]").value("w"));
     }
 
     @Test

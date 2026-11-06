@@ -117,7 +117,9 @@ public class ConditionNodeExecutor implements NodeExecutor {
             output.put(ExecutionCursor.BRANCH_KEYS, picked.stream().map(Branch::key).toList());
             log.info("[ConditionExecutor] 평가 완료 — nodeId: {}, branchKeys: {}, warnings: {}",
                 node.getId(), output.get(ExecutionCursor.BRANCH_KEYS), warnings.size());
-            return ExecutorResult.success(output, System.currentTimeMillis() - startTime);
+            ExecutorResult result = ExecutorResult.success(output, System.currentTimeMillis() - startTime);
+            result.setDetail(detail(output.get(ExecutionCursor.BRANCH_KEYS), results, warnings));
+            return result;
         } catch (IllegalArgumentException e) {
             log.warn("[ConditionExecutor] 설정 오류 — nodeId: {}, {}", node.getId(), e.getMessage());
             return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime);
@@ -125,6 +127,46 @@ public class ConditionNodeExecutor implements NodeExecutor {
             log.error("[ConditionExecutor] 실행 실패 — nodeId: {}", node.getId(), e);
             return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime);
         }
+    }
+
+    /** spec "경고·상세" 모양. 조건 left·right가 null일 수 있어 Map은 전부 LinkedHashMap이다. */
+    private static Map<String, Object> detail(Object picked, List<BranchResult> results, List<String> warnings) {
+        List<Map<String, Object>> branches = new ArrayList<>();
+        for (BranchResult b : results) {
+            List<Map<String, Object>> rules = new ArrayList<>();
+            for (RuleResult r : b.rules()) {
+                Map<String, Object> rule = new LinkedHashMap<>();
+                rule.put("left", shown(r.rule().left()));
+                rule.put("operator", r.rule().operator());
+                rule.put("right", shown(r.rule().right()));
+                rule.put("passed", r.passed());
+                rules.add(rule);
+            }
+            Map<String, Object> branch = new LinkedHashMap<>();
+            branch.put("key", b.branch().key());
+            branch.put("name", b.branch().name());
+            branch.put("matched", b.matched());
+            branch.put("rules", rules);
+            branches.add(branch);
+        }
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("picked", picked);
+        detail.put("branches", branches);
+        detail.put("warnings", warnings);
+        return detail;
+    }
+
+    /** null·숫자·불리언은 그대로, 그 밖은 문자열로 — 200자 넘으면 앞 200자 + "…"(서로게이트 쌍은 가르지 않는다). */
+    static Object shown(Object value) {
+        if (value == null || value instanceof Number || value instanceof Boolean) {
+            return value;
+        }
+        String s = String.valueOf(value);
+        if (s.length() <= 200) {
+            return s;
+        }
+        int end = Character.isHighSurrogate(s.charAt(199)) ? 199 : 200;
+        return s.substring(0, end) + "…";
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -260,7 +302,7 @@ public class ConditionNodeExecutor implements NodeExecutor {
                 Optional<ConditionValues.When> a = ConditionValues.date(l, now);
                 Optional<ConditionValues.When> b = a.isEmpty() ? Optional.empty() : ConditionValues.date(r, now);
                 if (a.isEmpty() || b.isEmpty()) {
-                    warnings.add(where + ": '" + (a.isEmpty() ? l : r) + "'을(를) 날짜로 읽지 못해 거짓으로 봤어요.");
+                    warnings.add(where + ": '" + shown(a.isEmpty() ? l : r) + "'을(를) 날짜로 읽지 못해 거짓으로 봤어요.");
                     yield false;
                 }
                 yield switch (rule.operator()) {
@@ -281,7 +323,7 @@ public class ConditionNodeExecutor implements NodeExecutor {
         Optional<BigDecimal> a = ConditionValues.number(l);
         Optional<BigDecimal> b = a.isEmpty() ? Optional.empty() : ConditionValues.number(r);
         if (a.isEmpty() || b.isEmpty()) {
-            warnings.add(where + ": '" + (a.isEmpty() ? l : r) + "'을(를) 숫자로 읽지 못해 거짓으로 봤어요.");
+            warnings.add(where + ": '" + shown(a.isEmpty() ? l : r) + "'을(를) 숫자로 읽지 못해 거짓으로 봤어요.");
             return false;
         }
         return test.test(a.get().compareTo(b.get()));

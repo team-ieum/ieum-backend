@@ -755,12 +755,26 @@ public class SyncExecutionRuntime {
                 .completionTokens(usage != null ? usage.completionTokens() : null)
                 .totalTokens(usage != null ? usage.totalTokens() : null)
                 .attemptCount(attemptCount)
+                .detailJson(detailJson(node, result))
                 .build();
 
             executionLogRepository.save(logEntry);
         } catch (Exception e) {
             // 로그 저장 실패가 실행 전체를 중단시키지 않도록 경고만 기록
             log.warn("[Runtime] 실행 로그 저장 실패 — nodeId: {}", node.getId(), e);
+        }
+    }
+
+    /** 판단 근거 직렬화 실패가 그 노드 실행 로그 행까지 지우지 않도록 따로 감싼다 */
+    private String detailJson(Node node, ExecutorResult result) {
+        if (result.getDetail() == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(SensitiveDataMasker.mask(result.getDetail()));
+        } catch (Exception e) {
+            log.warn("[Runtime] 판단 근거 직렬화 실패 — nodeId: {}", node.getId(), e);
+            return null;
         }
     }
 

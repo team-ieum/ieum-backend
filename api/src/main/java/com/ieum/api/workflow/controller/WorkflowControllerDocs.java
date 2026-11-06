@@ -441,7 +441,7 @@ public interface WorkflowControllerDocs {
             @Parameter(description = "커서 (페이지 번호)") String cursor,
             @Parameter(description = "페이지 크기 (1~100)") @Min(1) @Max(100) int size);
 
-    @Operation(summary = "실행 로그 조회")
+    @Operation(summary = "실행 로그 조회", description = "노드별 실행 로그. inputJson·outputJson·detailJson은 JSON 문자열이다. detailJson = CONDITION 노드의 판단 근거({picked, branches:[{key, name, matched, rules:[{left, operator, right, passed}]}], warnings}) — 그 밖 노드·실패·SKIPPED는 null.")
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<List<WorkflowExecutionLogResponse>>> getExecutionLogs(
             CustomUserDetails userDetails,

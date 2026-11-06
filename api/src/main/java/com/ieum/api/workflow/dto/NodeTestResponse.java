@@ -36,12 +36,17 @@ public class NodeTestResponse {
     @Schema(description = "LISTENING 만료 시각(시작 후 5분)")
     private final LocalDateTime expiresAt;
 
+    @Schema(description = "CONDITION 노드 테스트 직후에만 — 갈래·조건별 통과 여부와 비교값(picked·branches·warnings). "
+        + "샘플 조회(GET …/sample)·그 밖 노드·FAILED에는 없다.")
+    private final Map<String, Object> detail;
+
     public static NodeTestResponse from(NodeTestResult result) {
         return NodeTestResponse.builder()
             .status(result.status().name())
             .output(result.output())
             .error(result.error())
             .testedAt(result.testedAt())
+            .detail(result.detail())
             .build();
     }
 

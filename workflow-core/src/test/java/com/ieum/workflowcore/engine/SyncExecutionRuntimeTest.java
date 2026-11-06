@@ -371,6 +371,54 @@ class SyncExecutionRuntimeTest {
     }
 
     @Test
+    @DisplayName("실 CONDITION 실행기: 판단 근거가 마스킹돼 detailJson에 남고, 다른 노드 행은 null")
+    void realCondition_detailJsonIsMasked() throws Exception {
+        stubRealCondition(Map.of("branches", List.of(Map.of(
+            "key", "b_aaaaaaa1", "name", "긴급",
+            "rules", List.of(Map.of("left", "https://hooks.slack.com/services/T000/B000/XXXX",
+                "operator", "contains", "right", "hooks"))))),
+            "else");
+
+        runtimeWith(trigger(), ai(), new ConditionNodeExecutor())
+            .execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+        List<WorkflowExecutionLog> logs = savedLogs();
+        assertThat(logOf(logs, "cond").getDetailJson())
+            .contains("\"picked\":[\"b_aaaaaaa1\"]")
+            .contains("hooks.slack.com/services/***")
+            .doesNotContain("XXXX");
+        assertThat(logOf(logs, "t").getDetailJson()).isNull();
+        assertThat(logOf(logs, "yes").getDetailJson()).isNull();
+    }
+
+    @Test
+    @DisplayName("판단 근거 직렬화가 실패해도 그 노드 실행 로그 행은 남고 detailJson만 null")
+    void detailSerializationFailureKeepsLogRow() throws Exception {
+        stubDefinition(List.of(node("t", "TRIGGER"), node("a", "AI")), List.of(edge("t", "a", null)));
+        NodeExecutor badDetail = new NodeExecutor() {
+            @Override
+            public NodeType getNodeType() {
+                return NodeType.AI;
+            }
+
+            @Override
+            public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor) {
+                ExecutorResult r = ExecutorResult.success(Map.of("ok", true), 1);
+                r.setDetail(Map.of("x", new Object()));
+                return r;
+            }
+        };
+
+        runtimeWith(trigger(), badDetail).execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+        WorkflowExecutionLog a = logOf(savedLogs(), "a");
+        assertThat(a.getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
+        assertThat(a.getOutputJson()).isEqualTo("{\"ok\":true}");
+        assertThat(a.getDetailJson()).isNull();
+        verifyFinished(ExecutionStatus.SUCCESS, false);
+    }
+
+    @Test
     @DisplayName("실패 시 전체 중단: 실패 노드 이후 분기는 실행되지 않고 FAILED 처리")
     void failure_stops_workflow() throws Exception {
         failNodeIds.add("a");
@@ -879,6 +927,7 @@ class SyncExecutionRuntimeTest {
             List<WorkflowExecutionLog> logs = capturedLogs(3);
             assertThat(logOf(logs, "a").getStatus()).isEqualTo(ExecutionLogStatus.SKIPPED);
             assertThat(logOf(logs, "a").getOutputJson()).contains("원본-a-출력");
+            assertThat(logOf(logs, "a").getDetailJson()).isNull();
             assertThat(logOf(logs, "t").getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
             assertThat(logOf(logs, "b").getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
             verifyFinished(ExecutionStatus.SUCCESS, false);
