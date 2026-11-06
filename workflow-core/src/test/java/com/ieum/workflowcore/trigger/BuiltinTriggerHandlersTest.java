@@ -42,6 +42,15 @@ class BuiltinTriggerHandlersTest {
     }
 
     @Test
+    @DisplayName("MANUAL — 서버가 넣은 config.brand는 출력에 섞지 않는다: 실행 입력의 brand가 그대로 남는다")
+    void manualDoesNotLetServerBrandOverrideInput() {
+        Map<String, Object> output = new ManualTriggerHandler().output(
+            node(new HashMap<>(Map.of("brand", "webhook"))), Map.of("brand", "webhook"), Map.of("brand", "나이키"));
+
+        assertThat(output).isEqualTo(Map.of("brand", "나이키"));
+    }
+
+    @Test
     @DisplayName("SCHEDULE — {triggeredAt(ISO_LOCAL_DATE_TIME), cron}을 내고 input·planted는 섞지 않는다")
     void scheduleEmitsTriggeredAtAndCron() {
         ScheduleTriggerHandler handler = new ScheduleTriggerHandler();
