@@ -58,7 +58,7 @@
 - **단일 시도** — 재시도·모델 fallback 없음. `NodeAttempt(1, "test-<uuid>:<nodeId>", RetryPolicy.from(...))`, MARKER 모드면 러너가 `clearInFlight`
 - config가 **직접 참조한** 노드의 SUCCESS 샘플만 `nodeOutputs`에 넣는다(`ExecutionCursor.referencedNodeIds`). 하나라도 없으면 `TestSampleMissingException`(400, `missingNodeIds`). 실패(FAILED) 샘플은 참조 해석에 쓰지 않고, **실패한 재테스트는 이전 SUCCESS 샘플을 덮어쓴다**
 - 샘플 출력은 저장 직전 마스킹 — 하류가 `token`·`apiKey` 같은 필드를 참조하면 `***`가 들어간다(재처리 `loadReusableNodeOutputs`와 같은 트레이드오프)
-- 트리거: 페이로드를 트리거 출력으로 먼저 심고 `renderDeep(config)`를 `TriggerNodeExecutor`에 넘긴 출력이 샘플이다(런타임과 같은 모양 — WEBHOOK·앱 트리거는 페이로드 그대로, MANUAL은 페이로드 필드가 config 자기 참조로만 남는다). webhook 수신은 `recordWebhookSample`(저장 최신 버전의 노드, 없으면 합성 노드 `event: webhook.catch`·config `{}`)
+- 트리거: 페이로드를 트리거 출력으로 먼저 심고 `renderDeep(config)`를 `TriggerNodeExecutor`에 넘긴 출력이 샘플이다(런타임과 같은 모양 — WEBHOOK·앱 트리거는 페이로드 그대로, MANUAL(event 없음·트리거 아닌 event 포함)은 페이로드 + 치환된 config, 키가 겹치면 config, config의 brand는 빼고). webhook 수신은 `recordWebhookSample`(저장 최신 버전의 노드, 없으면 합성 노드 `event: webhook.catch`·config `{}`)
 - upsert는 find → record → saveAndFlush, UNIQUE 경합(`DataIntegrityViolationException`)이면 한 번 더 갱신으로 쓴다
 - 트랜잭션을 걸지 않는다(외부 호출을 한 트랜잭션에 묶지 않기 위해, 저장소 호출은 각자 트랜잭션. OSIV 기본 on이라 커넥션은 요청 끝까지 유지됨)
 
@@ -66,7 +66,7 @@
 `TRIGGER`, `AI`, `CONDITION`, `HTTP`, `TRANSFORM`, `APPROVAL`, `ACTION` — 7종. 노드 종류의 진실원은 `Node.event`(카탈로그 이벤트 이름 `앱.이벤트`, `EventCatalog`)이고 `type`은 저장 때 event의 `node_type`으로 계산된 값이다. `ACTION`은 앱 도구 하나를 LLM 없이 실행하는 결정론적 노드다(config는 입력 칸 평면 `config.<칸>` + 서버가 쓰는 `brand`, 실행 도구는 노드 `event`의 카탈로그 `tool_key` — `tools`·`serviceType` 없음). 그 외 외부 서비스(Gmail·Notion 등) 연동은 AI 노드의 도구/HTTP 노드로 처리한다. `APPROVAL`은 NodeExecutor가 없다(위 "승인 게이트").
 
 ### NodeExecutor
-`NodeExecutor` 인터페이스 + 타입별 구현체(`AgentNodeExecutor`, `ActionNodeExecutor`, `ConditionNodeExecutor`, `HttpNodeExecutor`, `TransformNodeExecutor`, `TriggerNodeExecutor`). 결과는 `ExecutorResult`. 트리거 종류는 노드 event → `EventCatalog.triggerTypeOf`(없으면 MANUAL). WEBHOOK·앱 트리거는 심어 둔 페이로드를 그대로 출력한다(config 에코 아님 — config `{}`인 WEBHOOK도 페이로드).
+`NodeExecutor` 인터페이스 + 타입별 구현체(`AgentNodeExecutor`, `ActionNodeExecutor`, `ConditionNodeExecutor`, `HttpNodeExecutor`, `TransformNodeExecutor`, `TriggerNodeExecutor`). 결과는 `ExecutorResult`. 트리거 종류는 노드 event → `EventCatalog.triggerTypeOf`(없으면 MANUAL). WEBHOOK·앱 트리거는 심어 둔 페이로드를 그대로 출력한다(config 에코 아님 — config `{}`인 WEBHOOK도 페이로드). MANUAL은 페이로드에 치환된 config(brand 제외)를 덮는다.
 
 **`HttpNodeExecutor`**(`HTTP`) — SSRF 경계(IEUM-BE-106): api의 전용 빈 `httpNodeRestTemplate`(`@Qualifier`, 공용 `restTemplate`은 `@Primary`)을 쓴다 — 클라이언트는 리다이렉트를 따라가지 않고(`DONT_FOLLOW`) 실행기가 301·302·303·307·308 + `Location`을 최대 3회 직접 따라간다 — Location은 현재 URL 기준 resolve 후 매 홉 `validateUrl`(내부망이면 그 홉에서 실패), 301·302·303은 본문 없는 GET·307·308은 같은 메서드·본문, 3회를 넘거나 Location이 파싱되지 않으면 노드 실패(메시지에 Location). 홉 요청은 `exchange(URI, …)`로 보낸다(String이면 percent-encoded Location이 이중 인코딩된다), 출처(scheme·host·port)가 바뀌는 홉에서 `Authorization`·`Proxy-Authorization`·`Cookie`를 떼고 이후 홉에도 다시 붙이지 않는다. 출력은 최종 응답의 `statusCode`·`body`뿐(`location` 칸 없음). 응답 본문은 `MAX_RESPONSE_BYTES`(1MB)에서 잘린다(표시 칸 없음 — JSON이 잘리면 문자열로 나간다). `validateUrl`은 scheme이 http·https만 통과시키고(scheme 없는 `//host/..`는 reactor-netty가 localhost로 연결한다) 호스트를 한 번 조회해 루프백·사설·링크로컬·any·CGNAT `100.64.0.0/10`·ULA `fc00::/7`을 막는다. DNS 재조회(rebinding)는 막지 않는다(운영 IMDSv2·hop limit 1로 갈음). 공용 클라이언트로 되돌리지 말 것 — 검사 없이 따라가 302 한 번으로 내부망·메타데이터 본문이 테스트 결과로 돌아온다(api `IeumApplicationTest`가 주입 빈이 `httpNodeRestTemplate`인지 단언한다).
 
@@ -145,8 +145,8 @@ enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROV
 - `workflow_runs.waiting_approval_node_ids` — 멈춘 순간 대기 중인 게이트 ID(JSON 배열 TEXT). `pauseForApproval`만 쓴다. 승인·거부 뒤에도 지우지 않는다(이력) — "대기 중"은 `status = WAITING_APPROVAL`일 때만의 의미. 읽기는 `WorkflowExecution.waitingApprovalNodeIdList()`(해석 실패 시 빈 목록 → 게이트 재대기, 우회 아님)
 - `workflow_runs.approval_deadline` — 멈춘 시각 + `ieum.workflow.approval.timeout`
 
-**DDL은 Flyway가 아니라 `ddl-auto: update`** — 마이그레이션 파일 없음. 컬럼 추가는 엔티티 필드만 넣으면 된다.
-단, **`nullable = false` 컬럼을 기존 행이 있는 테이블에 추가할 때는 `@ColumnDefault`가 반드시 필요하다.** 없으면 PostgreSQL이 DDL을 거부하는데 `ddl-auto: update`는 그 오류를 경고로만 남기고 부팅을 계속해 **컬럼 없이 앱이 뜬다.** 테스트는 `ddl-auto: create-drop`(빈 스키마)이라 이 사고를 잡지 못한다 — 이번에 `retry_exhausted`·`alert_target`이 걸릴 뻔했다.
+**DDL은 Flyway가 없다** — 마이그레이션 파일 없음. 로컬은 `ddl-auto: update`지만 **dev 배포(Blue/Green)는 `validate`가 강제**라 컬럼·테이블 추가도 자동 반영되지 않는다 — 엔티티를 바꾸면 `docs/schema/V<n>__*.sql`을 남기고 **머지 전에 dev PG에 수동 적용**한다(안 하면 후보 BE가 `Schema-validation: missing column`으로 기동 실패, IEUM-BE-113).
+**`nullable = false` 컬럼을 기존 행이 있는 테이블에 추가할 때는 DDL `DEFAULT`와 엔티티 `@ColumnDefault`가 반드시 필요하다.** 로컬(`update`)에서는 PostgreSQL이 DDL을 거부해도 경고만 남기고 부팅을 계속해 **컬럼 없이 앱이 뜬다.** 테스트는 `ddl-auto: create-drop`(빈 스키마)이라 이 사고를 잡지 못한다 — 이번에 `retry_exhausted`·`alert_target`이 걸릴 뻔했다.
 **enum 값을 추가하면 DB CHECK 제약도 손으로 고쳐야 한다.** Hibernate 6는 `@Enumerated(STRING)` 컬럼을 `CHECK (col IN (...))`와 함께 만드는데 `ddl-auto: update`는 이 제약을 갱신하지 않는다 — 새 값을 쓰는 순간 제약 위반이다. 테스트(`create-drop`)는 새 스키마라 못 잡는다. `docs/schema/V7`(connected_accounts.provider)·`V8`(workflow_runs.status·node_runs.node_type, IEUM-BE-45)·`V9`(node_runs.node_type에 `ACTION`)·`V10`(workflows·workflow_runs.trigger_type에 앱 트리거 2값)이 그 수동 DDL이다 — 배포 전에 대상 DB에 적용할 것. **`app_trigger_subscriptions.trigger_type`도 Hibernate가 CHECK를 만든다**(V10 시점 값으로 생성) — `TriggerType`에 값을 더하면 이 테이블 제약도 수동 DDL 대상이다.
 
 ## 트리거 추가 절차 (IEUM-BE-93)

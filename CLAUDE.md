@@ -93,8 +93,8 @@ QueryDSL (openfeign 7.1), springdoc-openapi 2.8.4, Quartz, Spring @Async (MVP)
 - 공통 의존성(Lombok, Test)은 루트 `build.gradle`의 `subprojects`에 선언 → 모듈별 중복 선언 불필요
 - Q클래스는 `./gradlew build` 후 생성됨 — 빌드 전에는 QueryDSL 코드가 컴파일 에러
 - `application-local.yml`은 `.gitignore`에 포함 — 환경변수는 `.env` 파일 사용
-- **스키마는 Flyway가 아니라 `ddl-auto: update`** — `db/migration` 디렉터리 자체가 없다. 컬럼 추가는 엔티티 필드만 넣으면 반영됨(컬럼 삭제·타입 변경은 반영 안 되니 수동 DDL 필요)
-- **`nullable = false` 컬럼을 기존 행이 있는 테이블에 추가할 때는 `@ColumnDefault`가 필수** — 없으면 PostgreSQL이 DDL을 거부하는데 `ddl-auto: update`는 그 오류를 경고로만 남기고 부팅을 계속해 **컬럼 없이 앱이 뜬다.** 운영은 `update`, 테스트는 `create-drop`(빈 스키마)이라 테스트가 이 사고를 잡아 주지 않는다
+- **스키마는 Flyway가 없다(`db/migration` 디렉터리 자체가 없음).** 앱 yml은 `ddl-auto: update`지만 **dev 배포(Blue/Green, 2026-11-03~)는 컨트롤러가 `validate`를 강제한다**(`docs/operations/bluegreen-secrets.md`, `scripts/bluegreen/backend_env.py`의 예약 키). 그래서 dev에서는 엔티티에 컬럼·테이블을 더해도 자동으로 생기지 않고, 후보 BE가 `Schema-validation: missing column`으로 기동에 실패해 배포가 멈춘다(IEUM-BE-113 `node_runs.detail_json`). **스키마를 바꾸는 PR은 `docs/schema/V<n>__*.sql`에 DDL을 남기고, 머지 전에 dev PG에 수동 적용한다**(nullable 컬럼 추가는 옛 버전 validate도 통과하므로 먼저 적용해도 안전)
+- **`nullable = false` 컬럼을 기존 행이 있는 테이블에 추가할 때는 기본값이 필수** — 수동 DDL에 `DEFAULT`를 넣고 엔티티에도 `@ColumnDefault`를 단다. 로컬(`update`)에서는 PostgreSQL이 DDL을 거부해도 경고만 남기고 **컬럼 없이 앱이 뜨고**, 테스트는 `create-drop`(빈 스키마)이라 이 사고를 잡아 주지 않는다
 - 변수 참조 문법: `{{nodes.<uuid>.output.<field>}}` (workflow-core에서 사용)
 - JWT 예외는 반드시 CustomException으로 변환 — ExpiredJwtException → TOKEN_EXPIRED, JwtException → TOKEN_INVALID
 - **`catalog/`는 서브모듈(ieum-node-catalog)** — clone·워크트리 생성 후 `git submodule update --init`을 먼저 실행한다. 비어 있으면 `:workflow-core:catalogIndex`가 실패해 빌드·테스트·bootJar가 전부 멈춘다(의도한 동작). 이벤트 정의는 BE 코드가 아니라 카탈로그 레포에서 고친다
@@ -128,6 +128,6 @@ docker-compose up -d                                    # PostgreSQL 16 + Redis 
 | `verify-jpa-entity` | JPA 엔티티 및 Repository 규칙 검증 |
 | `verify-security` | Spring Security 및 JWT 인증 규칙 검증 |
 | `verify-workflow-engine` | 워크플로우 실행 엔진 패턴 규칙 검증 (NodeExecutor 등록, Stub 패턴, ExecutorResult 생성) |
-| `verify-db-migration` | ⚠️ Flyway 마이그레이션 검증 — 이 프로젝트는 `ddl-auto: update`라 사실상 무효. Flyway 도입 전까지 쓰지 말 것 |
+| `verify-db-migration` | ⚠️ Flyway 마이그레이션 검증 — 이 프로젝트는 Flyway가 없어(수동 DDL은 `docs/schema`) 사실상 무효. Flyway 도입 전까지 쓰지 말 것 |
 | `verify-implementation` | 모든 verify 스킬 순차 실행, 통합 검증 보고서 |
 | `manage-skills` | 세션 변경사항 분석, 스킬 생성/업데이트, CLAUDE.md 관리 |
