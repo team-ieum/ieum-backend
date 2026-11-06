@@ -10,10 +10,13 @@ import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.repository.WorkflowQueryRepository;
+import com.ieum.workflowcore.scheduler.ScheduleCron;
 import com.querydsl.core.Tuple;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,19 +30,30 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(readOnly = true)
 public class WorkflowDashboardService {
 
+    /** 대시보드의 "오늘"·시간 = 한국 시각(스케줄 트리거와 같은 기준) */
+    private static final ZoneId DISPLAY_ZONE = ScheduleCron.ZONE;
+
     private final WorkflowQueryRepository workflowQueryRepository;
+
+    /** 저장 시각(LocalDateTime)의 기준 = 이 시계의 시간대(JVM 기본, dev = UTC). 테스트에서 고정한다 */
+    Clock clock = Clock.systemDefaultZone();
+
+    private LocalDateTime toStorage(LocalDate kstDate) {
+        return kstDate.atStartOfDay(DISPLAY_ZONE).withZoneSameInstant(clock.getZone()).toLocalDateTime();
+    }
 
     /**
      * 대시보드 상단 요약 정보 및 차트 데이터를 조회합니다.
      */
     public WorkflowDashboardSummaryResponse getDashboardSummary(UUID userId) {
-        LocalDate today = LocalDate.now();
-        LocalDateTime startOfToday = today.atStartOfDay();
-        LocalDateTime endOfToday = today.atTime(LocalTime.MAX);
+        // 한국 날짜 경계를 저장 벽시계로 바꿔 조회한다 — JVM 날짜로 자르면 dev(UTC)에선 '오늘'이 KST 09시에 바뀐다
+        LocalDate today = LocalDate.now(clock.withZone(DISPLAY_ZONE));
+        LocalDateTime startOfToday = toStorage(today);
+        LocalDateTime endOfToday = toStorage(today.plusDays(1)).minusNanos(1);
 
         LocalDate yesterday = today.minusDays(1);
-        LocalDateTime startOfYesterday = yesterday.atStartOfDay();
-        LocalDateTime endOfYesterday = yesterday.atTime(LocalTime.MAX);
+        LocalDateTime startOfYesterday = toStorage(yesterday);
+        LocalDateTime endOfYesterday = startOfToday.minusNanos(1);
 
         // 1. 실행 횟수 조회 (오늘 / 어제)
         long todayRuns = workflowQueryRepository.countExecutionsInPeriod(userId, startOfToday, endOfToday);
@@ -78,12 +92,17 @@ public class WorkflowDashboardService {
             hourlyCounts.put(h, 0L);
         }
 
+        // DB는 저장 벽시계의 시로 묶는다 → 한국 시로 옮긴다
+        // ponytail: 오늘 0시의 오프셋 차 하나로 옮긴다 — 정시 단위가 아닌 저장 시간대(+05:30 등)·하루 중 서머타임 전환은 버킷이 어긋난다
+        Instant dayStart = today.atStartOfDay(DISPLAY_ZONE).toInstant();
+        int shiftSeconds = DISPLAY_ZONE.getRules().getOffset(dayStart).getTotalSeconds()
+            - clock.getZone().getRules().getOffset(dayStart).getTotalSeconds();
         List<Tuple> hourlyTuples = workflowQueryRepository.findHourlyExecutionCounts(userId, startOfToday, endOfToday);
         for (Tuple tuple : hourlyTuples) {
             Integer hour = tuple.get(0, Integer.class);
             Long count = tuple.get(1, Long.class);
             if (hour != null && count != null) {
-                hourlyCounts.put(hour, count);
+                hourlyCounts.merge(Math.floorMod(hour * 3600 + shiftSeconds, 86400) / 3600, count, Long::sum);
             }
         }
 

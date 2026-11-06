@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.verify;
 
 import com.ieum.api.workflow.dto.WorkflowDashboardSummaryResponse;
 import com.ieum.workflowcore.domain.Workflow;
@@ -11,7 +12,11 @@ import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.repository.WorkflowQueryRepository;
 import com.querydsl.core.Tuple;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
@@ -36,14 +41,15 @@ class WorkflowDashboardServiceTest {
     @Test
     @DisplayName("대시보드 종합 요약 조회 성공 — 통계 및 시간별 집계 정합성 확인")
     void getDashboardSummary_success() {
-        // given
+        // given — 저장 시간대 = 한국 시각이라 경계·버킷이 그대로다
+        dashboardService.clock = Clock.fixed(Instant.parse("2026-11-06T03:00:00Z"), ZoneId.of("Asia/Seoul"));
         LocalDateTime now = LocalDateTime.now();
 
         // 어제 실행 수는 5회, 오늘 실행 수는 10회 (증감률 +100.0%)
         given(queryRepository.countExecutionsInPeriod(eq(userId), any(LocalDateTime.class), any(LocalDateTime.class)))
             .willAnswer(invocation -> {
                 LocalDateTime start = invocation.getArgument(1);
-                if (start.toLocalDate().isBefore(java.time.LocalDate.now())) {
+                if (start.toLocalDate().isBefore(java.time.LocalDate.of(2026, 11, 6))) {
                     return 5L; // 어제 실행 횟수
                 }
                 return 10L; // 오늘 실행 횟수
@@ -95,7 +101,8 @@ class WorkflowDashboardServiceTest {
         assertThat(response.getMetrics().getTodayRuns()).isEqualTo(10L);
         assertThat(response.getMetrics().getPercentageChange()).isEqualTo(100.0);
         // 소요 시간: successExec(10s), failedExec(20s) -> 평균 15.0초
-        assertThat(response.getMetrics().getAverageDurationSeconds()).isEqualTo(15.0);
+        // complete()·fail()이 finishedAt에 실제 now()를 써서, 처음 뜬 JVM(클래스 로딩)에선 15.1이 나온다
+        assertThat(response.getMetrics().getAverageDurationSeconds()).isCloseTo(15.0, org.assertj.core.data.Offset.offset(0.5));
         // 성공률: 2건 중 1건 성공 -> 50.0%
         assertThat(response.getMetrics().getSuccessRate()).isEqualTo(50.0);
 
@@ -113,7 +120,30 @@ class WorkflowDashboardServiceTest {
         assertThat(response.getWorkflowStats().getRunning()).isEqualTo(2L);
     }
 
-    private java.time.LocalDate LocalDate = java.time.LocalDate.now();
+    @Test
+    @DisplayName("저장 시간대가 UTC면 '오늘'은 한국 날짜 경계를 UTC 벽시계로 바꿔 조회하고, 시간 버킷은 한국 시로 옮긴다")
+    void utcStorage_usesKstDayAndHours() {
+        // 한국 11월 6일 08:30 = UTC 11월 5일 23:30
+        dashboardService.clock = Clock.fixed(Instant.parse("2026-11-05T23:30:00Z"), ZoneOffset.UTC);
+        given(queryRepository.findExecutionsInPeriod(eq(userId), any(), any())).willReturn(Collections.emptyList());
+        // UTC 23시 3회(= 한국 8시), UTC 0시 1회(= 한국 9시)
+        Tuple utc23 = mockTuple(23, 3L);
+        Tuple utc0 = mockTuple(0, 1L);
+        given(queryRepository.findHourlyExecutionCounts(eq(userId), any(), any())).willReturn(List.of(utc23, utc0));
+
+        WorkflowDashboardSummaryResponse response = dashboardService.getDashboardSummary(userId);
+
+        // 한국 11월 6일 하루 = UTC 11월 5일 15:00 ~ 11월 6일 15:00 직전
+        verify(queryRepository).countExecutionsInPeriod(userId,
+            LocalDateTime.of(2026, 11, 5, 15, 0), LocalDateTime.of(2026, 11, 6, 14, 59, 59, 999_999_999));
+        verify(queryRepository).countExecutionsInPeriod(userId,
+            LocalDateTime.of(2026, 11, 4, 15, 0), LocalDateTime.of(2026, 11, 5, 14, 59, 59, 999_999_999));
+        assertThat(response.getHourlyCounts()).hasSize(24);
+        assertThat(response.getHourlyCounts().get(8)).isEqualTo(3L);
+        assertThat(response.getHourlyCounts().get(9)).isEqualTo(1L);
+        assertThat(response.getHourlyCounts().get(23)).isEqualTo(0L);
+        assertThat(response.getHourlyCounts().get(0)).isEqualTo(0L);
+    }
 
     private Tuple mockTuple(Integer hour, Long count) {
         Tuple tuple = org.mockito.Mockito.mock(Tuple.class);
