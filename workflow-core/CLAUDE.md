@@ -145,8 +145,8 @@ enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROV
 - `workflow_runs.waiting_approval_node_ids` — 멈춘 순간 대기 중인 게이트 ID(JSON 배열 TEXT). `pauseForApproval`만 쓴다. 승인·거부 뒤에도 지우지 않는다(이력) — "대기 중"은 `status = WAITING_APPROVAL`일 때만의 의미. 읽기는 `WorkflowExecution.waitingApprovalNodeIdList()`(해석 실패 시 빈 목록 → 게이트 재대기, 우회 아님)
 - `workflow_runs.approval_deadline` — 멈춘 시각 + `ieum.workflow.approval.timeout`
 
-**DDL은 Flyway가 아니라 `ddl-auto: update`** — 마이그레이션 파일 없음. 컬럼 추가는 엔티티 필드만 넣으면 된다.
-단, **`nullable = false` 컬럼을 기존 행이 있는 테이블에 추가할 때는 `@ColumnDefault`가 반드시 필요하다.** 없으면 PostgreSQL이 DDL을 거부하는데 `ddl-auto: update`는 그 오류를 경고로만 남기고 부팅을 계속해 **컬럼 없이 앱이 뜬다.** 테스트는 `ddl-auto: create-drop`(빈 스키마)이라 이 사고를 잡지 못한다 — 이번에 `retry_exhausted`·`alert_target`이 걸릴 뻔했다.
+**DDL은 Flyway가 없다** — 마이그레이션 파일 없음. 로컬은 `ddl-auto: update`지만 **dev 배포(Blue/Green)는 `validate`가 강제**라 컬럼·테이블 추가도 자동 반영되지 않는다 — 엔티티를 바꾸면 `docs/schema/V<n>__*.sql`을 남기고 **머지 전에 dev PG에 수동 적용**한다(안 하면 후보 BE가 `Schema-validation: missing column`으로 기동 실패, IEUM-BE-113).
+**`nullable = false` 컬럼을 기존 행이 있는 테이블에 추가할 때는 DDL `DEFAULT`와 엔티티 `@ColumnDefault`가 반드시 필요하다.** 로컬(`update`)에서는 PostgreSQL이 DDL을 거부해도 경고만 남기고 부팅을 계속해 **컬럼 없이 앱이 뜬다.** 테스트는 `ddl-auto: create-drop`(빈 스키마)이라 이 사고를 잡지 못한다 — 이번에 `retry_exhausted`·`alert_target`이 걸릴 뻔했다.
 **enum 값을 추가하면 DB CHECK 제약도 손으로 고쳐야 한다.** Hibernate 6는 `@Enumerated(STRING)` 컬럼을 `CHECK (col IN (...))`와 함께 만드는데 `ddl-auto: update`는 이 제약을 갱신하지 않는다 — 새 값을 쓰는 순간 제약 위반이다. 테스트(`create-drop`)는 새 스키마라 못 잡는다. `docs/schema/V7`(connected_accounts.provider)·`V8`(workflow_runs.status·node_runs.node_type, IEUM-BE-45)·`V9`(node_runs.node_type에 `ACTION`)·`V10`(workflows·workflow_runs.trigger_type에 앱 트리거 2값)이 그 수동 DDL이다 — 배포 전에 대상 DB에 적용할 것. **`app_trigger_subscriptions.trigger_type`도 Hibernate가 CHECK를 만든다**(V10 시점 값으로 생성) — `TriggerType`에 값을 더하면 이 테이블 제약도 수동 DDL 대상이다.
 
 ## 트리거 추가 절차 (IEUM-BE-93)
