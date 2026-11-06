@@ -135,9 +135,9 @@ class WorkflowDashboardServiceTest {
 
         // 한국 11월 6일 하루 = UTC 11월 5일 15:00 ~ 11월 6일 15:00 직전
         verify(queryRepository).countExecutionsInPeriod(userId,
-            LocalDateTime.of(2026, 11, 5, 15, 0), LocalDateTime.of(2026, 11, 6, 14, 59, 59, 999_999_999));
+            LocalDateTime.of(2026, 11, 5, 15, 0), LocalDateTime.of(2026, 11, 6, 14, 59, 59, 999_999_000));
         verify(queryRepository).countExecutionsInPeriod(userId,
-            LocalDateTime.of(2026, 11, 4, 15, 0), LocalDateTime.of(2026, 11, 5, 14, 59, 59, 999_999_999));
+            LocalDateTime.of(2026, 11, 4, 15, 0), LocalDateTime.of(2026, 11, 5, 14, 59, 59, 999_999_000));
         assertThat(response.getHourlyCounts()).hasSize(24);
         assertThat(response.getHourlyCounts().get(8)).isEqualTo(3L);
         assertThat(response.getHourlyCounts().get(9)).isEqualTo(1L);

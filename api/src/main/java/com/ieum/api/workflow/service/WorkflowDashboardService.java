@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,11 +50,12 @@ public class WorkflowDashboardService {
         // 한국 날짜 경계를 저장 벽시계로 바꿔 조회한다 — JVM 날짜로 자르면 dev(UTC)에선 '오늘'이 KST 09시에 바뀐다
         LocalDate today = LocalDate.now(clock.withZone(DISPLAY_ZONE));
         LocalDateTime startOfToday = toStorage(today);
-        LocalDateTime endOfToday = toStorage(today.plusDays(1)).minusNanos(1);
+        // 상한은 µs 단위로 깎는다 — PgJDBC가 .999999999를 다음 날 0시로 올려 경계 행이 이틀에 잡힌다
+        LocalDateTime endOfToday = toStorage(today.plusDays(1)).minus(1, ChronoUnit.MICROS);
 
         LocalDate yesterday = today.minusDays(1);
         LocalDateTime startOfYesterday = toStorage(yesterday);
-        LocalDateTime endOfYesterday = startOfToday.minusNanos(1);
+        LocalDateTime endOfYesterday = startOfToday.minus(1, ChronoUnit.MICROS);
 
         // 1. 실행 횟수 조회 (오늘 / 어제)
         long todayRuns = workflowQueryRepository.countExecutionsInPeriod(userId, startOfToday, endOfToday);
