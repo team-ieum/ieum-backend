@@ -24,7 +24,7 @@ public class UserResponse {
     @Schema(description = "로그인 제공자 (LOCAL, GOOGLE)", example = "LOCAL")
     private String provider;
 
-    @Schema(description = "가입일시", example = "2026-01-01T00:00:00")
+    @Schema(description = "가입일시", example = "2026-01-01T00:00:00Z")
     private LocalDateTime createdAt;
 
     public static UserResponse from(User user) {
