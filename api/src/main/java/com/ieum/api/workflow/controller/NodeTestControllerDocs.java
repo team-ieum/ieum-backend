@@ -33,6 +33,7 @@ public interface NodeTestControllerDocs {
             + "수신 시 트리거 정의는 저장된 최신 버전에서 읽으므로 webhook 테스트 전에 저장해야 한다. "
             + "approval 게이트는 실행 없이 런타임 승인 출력 모양({approved: true, approvedBy: 소유자 ID, approvedAt})을 "
             + "SUCCESS 샘플로 남긴다 — 하류의 `{{nodes.<gate>.output.approvedBy}}` 참조를 테스트하기 위해서다. "
+            + "CONDITION(branch.if)은 응답 detail에 판단 근거({picked, branches, warnings})를 싣는다 — 샘플에는 저장하지 않아 GET …/sample에는 없다. "
             + "오류 code: WORKFLOW_NOT_FOUND(404, 남의 워크플로우 포함), NOT_FOUND(404, 저장된 노드 없음), "
             + "INVALID_INPUT(400, node.id 불일치·node.event 누락·실행기가 없는 타입), INVALID_WORKFLOW(400, 남의 크레덴셜·웹훅 URL 원문·"
             + "API 키 원문, node.event가 카탈로그에 없거나 실행할 수 없는 이벤트 — 요청 type은 무시하고 event로 계산), TEST_SAMPLE_MISSING(400), WEBHOOK_TOKEN_NOT_ISSUED(400, webhook 트리거인데 수신 주소 토큰 미발급)")

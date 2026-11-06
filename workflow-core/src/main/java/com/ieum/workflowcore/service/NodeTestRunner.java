@@ -222,9 +222,12 @@ public class NodeTestRunner {
             workflow.getId(), nodeId, status);
         Map<String, Object> output = null;
         String error = null;
+        Map<String, Object> detail = null;
         if (result.isSuccess()) {
             Map<String, Object> masked = SensitiveDataMasker.mask(result.getOutput());
             output = masked != null ? masked : new LinkedHashMap<>();
+            // 판단 근거는 응답에만 — 샘플은 다음 노드의 참조 근거라 저장하지 않는다
+            detail = SensitiveDataMasker.mask(result.getDetail());
         } else {
             // 런타임이 node_runs·SSE에 하듯 오류 본문의 웹훅 URL 비밀 구간을 가린다.
             String message = result.getErrorMessage();
@@ -233,7 +236,7 @@ public class NodeTestRunner {
         }
         LocalDateTime testedAt = LocalDateTime.now();
         upsert(workflow, nodeId, status, output == null ? null : toJson(output), error, testedAt);
-        return new NodeTestResult(status, output, error, testedAt);
+        return new NodeTestResult(status, output, error, testedAt, detail);
     }
 
     private void upsert(Workflow workflow, String nodeId, SampleStatus status, String outputJson,
