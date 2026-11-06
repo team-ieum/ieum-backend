@@ -23,6 +23,7 @@ public class WorkflowExecutionLogResponse {
     private Integer promptTokens;
     private Integer completionTokens;
     private Integer totalTokens;
+    private String detailJson;
     private LocalDateTime createdAt;
 
     public static WorkflowExecutionLogResponse from(WorkflowExecutionLog log) {
@@ -38,6 +39,7 @@ public class WorkflowExecutionLogResponse {
             .promptTokens(log.getPromptTokens())
             .completionTokens(log.getCompletionTokens())
             .totalTokens(log.getTotalTokens())
+            .detailJson(log.getDetailJson())
             .createdAt(log.getCreatedAt())
             .build();
     }

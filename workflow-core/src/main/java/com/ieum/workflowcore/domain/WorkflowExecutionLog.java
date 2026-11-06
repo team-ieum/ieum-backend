@@ -93,6 +93,10 @@ public class WorkflowExecutionLog extends BaseEntity {
     @Column(name = "attempt_count")
     private Integer attemptCount;
 
+    /** 판단 근거·경고 JSON(CONDITION만). 자격증명 원문 금지 — 저장 전 마스킹 */
+    @Column(name = "detail_json", columnDefinition = "TEXT")
+    private String detailJson;
+
     @Builder
     private WorkflowExecutionLog(
         WorkflowExecution execution,
@@ -107,7 +111,8 @@ public class WorkflowExecutionLog extends BaseEntity {
         Integer promptTokens,
         Integer completionTokens,
         Integer totalTokens,
-        Integer attemptCount
+        Integer attemptCount,
+        String detailJson
     ) {
         this.execution = execution;
         this.nodeId = nodeId;
@@ -122,5 +127,6 @@ public class WorkflowExecutionLog extends BaseEntity {
         this.completionTokens = completionTokens;
         this.totalTokens = totalTokens;
         this.attemptCount = attemptCount != null ? attemptCount : 1;
+        this.detailJson = detailJson;
     }
 }
