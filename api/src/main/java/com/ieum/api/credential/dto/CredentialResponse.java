@@ -31,10 +31,10 @@ public class CredentialResponse {
     @Schema(description = "유효 여부", example = "true")
     private boolean isValid;
 
-    @Schema(description = "마지막 검증 일시", example = "2026-03-19T10:00:00")
+    @Schema(description = "마지막 검증 일시", example = "2026-03-19T10:00:00Z")
     private LocalDateTime lastValidatedAt;
 
-    @Schema(description = "등록 일시", example = "2026-03-19T09:00:00")
+    @Schema(description = "등록 일시", example = "2026-03-19T09:00:00Z")
     private LocalDateTime createdAt;
 
     public static CredentialResponse from(Credential credential) {
