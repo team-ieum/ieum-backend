@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -67,5 +68,46 @@ class FormatterInputsTest {
     void summaryCutsAt50() {
         assertThat(FormatterInputs.summary("가".repeat(60))).isEqualTo("가".repeat(50) + "…");
         assertThat(FormatterInputs.summary("0123456789")).isEqualTo("0123456789");
+        assertThat(FormatterInputs.summary("a".repeat(50))).isEqualTo("a".repeat(50));
+        assertThat(FormatterInputs.summary("a".repeat(51))).isEqualTo("a".repeat(50) + "…");
+    }
+
+    @Test
+    @DisplayName("허용 밖 선택값은 요약해서 메시지에 싣는다")
+    void choiceUnknownValueIsSummarized() {
+        Map<String, Object> in = Map.of("kind", "x".repeat(51));
+
+        assertThatThrownBy(() -> FormatterInputs.choice(in, "kind", "a", Set.of("a")))
+            .isInstanceOf(FormatterFailure.class)
+            .hasMessage("'kind' 값을 알 수 없어요: " + "x".repeat(50) + "…");
+    }
+
+    @Test
+    @DisplayName("기본값 없는 선택 칸이 비면 실패")
+    void choiceWithoutDefaultFailsWhenEmpty() {
+        assertThatThrownBy(() -> FormatterInputs.choice(Map.of("kind", ""), "kind", null, Set.of("a")))
+            .isInstanceOf(FormatterFailure.class)
+            .hasMessage("'kind' 칸을 골라 주세요");
+        assertThatThrownBy(() -> FormatterInputs.choice(Map.of(), "kind", null, Set.of("a")))
+            .isInstanceOf(FormatterFailure.class);
+        assertThat(FormatterInputs.choice(Map.of(), "kind", "a", Set.of("a"))).isEqualTo("a");
+    }
+
+    @Test
+    @DisplayName("필수 칸이 비면 실패")
+    void requiredFailsWhenEmpty() {
+        assertThatThrownBy(() -> FormatterInputs.required(Map.of("find", ""), "find", "찾을 글자"))
+            .isInstanceOf(FormatterFailure.class)
+            .hasMessage("'찾을 글자' 칸이 비어 있어요");
+    }
+
+    @Test
+    @DisplayName("subSequence도 같은 마감을 잇는다")
+    void timedSubSequenceKeepsDeadline() {
+        CharSequence expired = new FormatterInputs.TimedCharSequence("abcdef", System.nanoTime() - 1);
+
+        assertThatThrownBy(() -> expired.subSequence(1, 3).charAt(0))
+            .isInstanceOf(FormatterFailure.class)
+            .hasMessage("패턴 검사가 1초를 넘었어요");
     }
 }

@@ -72,6 +72,19 @@ class TransformNodeExecutorTest {
     }
 
     @Test
+    @DisplayName("변환 실패는 '<title>: <이유> (입력: '<50자 요약>…')'로 감싼다")
+    void formatterFailureIsWrapped() {
+        Map<String, Object> config = new HashMap<>();
+        config.put("input", "a".repeat(FormatterInputs.MAX_TEXT + 1));
+
+        ExecutorResult result = run(Map.of(), "formatter.text_trim", new HashMap<>(), config);
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getErrorMessage())
+            .isEqualTo("공백 정리: 'input' 칸이 10만 자를 넘어요 (입력: '" + "a".repeat(50) + "…')");
+    }
+
+    @Test
     @DisplayName("모르는 포맷터 event는 노드 실패다")
     void unknownFormatterFails() {
         Map<String, Object> config = new HashMap<>();

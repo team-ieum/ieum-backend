@@ -4,6 +4,7 @@ import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.ExecutionCursor;
 import com.ieum.workflowcore.engine.ExecutorResult;
 import com.ieum.workflowcore.engine.Node;
+import com.ieum.workflowcore.util.SensitiveDataMasker;
 import java.time.Clock;
 import java.time.ZonedDateTime;
 import java.util.HashMap;
@@ -87,10 +88,14 @@ public class TransformNodeExecutor implements NodeExecutor {
             Map<String, Object> output = Formatter.apply(event, input, ZonedDateTime.now(clock));
             return ExecutorResult.success(output, System.currentTimeMillis() - startTime);
         } catch (FormatterFailure e) {
-            log.warn("[TransformExecutor] 포맷터 실패 — nodeId: {}, {}", node.getId(), e.getMessage());
+            // 메시지의 입력 요약에 웹훅 URL이 들어올 수 있다 — 로그엔 가린 값만(결과 메시지는 런타임이 가린다)
+            log.warn("[TransformExecutor] 포맷터 실패 — nodeId: {}, {}",
+                node.getId(), SensitiveDataMasker.maskWebhookUrl(e.getMessage()));
             return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime);
         } catch (Exception e) {
-            log.error("[TransformExecutor] 포맷터 실행 실패 — nodeId: {}", node.getId(), e);
+            // 스택트레이스는 원문 메시지를 찍으므로 남기지 않는다
+            log.error("[TransformExecutor] 포맷터 실행 실패 — nodeId: {}, {}: {}", node.getId(),
+                e.getClass().getName(), SensitiveDataMasker.maskWebhookUrl(e.getMessage()));
             return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime);
         }
     }

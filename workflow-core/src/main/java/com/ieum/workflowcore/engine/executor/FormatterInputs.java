@@ -46,15 +46,18 @@ final class FormatterInputs {
         return s;
     }
 
-    /** 없거나 빈 값이면 기본값, 허용 목록 밖이면 실패. */
+    /** 없거나 빈 값이면 기본값(기본값이 null이면 필수 선택 칸이라 실패), 허용 목록 밖이면 실패. */
     static String choice(Map<String, Object> in, String key, String dflt, Set<String> allowed) {
         Object value = in.get(key);
         if (value == null || "".equals(value)) {
+            if (dflt == null) {
+                throw new FormatterFailure("'" + key + "' 칸을 골라 주세요");
+            }
             return dflt;
         }
         String s = String.valueOf(value);
         if (!allowed.contains(s)) {
-            throw new FormatterFailure("'" + key + "' 값을 알 수 없어요: " + s);
+            throw new FormatterFailure("'" + key + "' 값을 알 수 없어요: " + summary(s));
         }
         return s;
     }
@@ -137,11 +140,11 @@ final class FormatterInputs {
         return s.substring(0, end) + "…";
     }
 
-    private record TimedCharSequence(CharSequence s, long deadline) implements CharSequence {
+    record TimedCharSequence(CharSequence s, long deadline) implements CharSequence {
 
         @Override
         public char charAt(int index) {
-            if (System.nanoTime() > deadline) {
+            if (System.nanoTime() - deadline > 0) {
                 throw new FormatterFailure("패턴 검사가 1초를 넘었어요");
             }
             return s.charAt(index);
