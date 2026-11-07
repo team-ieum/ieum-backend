@@ -10,9 +10,19 @@ final class Formatter {
     private record Op(String title, BiFunction<Map<String, Object>, ZonedDateTime, Map<String, Object>> fn) {
     }
 
-    private static final Map<String, Op> OPS = Map.of(
-        "formatter.text_trim", new Op("공백 정리",
-            (in, now) -> Map.of("output", FormatterInputs.text(in, "input").strip())));
+    private static final Map<String, Op> OPS = Map.ofEntries(
+        Map.entry("formatter.text_case", new Op("대소문자 바꾸기", TextFormats::textCase)),
+        Map.entry("formatter.text_trim", new Op("공백 정리", TextFormats::trim)),
+        Map.entry("formatter.text_replace", new Op("찾아 바꾸기", TextFormats::replace)),
+        Map.entry("formatter.text_truncate", new Op("길이 자르기", TextFormats::truncate)),
+        Map.entry("formatter.text_split", new Op("텍스트 나누기", TextFormats::split)),
+        Map.entry("formatter.text_default", new Op("기본값 넣기", TextFormats::defaultValue)),
+        Map.entry("formatter.text_extract", new Op("이메일·전화·URL·숫자 뽑기", TextFormats::extract)),
+        Map.entry("formatter.text_extract_pattern", new Op("패턴으로 뽑기", TextFormats::extractPattern)),
+        Map.entry("formatter.text_strip_html", new Op("HTML 태그 없애기", TextFormats::stripHtml)),
+        Map.entry("formatter.text_markdown_to_html", new Op("Markdown을 HTML로", TextFormats::markdownToHtml)),
+        Map.entry("formatter.text_url_encode", new Op("URL 인코딩", TextFormats::urlEncode)),
+        Map.entry("formatter.text_length", new Op("글자 수 세기", TextFormats::length)));
 
     private Formatter() {
     }
