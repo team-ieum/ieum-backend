@@ -33,8 +33,8 @@ final class ConditionValues {
     private static final ObjectMapper JSON = new ObjectMapper()
         .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
 
-    /** 유닉스 시각: 숫자만 10자리(초)·13자리(밀리초). */
-    private static final Pattern UNIX = Pattern.compile("\\d{10}|\\d{13}");
+    /** 유닉스 시각: 숫자만 10자리(초)·13자리(밀리초). 0으로 시작하면 아님 — {@code 0101234567}(옛 전화번호). */
+    private static final Pattern UNIX = Pattern.compile("[1-9]\\d{9}|[1-9]\\d{12}");
 
     /** {@code 2026년 11월 7일}(공백 유무 허용, 날짜만). */
     private static final Pattern KOREAN_DATE = Pattern.compile("(\\d{4})년\\s*(\\d{1,2})월\\s*(\\d{1,2})일");

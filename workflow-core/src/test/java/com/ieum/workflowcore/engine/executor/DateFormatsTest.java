@@ -51,7 +51,10 @@ class DateFormatsTest {
         assertThat(out("date_format", "input", "2026-11-07T04:30", "format", "datetime", "fromTimezone", "UTC"))
             .isEqualTo("2026-11-07 13:30");
         fails("date_format", "input", t, "format", "custom");
-        fails("date_format", "input", t, "format", "custom", "customPattern", "y".repeat(101));
+        String pattern100 = "yyyy-MM-dd '" + "a".repeat(87) + "'";
+        assertThat(out("date_format", "input", t, "format", "custom", "customPattern", pattern100))
+            .isEqualTo("2026-11-07 " + "a".repeat(87));
+        fails("date_format", "input", t, "format", "custom", "customPattern", "yyyy-MM-dd '" + "a".repeat(88) + "'");
         fails("date_format", "input", t, "format", "custom", "customPattern", "yyyy-MM-dd'");
         fails("date_format", "input", t, "toTimezone", "Mars/Base");
         fails("date_format", "input", t, "fromTimezone", "Mars/Base");
@@ -94,7 +97,29 @@ class DateFormatsTest {
         String t = "2026-11-07T13:30:00+09:00";
         fails("date_add", "input", t, "expression", "+999999999999 years");
         fails("date_add", "input", t, "expression", "+999999 years ".repeat(1000));
-        assertThat(out("date_add", "input", t, "expression", "+999999 years ".repeat(20))).isNotNull();
+        assertThat(out("date_add", "input", "2026-11-07", "expression", "+999999일")).isEqualTo("4764-10-03");
+        fails("date_add", "input", "2026-11-07", "expression", "+1000000일");
+        assertThat(out("date_add", "input", "2026-11-07", "expression", "+1일 ".repeat(20))).isEqualTo("2026-11-27");
+        fails("date_add", "input", "2026-11-07", "expression", "+1일 ".repeat(21));
+    }
+
+    @Test
+    @DisplayName("java.time 범위 끝을 넘는 연산·시간대 변환은 노드 실패")
+    void outOfRange() {
+        fails("date_add", "input", "+999999999-01-01", "expression", "+1 year");
+        fails("date_add", "input", "-999999999-01-01", "expression", "-1 day");
+        fails("date_add", "input", "+999999999-12-31T14:59:59Z", "expression", "+1 hour");
+        fails("date_format", "input", "-999999999-01-01",
+            "fromTimezone", "UTC", "toTimezone", "America/New_York");
+    }
+
+    @Test
+    @DisplayName("소수 초는 버리고, '오늘'은 실행 시각의 KST 날짜")
+    void truncatesSecondsAndToday() {
+        String t = "2026-11-07T13:30:45.678+09:00";
+        assertThat(out("date_format", "input", t, "format", "iso")).isEqualTo("2026-11-07T13:30:45+09:00");
+        assertThat(out("date_add", "input", t, "expression", "+1분")).isEqualTo("2026-11-07T13:31:45+09:00");
+        assertThat(out("date_format", "input", "오늘", "format", "date")).isEqualTo("2026-11-07");
     }
 
     @Test

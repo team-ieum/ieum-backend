@@ -100,7 +100,7 @@ class ConditionValuesTest {
         Instant t = Instant.ofEpochSecond(1794027000);
         assertThat(ConditionValues.date("1794027000", NOW)).contains(ConditionValues.When.at(t));
         assertThat(ConditionValues.date("1794027000000", NOW)).contains(ConditionValues.When.at(t));
-        for (String bad : new String[]{"12345", "17940270000", "-1794027000"}) {
+        for (String bad : new String[]{"12345", "17940270000", "-1794027000", "0101234567"}) {
             assertThat(ConditionValues.date(bad, NOW)).as(bad).isEmpty();
         }
     }

@@ -63,31 +63,35 @@ final class DateFormats {
         ZoneId from = zone(in, "fromTimezone");
         ZoneId to = zone(in, "toTimezone");
         ConditionValues.When w = read(in, "input", "입력값", now, from);
-        ZonedDateTime z = (w.dateOnly() ? w.day().atStartOfDay(from) : w.instant().atZone(from))
-            .withZoneSameInstant(to)
-            .truncatedTo(ChronoUnit.SECONDS);
         try {
+            ZonedDateTime z = (w.dateOnly() ? w.day().atStartOfDay(from) : w.instant().atZone(from))
+                .withZoneSameInstant(to)
+                .truncatedTo(ChronoUnit.SECONDS);
             return Map.of("output", z.format(f));
-        } catch (DateTimeException e) {
-            throw new FormatterFailure("직접 정한 모양으로 표기하지 못했어요");
+        } catch (DateTimeException | ArithmeticException e) {
+            throw new FormatterFailure("날짜를 표기할 수 있는 범위를 넘었어요");
         }
     }
 
     static Map<String, Object> add(Map<String, Object> in, ZonedDateTime now) {
         List<Term> terms = terms(FormatterInputs.required(in, "expression", "더하거나 뺄 기간"));
         ConditionValues.When w = read(in, "input", "입력값", now, KST);
-        if (w.dateOnly() && terms.stream().allMatch(t -> t.unit().isDateBased())) {
-            LocalDate d = w.day();
-            for (Term t : terms) {
-                d = d.plus(t.amount(), t.unit());
+        try {
+            if (w.dateOnly() && terms.stream().allMatch(t -> t.unit().isDateBased())) {
+                LocalDate d = w.day();
+                for (Term t : terms) {
+                    d = d.plus(t.amount(), t.unit());
+                }
+                return Map.of("output", d.toString());
             }
-            return Map.of("output", d.toString());
+            ZonedDateTime z = w.instant().atZone(KST);
+            for (Term t : terms) {
+                z = z.plus(t.amount(), t.unit());
+            }
+            return Map.of("output", z.truncatedTo(ChronoUnit.SECONDS).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
+        } catch (DateTimeException | ArithmeticException e) {
+            throw new FormatterFailure("계산한 날짜가 표기할 수 있는 범위를 넘었어요");
         }
-        ZonedDateTime z = w.instant().atZone(KST);
-        for (Term t : terms) {
-            z = z.plus(t.amount(), t.unit());
-        }
-        return Map.of("output", z.truncatedTo(ChronoUnit.SECONDS).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
     }
 
     static Map<String, Object> compare(Map<String, Object> in, ZonedDateTime now) {
