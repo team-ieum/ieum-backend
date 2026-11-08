@@ -33,19 +33,24 @@ import org.jsoup.select.NodeVisitor;
 /** 텍스트 포맷터 12개. 정규식 매칭은 전부 {@link FormatterInputs#timed} 위에서 돈다. */
 final class TextFormats {
 
-    private static final Pattern EMAIL = Pattern.compile("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}");
+    /**
+     * 앞 경계 + 소유격 수량자 — 없으면 {@code "a".repeat(90_000)}에서 시작 위치마다 다시 훑어 O(N²)이다.
+     * 도메인은 그룹 반복 대신 문자 클래스 + 뒤 확인({@code .tld}로 끝남) — 그룹 반복은 Java에서 반복마다 재귀라 긴 입력에 StackOverflow.
+     */
+    private static final Pattern EMAIL = Pattern.compile(
+        "(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]++@[A-Za-z0-9-][A-Za-z0-9.-]*(?<=\\.[A-Za-z]{2,63})");
+    private static final String AREA = "(?:2|1[016789]|[3-6][1-5]|70|80|50\\d?)";
+    /** 앞뒤가 숫자·{@code 숫자-}로 이어지면(카드·계좌번호 블록) 뽑지 않는다. */
     private static final Pattern PHONE = Pattern.compile(
-        "(?<!\\d)(?:\\+82[- ]?\\d{1,2}[- ]?\\d{3,4}[- ]?\\d{4}"
-            + "|0\\d{1,2}[-) .]?\\d{3,4}[- .]?\\d{4}"
-            + "|1[5-9]\\d{2}-\\d{4})(?!\\d)");
+        "(?<!\\d)(?<!\\d-)(?:(?:\\+82[- ]?0?|0)" + AREA + "(?:\\) ?|[- .])?\\d{3,4}[- .]?\\d{4}"
+            + "|1[5-9]\\d{2}-\\d{4})(?!\\d)(?!-\\d)");
     private static final Pattern URL = Pattern.compile("https?://[^\\s<>\"']+");
     private static final Pattern NUMBER = Pattern.compile("-?\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?|-?\\d+(?:\\.\\d+)?");
     private static final Pattern WHITESPACE = Pattern.compile("\\s+");
-    private static final String URL_TRAILING = ".,!?;:)]}";
+    private static final String URL_TRAILING = ".,!?;:";
 
     private static final Parser MARKDOWN = Parser.builder().build();
-    /** 원본 HTML은 통과시키고 Safelist로 걸러낸다 — escapeHtml(true)면 {@code onerror=} 같은 글자가 본문에 남는다. */
-    private static final HtmlRenderer HTML = HtmlRenderer.builder().sanitizeUrls(true).build();
+    private static final HtmlRenderer HTML = HtmlRenderer.builder().escapeHtml(true).sanitizeUrls(true).build();
     private static final Document.OutputSettings COMPACT = new Document.OutputSettings().prettyPrint(false);
 
     private TextFormats() {
@@ -85,7 +90,17 @@ final class TextFormats {
 
     static Map<String, Object> replace(Map<String, Object> in, ZonedDateTime now) {
         String find = notation(required(in, "find", "찾을 글자"));
-        return out(text(in, "input").replace(find, notation(text(in, "replace"))));
+        String replacement = notation(text(in, "replace"));
+        String s = text(in, "input");
+        // 결과 길이를 먼저 계산한다 — 만들고 나서 재면 수십억 자 문자열로 OOM이 난다.
+        long count = 0;
+        for (int i = s.indexOf(find); i >= 0; i = s.indexOf(find, i + find.length())) {
+            count++;
+        }
+        if (s.length() + count * (replacement.length() - find.length()) > FormatterInputs.MAX_TEXT) {
+            throw new FormatterFailure("바꾼 결과가 10만 자를 넘어요");
+        }
+        return out(s.replace(find, replacement));
     }
 
     private static String notation(String s) {
@@ -119,6 +134,9 @@ final class TextFormats {
     static Map<String, Object> split(Map<String, Object> in, ZonedDateTime now) {
         String part = choice(in, "part", "first", Set.of("first", "second", "last", "all"));
         String sep = text(in, "separator");
+        if ("all".equals(part) && text(in, "input").isEmpty()) {
+            return out(List.of());
+        }
         String[] raw = Pattern.compile(Pattern.quote(sep.isEmpty() ? "," : sep)).split(timed(text(in, "input")), -1);
         List<Object> pieces = new ArrayList<>(raw.length);
         for (String p : raw) {
@@ -168,11 +186,10 @@ final class TextFormats {
         while (m.find()) {
             String g = m.group();
             if (trimUrl) {
-                int end = g.length();
-                while (end > 0 && URL_TRAILING.indexOf(g.charAt(end - 1)) >= 0) {
-                    end--;
+                g = trimUrl(g);
+                if (g == null) {
+                    continue;
                 }
-                g = g.substring(0, end);
             }
             if (!all) {
                 return out(g);
@@ -181,6 +198,39 @@ final class TextFormats {
             capped(found);
         }
         return out(all ? found : "");
+    }
+
+    /**
+     * 닫는 괄호 뒤에 ASCII 밖 글자(한글 조사 등)가 붙으면 괄호 뒤를 버리고, 끝 문장부호와 짝 없는 {@code )}·{@code ]}를 뗀다.
+     * 호스트가 없으면 null.
+     */
+    private static String trimUrl(String g) {
+        for (int i = 0; i + 1 < g.length(); i++) {
+            char c = g.charAt(i);
+            if ((c == ')' || c == ']') && g.charAt(i + 1) > 0x7F) {
+                g = g.substring(0, i + 1);
+                break;
+            }
+        }
+        int end = g.length();
+        while (end > 0) {
+            char c = g.charAt(end - 1);
+            String head = g.substring(0, end);
+            if (URL_TRAILING.indexOf(c) >= 0
+                || c == ')' && unbalanced(head, '(', ')')
+                || c == ']' && unbalanced(head, '[', ']')) {
+                end--;
+            } else {
+                break;
+            }
+        }
+        g = g.substring(0, end);
+        String rest = g.substring(g.indexOf("://") + 3);
+        return rest.isEmpty() || !Character.isLetterOrDigit(rest.charAt(0)) ? null : g;
+    }
+
+    private static boolean unbalanced(String s, char open, char close) {
+        return s.chars().filter(ch -> ch == close).count() > s.chars().filter(ch -> ch == open).count();
     }
 
     private static List<Object> capped(List<Object> items) {
