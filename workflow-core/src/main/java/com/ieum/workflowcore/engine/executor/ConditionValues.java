@@ -3,6 +3,7 @@ package com.ieum.workflowcore.engine.executor;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
+import java.time.DateTimeException;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -17,6 +18,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 조건 분기의 값 읽기 규칙(텍스트·목록·숫자·날짜·참거짓·비어 있음).
@@ -29,6 +32,12 @@ final class ConditionValues {
     /** 뒤 글자를 거절해야 {@code "[2026] 보고서"}가 {@code [2026]}으로 읽히지 않는다. 스레드 안전하다. */
     private static final ObjectMapper JSON = new ObjectMapper()
         .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+
+    /** 유닉스 시각: 숫자만 10자리(초)·13자리(밀리초). */
+    private static final Pattern UNIX = Pattern.compile("\\d{10}|\\d{13}");
+
+    /** {@code 2026년 11월 7일}(공백 유무 허용, 날짜만). */
+    private static final Pattern KOREAN_DATE = Pattern.compile("(\\d{4})년\\s*(\\d{1,2})월\\s*(\\d{1,2})일");
 
     /** {@code day}는 KST 날짜. 날짜만 읽힌 값은 {@code instant} = 그날 KST 00:00. */
     record When(Instant instant, LocalDate day, boolean dateOnly) {
@@ -100,6 +109,11 @@ final class ConditionValues {
     }
 
     static Optional<When> date(Object value, ZonedDateTime now) {
+        return date(value, now, KST);
+    }
+
+    /** {@code zone} = 시간대 없는 날짜·시각 값의 시간대. 날짜만인 값({@link When#on})은 KST 날짜다. */
+    static Optional<When> date(Object value, ZonedDateTime now, ZoneId zone) {
         if (value == null) {
             return Optional.empty();
         }
@@ -120,7 +134,7 @@ final class ConditionValues {
             // 다음 형식
         }
         try {
-            return Optional.of(When.at(LocalDateTime.parse(t).atZone(KST).toInstant()));
+            return Optional.of(When.at(LocalDateTime.parse(t).atZone(zone).toInstant()));
         } catch (DateTimeParseException ignored) {
             // 다음 형식
         }
@@ -128,6 +142,19 @@ final class ConditionValues {
             return Optional.of(When.on(LocalDate.parse(s.replace('.', '-').replace('/', '-'))));
         } catch (DateTimeParseException ignored) {
             // 다음 형식
+        }
+        if (UNIX.matcher(s).matches()) {
+            long n = Long.parseLong(s);
+            return Optional.of(When.at(s.length() == 10 ? Instant.ofEpochSecond(n) : Instant.ofEpochMilli(n)));
+        }
+        Matcher k = KOREAN_DATE.matcher(s);
+        if (k.matches()) {
+            try {
+                return Optional.of(When.on(LocalDate.of(
+                    Integer.parseInt(k.group(1)), Integer.parseInt(k.group(2)), Integer.parseInt(k.group(3)))));
+            } catch (DateTimeException e) {
+                return Optional.empty();
+            }
         }
         try {
             return Optional.of(When.at(ZonedDateTime.parse(s, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant()));

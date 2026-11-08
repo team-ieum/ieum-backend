@@ -84,9 +84,30 @@ class ConditionValuesTest {
     }
 
     @Test void dateRejectsUnreadable() {
-        for (Object bad : new Object[]{"Wed, 5 Nov 2026 09:00:00 +0900", "2026-13-01", "내일", "1730768400", "", null}) {
+        for (Object bad : new Object[]{"Wed, 5 Nov 2026 09:00:00 +0900", "2026-13-01", "내일", "", null}) {
             assertThat(ConditionValues.date(bad, NOW)).as(String.valueOf(bad)).isEmpty();
         }
+    }
+
+    @Test void koreanDate() {
+        assertThat(ConditionValues.date("2026년 11월 7일", NOW)).contains(ConditionValues.When.on(LocalDate.of(2026, 11, 7)));
+        assertThat(ConditionValues.date("2026년11월7일", NOW)).contains(ConditionValues.When.on(LocalDate.of(2026, 11, 7)));
+        assertThat(ConditionValues.date("2026년 13월 1일", NOW)).isEmpty();
+        assertThat(ConditionValues.date("2026년 11월 7일 13:30", NOW)).isEmpty();
+    }
+
+    @Test void unixTime() {
+        Instant t = Instant.ofEpochSecond(1794027000);
+        assertThat(ConditionValues.date("1794027000", NOW)).contains(ConditionValues.When.at(t));
+        assertThat(ConditionValues.date("1794027000000", NOW)).contains(ConditionValues.When.at(t));
+        for (String bad : new String[]{"12345", "17940270000", "-1794027000"}) {
+            assertThat(ConditionValues.date(bad, NOW)).as(bad).isEmpty();
+        }
+    }
+
+    @Test void zoneArgument() {
+        assertThat(ConditionValues.date("2026-11-07T09:00", NOW, java.time.ZoneId.of("UTC")).orElseThrow().instant())
+            .isEqualTo(Instant.parse("2026-11-07T09:00:00Z"));
     }
 
     @Test void utcInstantMapsToKstDay() {

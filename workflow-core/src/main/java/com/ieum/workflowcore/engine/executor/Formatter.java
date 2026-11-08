@@ -26,7 +26,10 @@ final class Formatter {
         Map.entry("formatter.number_math", new Op("계산하기", NumberFormats::math)),
         Map.entry("formatter.number_format", new Op("숫자 표기", NumberFormats::format)),
         Map.entry("formatter.number_currency", new Op("금액 표기", NumberFormats::currency)),
-        Map.entry("formatter.number_phone", new Op("전화번호 표기", NumberFormats::phone)));
+        Map.entry("formatter.number_phone", new Op("전화번호 표기", NumberFormats::phone)),
+        Map.entry("formatter.date_format", new Op("날짜 표기 바꾸기", DateFormats::format)),
+        Map.entry("formatter.date_add", new Op("날짜 더하기·빼기", DateFormats::add)),
+        Map.entry("formatter.date_compare", new Op("두 날짜 비교", DateFormats::compare)));
 
     private Formatter() {
     }
