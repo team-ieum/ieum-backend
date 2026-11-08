@@ -60,6 +60,41 @@ class NumberFormatsTest {
     }
 
     @Test
+    @Timeout(value = 5, unit = TimeUnit.SECONDS)
+    @DisplayName("0·int 경계 지수·긴 소수 표기도 원본 그대로 상한 검사(Error 아닌 노드 실패)")
+    void scaleBypass() {
+        for (String s : new String[] {"0e-999999999", "0e-1000000", "1e2147483647", "1" + "0".repeat(900) + "e-1900"}) {
+            fails("number_math", "input", s, "operation", "add", "value", "1");
+            fails("number_math", "input", "1", "operation", "multiply", "value", s);
+            fails("number_format", "input", s);
+            fails("number_currency", "input", s);
+        }
+        fails("number_format", "input", " ".repeat(200_000) + "1");
+        fails("number_math", "input", "1", "operation", "add", "value", " ".repeat(200_000) + "1");
+    }
+
+    @Test
+    @DisplayName("통화 .5는 HALF_UP, CNY·GBP 기호, -0은 0")
+    void currencyRoundingAndZero() {
+        assertThat(out("number_currency", "input", "12000.5", "currency", "KRW")).isEqualTo("12,001원");
+        assertThat(out("number_currency", "input", "1.005", "currency", "USD")).isEqualTo("$1.01");
+        assertThat(out("number_currency", "input", "12000", "currency", "CNY")).isEqualTo("¥12,000.00");
+        assertThat(out("number_currency", "input", "12000", "currency", "GBP")).isEqualTo("£12,000.00");
+        assertThat(out("number_math", "input", "-0", "operation", "negate")).isEqualTo("0");
+        assertThat(out("number_math", "input", "5", "operation", "subtract", "value", "5")).isEqualTo("0");
+        assertThat(out("number_format", "input", "-0")).isEqualTo("0");
+    }
+
+    @Test
+    @DisplayName("number_phone: 길이 초과·앞자리 오류 실패, +82 0 앞자리 국제 표기")
+    void phoneEdges() {
+        fails("number_phone", "input", "010123456789");
+        fails("number_phone", "input", "01212345678");
+        assertThat(out("number_phone", "input", "+82 010-1234-5678", "format", "international"))
+            .isEqualTo("+82 10-1234-5678");
+    }
+
+    @Test
     @DisplayName("number_format: 기본 쉼표·마침표, 구분 기호 바꾸기, 같은 기호면 실패")
     void numberFormat() {
         assertThat(out("number_format", "input", "1234567.891")).isEqualTo("1,234,567.891");
