@@ -183,7 +183,15 @@ class TextFormatsTest {
     }
 
     @Test
-    @DisplayName("text_strip_html: 태그·script 버리고 엔티티 풀고 블록·br은 줄바꿈")
+    @DisplayName("text_extract_pattern: 스택 넘침은 Error로 새지 않고 노드 실패다")
+    void extractPatternStackOverflowIsFailure() {
+        assertThatThrownBy(() -> out("text_extract_pattern", "input", "ab".repeat(50_000), "pattern", "(a|b)*"))
+            .isExactlyInstanceOf(FormatterFailure.class)
+            .satisfies(e -> assertThat(e.getMessage()).containsAnyOf("패턴이 너무 복잡해요", "1초"));
+    }
+
+    @Test
+    @DisplayName("text_strip_html:태그·script 버리고 엔티티 풀고 블록·br은 줄바꿈")
     void stripHtml() {
         assertThat(out("text_strip_html", "input",
             "<p>안녕 &amp; <b>반가워</b></p><script>alert(1)</script><p>둘째</p>")).isEqualTo("안녕 & 반가워\n둘째");

@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 
 /** 포맷터 공용 입력 읽기·제한. 실패는 전부 {@link FormatterFailure}(이유만). */
 final class FormatterInputs {
@@ -128,6 +129,18 @@ final class FormatterInputs {
     /** 정규식 입력을 감싼다 — 마감({@link #REGEX_TIMEOUT})을 넘겨 글자를 읽으면 실패. */
     static CharSequence timed(CharSequence s) {
         return new TimedCharSequence(s, System.nanoTime() + REGEX_TIMEOUT.toNanos());
+    }
+
+    /**
+     * 정규식 매칭을 감싼다. Java 정규식은 그룹 반복마다 재귀라 {@code (a|b)*} 같은 패턴에 긴 입력이면 StackOverflowError가 나는데,
+     * Error는 실행기의 catch(Exception)를 지나 워커 스레드까지 올라가므로 여기서 노드 실패로 바꾼다.
+     */
+    static <T> T regex(Supplier<T> work) {
+        try {
+            return work.get();
+        } catch (StackOverflowError e) {
+            throw new FormatterFailure("패턴이 너무 복잡해요");
+        }
     }
 
     /** 실패 메시지용 입력 요약 — 앞 50자 + {@code …}(서로게이트 쌍은 가르지 않는다). */

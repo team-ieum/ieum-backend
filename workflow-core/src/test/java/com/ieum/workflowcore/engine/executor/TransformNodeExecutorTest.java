@@ -85,6 +85,19 @@ class TransformNodeExecutorTest {
     }
 
     @Test
+    @DisplayName("정규식 스택 넘침은 워커로 새지 않고 노드 실패다")
+    void regexStackOverflowIsNodeFailure() {
+        Map<String, Object> config = new HashMap<>();
+        config.put("input", "ab".repeat(50_000));
+        config.put("pattern", "(a|b)*");
+
+        ExecutorResult result = run(Map.of(), "formatter.text_extract_pattern", new HashMap<>(), config);
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getErrorMessage()).containsAnyOf("패턴이 너무 복잡해요", "1초");
+    }
+
+    @Test
     @DisplayName("모르는 포맷터 event는 노드 실패다")
     void unknownFormatterFails() {
         Map<String, Object> config = new HashMap<>();

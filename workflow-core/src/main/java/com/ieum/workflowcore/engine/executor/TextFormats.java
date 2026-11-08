@@ -3,6 +3,7 @@ package com.ieum.workflowcore.engine.executor;
 import static com.ieum.workflowcore.engine.executor.FormatterInputs.choice;
 import static com.ieum.workflowcore.engine.executor.FormatterInputs.flag;
 import static com.ieum.workflowcore.engine.executor.FormatterInputs.positiveInt;
+import static com.ieum.workflowcore.engine.executor.FormatterInputs.regex;
 import static com.ieum.workflowcore.engine.executor.FormatterInputs.required;
 import static com.ieum.workflowcore.engine.executor.FormatterInputs.text;
 import static com.ieum.workflowcore.engine.executor.FormatterInputs.timed;
@@ -137,7 +138,9 @@ final class TextFormats {
         if ("all".equals(part) && text(in, "input").isEmpty()) {
             return out(List.of());
         }
-        String[] raw = Pattern.compile(Pattern.quote(sep.isEmpty() ? "," : sep)).split(timed(text(in, "input")), -1);
+        Pattern sepPattern = Pattern.compile(Pattern.quote(sep.isEmpty() ? "," : sep));
+        CharSequence input = timed(text(in, "input"));
+        String[] raw = regex(() -> sepPattern.split(input, -1));
         List<Object> pieces = new ArrayList<>(raw.length);
         for (String p : raw) {
             pieces.add(p.strip());
@@ -181,6 +184,10 @@ final class TextFormats {
     }
 
     private static Map<String, Object> matches(Pattern p, String s, boolean all, boolean trimUrl) {
+        return regex(() -> findAll(p, s, all, trimUrl));
+    }
+
+    private static Map<String, Object> findAll(Pattern p, String s, boolean all, boolean trimUrl) {
         Matcher m = p.matcher(timed(s));
         List<Object> found = new ArrayList<>();
         while (m.find()) {
@@ -292,7 +299,7 @@ final class TextFormats {
         String s = text(in, "input");
         if ("words".equals(choice(in, "unit", "chars", Set.of("chars", "words")))) {
             String t = s.strip();
-            return out(t.isEmpty() ? 0L : (long) WHITESPACE.split(timed(t)).length);
+            return out(t.isEmpty() ? 0L : (long) regex(() -> WHITESPACE.split(timed(t))).length);
         }
         return out((long) graphemeBounds(s).size() - 1);
     }
