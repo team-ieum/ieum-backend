@@ -11,7 +11,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 /** 유틸 포맷터 3개 — 대응표·목록 고르기·목록을 글로. */
 final class ListFormats {
@@ -57,11 +56,19 @@ final class ListFormats {
         return out;
     }
 
+    /** 결과 길이를 이어 붙이기 전에 계산해 10만 자를 넘으면 실패(1만 자 구분 기호 × 1만 개 = 1억 자 방지). null 원소는 {@code ""}. */
     static Map<String, Object> toText(Map<String, Object> in, ZonedDateTime now) {
-        String sep = text(in, "separator");
-        String joined = items(in).stream().map(FormatterInputs::json)
-            .collect(Collectors.joining(sep.isEmpty() ? ", " : sep));
-        return Map.of("output", joined);
+        String text = text(in, "separator");
+        String sep = text.isEmpty() ? ", " : text;
+        List<String> parts = items(in).stream().map(v -> v == null ? "" : json(v)).toList();
+        long total = (long) sep.length() * Math.max(0, parts.size() - 1);
+        for (String part : parts) {
+            total += part.length();
+        }
+        if (total > FormatterInputs.MAX_TEXT) {
+            throw new FormatterFailure("결과가 10만 자를 넘어요");
+        }
+        return Map.of("output", String.join(sep, parts));
     }
 
     /** 문자열 입력은 10만 자 제한을 거친다. */

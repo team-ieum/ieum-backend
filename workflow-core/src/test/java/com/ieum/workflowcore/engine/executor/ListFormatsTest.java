@@ -11,8 +11,10 @@ import java.time.ZonedDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 class ListFormatsTest {
 
@@ -98,5 +100,40 @@ class ListFormatsTest {
         assertThat(out("list_to_text", "input", "a,b", "separator", " / ")).isEqualTo("a / b");
         assertThat(out("list_to_text", "input", "a,b")).isEqualTo("a, b");
         assertThat(out("list_to_text", "input", "")).isEqualTo("");
+        assertThat(out("list_to_text", "input", "[\"a\",null,\"b\"]")).isEqualTo("a, , b");
+        assertThat(out("list_to_text", "input", "a,b", "separator", "")).isEqualTo("a, b");
+    }
+
+    @Test
+    @DisplayName("검색 items 모양(중첩 객체·배열·숫자·null)을 고르면 다음 노드 참조가 같은 JSON이다")
+    void listPickSearchItemsRoundTrip() {
+        String items = "[{\"id\":7,\"meta\":{\"tags\":[\"a\",\"b\"],\"score\":2.5,\"note\":null}},3]";
+        ExecutionCursor cursor = new ExecutionCursor();
+        cursor.setContext(new ExecutionContext());
+        cursor.getContext().setNodeOutput("f", run("list_pick", "input", items));
+        assertThat(cursor.renderVariables("{{nodes.f.output.output}}"))
+            .isEqualTo("{\"id\":7,\"meta\":{\"tags\":[\"a\",\"b\"],\"score\":2.5,\"note\":null}}");
+        assertThat(out("list_pick", "input", items, "position", "last")).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("list_pick: null 원소는 null 그대로, 공백뿐인 입력은 빈 목록이라 실패")
+    void listPickNullAndBlank() {
+        Map<String, Object> picked = run("list_pick", "input", "[null,1]");
+        assertThat(picked).containsKey("output");
+        assertThat(picked.get("output")).isNull();
+        fails("list_pick", "input", "   ");
+    }
+
+    @Test
+    @Timeout(value = 5, unit = TimeUnit.SECONDS)
+    @DisplayName("list_to_text: 결과가 10만 자를 넘으면 이어 붙이기 전에 실패(1만 개 × 큰 구분 기호, List 입력도)")
+    void listToTextResultLimit() {
+        String many = ",".repeat(FormatterInputs.MAX_ITEMS - 1);
+        fails("list_to_text", "input", many, "separator", "x".repeat(FormatterInputs.MAX_TEXT));
+        fails("list_to_text", "input", many, "separator", "xxxxxxxxxxx");
+        fails("list_to_text", "input", "a", "separator", "x".repeat(FormatterInputs.MAX_TEXT + 1));
+        fails("list_to_text", "input", List.of("y".repeat(60_000), "z".repeat(60_000)));
+        assertThat(out("list_to_text", "input", many, "separator", "x".repeat(10))).asString().hasSize(99_990);
     }
 }

@@ -81,12 +81,12 @@ final class FormatterInputs {
 
     /**
      * spec "목록 읽기": List는 그대로, {@code [}로 시작하는 JSON 배열은 그 배열(원소 타입 보존 — 객체는 Map),
-     * 아니면 쉼표로 나눠 앞뒤 공백 제거. 빈 원소도 자리를 지킨다. null·{@code ""} → 빈 목록.
+     * 아니면 쉼표로 나눠 앞뒤 공백 제거. 빈 원소도 자리를 지킨다. null·공백뿐인 문자열 → 빈 목록.
      */
     @SuppressWarnings("unchecked")
     static List<Object> list(Object value) {
         List<Object> items;
-        if (value == null || "".equals(value)) {
+        if (value == null || value instanceof String blank && blank.isBlank()) {
             items = List.of();
         } else if (value instanceof List<?> l) {
             items = (List<Object>) l;
