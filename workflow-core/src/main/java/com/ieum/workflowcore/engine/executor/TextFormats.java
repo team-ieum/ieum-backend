@@ -40,7 +40,8 @@ final class TextFormats {
      */
     private static final Pattern EMAIL = Pattern.compile(
         "(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]++@[A-Za-z0-9-][A-Za-z0-9.-]*(?<=\\.[A-Za-z]{2,63})");
-    private static final String AREA = "(?:2|1[016789]|[3-6][1-5]|70|80|50\\d?)";
+    /** 한국 전화 앞자리(0 뒤). NumberFormats.phone도 같은 규칙을 쓴다. */
+    static final String AREA = "(?:2|1[016789]|[3-6][1-5]|70|80|50\\d?)";
     /** 앞뒤가 숫자·{@code 숫자-}로 이어지면(카드·계좌번호 블록) 뽑지 않는다. */
     private static final Pattern PHONE = Pattern.compile(
         "(?<!\\d)(?<!\\d-)(?:(?:\\+82[- ]?0?|0)" + AREA + "(?:\\) ?|[- .])?\\d{3,4}[- .]?\\d{4}"

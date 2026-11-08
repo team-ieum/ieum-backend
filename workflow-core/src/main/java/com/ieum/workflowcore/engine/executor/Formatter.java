@@ -22,7 +22,11 @@ final class Formatter {
         Map.entry("formatter.text_strip_html", new Op("HTML 태그 없애기", TextFormats::stripHtml)),
         Map.entry("formatter.text_markdown_to_html", new Op("Markdown을 HTML로", TextFormats::markdownToHtml)),
         Map.entry("formatter.text_url_encode", new Op("URL 인코딩", TextFormats::urlEncode)),
-        Map.entry("formatter.text_length", new Op("글자 수 세기", TextFormats::length)));
+        Map.entry("formatter.text_length", new Op("글자 수 세기", TextFormats::length)),
+        Map.entry("formatter.number_math", new Op("계산하기", NumberFormats::math)),
+        Map.entry("formatter.number_format", new Op("숫자 표기", NumberFormats::format)),
+        Map.entry("formatter.number_currency", new Op("금액 표기", NumberFormats::currency)),
+        Map.entry("formatter.number_phone", new Op("전화번호 표기", NumberFormats::phone)));
 
     private Formatter() {
     }
