@@ -115,10 +115,15 @@ final class NumberFormats {
      * int 뺄셈은 {@code 1e2147483647}에서 넘치므로 long으로.
      */
     private static BigDecimal bounded(BigDecimal d) {
-        if (Math.abs((long) d.scale()) > MAX_DIGITS || (long) d.precision() - d.scale() > MAX_DIGITS) {
+        if (!withinDigits(d)) {
             throw new FormatterFailure("숫자가 너무 커요(정수·소수 각 1000자리까지)");
         }
         return d;
+    }
+
+    /** 정수·소수 각 {@value #MAX_DIGITS}자리 이내인지 — 승인 게이트 숫자 칸도 같은 기준을 쓴다. */
+    static boolean withinDigits(BigDecimal d) {
+        return Math.abs((long) d.scale()) <= MAX_DIGITS && (long) d.precision() - d.scale() <= MAX_DIGITS;
     }
 
     /** 상한 검사를 지나고도 남는 산술 예외를 노드 실패로. */

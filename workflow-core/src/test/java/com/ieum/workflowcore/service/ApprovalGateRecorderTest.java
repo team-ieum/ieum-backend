@@ -69,6 +69,18 @@ class ApprovalGateRecorderTest {
         List<Map<String, Object>> items = (List<Map<String, Object>>) view(rows.get(0)).get("items");
         assertThat((String) items.get(0).get("value")).doesNotContain("abc").startsWith("초안: https://discord.com/api/webhooks/");
         assertThat((String) items.get(1).get("value")).hasSize(10_001).endsWith("…");
+        assertThat(rows.get(0).getTitle()).isEqualTo("승인이 필요해요");
+    }
+
+    @Test
+    @DisplayName("목록 제목은 message 앞 200자")
+    void 제목은_message_앞_200자() throws Exception {
+        ApprovalGateConfig config = ApprovalGateConfig.parse(ApprovalGateConfig.REQUEST,
+            Map.of("message", "가".repeat(300)));
+
+        recorder.record(executionId, workflowId, userId, Map.of("g", config), now, d -> 1);
+
+        assertThat(rows.get(0).getTitle()).isEqualTo("가".repeat(200));
     }
 
     @Test
@@ -125,6 +137,8 @@ class ApprovalGateRecorderTest {
         assertThat(fields.get(0).get("key")).isEqualTo("note1");
         assertThat((String) fields.get(1).get("default")).contains("discord.com/api/webhooks/");
         assertThat((String) view.get("message")).startsWith("확인: https://discord.com/api/webhooks/");
+        // 목록 제목은 마스킹된 message 그대로(앞 200자)
+        assertThat(gate.getTitle()).isEqualTo(view.get("message")).doesNotContain("abc");
         // view 키 이름이 민감 키로 걸려 통째로 가려지지 않는다
         assertThat(view.get("event")).isEqualTo(ApprovalGateConfig.COLLECT);
         assertThat(view.get("fields")).isInstanceOf(List.class);

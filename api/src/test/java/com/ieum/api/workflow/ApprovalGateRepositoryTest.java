@@ -74,7 +74,7 @@ class ApprovalGateRepositoryTest {
 
     private ApprovalGate gate(UUID executionId, String nodeId, UUID webhookId, LocalDateTime remindAt) {
         return ApprovalGate.open(executionId, workflow.getId(), u, nodeId, "approval.request", "{}",
-            webhookId, NOW.plusHours(24), remindAt);
+            "제목 " + nodeId, webhookId, NOW.plusHours(24), remindAt);
     }
 
     @Test
@@ -96,9 +96,13 @@ class ApprovalGateRepositoryTest {
         gates.save(decided);
         gates.save(gate(run(ExecutionStatus.FAILED), "n1", null, null));
 
-        List<ApprovalGate> found = gates.findOpenByUser(u, PageRequest.of(0, 10));
+        List<ApprovalGateRepository.OpenGate> found = gates.findOpenByUser(u, PageRequest.of(0, 10));
 
-        assertThat(found).extracting(ApprovalGate::getId).containsExactly(open.getId());
+        assertThat(found).extracting(ApprovalGateRepository.OpenGate::getId).containsExactly(open.getId());
+        // 투영이라 엔티티(view_json 포함)를 올리지 않는다
+        assertThat(found.get(0)).isNotInstanceOf(ApprovalGate.class);
+        assertThat(found.get(0).getTitle()).isEqualTo("제목 n1");
+        assertThat(found.get(0).getExecutionId()).isEqualTo(open.getExecutionId());
     }
 
     @Test
@@ -110,6 +114,17 @@ class ApprovalGateRepositoryTest {
         assertThat(gates.markNotified(g.getId(), NOW)).isEqualTo(0);
         assertThat(gates.markReminded(g.getId(), NOW)).isEqualTo(1);
         assertThat(gates.markReminded(g.getId(), NOW)).isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("결정된_게이트는_선점하지_않는다")
+    void decidedGate_notClaimed() {
+        ApprovalGate g = gate(run(ExecutionStatus.WAITING_APPROVAL), "n1", UUID.randomUUID(), null);
+        g.decide("approved", "{}", NOW);
+        g = gates.save(g);
+
+        assertThat(gates.markNotified(g.getId(), NOW)).isZero();
+        assertThat(gates.markReminded(g.getId(), NOW)).isZero();
     }
 
     @Test

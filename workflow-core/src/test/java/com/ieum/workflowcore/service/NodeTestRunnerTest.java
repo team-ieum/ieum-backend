@@ -478,6 +478,22 @@ class NodeTestRunnerTest {
     }
 
     @Test
+    @DisplayName("값 입력받기 샘플은 기본값이 없는 칸도 타입별 자리값으로 values에 싣는다")
+    void 값_입력_샘플은_자리값() {
+        Node gate = new Node("gate", NodeType.APPROVAL, "값 입력", new HashMap<>(Map.of("fields", List.of(
+            Map.of("key", "s", "type", "short"), Map.of("key", "l", "type", "long"),
+            Map.of("key", "c", "type", "choice", "options", "a,b"), Map.of("key", "n", "type", "number"),
+            Map.of("key", "b", "type", "boolean"), Map.of("key", "d", "type", "date"),
+            Map.of("key", "bad", "type", "number", "default", "abc")))), "approval.collect");
+
+        runner.run(workflow, gate, Map.of());
+
+        String today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul")) + "T00:00:00+09:00";
+        assertThat(runner.findSample(workflow.getId(), "gate").orElseThrow().output().get("values"))
+            .isEqualTo(Map.of("s", "", "l", "", "c", "a", "n", 0, "b", false, "d", today, "bad", 0));
+    }
+
+    @Test
     @DisplayName("사람 확인 설정이 잘못되면 그 문구로 FAILED 샘플을 남긴다")
     void 승인_설정_오류는_실패_샘플() {
         Node gate = new Node("gate", NodeType.APPROVAL, "값 입력", new HashMap<>(), "approval.collect");

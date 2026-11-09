@@ -62,18 +62,30 @@ public class ApprovalNotifier {
         }
     }
 
+    /** 머리줄·기한·링크를 먼저 만들고 남은 예산만큼만 message를 넣는다 — 긴 message가 기한·링크 줄을 밀어내지 않게. */
     private String content(ApprovalGate gate, String workflowName, boolean reminder) throws Exception {
-        StringBuilder sb = new StringBuilder();
-        if (reminder) sb.append("⏰ 다시 알려드려요 · ");
-        sb.append(ApprovalGateConfig.COLLECT.equals(gate.getEvent()) ? "✍️ 값 입력 요청 — " : "🙋 승인 요청 — ")
-            .append(workflowName);
-        Object message = objectMapper.readValue(gate.getViewJson(), Map.class).get("message");
-        if (message != null) sb.append('\n').append(message);
-        sb.append("\n기한: ").append(gate.getDeadline().atZone(ZoneId.systemDefault())
-            .withZoneSameInstant(KST).format(DEADLINE));
+        String head = (reminder ? "⏰ 다시 알려드려요 · " : "")
+            + (ApprovalGateConfig.COLLECT.equals(gate.getEvent()) ? "✍️ 값 입력 요청 — " : "🙋 승인 요청 — ")
+            + workflowName;
+        String tail = "\n기한: " + gate.getDeadline().atZone(ZoneId.systemDefault())
+            .withZoneSameInstant(KST).format(DEADLINE);
         if (baseUrl != null && !baseUrl.isBlank()) {
-            sb.append('\n').append(baseUrl.replaceAll("/+$", "")).append("/approvals/").append(gate.getId());
+            tail += "\n" + baseUrl.replaceAll("/+$", "") + "/approvals/" + gate.getId();
         }
-        return sb.length() <= MAX_CONTENT ? sb.toString() : sb.substring(0, MAX_CONTENT - 1) + "…";
+        head = cut(head, MAX_CONTENT - tail.length());
+        Object message = objectMapper.readValue(gate.getViewJson(), Map.class).get("message");
+        // 줄바꿈 1자를 뺀 남은 예산
+        int budget = MAX_CONTENT - head.length() - tail.length() - 1;
+        String body = message == null || budget <= 0 ? "" : "\n" + cut(String.valueOf(message), budget);
+        return head + body + tail;
+    }
+
+    /** max자(UTF-16) 이하로 자른다. 넘치면 끝을 "…"로 — 서로게이트 쌍을 가르지 않는다. */
+    static String cut(String s, int max) {
+        if (s.length() <= max) return s;
+        if (max <= 0) return "";
+        int end = max - 1;
+        if (end > 0 && Character.isHighSurrogate(s.charAt(end - 1))) end--;
+        return s.substring(0, end) + "…";
     }
 }

@@ -1,6 +1,6 @@
 package com.ieum.api.workflow.dto;
 
-import com.ieum.workflowcore.domain.ApprovalGate;
+import com.ieum.workflowcore.repository.ApprovalGateRepository.OpenGate;
 import java.time.LocalDateTime;
 import java.util.UUID;
 import lombok.Builder;
@@ -21,7 +21,7 @@ public class ApprovalGateSummaryResponse {
     private LocalDateTime deadline;
     private LocalDateTime createdAt;
 
-    public static ApprovalGateSummaryResponse from(ApprovalGate gate, String workflowName, String title) {
+    public static ApprovalGateSummaryResponse from(OpenGate gate, String workflowName) {
         return ApprovalGateSummaryResponse.builder()
             .gateId(gate.getId())
             .executionId(gate.getExecutionId())
@@ -29,7 +29,7 @@ public class ApprovalGateSummaryResponse {
             .workflowName(workflowName)
             .nodeId(gate.getNodeId())
             .event(gate.getEvent())
-            .title(title)
+            .title(gate.getTitle())
             .deadline(gate.getDeadline())
             .createdAt(gate.getCreatedAt())
             .build();

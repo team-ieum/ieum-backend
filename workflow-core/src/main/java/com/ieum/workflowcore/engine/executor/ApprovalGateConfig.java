@@ -33,6 +33,7 @@ public final class ApprovalGateConfig {
     public static final int MAX_MESSAGE = 2_000;
     public static final int MAX_ITEM_VALUE = 10_000;
     public static final int MAX_LABEL = 75;
+    public static final int MAX_FIELD_LABEL = 100;
     public static final int MAX_NOTE = 200;
     public static final int MAX_SHORT = 1_000;
     public static final int MAX_LONG = 10_000;
@@ -219,8 +220,15 @@ public final class ApprovalGateConfig {
     private static Object convert(InputField f, Object value) {
         String label = "'" + f.label() + "'";
         return switch (f.type()) {
-            case "number" -> ConditionValues.number(value)
-                .orElseThrow(() -> new ApprovalFailure(label + "은 숫자여야 해요"));
+            case "number" -> {
+                BigDecimal n = ConditionValues.number(value)
+                    .orElseThrow(() -> new ApprovalFailure(label + "은 숫자여야 해요"));
+                // 거대 지수(1e999999999)는 node_runs로 옮길 때 Double "Infinity"가 된다
+                if (!NumberFormats.withinDigits(n)) {
+                    throw new ApprovalFailure(label + "은 정수·소수 각 1000자리까지예요");
+                }
+                yield n;
+            }
             case "boolean" -> {
                 Boolean b = value instanceof Boolean v ? v : ConditionValues.bool(value);
                 if (b == null) throw new ApprovalFailure(label + "은 예/아니오여야 해요");
@@ -317,7 +325,8 @@ public final class ApprovalGateConfig {
         Set<String> seen = new HashSet<>();
         for (Map<?, ?> m : list) {
             String key = key(m.get("key"), seen);
-            String label = text(m.get("label"), key);
+            // view·제출 오류 문구·노드 실패 문구에 통째로 실리므로 자른다
+            String label = fitted(text(m.get("label"), key), MAX_FIELD_LABEL);
             String type = m.get("type") == null ? "short" : String.valueOf(m.get("type"));
             if (!TYPES.contains(type)) throw new ApprovalFailure("'" + label + "' 칸의 형식이 올바르지 않아요");
             List<String> options = options(m.get("options"), label);
@@ -325,8 +334,10 @@ public final class ApprovalGateConfig {
                 throw new ApprovalFailure("'" + label + "' 칸의 보기를 적어 주세요");
             }
             Object def = m.get("default");
+            // 칸 타입 상한 안에 들게("…" 포함) 자른다 — 넘치면 convert가 실패해 기본값이 통째로 빠진다
+            int max = "short".equals(type) ? MAX_SHORT : MAX_LONG;
             out.add(new InputField(key, label, type, flag(m.get("required")),
-                def == null ? null : clipped(String.valueOf(def), MAX_LONG), options));
+                def == null ? null : fitted(String.valueOf(def), max), options));
         }
         return List.copyOf(out);
     }
@@ -377,6 +388,11 @@ public final class ApprovalGateConfig {
     /** 렌더 값 상한 — 넘으면 잘라 {@code "…"}를 붙인다. 같은 값을 다시 거쳐도 그대로다(view 왕복). */
     private static String clipped(String s, int max) {
         return s.length() <= max ? s : s.substring(0, max) + "…";
+    }
+
+    /** {@link #clipped}와 같되 {@code "…"}까지 max자 안에 든다. 같은 값을 다시 거쳐도 그대로다. */
+    private static String fitted(String s, int max) {
+        return s.length() <= max ? s : s.substring(0, max - 1) + "…";
     }
 
     /** 실패 문구에 싣는 원문은 50자까지(DelayNodeExecutor.clip과 같다). */

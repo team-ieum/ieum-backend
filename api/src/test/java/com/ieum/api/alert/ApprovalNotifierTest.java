@@ -44,7 +44,7 @@ class ApprovalNotifierTest {
     private ApprovalGate gate(String event, String message) throws Exception {
         String view = objectMapper.writeValueAsString(Map.of("event", event, "message", message));
         ApprovalGate g = ApprovalGate.open(UUID.randomUUID(), UUID.randomUUID(), userId, "g", event, view,
-            webhookId, LocalDateTime.of(2026, 11, 10, 9, 30), null);
+            message, webhookId, LocalDateTime.of(2026, 11, 10, 9, 30), null);
         ReflectionTestUtils.setField(g, "id", UUID.randomUUID());
         return g;
     }
@@ -82,12 +82,21 @@ class ApprovalNotifierTest {
     }
 
     @Test
-    @DisplayName("문구는 2,000자에서 자른다")
+    @DisplayName("문구는 2,000자 안에서 message만 자른다 — 기한·링크 줄은 남고 서로게이트 쌍을 가르지 않는다")
     void 문구는_2000자에서_자른다() throws Exception {
-        notifier.notifyRequested(gate("approval.request", "가".repeat(2_000)), "wf");
+        ReflectionTestUtils.setField(notifier, "baseUrl", "https://ieum.app");
+        // 이모지(서로게이트 쌍)가 자르는 자리에 걸리도록 홀짝을 섞는다
+        ApprovalGate g = gate("approval.request", "가" + "😀".repeat(1_000));
+        notifier.notifyRequested(g, "wf");
 
         String content = sent();
-        assertThat(content).hasSize(2_000).endsWith("…");
+        assertThat(content.length()).isLessThanOrEqualTo(2_000);
+        assertThat(content).contains("…\n기한: 2026-11-10").endsWith("https://ieum.app/approvals/" + g.getId());
+        for (int i = 0; i < content.length(); i++) {
+            char c = content.charAt(i);
+            if (Character.isHighSurrogate(c)) assertThat(Character.isLowSurrogate(content.charAt(i + 1))).isTrue();
+            if (Character.isLowSurrogate(c)) assertThat(Character.isHighSurrogate(content.charAt(i - 1))).isTrue();
+        }
     }
 
     @Test

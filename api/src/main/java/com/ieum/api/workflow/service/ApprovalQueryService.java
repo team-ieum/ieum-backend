@@ -11,6 +11,7 @@ import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.ApprovalGate;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.repository.ApprovalGateRepository;
+import com.ieum.workflowcore.repository.ApprovalGateRepository.OpenGate;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowRepository;
 import java.util.List;
@@ -31,7 +32,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class ApprovalQueryService {
 
     static final int MAX_SIZE = 50;
-    private static final int TITLE_LENGTH = 200;
 
     private final ApprovalGateRepository approvalGateRepository;
     private final WorkflowRepository workflowRepository;
@@ -49,15 +49,15 @@ public class ApprovalQueryService {
                 return (long) page * limit;
             }
         };
-        List<ApprovalGate> gates = approvalGateRepository.findOpenByUser(userId, pageable);
+        List<OpenGate> gates = approvalGateRepository.findOpenByUser(userId, pageable);
         boolean hasNext = gates.size() > limit;
-        List<ApprovalGate> rows = gates.stream().limit(limit).toList();
+        List<OpenGate> rows = gates.stream().limit(limit).toList();
 
         Map<UUID, String> names = workflowRepository
-            .findAllById(rows.stream().map(ApprovalGate::getWorkflowId).distinct().toList()).stream()
+            .findAllById(rows.stream().map(OpenGate::getWorkflowId).distinct().toList()).stream()
             .collect(Collectors.toMap(Workflow::getId, Workflow::getName));
         List<ApprovalGateSummaryResponse> content = rows.stream()
-            .map(g -> ApprovalGateSummaryResponse.from(g, names.get(g.getWorkflowId()), title(g)))
+            .map(g -> ApprovalGateSummaryResponse.from(g, names.get(g.getWorkflowId())))
             .toList();
         return PageResponse.of(content, hasNext, hasNext ? String.valueOf(page + 1) : null);
     }
@@ -70,13 +70,6 @@ public class ApprovalQueryService {
         String executionStatus = workflowExecutionRepository.findById(gate.getExecutionId())
             .map(e -> e.getStatus().name()).orElse(null);
         return ApprovalGateDetailResponse.from(gate, workflowName, view(gate), executionStatus);
-    }
-
-    private String title(ApprovalGate gate) {
-        Object message = view(gate).get("message");
-        if (message == null) return null;
-        String text = message.toString();
-        return text.length() > TITLE_LENGTH ? text.substring(0, TITLE_LENGTH) : text;
     }
 
     private Map<String, Object> view(ApprovalGate gate) {

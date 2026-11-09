@@ -163,6 +163,47 @@ class ApprovalGateConfigTest {
     }
 
     @Test
+    @DisplayName("coerce_거대_지수_숫자는_ApprovalFailure")
+    void hugeExponentNumberIsApprovalFailure() {
+        List<ApprovalGateConfig.InputField> fields =
+            ApprovalGateConfig.parse(COLLECT, collect(List.of(field("n", "number")))).fields();
+
+        assertThatThrownBy(() -> ApprovalGateConfig.coerce(fields, Map.of("n", "1e999999999")))
+            .isInstanceOf(ApprovalFailure.class).hasMessageContaining("'n'");
+        assertThat((BigDecimal) ApprovalGateConfig.coerce(fields, Map.of("n", "1e999")).get("n"))
+            .isEqualByComparingTo("1e999");
+    }
+
+    @Test
+    @DisplayName("기본값은_칸_타입_상한_안에_들게_자른다")
+    void defaultIsFittedToFieldTypeLimit() {
+        Map<String, Object> s = field("s", "short");
+        s.put("default", "x".repeat(1_001));
+        Map<String, Object> l = field("l", "long");
+        l.put("default", "y".repeat(10_001));
+        ApprovalGateConfig c = ApprovalGateConfig.parse(COLLECT, collect(List.of(s, l)));
+
+        Map<String, Object> defaults = c.defaultValues();
+        assertThat((String) defaults.get("s")).hasSize(1_000).startsWith("x".repeat(999)).endsWith("…");
+        assertThat((String) defaults.get("l")).hasSize(10_000).endsWith("…");
+        // 자른 값은 제출 검사도 통과한다(FE가 그대로 미리 채워 제출)
+        assertThat(ApprovalGateConfig.coerce(c.fields(), defaults)).isEqualTo(defaults);
+    }
+
+    @Test
+    @DisplayName("칸_라벨은_100자에서_자른다")
+    void fieldLabelIsFittedTo100() {
+        Map<String, Object> s = field("s", "short");
+        s.put("label", "라".repeat(10_000));
+        s.put("required", true);
+        ApprovalGateConfig c = ApprovalGateConfig.parse(COLLECT, collect(List.of(s)));
+
+        assertThat(c.fields().get(0).label()).hasSize(100).endsWith("…");
+        assertThatThrownBy(() -> ApprovalGateConfig.coerce(c.fields(), Map.of()))
+            .isInstanceOf(ApprovalFailure.class).message().hasSizeLessThan(150);
+    }
+
+    @Test
     @DisplayName("만료_기본값은_변환_실패_칸을_뺀다")
     void defaultValuesSkipUnconvertible() {
         Map<String, Object> n = field("n", "number");

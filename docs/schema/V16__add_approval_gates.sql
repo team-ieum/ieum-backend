@@ -17,6 +17,8 @@ CREATE TABLE approval_gates (
     node_id      VARCHAR(100) NOT NULL,
     event        VARCHAR(100) NOT NULL,
     view_json    TEXT         NOT NULL,
+    -- 목록 제목(렌더·마스킹한 message 앞 200자). 목록 조회가 view_json을 읽지 않게 따로 둔다.
+    title        VARCHAR(200) NOT NULL DEFAULT '',
     webhook_id   UUID,
     deadline     TIMESTAMP    NOT NULL,
     remind_at    TIMESTAMP,
@@ -31,5 +33,9 @@ CREATE TABLE approval_gates (
 );
 
 CREATE INDEX idx_approval_gates_user_created ON approval_gates (user_id, created_at);
+
+-- 미결정 게이트만 — sweeper의 첫 알림(created_at 순)·리마인더 조회가 결정된 행(대부분)을 훑지 않게.
+-- 엔티티 @Index에는 없다(부분 조건을 표현할 수 없고, validate는 인덱스를 보지 않는다).
+CREATE INDEX idx_approval_gates_open ON approval_gates (created_at) WHERE decision IS NULL;
 
 COMMIT;

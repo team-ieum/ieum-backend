@@ -23,12 +23,33 @@ public interface ApprovalGateRepository extends JpaRepository<ApprovalGate, UUID
 
     Optional<ApprovalGate> findByExecutionIdAndNodeId(UUID executionId, String nodeId);
 
+    /** 대기 목록 한 행 — {@code view_json}(최대 수백 KB)을 읽지 않게 필요한 칸만 투영한다. */
+    interface OpenGate {
+        UUID getId();
+
+        UUID getExecutionId();
+
+        UUID getWorkflowId();
+
+        String getNodeId();
+
+        String getEvent();
+
+        String getTitle();
+
+        LocalDateTime getDeadline();
+
+        LocalDateTime getCreatedAt();
+    }
+
     /** 내 대기 목록 — 미결정이고 실행이 승인 대기인 게이트, 최신순. 페이지는 호출자가 {@code size + 1}로 hasNext를 본다. */
-    @Query("SELECT g FROM ApprovalGate g JOIN WorkflowExecution e ON e.id = g.executionId "
+    @Query("SELECT g.id AS id, g.executionId AS executionId, g.workflowId AS workflowId, g.nodeId AS nodeId, "
+        + "g.event AS event, g.title AS title, g.deadline AS deadline, g.createdAt AS createdAt "
+        + "FROM ApprovalGate g JOIN WorkflowExecution e ON e.id = g.executionId "
         + "WHERE g.userId = :userId AND g.decision IS NULL "
         + "AND e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL "
         + "ORDER BY g.createdAt DESC, g.id DESC")
-    List<ApprovalGate> findOpenByUser(@Param("userId") UUID userId, Pageable page);
+    List<OpenGate> findOpenByUser(@Param("userId") UUID userId, Pageable page);
 
     /** 첫 알림 대상 — 웹훅이 있고 아직 안 보낸 미결정 게이트. */
     @Query("SELECT g FROM ApprovalGate g JOIN WorkflowExecution e ON e.id = g.executionId "
@@ -44,18 +65,21 @@ public interface ApprovalGateRepository extends JpaRepository<ApprovalGate, UUID
         + "ORDER BY g.remindAt, g.id")
     List<ApprovalGate> findDueReminders(@Param("now") LocalDateTime now, Pageable page);
 
-    /** 첫 알림 선점 — 아직 안 보냈을 때만 1. bulk UPDATE라 {@code updatedAt}을 직접 쓴다. */
+    /**
+     * 첫 알림 선점 — 아직 안 보냈고 미결정일 때만 1(조회 뒤 막 결정된 게이트에 요청 알림이 가지 않게).
+     * bulk UPDATE라 {@code updatedAt}을 직접 쓴다.
+     */
     @Transactional
     @Modifying
     @Query("UPDATE ApprovalGate g SET g.notifiedAt = :now, g.updatedAt = :now "
-        + "WHERE g.id = :id AND g.notifiedAt IS NULL")
+        + "WHERE g.id = :id AND g.notifiedAt IS NULL AND g.decision IS NULL")
     int markNotified(@Param("id") UUID id, @Param("now") LocalDateTime now);
 
-    /** 리마인더 선점 — 아직 안 보냈을 때만 1. */
+    /** 리마인더 선점 — 아직 안 보냈고 미결정일 때만 1. */
     @Transactional
     @Modifying
     @Query("UPDATE ApprovalGate g SET g.remindedAt = :now, g.updatedAt = :now "
-        + "WHERE g.id = :id AND g.remindedAt IS NULL")
+        + "WHERE g.id = :id AND g.remindedAt IS NULL AND g.decision IS NULL")
     int markReminded(@Param("id") UUID id, @Param("now") LocalDateTime now);
 
     /** 첫 알림 선점 되돌리기 — 발송이 일시 실패했을 때, {@code claimedAt}으로 선점한 행만 다음 스윕에 다시 잡히게 한다. */

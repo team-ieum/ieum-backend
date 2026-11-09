@@ -98,8 +98,8 @@ class ApprovalGateServiceTest {
     private ApprovalGate gate(String nodeId, String event, Map<String, Object> raw, LocalDateTime deadline)
             throws Exception {
         String view = objectMapper.writeValueAsString(ApprovalGateConfig.parse(event, raw).view());
-        ApprovalGate g = ApprovalGate.open(executionId, workflow.getId(), userId, nodeId, event, view, null,
-            deadline, null);
+        ApprovalGate g = ApprovalGate.open(executionId, workflow.getId(), userId, nodeId, event, view, "",
+            null, deadline, null);
         UUID id = UUID.randomUUID();
         ReflectionTestUtils.setField(g, "id", id);
         given(approvalGateRepository.findExecutionIdById(id)).willReturn(Optional.of(executionId));

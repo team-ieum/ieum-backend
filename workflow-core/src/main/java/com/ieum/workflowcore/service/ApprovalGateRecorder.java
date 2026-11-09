@@ -49,9 +49,11 @@ public class ApprovalGateRecorder {
             ApprovalGateConfig config = e.getValue();
             LocalDateTime deadline = now.plus(config.timeout());
             LocalDateTime remindAt = config.reminder() ? now.plus(config.timeout().dividedBy(2)) : null;
+            Map<String, Object> view = maskedView(config);
+            Object message = view.get("message");
             rows.add(ApprovalGate.open(executionId, workflowId, userId, e.getKey(),
-                config.event(), objectMapper.writeValueAsString(maskedView(config)), config.webhookId(),
-                deadline, remindAt));
+                config.event(), objectMapper.writeValueAsString(view), message == null ? "" : message.toString(),
+                config.webhookId(), deadline, remindAt));
             if (earliest == null || deadline.isBefore(earliest)) earliest = deadline;
         }
         if (pauseAt.applyAsInt(earliest) == 0) return null;

@@ -61,7 +61,7 @@ class ApprovalGateSweeperTest {
 
     private ApprovalGate gate(UUID webhookId) {
         ApprovalGate g = ApprovalGate.open(UUID.randomUUID(), workflowId, UUID.randomUUID(), "g",
-            "approval.request", "{}", webhookId, LocalDateTime.now().plusHours(1), null);
+            "approval.request", "{}", "", webhookId, LocalDateTime.now().plusHours(1), null);
         ReflectionTestUtils.setField(g, "id", UUID.randomUUID());
         return g;
     }
@@ -289,7 +289,7 @@ class ApprovalGateSweeperTest {
     @DisplayName("되돌린 행은 같은 스윕에서 다시 선점하지 않는다 — 꽉 찬 페이지가 전부 되돌려져도 멈춘다")
     void 되돌린_행은_같은_스윕에서_다시_선점하지_않는다() {
         List<ApprovalGate> full = gates(100);
-        given(approvalGateRepository.findUnnotified(any(), any())).willReturn(full);
+        byOffset(full);
         given(approvalGateRepository.markNotified(any(), any())).willReturn(1);
         given(approvalNotifier.notifyRequested(any(), any())).willReturn(SendResult.RETRYABLE);
 
@@ -298,5 +298,52 @@ class ApprovalGateSweeperTest {
         verify(approvalGateRepository, times(2)).findUnnotified(any(), any());
         verify(approvalGateRepository, times(100)).markNotified(any(), any());
         verify(approvalGateRepository, times(100)).unmarkNotified(any(), any());
+    }
+
+    /** 실제 DB처럼 offset 기준으로 남은 행을 돌려준다(선점 뒤 결과에서 빠지는 것은 각 테스트가 정한다). */
+    private void byOffset(List<ApprovalGate> rows) {
+        given(approvalGateRepository.findUnnotified(any(), any())).willAnswer(inv -> {
+            Pageable p = inv.getArgument(1);
+            int from = (int) Math.min(p.getOffset(), rows.size());
+            return rows.subList(from, Math.min(rows.size(), from + p.getPageSize()));
+        });
+    }
+
+    @Test
+    @DisplayName("앞 100건이 모두 일시 실패(RETRYABLE) 웹훅이어도 101번째 게이트 알림이 그 스윕에서 나간다 — 같은 행은 한 번만")
+    void 건너뛴_행으로_꽉_찬_페이지_뒤도_보낸다() {
+        List<ApprovalGate> rows = gates(101);
+        ApprovalGate last = rows.get(100);
+        byOffset(rows);
+        given(approvalGateRepository.markNotified(any(), any())).willReturn(1);
+        given(approvalNotifier.notifyRequested(any(), any())).willReturn(SendResult.RETRYABLE);
+        given(approvalNotifier.notifyRequested(eq(last), any())).willReturn(SendResult.SENT);
+
+        sweeper.sweep();
+
+        verify(approvalNotifier).notifyRequested(last, "주간 보고");
+        verify(approvalGateRepository, times(101)).markNotified(any(), any());
+        verify(approvalNotifier, times(101)).notifyRequested(any(), any());
+    }
+
+    @Test
+    @DisplayName("연결 단계 실패(UNREACHABLE)면 선점을 되돌리고 이 스윕의 남은 알림·리마인더를 멈춘다")
+    void 연결_실패면_남은_발송을_멈춘다() {
+        ApprovalGate first = gate();
+        ApprovalGate second = gate();
+        ApprovalGate reminder = gate();
+        given(approvalGateRepository.findUnnotified(any(), any())).willReturn(List.of(first, second));
+        given(approvalGateRepository.findDueReminders(any(), any())).willReturn(List.of(reminder));
+        given(approvalGateRepository.markNotified(any(), any())).willReturn(1);
+        given(approvalGateRepository.markReminded(any(), any())).willReturn(1);
+        given(approvalNotifier.notifyRequested(eq(first), any())).willReturn(SendResult.UNREACHABLE);
+
+        sweeper.sweep();
+
+        verify(approvalGateRepository).unmarkNotified(eq(first.getId()), any());
+        verify(approvalGateRepository, never()).markNotified(eq(second.getId()), any());
+        verify(approvalNotifier, never()).notifyRequested(eq(second), any());
+        verify(approvalGateRepository, never()).findDueReminders(any(), any());
+        verify(approvalNotifier, never()).notifyReminder(any(), any());
     }
 }

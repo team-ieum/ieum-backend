@@ -19,12 +19,16 @@ import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.RetryPolicy;
 import com.ieum.workflowcore.engine.executor.ApprovalFailure;
 import com.ieum.workflowcore.engine.executor.ApprovalGateConfig;
+import com.ieum.workflowcore.engine.executor.DelayPlan;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.repository.NodeTestSampleRepository;
 import com.ieum.workflowcore.util.SensitiveDataMasker;
+import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -57,6 +61,7 @@ import org.springframework.stereotype.Component;
 public class NodeTestRunner {
 
     private static final String DEFAULT_FAILURE_MESSAGE = "노드 실행에 실패했습니다.";
+    private static final ZoneId KST = ZoneId.of("Asia/Seoul");
 
     private final Map<NodeType, NodeExecutor> executors = new EnumMap<>(NodeType.class);
     private final NodeTestSampleRepository sampleRepository;
@@ -124,11 +129,29 @@ public class NodeTestRunner {
         output.put("approvedAt", Instant.now().toString());
         output.put("reviewer", reviewer);
         if (collect) {
-            output.put("values", config.defaultValues());
+            output.put("values", sampleValues(config));
         } else {
             output.put("content", config.contentValues());
         }
         return ExecutorResult.success(output, 0);
+    }
+
+    /**
+     * 기본값(변환된 것) + 기본값이 없거나 변환에 실패한 칸은 타입별 자리값 — 하류 테스트가 모든 칸 키를 참조할 수 있게.
+     * short·long은 빈 문자열, choice는 첫 보기, number는 0, boolean은 false, date는 오늘 0시(KST).
+     */
+    private static Map<String, Object> sampleValues(ApprovalGateConfig config) {
+        Map<String, Object> values = config.defaultValues();
+        for (ApprovalGateConfig.InputField f : config.fields()) {
+            values.computeIfAbsent(f.key(), k -> switch (f.type()) {
+                case "choice" -> f.options().get(0);
+                case "number" -> BigDecimal.ZERO;
+                case "boolean" -> false;
+                case "date" -> DelayPlan.format(LocalDate.now(KST).atStartOfDay(KST).toInstant());
+                default -> "";
+            });
+        }
+        return values;
     }
 
     /**

@@ -68,7 +68,7 @@ class DiscordWebhookSenderTest {
     }
 
     @Test
-    @DisplayName("sendOnce 분류 — 성공 SENT, 429·5xx·연결 오류 RETRYABLE, 그 밖 4xx PERMANENT")
+    @DisplayName("sendOnce 분류 — 성공 SENT, 429·5xx·읽기 타임아웃 RETRYABLE, 연결 단계 실패 UNREACHABLE, 그 밖 4xx PERMANENT")
     void sendOnce_분류() {
         assertThat(sender.sendOnce(URL, "a")).isEqualTo(DiscordWebhookSender.SendResult.SENT);
 
@@ -76,12 +76,18 @@ class DiscordWebhookSenderTest {
                 .thenThrow(new HttpClientErrorException(HttpStatus.TOO_MANY_REQUESTS))
                 .thenThrow(new HttpServerErrorException(HttpStatus.SERVICE_UNAVAILABLE))
                 .thenThrow(new ResourceAccessException("I/O error on POST request for \"" + URL + "\""))
+                .thenThrow(new ResourceAccessException("x", new java.net.SocketTimeoutException("Read timed out")))
+                .thenThrow(new ResourceAccessException("x", new java.net.ConnectException("Connection refused")))
+                .thenThrow(new ResourceAccessException("x", new java.net.SocketTimeoutException("Connect timed out")))
                 .thenThrow(new HttpClientErrorException(HttpStatus.NOT_FOUND))
                 .thenThrow(new HttpClientErrorException(HttpStatus.BAD_REQUEST));
 
         assertThat(sender.sendOnce(URL, "a")).isEqualTo(DiscordWebhookSender.SendResult.RETRYABLE);
         assertThat(sender.sendOnce(URL, "a")).isEqualTo(DiscordWebhookSender.SendResult.RETRYABLE);
         assertThat(sender.sendOnce(URL, "a")).isEqualTo(DiscordWebhookSender.SendResult.RETRYABLE);
+        assertThat(sender.sendOnce(URL, "a")).isEqualTo(DiscordWebhookSender.SendResult.RETRYABLE);
+        assertThat(sender.sendOnce(URL, "a")).isEqualTo(DiscordWebhookSender.SendResult.UNREACHABLE);
+        assertThat(sender.sendOnce(URL, "a")).isEqualTo(DiscordWebhookSender.SendResult.UNREACHABLE);
         assertThat(sender.sendOnce(URL, "a")).isEqualTo(DiscordWebhookSender.SendResult.PERMANENT);
         assertThat(sender.sendOnce(URL, "a")).isEqualTo(DiscordWebhookSender.SendResult.PERMANENT);
         assertThat(logOutput()).doesNotContain("superSecretToken");

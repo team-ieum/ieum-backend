@@ -16,6 +16,7 @@ import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.ApprovalGate;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.repository.ApprovalGateRepository;
+import com.ieum.workflowcore.repository.ApprovalGateRepository.OpenGate;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.domain.enums.TriggerType;
@@ -65,10 +66,26 @@ class ApprovalQueryServiceTest {
     private ApprovalGate gate(UUID owner, String message) throws Exception {
         String view = objectMapper.writeValueAsString(Map.of("event", "approval.request", "message", message));
         ApprovalGate g = ApprovalGate.open(UUID.randomUUID(), workflow.getId(), owner, "g1", "approval.request",
-            view, null, LocalDateTime.now().plusHours(1), null);
+            view, message, null, LocalDateTime.now().plusHours(1), null);
         ReflectionTestUtils.setField(g, "id", UUID.randomUUID());
         given(approvalGateRepository.findById(g.getId())).willReturn(Optional.of(g));
         return g;
+    }
+
+    private OpenGate openGate(String title) {
+        UUID id = UUID.randomUUID();
+        UUID executionId = UUID.randomUUID();
+        LocalDateTime now = LocalDateTime.now();
+        return new OpenGate() {
+            @Override public UUID getId() { return id; }
+            @Override public UUID getExecutionId() { return executionId; }
+            @Override public UUID getWorkflowId() { return workflow.getId(); }
+            @Override public String getNodeId() { return "g1"; }
+            @Override public String getEvent() { return "approval.request"; }
+            @Override public String getTitle() { return title; }
+            @Override public LocalDateTime getDeadline() { return now.plusHours(1); }
+            @Override public LocalDateTime getCreatedAt() { return now; }
+        };
     }
 
     @Test
@@ -129,11 +146,11 @@ class ApprovalQueryServiceTest {
     }
 
     @Test
-    @DisplayName("목록 행은 워크플로우 이름과 message 앞 200자 제목을 싣고, 초과분이 있으면 다음 커서를 준다")
+    @DisplayName("목록 행은 워크플로우 이름과 title 컬럼을 싣고(view_json을 읽지 않음), 초과분이 있으면 다음 커서를 준다")
     void 목록_행_모양() throws Exception {
-        List<ApprovalGate> rows = new ArrayList<>();
-        rows.add(gate(userId, "가".repeat(300)));
-        rows.add(gate(userId, "둘째"));
+        List<OpenGate> rows = new ArrayList<>();
+        rows.add(openGate("가".repeat(200)));
+        rows.add(openGate("둘째"));
         given(approvalGateRepository.findOpenByUser(eq(userId), any())).willReturn(rows);
 
         PageResponse<ApprovalGateSummaryResponse> result = service.list(userId, null, 1);
@@ -141,7 +158,7 @@ class ApprovalQueryServiceTest {
         assertThat(result.getContent()).hasSize(1);
         assertThat(result.isHasNext()).isTrue();
         assertThat(result.getNextCursor()).isEqualTo("1");
-        assertThat(result.getContent().get(0).getTitle()).hasSize(200);
+        assertThat(result.getContent().get(0).getTitle()).isEqualTo("가".repeat(200));
         assertThat(result.getContent().get(0).getWorkflowName()).isEqualTo("결재");
         verify(workflowRepository).findAllById(any());
     }

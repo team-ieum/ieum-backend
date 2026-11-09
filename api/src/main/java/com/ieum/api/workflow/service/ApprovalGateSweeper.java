@@ -24,6 +24,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.TransactionException;
@@ -33,8 +34,8 @@ import org.springframework.transaction.TransactionException;
  * 알림 페이지마다 다시 본다. 알림은 조건부 UPDATE({@code markNotified}·{@code markReminded})로 선점한 것만 보낸다 —
  * 두 인스턴스가 겹쳐도 한 번만 간다.
  *
- * <p>알림 조회는 항상 0번 페이지다. 선점한 행은 결과에서 빠지므로 페이지 번호를 올리면 행을 건너뛴다. 페이지가 덜 찼거나
- * 한 건도 선점하지 못했으면(다른 인스턴스가 먼저 가져갔거나 선점이 계속 실패) 멈춘다.
+ * <p>알림 조회는 건너뛴 행 수만큼만 offset을 올린다 — 선점한 행은 결과에서 빠지므로 페이지 번호를 올리면 행을 건너뛴다
+ * ({@link #announce} 참고). 페이지가 덜 찼거나 한 건도 선점·건너뛰지 않았으면 멈춘다.
  *
  * <p>만료가 {@link CustomException}(영구 오류)으로 실패하거나, 실행 기한이 1일 넘게 지났는데 DB 일시 오류
  * ({@code DataAccessException}·{@code TransactionException} 계열)가 아닌 예외로 실패하면 {@code markAsFailed}로 닫는다
@@ -69,8 +70,10 @@ public class ApprovalGateSweeper {
             expireOne(expired, now);
         }
         Set<UUID> limitedWebhooks = new HashSet<>();
-        announce(page -> approvalGateRepository.findUnnotified(now, page), approvalGateRepository::markNotified,
-            approvalGateRepository::unmarkNotified, approvalNotifier::notifyRequested, now, limitedWebhooks);
+        boolean unreachable = announce(page -> approvalGateRepository.findUnnotified(now, page),
+            approvalGateRepository::markNotified, approvalGateRepository::unmarkNotified,
+            approvalNotifier::notifyRequested, now, limitedWebhooks);
+        if (unreachable) return;
         announce(page -> approvalGateRepository.findDueReminders(now, page), approvalGateRepository::markReminded,
             approvalGateRepository::unmarkReminded, approvalNotifier::notifyReminder, now, limitedWebhooks);
     }
@@ -104,35 +107,69 @@ public class ApprovalGateSweeper {
 
     /**
      * 일시 실패(RETRYABLE)면 선점을 되돌려 다음 스윕에 다시 잡히게 하고, 그 웹훅은 이 스윕에서 더 보내지 않는다
-     * (레이트 리밋에 연달아 부딪히지 않게). 되돌린 행·막힌 웹훅의 행은 이 스윕에서 다시 선점하지 않아 0번 페이지 반복이
-     * 끝난다. PERMANENT는 되돌리지 않는다.
+     * (레이트 리밋에 연달아 부딪히지 않게). PERMANENT는 되돌리지 않는다. 연결 단계 실패(UNREACHABLE)면 선점을 되돌리고
+     * 이 스윕의 남은 발송(리마인더 포함)을 멈춘다 — Discord가 안 닿으면 웹훅마다 연결 타임아웃을 기다리며 공용 스케줄러
+     * 스레드를 붙잡기 때문이다. 읽기 타임아웃은 RETRYABLE이라 다음 분에 다시 보내는데, Discord가 이미 게시했을 수 있어
+     * 같은 알림이 두 번 갈 수 있다(감수).
+     *
+     * <p>페이지는 offset으로 넘긴다 — 키셋은 첫 알림 {@code (created_at, id)}·리마인더 {@code (remind_at, id)}로 조회가
+     * 둘 다 바뀌지만, offset은 "결과에 남은 행 수"만 세면 된다. 선점에 성공한 행(SENT·PERMANENT)과 선점이 0인 행
+     * (남이 가져갔거나 결정됨)은 결과에서 빠지고, 건너뛴 행(되돌림·막힌 웹훅·예외)은 남으므로 그 수만큼 offset을 올린다.
+     * 0번 페이지만 반복하면 건너뛴 행으로 꽉 찬 페이지 뒤의 게이트가 굶는다. 반복마다 offset이 오르거나 행이 빠지므로
+     * 끝나고, 둘 다 없으면(전부 선점 0) 멈춘다. 다른 인스턴스가 앞쪽 행을 가져가 몇 행을 건너뛰어도 다음 스윕에 잡힌다.
+     *
+     * @return 연결 단계 실패로 멈췄으면 true
      */
-    private void announce(Function<Pageable, List<ApprovalGate>> find,
-                          BiFunction<UUID, LocalDateTime, Integer> claim,
-                          BiFunction<UUID, LocalDateTime, Integer> unclaim,
-                          BiFunction<ApprovalGate, String, SendResult> send, LocalDateTime now,
-                          Set<UUID> limitedWebhooks) {
+    private boolean announce(Function<Pageable, List<ApprovalGate>> find,
+                             BiFunction<UUID, LocalDateTime, Integer> claim,
+                             BiFunction<UUID, LocalDateTime, Integer> unclaim,
+                             BiFunction<ApprovalGate, String, SendResult> send, LocalDateTime now,
+                             Set<UUID> limitedWebhooks) {
         Set<UUID> released = new HashSet<>();
+        long offset = 0;
         while (isOwner()) {
-            List<ApprovalGate> page = find.apply(PageRequest.of(0, PAGE_SIZE));
+            List<ApprovalGate> page = find.apply(page(offset));
+            int skipped = 0;
             int claimed = 0;
             for (ApprovalGate gate : page) {
-                if (released.contains(gate.getId()) || limitedWebhooks.contains(gate.getWebhookId())) continue;
+                if (released.contains(gate.getId()) || limitedWebhooks.contains(gate.getWebhookId())) {
+                    skipped++;
+                    continue;
+                }
                 try {
                     String workflowName = workflowCrudService.getWorkflowById(gate.getWorkflowId()).getName();
                     if (claim.apply(gate.getId(), now) != 1) continue;
                     claimed++;
-                    if (send.apply(gate, workflowName) == SendResult.RETRYABLE) {
+                    SendResult result = send.apply(gate, workflowName);
+                    if (result == SendResult.RETRYABLE || result == SendResult.UNREACHABLE) {
                         limitedWebhooks.add(gate.getWebhookId());
                         released.add(gate.getId());
                         unclaim.apply(gate.getId(), now);
+                        skipped++;
+                    }
+                    if (result == SendResult.UNREACHABLE) {
+                        log.warn("[ApprovalGateSweeper] Discord에 연결하지 못해 이번 스윕의 남은 알림을 멈춤 — gateId: {}",
+                            gate.getId());
+                        return true;
                     }
                 } catch (Exception e) {
+                    skipped++;
                     log.error("[ApprovalGateSweeper] 알림 실패 — gateId: {}, cause: {}",
                         gate.getId(), e.getClass().getSimpleName());
                 }
             }
-            if (page.size() < PAGE_SIZE || claimed == 0) return;
+            if (page.size() < PAGE_SIZE || (skipped == 0 && claimed == 0)) return false;
+            offset += skipped;
         }
+        return false;
+    }
+
+    private static Pageable page(long offset) {
+        return new PageRequest(0, PAGE_SIZE, Sort.unsorted()) {
+            @Override
+            public long getOffset() {
+                return offset;
+            }
+        };
     }
 }
