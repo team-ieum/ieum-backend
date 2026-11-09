@@ -19,6 +19,7 @@ import com.ieum.auth.repository.RefreshTokenRepository;
 import com.ieum.auth.repository.UserRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.repository.ApprovalGateRepository;
 import com.ieum.workflowcore.service.DelayQueueService;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import java.util.Optional;
@@ -39,6 +40,7 @@ class UserServiceTest {
     @Mock private DiscordDisconnectService discordDisconnectService;
     @Mock private WorkflowCrudService workflowCrudService;
     @Mock private DelayQueueService delayQueueService;
+    @Mock private ApprovalGateRepository approvalGateRepository;
     @Mock private CredentialRepository credentialRepository;
     @Mock private WebhookCredentialRepository webhookCredentialRepository;
     @Mock private McpServerCatalogRepository mcpServerCatalogRepository;
@@ -65,6 +67,7 @@ class UserServiceTest {
         order.verify(userRepository).flush();
         order.verify(workflowCrudService).deleteAllByUserId(userId);
         verify(delayQueueService).deleteAllByUserId(userId); // 기다리기 큐·슬롯 — 이름이 탈퇴 뒤에 남지 않게
+        verify(approvalGateRepository).deleteByUserId(userId);
         order.verify(credentialRepository).deleteByUserId(userId);
         order.verify(webhookCredentialRepository).deleteByUserId(userId);
         order.verify(mcpServerCatalogRepository).deleteByUserId(userId);

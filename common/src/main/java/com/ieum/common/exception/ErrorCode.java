@@ -86,6 +86,10 @@ public enum ErrorCode {
     EXECUTION_NOT_RETRYABLE(HttpStatus.BAD_REQUEST, "실패한 실행만 재처리할 수 있습니다."),
     EXECUTION_NOT_WAITING_APPROVAL(HttpStatus.CONFLICT, "승인 대기 중인 실행이 아닙니다."),
     EXECUTION_NOT_WAITING_DELAY(HttpStatus.CONFLICT, "기다리는 중인 실행이 아닙니다."),
+    APPROVAL_GATE_NOT_FOUND(HttpStatus.NOT_FOUND, "승인 요청을 찾을 수 없습니다."),
+    APPROVAL_GATE_ALREADY_DECIDED(HttpStatus.CONFLICT, "이미 처리된 승인 요청입니다."),
+    APPROVAL_GATE_ACTION_MISMATCH(HttpStatus.CONFLICT, "이 승인 요청에는 쓸 수 없는 동작입니다."),
+    APPROVAL_INPUT_INVALID(HttpStatus.BAD_REQUEST, "입력값이 올바르지 않습니다."),
     INVALID_CURSOR(HttpStatus.BAD_REQUEST, "유효하지 않은 커서 값입니다."),
 
     // 노드 테스트

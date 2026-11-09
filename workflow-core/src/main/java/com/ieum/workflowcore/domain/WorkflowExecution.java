@@ -237,6 +237,11 @@ public class WorkflowExecution extends BaseEntity {
         }
     }
 
+    /** 남은(결정 안 된) 게이트 기한의 최솟값으로 승인 기한을 다시 잡는다 — 잠근 엔티티에서 부른다. */
+    public void rescheduleApprovalDeadline(LocalDateTime deadline) {
+        this.approvalDeadline = deadline;
+    }
+
     /** 승인을 재개 시각 전에 받았을 때 — 상태만 기다리기로 바꾼다(재개 시각·대기 노드는 런타임이 이미 썼다). */
     public void waitForDelay() {
         this.status = ExecutionStatus.WAITING_DELAY;

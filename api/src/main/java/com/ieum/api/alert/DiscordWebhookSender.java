@@ -1,10 +1,18 @@
 package com.ieum.api.alert;
 
+import java.net.ConnectException;
+import java.net.NoRouteToHostException;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
+import java.net.http.HttpConnectTimeoutException;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpStatusCodeException;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 /**
@@ -31,13 +39,50 @@ public class DiscordWebhookSender {
      * @return 발신 성공 여부
      */
     public boolean send(String webhookUrl, String content) {
+        return sendOnce(webhookUrl, content) == SendResult.SENT;
+    }
+
+    /**
+     * 한 번 보낸 결과. 다시 보내 볼 만한 실패(429·5xx·읽기 타임아웃 등 IO 오류)는 RETRYABLE, 연결 단계 실패(연결 거부·
+     * 연결 타임아웃·DNS)는 UNREACHABLE(재시도 대상이되 Discord 자체가 안 닿는다는 신호), 그 밖의 실패는 PERMANENT.
+     */
+    public enum SendResult { SENT, RETRYABLE, UNREACHABLE, PERMANENT }
+
+    /** {@link #send}와 같이 보내되 실패를 분류해 돌려준다. 예외를 던지지 않고 URL을 로그에 남기지 않는다. */
+    public SendResult sendOnce(String webhookUrl, String content) {
         try {
-            restTemplate.postForEntity(webhookUrl, Map.of("content", content), Void.class);
-            return true;
+            // allowed_mentions.parse = [] — 상류 값에 든 @everyone·@here·역할 멘션이 울리지 않게 한다.
+            restTemplate.postForEntity(webhookUrl,
+                Map.of("content", content, "allowed_mentions", Map.of("parse", List.of())), Void.class);
+            return SendResult.SENT;
         } catch (Exception e) {
             log.warn("[DiscordWebhookSender] 발신 실패 — {}", describe(e));
-            return false;
+            if (e instanceof HttpStatusCodeException s) {
+                return s.getStatusCode().value() == 429 || s.getStatusCode().is5xxServerError()
+                    ? SendResult.RETRYABLE : SendResult.PERMANENT;
+            }
+            if (!(e instanceof ResourceAccessException)) return SendResult.PERMANENT;
+            return connectFailure(e) ? SendResult.UNREACHABLE : SendResult.RETRYABLE;
         }
+    }
+
+    /**
+     * 요청을 보내기 전(연결 단계)에 실패했는지. 이 경우 Discord는 게시하지 않았으니 다시 보내도 중복이 없다.
+     * 읽기 타임아웃은 여기 들지 않는다 — Discord가 이미 게시했을 수 있어 재발송하면 중복될 수 있다.
+     */
+    private static boolean connectFailure(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof ConnectException || t instanceof UnknownHostException
+                || t instanceof NoRouteToHostException || t instanceof HttpConnectTimeoutException) {
+                return true;
+            }
+            // JDK HttpURLConnection의 연결 타임아웃은 "Connect timed out" 메시지의 SocketTimeoutException이다
+            if (t instanceof SocketTimeoutException && t.getMessage() != null
+                && t.getMessage().toLowerCase(Locale.ROOT).contains("connect")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

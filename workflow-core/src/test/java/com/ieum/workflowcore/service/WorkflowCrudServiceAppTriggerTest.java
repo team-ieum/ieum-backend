@@ -26,6 +26,7 @@ import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowRepository;
 import com.ieum.workflowcore.repository.WorkflowVersionRepository;
 import com.ieum.workflowcore.repository.WorkflowWebhookTokenRepository;
+import com.ieum.workflowcore.repository.ApprovalGateRepository;
 import com.ieum.workflowcore.scheduler.WorkflowScheduler;
 import java.util.List;
 import java.util.Map;
@@ -61,6 +62,7 @@ class WorkflowCrudServiceAppTriggerTest {
     @Mock private WorkflowWebhookTokenRepository webhookTokenRepository;
     @Mock private ChatSessionRepository chatSessionRepository;
     @Mock private ChatMessageRepository chatMessageRepository;
+    @Mock private ApprovalGateRepository approvalGateRepository;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
     @InjectMocks private WorkflowCrudService service;
 

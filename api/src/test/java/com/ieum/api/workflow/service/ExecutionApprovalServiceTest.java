@@ -19,6 +19,8 @@ import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.domain.enums.ExecutionLogStatus;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
+import com.ieum.workflowcore.domain.ApprovalGate;
+import com.ieum.workflowcore.repository.ApprovalGateRepository;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.time.Instant;
@@ -43,6 +45,8 @@ class ExecutionApprovalServiceTest {
     @Mock private WorkflowCrudService workflowCrudService;
     @Mock private WorkflowExecutionService workflowExecutionService;
     @Mock private ExecutionRetryService executionRetryService;
+    @Mock private ApprovalGateRepository approvalGateRepository;
+    @Mock private ApprovalGateService approvalGateService;
     @InjectMocks private ExecutionApprovalService service;
     @Captor private ArgumentCaptor<Map<String, Object>> decision;
 
@@ -237,5 +241,21 @@ class ExecutionApprovalServiceTest {
         assertThat(response.getStatus()).isEqualTo(ExecutionStatus.WAITING_APPROVAL);
         assertThat(response.getWaitingApprovalNodeIds()).containsExactly("gate-1");
         assertThat(response.getApprovalDeadline()).isEqualTo(deadline);
+    }
+
+    @Test
+    @DisplayName("게이트 행이 있는 실행은 승인·거부를 ApprovalGateService.decideAll로 위임한다")
+    void gateRows_delegateToDecideAll() {
+        waitingOriginal();
+        given(approvalGateRepository.findByExecutionIdOrderByCreatedAtAsc(executionId))
+            .willReturn(List.of(mock(ApprovalGate.class)));
+        WorkflowExecutionResponse delegated = WorkflowExecutionResponse.builder().id(continuationId).build();
+        given(approvalGateService.decideAll(userId, executionId, true, null)).willReturn(delegated);
+        given(approvalGateService.decideAll(userId, executionId, false, "아님")).willReturn(delegated);
+
+        assertThat(service.approve(userId, executionId)).isSameAs(delegated);
+        assertThat(service.reject(userId, executionId, "아님")).isSameAs(delegated);
+        verify(workflowExecutionService, never()).recordApprovalDecision(any(), any(), any(), any());
+        verify(executionRetryService, never()).startContinuation(any(), any());
     }
 }

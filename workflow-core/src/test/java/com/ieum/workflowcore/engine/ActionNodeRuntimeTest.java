@@ -126,7 +126,9 @@ class ActionNodeRuntimeTest {
             new ManualTriggerHandler(), new ScheduleTriggerHandler(), new WebhookTriggerHandler()))), action);
         runtime = new SyncExecutionRuntime(objectMapper, logRepository, executionRepository, crudService,
             mock(ExecutionEventPublisher.class), executors, new RetryProperties(), idempotencyStore,
-            alertNotifier, mock(WorkflowValidationClient.class));
+            alertNotifier, mock(WorkflowValidationClient.class),
+            new com.ieum.workflowcore.service.ApprovalGateRecorder(
+                mock(com.ieum.workflowcore.repository.ApprovalGateRepository.class), objectMapper));
         runtime.initExecutorMap();
         ReflectionTestUtils.setField(runtime, "parallelism", 4);
     }

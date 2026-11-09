@@ -77,6 +77,9 @@ ieum:
     delay:
       # 캐시된 컨텍스트가 테스트 내내 살아 있다 — 재개 스윕이 공유 H2의 다른 테스트 행을 건드리지 않게 사실상 끈다.
       sweep-initial-delay: P1D
+    approval:
+      # 승인 sweeper도 같은 이유로 사실상 끈다.
+      sweep-initial-delay: P1D
   catalog:
     # 테스트엔 agent가 없다 — 기동 때 agent 카탈로그 대조(AgentCatalogDiffReporter)를 끈다.
     agent-diff-check: false

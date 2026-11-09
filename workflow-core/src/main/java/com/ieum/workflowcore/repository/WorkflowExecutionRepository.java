@@ -88,14 +88,21 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
         + "AND e.startedAt < :threshold")
     List<UUID> findStuckRunningIds(@Param("threshold") LocalDateTime threshold);
 
+    /** 승인 만료 sweeper 한 행 — 기한은 만료 실패를 닫을지(1일 넘게 밀렸는지) 판정하는 데 쓴다. */
+    interface ExpiredApproval {
+        UUID getId();
+
+        LocalDateTime getApprovalDeadline();
+    }
+
     /**
-     * 승인 기한이 지난 {@code WAITING_APPROVAL} 실행의 ID(승인 만료 sweeper용). {@link #findStuckRunningIds}와
-     * 같은 이유로 ID만 돌려준다 — 후보마다 {@code markAsFailed}가 별도 트랜잭션에서 잠가 확정한다.
+     * 승인 기한이 지난 {@code WAITING_APPROVAL} 실행의 ID·기한(승인 만료 sweeper용). {@link #findStuckRunningIds}와
+     * 같은 이유로 엔티티가 아니라 투영만 돌려준다 — 후보마다 만료가 별도 트랜잭션에서 잠가 확정한다.
      */
-    @Query("SELECT e.id FROM WorkflowExecution e "
+    @Query("SELECT e.id AS id, e.approvalDeadline AS approvalDeadline FROM WorkflowExecution e "
         + "WHERE e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL "
         + "AND e.approvalDeadline < :now")
-    List<UUID> findExpiredApprovalIds(@Param("now") LocalDateTime now);
+    List<ExpiredApproval> findExpiredApprovals(@Param("now") LocalDateTime now);
 
     /**
      * 주어진 시각 이후 시작해 아직 주어진 상태에 있는 실행이 있는지 본다(스케줄 발화 겹침 판정용).

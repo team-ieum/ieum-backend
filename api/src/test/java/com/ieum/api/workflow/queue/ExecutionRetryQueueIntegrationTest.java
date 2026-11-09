@@ -12,7 +12,13 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ieum.api.workflow.WorkflowExecutionRunner;
+import com.ieum.api.workflow.service.ApprovalGateService;
 import com.ieum.api.workflow.service.ExecutionApprovalService;
+import com.ieum.auth.repository.UserRepository;
+import com.ieum.workflowcore.domain.ApprovalGate;
+import com.ieum.workflowcore.repository.ApprovalGateRepository;
+import java.time.LocalDateTime;
+import java.util.Comparator;
 import com.ieum.api.workflow.service.ExecutionRetryService;
 import com.ieum.common.util.AesEncryptor;
 import com.ieum.workflowcore.catalog.EventCatalog;
@@ -137,7 +143,13 @@ class ExecutionRetryQueueIntegrationTest {
     private ExecutionJobWorker worker;
     private ExecutionRetryService retryService;
     private ExecutionApprovalService approvalService;
+    private ApprovalGateService gateService;
+    private ApprovalGateRepository gateRepository;
     private WorkflowExecutionRunner runner;
+
+    /** 인메모리 approval_gates. createdAt은 저장 순서대로 직접 세팅한다. */
+    private final Map<UUID, ApprovalGate> gateRows = new LinkedHashMap<>();
+    private long gateSeq = 0;
 
     private Workflow workflow;
     private WorkflowVersion version;
@@ -151,6 +163,7 @@ class ExecutionRetryQueueIntegrationTest {
 
         executionRepository = fakeExecutionRepository();
         logRepository = fakeLogRepository();
+        gateRepository = fakeGateRepository();
         crudService = Mockito.mock(WorkflowCrudService.class);
 
         workflowExecutionService = new WorkflowExecutionService(
@@ -180,7 +193,10 @@ class ExecutionRetryQueueIntegrationTest {
         worker = new ExecutionJobWorker(redisTemplate, executionRepository,
             workflowExecutionService, runner, Runnable::run);
         retryService = new ExecutionRetryService(crudService, workflowExecutionService, runner);
-        approvalService = new ExecutionApprovalService(crudService, workflowExecutionService, retryService);
+        gateService = new ApprovalGateService(gateRepository, workflowExecutionService, crudService, retryService,
+            Mockito.mock(UserRepository.class), objectMapper);
+        approvalService = new ExecutionApprovalService(crudService, workflowExecutionService, retryService,
+            gateRepository, gateService);
 
         workflow = Workflow.builder().userId(userId).name("통합").isActive(true).build();
         ReflectionTestUtils.setField(workflow, "id", UUID.randomUUID());
@@ -260,6 +276,38 @@ class ExecutionRetryQueueIntegrationTest {
         return repository;
     }
 
+    private ApprovalGateRepository fakeGateRepository() {
+        ApprovalGateRepository repository = Mockito.mock(ApprovalGateRepository.class);
+        when(repository.save(any())).thenAnswer(invocation -> {
+            ApprovalGate gate = invocation.getArgument(0);
+            if (gate.getId() == null) {
+                ReflectionTestUtils.setField(gate, "id", UUID.randomUUID());
+                ReflectionTestUtils.setField(gate, "createdAt", LocalDateTime.now().plusNanos(gateSeq++));
+            }
+            gateRows.put(gate.getId(), gate);
+            return gate;
+        });
+        when(repository.findById(any())).thenAnswer(invocation ->
+            Optional.ofNullable(gateRows.get((UUID) invocation.getArgument(0))));
+        when(repository.findExecutionIdById(any())).thenAnswer(invocation ->
+            Optional.ofNullable(gateRows.get((UUID) invocation.getArgument(0))).map(ApprovalGate::getExecutionId));
+        when(repository.findByExecutionIdOrderByCreatedAtAsc(any())).thenAnswer(invocation ->
+            gateRows.values().stream()
+                .filter(g -> g.getExecutionId().equals(invocation.getArgument(0)))
+                .sorted(Comparator.comparing(ApprovalGate::getCreatedAt))
+                .toList());
+        when(repository.findByExecutionIdAndNodeId(any(), any())).thenAnswer(invocation ->
+            gateRows.values().stream()
+                .filter(g -> g.getExecutionId().equals(invocation.getArgument(0))
+                    && g.getNodeId().equals(invocation.getArgument(1)))
+                .findFirst());
+        Mockito.doAnswer(invocation -> {
+            gateRows.values().removeIf(g -> g.getExecutionId().equals(invocation.getArgument(0)));
+            return null;
+        }).when(repository).deleteByExecutionId(any());
+        return repository;
+    }
+
     private Optional<WorkflowExecution> findRow(org.mockito.invocation.InvocationOnMock invocation) {
         return Optional.ofNullable(rows.get((UUID) invocation.getArgument(0)));
     }
@@ -302,7 +350,8 @@ class ExecutionRetryQueueIntegrationTest {
                 new ManualTriggerHandler(), new ScheduleTriggerHandler(), new WebhookTriggerHandler()))),
                 new RecordingAiExecutor()),
             retryProperties, Mockito.mock(IdempotencyStore.class),
-            Mockito.mock(AlertNotifier.class), validationClient);
+            Mockito.mock(AlertNotifier.class), validationClient,
+            new com.ieum.workflowcore.service.ApprovalGateRecorder(gateRepository, objectMapper));
         ReflectionTestUtils.invokeMethod(runtime, "initExecutorMap");
         ReflectionTestUtils.setField(runtime, "parallelism", 2);
         return runtime;
@@ -611,6 +660,24 @@ class ExecutionRetryQueueIntegrationTest {
     }
 
     @Test
+    @DisplayName("게이트 행이 없는 레거시 실행(배포 전 멈춤)도 /approve로 이어지고 하류가 승인자를 참조한다")
+    void 레거시_승인은_게이트_행_없이_이어간다() {
+        stubGatedDefinition();
+        WorkflowExecution original = givenPausedOriginal();
+        gateRows.clear();   // 배포 전에 멈춘 실행 — 게이트 행이 없다
+
+        UUID continuationId = approveAndCommit(original.getId());
+        consumeOneJob();
+
+        assertThat(original.getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
+        assertThat(nodeRunOf(original.getId(), "g").getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
+        assertThat(rows.get(continuationId).getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
+        assertThat(nodeRunOf(continuationId, "g").getStatus()).isEqualTo(ExecutionLogStatus.SKIPPED);
+        assertThat(aiCalls).containsExactly("a", "b");
+        assertThat(aiInputs.get("b")).containsEntry("prompt", userId.toString());
+    }
+
+    @Test
     @DisplayName("하류에 또 게이트가 있으면 이어진 실행이 거기서 다시 멈추고, 두 번째 승인 뒤엔 마지막 구간만 실행된다")
     void approve_chainedGates_pausesAgainAtNextGate() {
         // t → a → g1 → b → g2 → c
@@ -661,6 +728,30 @@ class ExecutionRetryQueueIntegrationTest {
         // 게이트의 FAILED 행은 재사용 대상(SUCCESS·SKIPPED)이 아니다 — 새 실행에서 게이트가 다시 멈춘다.
         assertThat(rows.get(retryId).getStatus()).isEqualTo(ExecutionStatus.WAITING_APPROVAL);
         assertThat(aiCalls).containsExactly("a");   // a는 SKIPPED로 재사용, b는 여전히 막혔다
+    }
+
+    @Test
+    @DisplayName("거절(계속) 게이트를 거절하면 이어진 실행에서 하류가 실제로 돌고 decision rejected를 받는다")
+    void 거절_계속이면_하류가_decision_rejected로_돈다() {
+        Map<String, Object> g = node("g", "APPROVAL");
+        g.put("config", new HashMap<>(Map.of("onReject", "continue")));
+        Map<String, Object> b = node("b", "AI");
+        b.put("config", new HashMap<>(Map.of("prompt", "{{nodes.g.output.decision}}")));
+        when(crudService.loadDefinition(any())).thenReturn(WorkflowDefinitionDocument.builder()
+            .nodes(List.of(node("t", "TRIGGER"), g, b))
+            .edges(List.of(edge("t", "g"), edge("g", "b")))
+            .build());
+        WorkflowExecution original = givenPausedOriginal();
+        UUID gateId = gateRepository.findByExecutionIdAndNodeId(original.getId(), "g").orElseThrow().getId();
+
+        UUID continuationId = callAndCommit(() -> gateService.reject(userId, gateId, "다시").getId());
+        consumeOneJob();
+
+        assertThat(original.getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
+        assertThat(nodeRunOf(original.getId(), "g").getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
+        assertThat(rows.get(continuationId).getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
+        assertThat(nodeRunOf(continuationId, "g").getStatus()).isEqualTo(ExecutionLogStatus.SKIPPED);
+        assertThat(aiInputs.get("b")).containsEntry("prompt", "rejected");
     }
 
     // ──────────────────────────────────────────────────────────────────────

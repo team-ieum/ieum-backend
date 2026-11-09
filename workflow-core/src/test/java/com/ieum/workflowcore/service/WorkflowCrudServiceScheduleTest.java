@@ -17,6 +17,7 @@ import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
+import com.ieum.workflowcore.repository.ApprovalGateRepository;
 import com.ieum.workflowcore.repository.WorkflowRepository;
 import com.ieum.workflowcore.repository.WorkflowVersionRepository;
 import com.ieum.workflowcore.scheduler.WorkflowScheduler;
@@ -61,6 +62,7 @@ class WorkflowCrudServiceScheduleTest {
     @Mock private WorkflowScheduler workflowScheduler;
     @Mock private WorkflowDefinitionRepository definitionRepository;
     @Mock private AppTriggerSubscriptionService appTriggerSubscriptionService;
+    @Mock private ApprovalGateRepository approvalGateRepository;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
     @InjectMocks private WorkflowCrudService service;
 
