@@ -87,8 +87,27 @@ class DelayQueueServiceTest {
         return e.getId();
     }
 
+    /** 차례가 오기 전(T − 1시간)에 취소·실패로 끝난다. */
     private void cancel(UUID executionId) {
-        executions.finishIfNotTerminal(executionId, ExecutionStatus.FAILED, false, LocalDateTime.now());
+        executions.finishIfNotTerminal(executionId, ExecutionStatus.FAILED, false, local(T.minus(Duration.ofHours(1))));
+    }
+
+    private static LocalDateTime local(Instant at) {
+        return LocalDateTime.ofInstant(at, java.time.ZoneId.systemDefault());
+    }
+
+    @Test
+    @DisplayName("차례를 지나 보낸(즉시 통과) 뒤 실패한 실행의 차례는 간격 기준에 남는다 — 다음 실행은 +간격")
+    void releasedThenFailed_keepsInterval() {
+        Duration hour = Duration.ofHours(1);
+        UUID a = run();
+        assertThat(service.reserve(u, "slack", hour, T, a)).isEqualTo(new Slot(T, 0));
+        // A는 즉시 통과해 차례를 쓴 뒤 다른 노드 실패로 끝났다
+        executions.finishIfNotTerminal(a, ExecutionStatus.FAILED, false, local(T.plus(Duration.ofMinutes(2))));
+
+        Slot b = service.reserve(u, "slack", hour, T.plus(Duration.ofMinutes(5)), run());
+
+        assertThat(b.releaseAt()).isEqualTo(T.plus(hour));
     }
 
     @Test

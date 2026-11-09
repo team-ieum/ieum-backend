@@ -16,11 +16,13 @@ public interface DelayQueueSlotRepository extends JpaRepository<DelayQueueSlot, 
 
     /**
      * 간격의 기준 — 실패·취소되지 않은 실행의 가장 늦은 차례. 이미 지나간(재개된) 차례도 넣는다:
-     * 방금 나간 실행 뒤에도 간격을 지켜야 한다. FAILED 실행의 차례는 비운 것으로 본다.
+     * 방금 나간 실행 뒤에도 간격을 지켜야 한다. 차례가 오기 전에 FAILED로 끝난(취소 등) 실행의 차례만 비운 것으로 본다 —
+     * 차례를 지나 보낸 뒤(즉시 통과) 실패한 실행은 이미 차례를 썼으므로 남긴다.
      */
     @Query("SELECT MAX(s.releaseAt) FROM DelayQueueSlot s, WorkflowExecution e "
         + "WHERE e.id = s.executionId AND s.queueId = :queueId "
-        + "AND e.status <> com.ieum.workflowcore.domain.enums.ExecutionStatus.FAILED")
+        + "AND (e.status <> com.ieum.workflowcore.domain.enums.ExecutionStatus.FAILED "
+        + "OR e.finishedAt >= s.releaseAt)")
     LocalDateTime findLastRelease(@Param("queueId") UUID queueId);
 
     /** {@code now}와 {@code before} 사이에 아직 나가지 않은 차례 중, 실행이 살아 있는(대기·실행 중) 것의 수. */

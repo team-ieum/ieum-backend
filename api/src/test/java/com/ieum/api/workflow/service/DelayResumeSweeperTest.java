@@ -139,6 +139,20 @@ class DelayResumeSweeperTest {
     }
 
     @Test
+    @DisplayName("1일 넘게 밀렸어도 DB 일시 오류(DataAccessException 계열)면 닫지 않고 다음 스윕에 다시 본다")
+    void transientDataAccessFailure_overOneDay_retriesLater() {
+        UUID id = UUID.randomUUID();
+        given(workflowExecutionService.findDueDelayPage(any(), any(), any(), anyInt()))
+            .willReturn(List.of(due(id, LocalDateTime.now().minusDays(3))));
+        given(executionDelayService.resume(eq(id), any()))
+            .willThrow(new org.springframework.dao.QueryTimeoutException("connection lost"));
+
+        sweeper.sweep();
+
+        verify(workflowExecutionService, never()).markAsFailed(any(), any(), any());
+    }
+
+    @Test
     @DisplayName("일시 예외이고 1일 안이면 닫지 않고 다음 스윕에 다시 본다")
     void transientFailure_withinOneDay_retriesLater() {
         UUID id = UUID.randomUUID();

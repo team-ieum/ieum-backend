@@ -13,6 +13,8 @@ import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
+import org.springframework.transaction.TransactionException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -21,7 +23,8 @@ import org.springframework.stereotype.Component;
  * 소유권은 페이지(100건)마다 다시 본다.
  *
  * <p>재개가 {@link CustomException}(복호 실패 등 영구 오류)으로 실패하거나 재개 시각이 1일 넘게 지났으면
- * {@code markAsFailed("재개하지 못했어요")}로 닫는다 — 알림이 가고 재처리할 수 있다. 그 밖의 일시 오류는 다음 스윕에 다시 본다.
+ * {@code markAsFailed("재개하지 못했어요")}로 닫는다 — 알림이 가고 재처리할 수 있다. DB 일시 오류({@code DataAccessException}·
+ * {@code TransactionException} 계열)는 1일이 지났어도 닫지 않고, 그 밖의 1일 안 오류와 함께 다음 스윕에 다시 본다.
  * 스윕 끝에 오래된 큐 슬롯을 정리한다.
  */
 @Slf4j
@@ -74,8 +77,10 @@ public class DelayResumeSweeper {
             log.error("[DelayResumeSweeper] 재개 실패 — executionId: {}, cause: {}, message: {}",
                 id, cause, e.getMessage());
             boolean permanent = e instanceof CustomException;
+            // DB 일시 오류는 1일 넘게 밀렸어도 닫지 않는다 — 장애 뒤 첫 재시도에서 영구 실패로 굳히지 않게 다음 스윕에 다시 본다.
+            boolean transientFailure = e instanceof DataAccessException || e instanceof TransactionException;
             boolean overdue = due.getResumeAt() != null && due.getResumeAt().isBefore(now.minusDays(1));
-            if (permanent || overdue) {
+            if (permanent || (overdue && !transientFailure)) {
                 try {
                     workflowExecutionService.markAsFailed(id, RESUME_FAILED, ExecutionStatus.WAITING_DELAY);
                 } catch (Exception closeFailure) {
