@@ -17,7 +17,12 @@ import com.ieum.api.integration.options.OptionPage.OptionItem;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.engine.executor.GitHubTokenProvider;
+import java.io.ByteArrayInputStream;
+import java.io.FilterInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.SocketTimeoutException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -31,6 +36,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.mock.http.client.MockClientHttpResponse;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestTemplate;
 
@@ -119,8 +125,8 @@ class GitHubOptionSourcesTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"../x", "a//b", "a/./b", "/a"})
-    @DisplayName("branches — q에 빈·. ·.. 세그먼트가 있으면 HTTP 호출 전에 INVALID_INPUT (경로 탈출 차단)")
+    @ValueSource(strings = {"../x", "a//b", "a/./b", "/a", "a/ /b", "a//", "/", "a/../"})
+    @DisplayName("branches — q에 빈·공백·. ·.. 세그먼트가 있으면 HTTP 호출 전에 INVALID_INPUT (경로 탈출 차단)")
     void branchesQueryRejectsDotSegments(String q) {
         Map<String, String> inputs = Map.of("owner", "dobee", "repo", "ieum-backend", "q", q);
 
@@ -128,7 +134,109 @@ class GitHubOptionSourcesTest {
         verifyNoInteractions(tokenProvider);
     }
 
+    @Test
+    @DisplayName("branches — q 끝의 / 하나는 허용: feature/ → heads/feature 접두 조회 후 feature/로 시작하는 이름만")
+    void branchesQueryTrailingSlashMeansChildren() {
+        connected();
+        server.expect(requestTo(REPO_PATH + "/git/matching-refs/heads/feature"))
+            .andRespond(withSuccess("[{\"ref\":\"refs/heads/feature/a\"},{\"ref\":\"refs/heads/featureX\"}]",
+                MediaType.APPLICATION_JSON));
+
+        Map<String, String> inputs = Map.of("owner", "dobee", "repo", "ieum-backend", "q", "feature/");
+        OptionPage page = branches.fetch(userId, inputs, null);
+
+        assertThat(page.items()).containsExactly(new OptionItem("feature/a", "feature/a"));
+        assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("branches — q 결과는 refs/heads/ 항목만 앞 20개 (25개 중 비-heads 1개 제외)")
+    void branchesPrefixQueryCapsAtTwentyHeads() {
+        connected();
+        StringBuilder body = new StringBuilder("[{\"ref\":\"refs/tags/v1\"}");
+        for (int i = 0; i < 24; i++) {
+            body.append(",{\"ref\":\"refs/heads/b").append(i).append("\"}");
+        }
+        server.expect(requestTo(REPO_PATH + "/git/matching-refs/heads/b"))
+            .andRespond(withSuccess(body.append(']').toString(), MediaType.APPLICATION_JSON));
+
+        Map<String, String> inputs = Map.of("owner", "dobee", "repo", "ieum-backend", "q", "b");
+        List<OptionItem> items = branches.fetch(userId, inputs, null).items();
+
+        assertThat(items).hasSize(20);
+        assertThat(items.get(0)).isEqualTo(new OptionItem("b0", "b0"));
+        assertThat(items.get(19)).isEqualTo(new OptionItem("b19", "b19"));
+    }
+
+    @Test
+    @DisplayName("branches — matching-refs 5만 개 응답도 20개를 모으면 읽기를 멈춘다(본문 전체를 메모리에 올리지 않는다)")
+    void branchesPrefixQueryStopsReadingAfterTwenty() {
+        connected();
+        StringBuilder body = new StringBuilder("[");
+        for (int i = 0; i < 50_000; i++) {
+            body.append(i == 0 ? "" : ",").append("{\"ref\":\"refs/heads/feature/b").append(i)
+                .append("\",\"node_id\":\"MDM6UmVmcmVmcy9oZWFkcy9mZWF0dXJl\",\"object\":{\"sha\":\"0123456789abcdef\",\"type\":\"commit\"}}");
+        }
+        byte[] bytes = body.append(']').toString().getBytes(StandardCharsets.UTF_8);
+        CountingInputStream stream = new CountingInputStream(new ByteArrayInputStream(bytes));
+        server.expect(requestTo(REPO_PATH + "/git/matching-refs/heads/feature"))
+            .andRespond(request -> new MockClientHttpResponse(stream, HttpStatus.OK));
+
+        Map<String, String> inputs = Map.of("owner", "dobee", "repo", "ieum-backend", "q", "feature");
+        List<OptionItem> items = branches.fetch(userId, inputs, null).items();
+
+        assertThat(items).hasSize(20);
+        assertThat(items.get(0)).isEqualTo(new OptionItem("feature/b0", "feature/b0"));
+        assertThat(items.get(19)).isEqualTo(new OptionItem("feature/b19", "feature/b19"));
+        assertThat(stream.count).isLessThan(bytes.length / 100);
+    }
+
+    /** 읽은 바이트 수를 센다 — 파서가 본문 끝까지 읽지 않았는지 확인용. */
+    private static final class CountingInputStream extends FilterInputStream {
+        long count;
+
+        CountingInputStream(InputStream in) {
+            super(in);
+        }
+
+        @Override
+        public int read() throws IOException {
+            int b = super.read();
+            count += b < 0 ? 0 : 1;
+            return b;
+        }
+
+        @Override
+        public int read(byte[] buf, int off, int len) throws IOException {
+            int n = super.read(buf, off, len);
+            count += Math.max(n, 0);
+            return n;
+        }
+    }
+
     // ──────────────────────────── milestones ────────────────────────────
+
+    @Test
+    @DisplayName("milestones — q 일치가 25개여도 앞 20개만")
+    void milestonesQueryCapsAtTwenty() {
+        connected();
+        StringBuilder body = new StringBuilder("[");
+        for (int i = 0; i < 25; i++) {
+            body.append(i == 0 ? "" : ",").append("{\"number\":").append(i + 1)
+                .append(",\"title\":\"v1.").append(i).append("\"}");
+        }
+        server.expect(requestTo(startsWith(REPO_PATH + "/milestones?")))
+            .andExpect(queryParam("per_page", "100"))
+            .andRespond(withSuccess(body.append(']').toString(), MediaType.APPLICATION_JSON));
+
+        Map<String, String> inputs = Map.of("owner", "dobee", "repo", "ieum-backend", "q", "v1");
+        OptionPage page = milestones.fetch(userId, inputs, null);
+
+        assertThat(page.items()).hasSize(20);
+        assertThat(page.items().get(0)).isEqualTo(new OptionItem("1", "v1.0"));
+        assertThat(page.items().get(19)).isEqualTo(new OptionItem("20", "v1.19"));
+        assertThat(page.nextCursor()).isNull();
+    }
 
     @Test
     @DisplayName("milestones — 열린 마일스톤 due_on순 20개(값=번호·이름=제목), q는 100개 받아 제목 부분 일치(대소문자 무시)")

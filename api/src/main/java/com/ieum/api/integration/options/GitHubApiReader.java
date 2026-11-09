@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,6 +22,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.ResponseExtractor;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
@@ -104,25 +106,49 @@ public class GitHubApiReader {
      * @param query        쿼리 파라미터(삽입 순서 유지)
      */
     public Page get(UUID userId, List<String> pathSegments, Map<String, String> query) {
-        String token = gitHubTokenProvider.getAccessToken(userId)
-            .orElseThrow(() -> new CustomException(ErrorCode.ACCOUNT_NOT_CONNECTED));
-
-        UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(API_BASE)
-            .pathSegment(pathSegments.toArray(String[]::new));
-        query.forEach(builder::queryParam);
-        URI uri = builder.build().encode().toUri();
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(token);
-        headers.set(HttpHeaders.ACCEPT, "application/vnd.github+json");
-        headers.set("X-GitHub-Api-Version", "2022-11-28");
-        headers.set(HttpHeaders.USER_AGENT, "ieum-backend");
-        try {
+        HttpHeaders headers = headers(userId);
+        URI uri = uri(pathSegments, query);
+        return call(() -> {
             ResponseEntity<JsonNode> response =
                 restTemplate.exchange(uri, HttpMethod.GET, new HttpEntity<>(headers), JsonNode.class);
             JsonNode body = response.getBody() != null ? response.getBody() : JsonNodeFactory.instance.arrayNode();
             String link = response.getHeaders().getFirst(HttpHeaders.LINK);
             return new Page(body, link != null && link.contains("rel=\"next\""));
+        });
+    }
+
+    /**
+     * {@link #get}과 같은 토큰·헤더·오류 매핑으로 GET 하되, 본문을 트리로 올리지 않고 {@code extractor}가 스트림에서
+     * 필요한 만큼만 읽는다 — 페이지를 나눌 수 없는 큰 응답(matching-refs 등)용. 오류 응답은 extractor 전에 걸러진다.
+     */
+    public <T> T stream(UUID userId, List<String> pathSegments, Map<String, String> query, ResponseExtractor<T> extractor) {
+        HttpHeaders headers = headers(userId);
+        URI uri = uri(pathSegments, query);
+        return call(() -> restTemplate.execute(uri, HttpMethod.GET,
+            request -> request.getHeaders().putAll(headers), extractor));
+    }
+
+    private HttpHeaders headers(UUID userId) {
+        String token = gitHubTokenProvider.getAccessToken(userId)
+            .orElseThrow(() -> new CustomException(ErrorCode.ACCOUNT_NOT_CONNECTED));
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(token);
+        headers.set(HttpHeaders.ACCEPT, "application/vnd.github+json");
+        headers.set("X-GitHub-Api-Version", "2022-11-28");
+        headers.set(HttpHeaders.USER_AGENT, "ieum-backend");
+        return headers;
+    }
+
+    private static URI uri(List<String> pathSegments, Map<String, String> query) {
+        UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(API_BASE)
+            .pathSegment(pathSegments.toArray(String[]::new));
+        query.forEach(builder::queryParam);
+        return builder.build().encode().toUri();
+    }
+
+    private static <T> T call(Supplier<T> request) {
+        try {
+            return request.get();
         } catch (HttpClientErrorException e) {
             // 응답 본문엔 사용자 정보가 섞일 수 있어 상태 코드만 남긴다
             log.warn("[GitHubApiReader] GitHub 요청 거부 — status: {}", e.getStatusCode().value());
