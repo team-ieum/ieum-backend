@@ -126,7 +126,9 @@ class LiveAndSnapshotEventParityTest {
                 new FakeExecutor(NodeType.CONDITION, conditionResults),
                 new DelayNodeExecutor(mock(DelayQueueService.class), Clock.fixed(NOW, ZoneId.of("Asia/Seoul")))),
             new RetryProperties(), mock(IdempotencyStore.class), mock(AlertNotifier.class),
-            mock(WorkflowValidationClient.class));
+            mock(WorkflowValidationClient.class),
+            new com.ieum.workflowcore.service.ApprovalGateRecorder(
+                mock(com.ieum.workflowcore.repository.ApprovalGateRepository.class), objectMapper));
         runtime.initExecutorMap();
         // 완료 순서를 제출 순서로 고정해 라이브·재생 순서를 결정적으로 비교한다.
         ReflectionTestUtils.setField(runtime, "parallelism", 1);

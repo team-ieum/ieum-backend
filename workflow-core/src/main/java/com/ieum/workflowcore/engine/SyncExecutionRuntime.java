@@ -10,6 +10,7 @@ import com.ieum.workflowcore.document.WorkflowDefinitionDocument;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowExecutionLog;
 import com.ieum.workflowcore.domain.WorkflowVersion;
+import com.ieum.workflowcore.service.ApprovalGateRecorder;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.domain.enums.ExecutionLogStatus;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
@@ -18,6 +19,8 @@ import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.ExecutionOwnershipGuard.OwnershipLostException;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.executor.AlertNotifier;
+import com.ieum.workflowcore.engine.executor.ApprovalFailure;
+import com.ieum.workflowcore.engine.executor.ApprovalGateConfig;
 import com.ieum.workflowcore.engine.executor.DelayFailure;
 import com.ieum.workflowcore.engine.executor.DelayNodeExecutor;
 import com.ieum.workflowcore.engine.executor.DelayPlan;
@@ -30,7 +33,6 @@ import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.util.SensitiveDataMasker;
 import jakarta.annotation.PostConstruct;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -81,6 +83,7 @@ public class SyncExecutionRuntime {
     private final IdempotencyStore idempotencyStore;
     private final AlertNotifier alertNotifier;
     private final WorkflowValidationClient validationClient;
+    private final ApprovalGateRecorder approvalGateRecorder;
     @Autowired(required = false)
     private ExecutionOwnershipGuard ownershipGuard;
 
@@ -111,13 +114,6 @@ public class SyncExecutionRuntime {
     /** fan-out 병렬 실행 시 동시에 실행할 노드 수(워커 스레드 풀 크기). */
     @Value("${workflow.execution.parallelism:4}")
     private int parallelism;
-
-    /**
-     * 승인 게이트 기한 — 멈춘 시각 + 이 값이 {@code approval_deadline}이 된다. 지나면 sweeper가
-     * FAILED("승인 만료")로 확정한다. 필드 초기값은 {@code new}로 만드는 단위 테스트용이고 스프링이 덮는다.
-     */
-    @Value("${ieum.workflow.approval.timeout:PT24H}")
-    private Duration approvalTimeout = Duration.ofHours(24);
 
     /**
      * 워커 스레드가 메인으로 돌려주는 노드 실행 결과 묶음. attempts는 마지막으로 실행된 시도 회차.
@@ -279,8 +275,8 @@ public class SyncExecutionRuntime {
             boolean failedNodeRetryExhausted = false;
             String failedNodeId = null;
             String failedNodeError = null;
-            // 승인 전이라 제출하지 않고 멈춰 둔 APPROVAL 노드. dispatch()(메인 스레드)만 쓴다.
-            List<String> waitingGates = new ArrayList<>();
+            // 승인 전이라 제출하지 않고 멈춰 둔 APPROVAL 노드(nodeId → 렌더·해석한 설정). dispatch()(메인 스레드)만 쓴다.
+            Map<String, ApprovalGateConfig> waitingGates = new LinkedHashMap<>();
             // 재개 시각이 아직 오지 않아 제출하지 않고 보류한 DELAY 노드(nodeId → 계산 결과). dispatch()만 쓴다.
             Map<String, DelayPlan> waitingDelays = new LinkedHashMap<>();
             try (ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, parallelism))) {
@@ -380,7 +376,7 @@ public class SyncExecutionRuntime {
 
             // 실패가 없고 게이트·DELAY가 남았으면 대기로 멈춘다(실패가 대기보다 우선 — 위에서 이미 return).
             if (!waitingGates.isEmpty() || !waitingDelays.isEmpty()) {
-                pause(executionId, workflowId, waitingGates, waitingDelays);
+                pause(executionId, workflowId, execution.getWorkflow().getUserId(), waitingGates, waitingDelays);
                 return;
             }
 
@@ -437,10 +433,10 @@ public class SyncExecutionRuntime {
      * 남긴다(승인 API가 대기 상태를 보는 순간 재개 시각이 이미 있어야 한다). 게이트가 없으면 {@code WAITING_DELAY}.
      * 둘 다 {@code RUNNING}일 때만 쓰는 조건부 UPDATE라 0행이면 DB 상태로 종료 이벤트만 흘린다. 실패 알림은 없다.
      */
-    private void pause(UUID executionId, UUID workflowId, List<String> gateIds,
+    private void pause(UUID executionId, UUID workflowId, UUID userId, Map<String, ApprovalGateConfig> gates,
                        Map<String, DelayPlan> delays) throws JsonProcessingException {
         if (delays.isEmpty()) {
-            pauseForApproval(executionId, workflowId, gateIds);
+            pauseForApproval(executionId, workflowId, userId, gates);
             return;
         }
         assertOwnership(executionId);
@@ -452,12 +448,12 @@ public class SyncExecutionRuntime {
         String delayJson = objectMapper.writeValueAsString(waiting);
         LocalDateTime now = LocalDateTime.now();
 
-        if (!gateIds.isEmpty()) {
+        if (!gates.isEmpty()) {
             if (workflowExecutionRepository.recordDelayWait(executionId, resumeAt, delayJson, now) == 0) {
                 publishAlreadyFinished(executionId, workflowId, ExecutionStatus.WAITING_APPROVAL);
                 return;
             }
-            pauseForApproval(executionId, workflowId, gateIds);
+            pauseForApproval(executionId, workflowId, userId, gates);
             return;
         }
         if (workflowExecutionRepository.pauseForDelay(executionId, resumeAt, delayJson, now) == 0) {
@@ -476,13 +472,18 @@ public class SyncExecutionRuntime {
      * <p>종료 전이와 같은 조건부 UPDATE다({@code RUNNING}일 때만). 0행이면 그사이 sweeper 등이 먼저
      * 끝낸 실행이라 DB 상태로 종료 이벤트만 흘린다. 사용자가 결정할 대기라 실패 알림은 없다.
      * 스트림은 호출부의 {@code finally}가 닫는다.
+     *
+     * <p>게이트 행을 <b>먼저</b> 남긴다 — 승인 API가 대기 상태를 보는 순간 게이트 행이 이미 있어야 한다.
+     * 실행 기한({@code approval_deadline})은 게이트 기한의 최솟값이다.
      */
-    private void pauseForApproval(UUID executionId, UUID workflowId, List<String> gateIds)
-            throws JsonProcessingException {
+    private void pauseForApproval(UUID executionId, UUID workflowId, UUID userId,
+                                  Map<String, ApprovalGateConfig> gates) throws JsonProcessingException {
         assertOwnership(executionId);
         LocalDateTime now = LocalDateTime.now();
+        LocalDateTime deadline = approvalGateRecorder.record(executionId, workflowId, userId, gates, now);
+        List<String> gateIds = new ArrayList<>(gates.keySet());
         int paused = workflowExecutionRepository.pauseForApproval(executionId,
-            objectMapper.writeValueAsString(gateIds), now.plus(approvalTimeout), now);
+            objectMapper.writeValueAsString(gateIds), deadline, now);
         if (paused == 0) {
             publishAlreadyFinished(executionId, workflowId, ExecutionStatus.WAITING_APPROVAL);
             return;
@@ -563,7 +564,7 @@ public class SyncExecutionRuntime {
      * 지금 통과면 SUCCESS로 제출하고, 그 밖엔 제출하지 않고 {@code waitingDelays}에 보류한다 — 게이트와 같이
      * 하류가 막히고 {@code node_runs} 행도 남지 않는다(행은 재개 때 쓴다).
      *
-     * @param waitingGates  대기에 넣은 게이트 ID가 추가된다
+     * @param waitingGates  대기에 넣은 게이트(nodeId → 렌더·해석한 설정)가 추가된다. 설정이 잘못되면 노드 FAILED로 제출한다
      * @param waitingDelays 보류한 DELAY 노드의 계산 결과가 추가된다
      * @return 제출한 노드 수(대기 게이트·보류 DELAY는 세지 않는다)
      */
@@ -571,7 +572,7 @@ public class SyncExecutionRuntime {
                          CompletionService<NodeOutcome> completion, UUID executionId,
                          UUID workflowId,
                          Map<String, Map<String, Object>> preCompleted,
-                         List<String> waitingGates,
+                         Map<String, ApprovalGateConfig> waitingGates,
                          Map<String, DelayPlan> waitingDelays) {
         int count = 0;
         while (!ready.isEmpty()) {
@@ -589,8 +590,20 @@ public class SyncExecutionRuntime {
                 continue;
             }
             if (node.getType() == NodeType.APPROVAL) {
+                Map<String, Object> input = prepareNodeInput(node, cursor);
+                ApprovalGateConfig gate;
+                try {
+                    gate = ApprovalGateConfig.parse(node.getEvent(), input);
+                } catch (ApprovalFailure f) {
+                    eventPublisher.publish(executionId, ExecutionEvent.nodeStarted(
+                        executionId, workflowId, node.getId(), node.getType()));
+                    completion.submit(() -> new NodeOutcome(node, input,
+                        ExecutorResult.failure(f.getMessage(), 0L), 0L, 1, false, false));
+                    count++;
+                    continue;
+                }
                 log.info("[Runtime] 승인 게이트 도달 — nodeId: {}", node.getId());
-                waitingGates.add(node.getId());
+                waitingGates.put(node.getId(), gate);
                 eventPublisher.publish(executionId,
                     ExecutionEvent.approvalRequested(executionId, workflowId, node.getId()));
                 continue;

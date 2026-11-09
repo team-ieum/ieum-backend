@@ -302,7 +302,9 @@ class ExecutionRetryQueueIntegrationTest {
                 new ManualTriggerHandler(), new ScheduleTriggerHandler(), new WebhookTriggerHandler()))),
                 new RecordingAiExecutor()),
             retryProperties, Mockito.mock(IdempotencyStore.class),
-            Mockito.mock(AlertNotifier.class), validationClient);
+            Mockito.mock(AlertNotifier.class), validationClient,
+            new com.ieum.workflowcore.service.ApprovalGateRecorder(
+                Mockito.mock(com.ieum.workflowcore.repository.ApprovalGateRepository.class), objectMapper));
         ReflectionTestUtils.invokeMethod(runtime, "initExecutorMap");
         ReflectionTestUtils.setField(runtime, "parallelism", 2);
         return runtime;

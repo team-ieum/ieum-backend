@@ -38,7 +38,9 @@ import com.ieum.workflowcore.engine.executor.TriggerNodeExecutor;
 import com.ieum.workflowcore.engine.validation.WorkflowValidationClient;
 import com.ieum.workflowcore.engine.validation.WorkflowValidationException;
 import com.ieum.workflowcore.engine.validation.WorkflowValidationResult;
+import com.ieum.workflowcore.repository.ApprovalGateRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
+import com.ieum.workflowcore.service.ApprovalGateRecorder;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.trigger.ManualTriggerHandler;
@@ -80,6 +82,7 @@ class SyncExecutionRuntimeTest {
     private IdempotencyStore idempotencyStore;
     private AlertNotifier alertNotifier;
     private WorkflowValidationClient validationClient;
+    private ApprovalGateRepository gateRepository;
     private WorkflowExecution execution;
     private Workflow workflow;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -136,6 +139,7 @@ class SyncExecutionRuntimeTest {
         idempotencyStore = mock(IdempotencyStore.class);
         alertNotifier = mock(AlertNotifier.class);
         validationClient = mock(WorkflowValidationClient.class);
+        gateRepository = mock(ApprovalGateRepository.class);
         execution = mock(WorkflowExecution.class);
         workflow = mock(Workflow.class);
         when(workflow.getUserId()).thenReturn(UUID.randomUUID());
@@ -160,7 +164,8 @@ class SyncExecutionRuntimeTest {
     private SyncExecutionRuntime runtimeWith(NodeExecutor... executors) {
         SyncExecutionRuntime runtime = new SyncExecutionRuntime(
             objectMapper, logRepository, executionRepository, crudService, eventPublisher, List.of(executors),
-            new RetryProperties(), idempotencyStore, alertNotifier, validationClient);
+            new RetryProperties(), idempotencyStore, alertNotifier, validationClient,
+            new ApprovalGateRecorder(gateRepository, objectMapper));
         runtime.initExecutorMap();
         ReflectionTestUtils.setField(runtime, "parallelism", 4);
         return runtime;
@@ -1262,7 +1267,7 @@ class SyncExecutionRuntimeTest {
             SyncExecutionRuntime runtime = new SyncExecutionRuntime(
                 objectMapper, logRepository, executionRepository, crudService, eventPublisher,
                 List.of(executors), retryProperties, idempotencyStore, alertNotifier,
-                mock(WorkflowValidationClient.class));
+                mock(WorkflowValidationClient.class), new ApprovalGateRecorder(gateRepository, objectMapper));
             runtime.initExecutorMap();
             ReflectionTestUtils.setField(runtime, "parallelism", 4);
             return runtime;
@@ -2047,6 +2052,88 @@ class SyncExecutionRuntimeTest {
                 .containsExactlyInAnyOrder("g1", "g2");
         }
 
+        private Map<String, Object> gateNode(String id, Map<String, Object> config) {
+            Map<String, Object> n = node(id, "APPROVAL");
+            n.put("event", "approval.request");
+            n.put("config", new HashMap<>(config));
+            return n;
+        }
+
+        private List<com.ieum.workflowcore.domain.ApprovalGate> savedGates() {
+            ArgumentCaptor<com.ieum.workflowcore.domain.ApprovalGate> captor =
+                ArgumentCaptor.forClass(com.ieum.workflowcore.domain.ApprovalGate.class);
+            verify(gateRepository, atLeastOnce()).save(captor.capture());
+            return captor.getAllValues();
+        }
+
+        @Test
+        @DisplayName("게이트 message·검토 내용은 상류 출력으로 렌더돼 게이트 행에 남는다")
+        void 게이트_message는_상류_출력으로_렌더된다() throws Exception {
+            NodeExecutor draftAi = new NodeExecutor() {
+                @Override
+                public NodeType getNodeType() {
+                    return NodeType.AI;
+                }
+
+                @Override
+                public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor) {
+                    return ExecutorResult.success(Map.of("reply", "초안"), 1);
+                }
+            };
+            stubDefinition(
+                List.of(node("t", "TRIGGER"), node("ai", "AI"), gateNode("g", Map.of("items",
+                    List.of(Map.of("key", "draft", "value", "{{nodes.ai.output.reply}}"))))),
+                List.of(edge("t", "ai", null), edge("ai", "g", null)));
+
+            runtimeWith(trigger(), draftAi).execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+
+            com.ieum.workflowcore.domain.ApprovalGate gate = savedGates().get(0);
+            Map<?, ?> view = objectMapper.readValue(gate.getViewJson(), Map.class);
+            assertThat(((Map<?, ?>) ((List<?>) view.get("items")).get(0)).get("value")).isEqualTo("초안");
+            assertThat(gate.getNodeId()).isEqualTo("g");
+            assertThat(gate.getEvent()).isEqualTo("approval.request");
+        }
+
+        @Test
+        @DisplayName("노드별 기한 — 실행 기한은 가장 이른 게이트 기한이다")
+        void 노드별_기한이_실행_기한이_된다() throws Exception {
+            stubDefinition(
+                List.of(node("t", "TRIGGER"),
+                    gateNode("g1", Map.of("timeoutAmount", 30, "timeoutUnit", "minutes")),
+                    gateNode("g2", Map.of("timeoutAmount", 2, "timeoutUnit", "hours"))),
+                List.of(edge("t", "g1", null), edge("t", "g2", null)));
+
+            run();
+
+            ArgumentCaptor<LocalDateTime> deadline = ArgumentCaptor.forClass(LocalDateTime.class);
+            ArgumentCaptor<LocalDateTime> now = ArgumentCaptor.forClass(LocalDateTime.class);
+            verify(executionRepository).pauseForApproval(
+                eq(executionId), any(), deadline.capture(), now.capture());
+            assertThat(deadline.getValue()).isEqualTo(now.getValue().plusMinutes(30));
+            Map<String, LocalDateTime> gateDeadlines = new HashMap<>();
+            savedGates().forEach(g -> gateDeadlines.put(g.getNodeId(), g.getDeadline()));
+            assertThat(gateDeadlines).containsEntry("g1", now.getValue().plusMinutes(30))
+                .containsEntry("g2", now.getValue().plusHours(2));
+        }
+
+        @Test
+        @DisplayName("잘못된 게이트 설정은 그 노드 FAILED — 실행 FAILED, 게이트 행 없음")
+        void 잘못된_설정은_게이트_노드_실패() throws Exception {
+            stubDefinition(
+                List.of(node("t", "TRIGGER"),
+                    gateNode("g", Map.of("timeoutAmount", 1, "timeoutUnit", "minutes"))),
+                List.of(edge("t", "g", null)));
+
+            run();
+
+            verifyFinished(ExecutionStatus.FAILED, false);
+            WorkflowExecutionLog gateLog = logOf(savedLogs(), "g");
+            assertThat(gateLog.getStatus()).isEqualTo(ExecutionLogStatus.FAILED);
+            assertThat(gateLog.getErrorMessage()).isEqualTo("제한 시간은 5분~7일이에요");
+            verify(gateRepository, never()).save(any());
+            verify(executionRepository, never()).pauseForApproval(any(), any(), any(), any());
+        }
+
         @Test
         @DisplayName("멈추기 전에 외부에서 종료됐으면(조건부 UPDATE 0행) DB 상태로 종료 이벤트만 흘린다")
         void pause_after_external_finish_publishes_db_status() throws Exception {
@@ -2126,7 +2213,8 @@ class SyncExecutionRuntimeTest {
                 objectMapper, logRepository, executionRepository, crudService, eventPublisher,
                 List.of(new RecordingExecutor(NodeType.TRIGGER, log, failNodeIds, conditionResults),
                     failingAi(message)),
-                new RetryProperties(), idempotencyStore, alertNotifier, mock(WorkflowValidationClient.class));
+                new RetryProperties(), idempotencyStore, alertNotifier, mock(WorkflowValidationClient.class),
+                new ApprovalGateRecorder(gateRepository, objectMapper));
             runtime.initExecutorMap();
             ReflectionTestUtils.setField(runtime, "parallelism", 4);
 
