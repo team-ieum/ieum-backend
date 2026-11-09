@@ -473,18 +473,19 @@ public class SyncExecutionRuntime {
      * 끝낸 실행이라 DB 상태로 종료 이벤트만 흘린다. 사용자가 결정할 대기라 실패 알림은 없다.
      * 스트림은 호출부의 {@code finally}가 닫는다.
      *
-     * <p>게이트 행을 <b>먼저</b> 남긴다 — 승인 API가 대기 상태를 보는 순간 게이트 행이 이미 있어야 한다.
+     * <p>대기 전이와 게이트 행 기록이 한 트랜잭션이다({@link ApprovalGateRecorder#record}) — 승인 API가 대기 상태를
+     * 보는 순간 게이트 행이 이미 있고, 0행이면 이미 대기인 실행의 게이트를 건드리지 않는다.
      * 실행 기한({@code approval_deadline})은 게이트 기한의 최솟값이다.
      */
     private void pauseForApproval(UUID executionId, UUID workflowId, UUID userId,
                                   Map<String, ApprovalGateConfig> gates) throws JsonProcessingException {
         assertOwnership(executionId);
         LocalDateTime now = LocalDateTime.now();
-        LocalDateTime deadline = approvalGateRecorder.record(executionId, workflowId, userId, gates, now);
         List<String> gateIds = new ArrayList<>(gates.keySet());
-        int paused = workflowExecutionRepository.pauseForApproval(executionId,
-            objectMapper.writeValueAsString(gateIds), deadline, now);
-        if (paused == 0) {
+        String gateIdsJson = objectMapper.writeValueAsString(gateIds);
+        LocalDateTime deadline = approvalGateRecorder.record(executionId, workflowId, userId, gates, now,
+            earliest -> workflowExecutionRepository.pauseForApproval(executionId, gateIdsJson, earliest, now));
+        if (deadline == null) {
             publishAlreadyFinished(executionId, workflowId, ExecutionStatus.WAITING_APPROVAL);
             return;
         }
