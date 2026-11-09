@@ -11,6 +11,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Supplier;
+import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpEntity;
@@ -20,6 +22,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.ResponseExtractor;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
@@ -37,9 +40,62 @@ public class GitHubApiReader {
 
     static final String API_BASE = "https://api.github.com";
     static final int PAGE_SIZE = 50;
+    static final int RESOURCE_PAGE_SIZE = 20;
+
+    /** GitHub login 규칙(영숫자·하이픈, 최대 39자 — EMU의 밑줄 포함). URL 경로에 쓰므로 이 형식만 받는다. */
+    private static final Pattern OWNER = Pattern.compile("[A-Za-z0-9_-]{1,39}");
+    private static final Pattern REPO = Pattern.compile("[A-Za-z0-9_.-]{1,100}");
+    private static final int MAX_PAGE = 1000;
+    private static final int MAX_SEARCH_TEXT = 200;
 
     private final GitHubTokenProvider gitHubTokenProvider;
     private final RestTemplate restTemplate;
+
+    /** 입력 {@code owner} — 형식이 틀리면(참조식 포함) HTTP 호출 전에 INVALID_INPUT. */
+    static String requireOwner(Map<String, String> inputs) {
+        String owner = inputs.get("owner") == null ? "" : inputs.get("owner").strip();
+        if (!OWNER.matcher(owner).matches()) {
+            throw new CustomException(ErrorCode.INVALID_INPUT, "owner가 없거나 올바르지 않습니다.");
+        }
+        return owner;
+    }
+
+    /** 입력 {@code repo} — GitHub repo name 형식만, {@code .}·{@code ..}는 경로 탈출이라 거부. */
+    static String requireRepo(Map<String, String> inputs) {
+        String repo = inputs.get("repo") == null ? "" : inputs.get("repo").strip();
+        if (!REPO.matcher(repo).matches() || repo.equals(".") || repo.equals("..")) {
+            throw new CustomException(ErrorCode.INVALID_INPUT, "repo가 없거나 올바르지 않습니다.");
+        }
+        return repo;
+    }
+
+    /** cursor = 페이지 번호(1~1000), null이면 1. */
+    static int parsePage(String cursor) {
+        if (cursor == null) {
+            return 1;
+        }
+        try {
+            int page = Integer.parseInt(cursor.strip());
+            if (page >= 1 && page <= MAX_PAGE) {
+                return page;
+            }
+        } catch (NumberFormatException ignored) {
+            // 아래에서 같은 오류로 처리
+        }
+        throw new CustomException(ErrorCode.INVALID_INPUT, "cursor가 올바르지 않습니다.");
+    }
+
+    /** 입력 {@code q} — strip 후 비면 null, 200자 초과면 INVALID_INPUT. */
+    static String searchText(Map<String, String> inputs) {
+        String q = inputs.get("q") == null ? "" : inputs.get("q").strip();
+        if (q.isEmpty()) {
+            return null;
+        }
+        if (q.length() > MAX_SEARCH_TEXT) {
+            throw new CustomException(ErrorCode.INVALID_INPUT, "검색어가 너무 깁니다.");
+        }
+        return q;
+    }
 
     /** @param hasNext 응답 {@code Link} 헤더에 {@code rel="next"}가 있는지 */
     public record Page(JsonNode body, boolean hasNext) {
@@ -50,25 +106,49 @@ public class GitHubApiReader {
      * @param query        쿼리 파라미터(삽입 순서 유지)
      */
     public Page get(UUID userId, List<String> pathSegments, Map<String, String> query) {
-        String token = gitHubTokenProvider.getAccessToken(userId)
-            .orElseThrow(() -> new CustomException(ErrorCode.ACCOUNT_NOT_CONNECTED));
-
-        UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(API_BASE)
-            .pathSegment(pathSegments.toArray(String[]::new));
-        query.forEach(builder::queryParam);
-        URI uri = builder.build().encode().toUri();
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(token);
-        headers.set(HttpHeaders.ACCEPT, "application/vnd.github+json");
-        headers.set("X-GitHub-Api-Version", "2022-11-28");
-        headers.set(HttpHeaders.USER_AGENT, "ieum-backend");
-        try {
+        HttpHeaders headers = headers(userId);
+        URI uri = uri(pathSegments, query);
+        return call(() -> {
             ResponseEntity<JsonNode> response =
                 restTemplate.exchange(uri, HttpMethod.GET, new HttpEntity<>(headers), JsonNode.class);
             JsonNode body = response.getBody() != null ? response.getBody() : JsonNodeFactory.instance.arrayNode();
             String link = response.getHeaders().getFirst(HttpHeaders.LINK);
             return new Page(body, link != null && link.contains("rel=\"next\""));
+        });
+    }
+
+    /**
+     * {@link #get}과 같은 토큰·헤더·오류 매핑으로 GET 하되, 본문을 트리로 올리지 않고 {@code extractor}가 스트림에서
+     * 필요한 만큼만 읽는다 — 페이지를 나눌 수 없는 큰 응답(matching-refs 등)용. 오류 응답은 extractor 전에 걸러진다.
+     */
+    public <T> T stream(UUID userId, List<String> pathSegments, Map<String, String> query, ResponseExtractor<T> extractor) {
+        HttpHeaders headers = headers(userId);
+        URI uri = uri(pathSegments, query);
+        return call(() -> restTemplate.execute(uri, HttpMethod.GET,
+            request -> request.getHeaders().putAll(headers), extractor));
+    }
+
+    private HttpHeaders headers(UUID userId) {
+        String token = gitHubTokenProvider.getAccessToken(userId)
+            .orElseThrow(() -> new CustomException(ErrorCode.ACCOUNT_NOT_CONNECTED));
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(token);
+        headers.set(HttpHeaders.ACCEPT, "application/vnd.github+json");
+        headers.set("X-GitHub-Api-Version", "2022-11-28");
+        headers.set(HttpHeaders.USER_AGENT, "ieum-backend");
+        return headers;
+    }
+
+    private static URI uri(List<String> pathSegments, Map<String, String> query) {
+        UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(API_BASE)
+            .pathSegment(pathSegments.toArray(String[]::new));
+        query.forEach(builder::queryParam);
+        return builder.build().encode().toUri();
+    }
+
+    private static <T> T call(Supplier<T> request) {
+        try {
+            return request.get();
         } catch (HttpClientErrorException e) {
             // 응답 본문엔 사용자 정보가 섞일 수 있어 상태 코드만 남긴다
             log.warn("[GitHubApiReader] GitHub 요청 거부 — status: {}", e.getStatusCode().value());

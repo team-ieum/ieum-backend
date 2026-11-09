@@ -36,6 +36,8 @@ public interface IntegrationOptionControllerDocs {
             + "(웹훅·MCP는 활성 항목만, 모두 요청자 소유만). "
             + "github/owners(본인 login + 소속 org), github/repos(owner 필수 — owners의 값. 목록은 GitHub App 설치 범위 안만), "
             + "github/installed_repos(입력 없음, 값은 숫자 repo id 문자열·이름은 owner/name, 설치 범위 전체를 한 번에 — nextCursor 항상 null), "
+            + "github/branches(owner·repo 필수 — 값·이름은 브랜치 이름, 20개씩. q 선택 — 이름 앞부분 일치 20개), "
+            + "github/milestones(owner·repo 필수 — 열린 마일스톤, 값은 번호·이름은 제목, 20개씩. q 선택 — 제목 부분 일치), "
             + "slack/channels(연결한 Slack 워크스페이스의 공개 채널, 보관 제외 — 값은 채널 ID·이름은 #이름. q 없으면 20개씩이고 "
             + "items가 비어도 nextCursor가 있을 수 있음. q 선택 — 이름 부분 일치(대소문자·앞의 # 무시), 최대 1,000개 중 20개, nextCursor 항상 null. "
             + "못 찾으면 items=[] — 채널 ID 직접 입력으로 안내), "
