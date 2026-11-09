@@ -1,5 +1,7 @@
 package com.ieum.workflowcore.engine.executor;
 
+import com.ieum.common.exception.CustomException;
+import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.catalog.EventCatalog;
 import com.ieum.workflowcore.catalog.EventDefinition;
 import com.ieum.workflowcore.domain.enums.NodeType;
@@ -48,6 +50,8 @@ public class ActionNodeExecutor implements NodeExecutor {
     // 정적 WebClient.builder()는 Boot codec 설정을 받지 않아 기본 256KB에 묶인다.
     // agent 읽기 도구는 본문을 최대 1MB까지 돌려주므로(google_drive_read) JSON 이스케이프 여유를 둬 4MB.
     private static final int MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+    static final String SUBMIT_PR_REVIEW = "builtin:github_submit_pr_review";
+    private static final String GITHUB_TOKEN_HEADER = "X-GitHub-Token";
 
     private final WebClient webClient;
     private final ToolCallPreparer toolCallPreparer;
@@ -55,6 +59,7 @@ public class ActionNodeExecutor implements NodeExecutor {
     private final IdempotencyStore idempotencyStore;
     private final int agentTimeoutSeconds;
     private final EventCatalog eventCatalog;
+    private final GitHubBotTokenProvider gitHubBotTokenProvider;
 
     public ActionNodeExecutor(
         @Value("${ieum.agent.url}") String agentBaseUrl,
@@ -63,8 +68,10 @@ public class ActionNodeExecutor implements NodeExecutor {
         IdempotencyStore idempotencyStore,
         @Value("${ieum.agent.timeout-seconds:120}") int agentTimeoutSeconds,
         EventCatalog eventCatalog,
-        @Value("${ieum.agent.internal-token:}") String internalToken
+        @Value("${ieum.agent.internal-token:}") String internalToken,
+        GitHubBotTokenProvider gitHubBotTokenProvider
     ) {
+        this.gitHubBotTokenProvider = gitHubBotTokenProvider;
         this.webClient = WebClient.builder()
             .baseUrl(agentBaseUrl)
             .defaultHeaders(AgentInternalToken.headers(internalToken))
@@ -123,6 +130,24 @@ public class ActionNodeExecutor implements NodeExecutor {
             UUID userId = cursor.getContext().getUserId();
             String userRole = userId != null ? userRoleProvider.findRoleByUserId(userId) : null;
 
+            // C7 PR 리뷰는 author가 "me"가 아니면(없음 포함 — 카탈로그 기본값 bot, FE는 기본값을 저장하지 않는다) 봇 명의.
+            // ToolAuthResolver가 아니라 여기서만 바꾼다 — AI 노드는 tools를 직접 적을 수 있어 공용 해석기에 두면 봇 토큰이 샌다.
+            if (SUBMIT_PR_REVIEW.equals(toolKey) && !"me".equals(toolConfig.get("author"))) {
+                String botToken;
+                try {
+                    botToken = gitHubBotTokenProvider.getBotToken(userId,
+                        stringOrNull(toolConfig.get("owner")), stringOrNull(toolConfig.get("repo")));
+                } catch (CustomException e) {
+                    log.warn("[ActionNodeExecutor] 봇 명의 거부 — nodeId: {}, errorCode: {}", node.getId(), e.getErrorCode());
+                    return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime,
+                        e.getErrorCode() == ErrorCode.GITHUB_API_UNAVAILABLE
+                            ? FailureKind.SERVER_ERROR : FailureKind.CLIENT_ERROR);
+                }
+                Map<String, String> headers = new HashMap<>(prepared.authHeaders());
+                headers.put(GITHUB_TOKEN_HEADER, botToken);
+                prepared = new ToolCallPreparer.PreparedTools(prepared.tools(), prepared.googleAccessToken(), headers);
+            }
+
             if (policy != null && policy.idempotency().usesMarker()) {
                 if (!idempotencyStore.markInFlight(attempt.idempotencyKey(), NodeExecutor.markerTtl(policy))) {
                     log.warn("[ActionNodeExecutor] 멱등성 마커 충돌로 호출 차단 — nodeId: {}", node.getId());
@@ -167,6 +192,10 @@ public class ActionNodeExecutor implements NodeExecutor {
             return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime,
                 FailureClassifier.fromException(e));
         }
+    }
+
+    private static String stringOrNull(Object value) {
+        return value == null ? null : String.valueOf(value);
     }
 
     private ActionExecutionResult callAgentService(

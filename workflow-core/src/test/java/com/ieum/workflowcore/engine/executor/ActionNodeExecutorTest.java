@@ -9,6 +9,8 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.common.exception.CustomException;
+import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.catalog.EventCatalog;
 import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.ExecutionContext;
@@ -56,6 +58,7 @@ class ActionNodeExecutorTest {
     private GitHubTokenProvider gitHubTokenProvider;
     private WebhookCredentialProvider webhookCredentialProvider;
     private IdempotencyStore idempotencyStore;
+    private GitHubBotTokenProvider botTokenProvider = mock(GitHubBotTokenProvider.class);
     private ActionNodeExecutor executor;
 
     @BeforeEach
@@ -89,7 +92,8 @@ class ActionNodeExecutorTest {
             idempotencyStore,
             30,
             CATALOG,
-            INTERNAL_TOKEN);
+            INTERNAL_TOKEN,
+            botTokenProvider);
     }
 
     // ── 헬퍼 ────────────────────────────────────────────────────────────────
@@ -461,5 +465,82 @@ class ActionNodeExecutorTest {
         assertThat(node.getConfig().toString()).doesNotContain(WEBHOOK_URL);
         assertThat(input.toString()).doesNotContain(WEBHOOK_URL);
         assertThat(result.getOutput().toString()).doesNotContain(WEBHOOK_URL);
+    }
+
+    // ── C7 PR 리뷰 봇 명의 ──────────────────────────────────────────────────
+
+    private static final String REVIEW_EVENT = "github.submit_pr_review";
+
+    private static Node reviewNode(String author) {
+        Map<String, Object> config = new HashMap<>(Map.of(
+            "owner", "o", "repo", "r", "pull_number", "5", "body", "LGTM", "brand", "github"));
+        if (author != null) {
+            config.put("author", author);
+        }
+        return actionNode(REVIEW_EVENT, config);
+    }
+
+    @Test
+    @DisplayName("submit_pr_review + author bot이면 X-GitHub-Token이 봇 설치 토큰으로 바뀐다")
+    void submit_pr_review_author_bot이면_봇_토큰() throws Exception {
+        assertThat(toolKeyOf(REVIEW_EVENT)).isEqualTo("builtin:github_submit_pr_review");
+        when(botTokenProvider.getBotToken(userId, "o", "r")).thenReturn("ghs_bot");
+        enqueueSuccess();
+
+        ExecutorResult result = executor.execute(reviewNode("bot"), NO_INPUT, cursor(userId));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(mockWebServer.takeRequest().getHeader("X-GitHub-Token")).isEqualTo("ghs_bot");
+    }
+
+    @Test
+    @DisplayName("[Review Focus 1] author 키가 없으면(FE는 기본값을 저장하지 않는다) 봇 토큰")
+    void author_없으면_봇_토큰() throws Exception {
+        when(botTokenProvider.getBotToken(userId, "o", "r")).thenReturn("ghs_bot");
+        enqueueSuccess();
+
+        ExecutorResult result = executor.execute(reviewNode(null), NO_INPUT, cursor(userId));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(mockWebServer.takeRequest().getHeader("X-GitHub-Token")).isEqualTo("ghs_bot");
+    }
+
+    @Test
+    @DisplayName("author me면 사용자 토큰 그대로 — 봇 포트를 부르지 않는다")
+    void author_me면_사용자_토큰_그대로() throws Exception {
+        enqueueSuccess();
+
+        ExecutorResult result = executor.execute(reviewNode("me"), NO_INPUT, cursor(userId));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(mockWebServer.takeRequest().getHeader("X-GitHub-Token")).isEqualTo("gh-token");
+        verify(botTokenProvider, never()).getBotToken(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("다른 GitHub 도구(create_issue)는 author 칸이 없어도 봇을 부르지 않는다")
+    void 다른_github_도구는_봇_안_부름() throws Exception {
+        enqueueSuccess();
+
+        ExecutorResult result = executor.execute(githubNode(), NO_INPUT, cursor(userId));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(mockWebServer.takeRequest().getHeader("X-GitHub-Token")).isEqualTo("gh-token");
+        verify(botTokenProvider, never()).getBotToken(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("봇 거부 예외는 노드 실패(메시지 그대로, 재시도 없음) — agent를 부르지 않는다")
+    void 봇_거부_예외는_노드_실패() {
+        String denied = "이 저장소에 쓰기 권한이 없어 IEUM 봇으로 리뷰할 수 없어요";
+        when(botTokenProvider.getBotToken(userId, "o", "r"))
+            .thenThrow(new CustomException(ErrorCode.FORBIDDEN, denied));
+
+        ExecutorResult result = executor.execute(reviewNode("bot"), NO_INPUT, cursor(userId));
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getErrorMessage()).isEqualTo(denied);
+        assertThat(result.getFailureKind()).isEqualTo(FailureKind.CLIENT_ERROR);
+        assertThat(mockWebServer.getRequestCount()).isZero();
     }
 }
