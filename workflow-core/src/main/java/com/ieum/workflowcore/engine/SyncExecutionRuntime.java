@@ -18,6 +18,9 @@ import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.ExecutionOwnershipGuard.OwnershipLostException;
 import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.executor.AlertNotifier;
+import com.ieum.workflowcore.engine.executor.DelayFailure;
+import com.ieum.workflowcore.engine.executor.DelayNodeExecutor;
+import com.ieum.workflowcore.engine.executor.DelayPlan;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.engine.validation.WorkflowValidationClient;
@@ -28,13 +31,17 @@ import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.util.SensitiveDataMasker;
 import jakarta.annotation.PostConstruct;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -274,6 +281,8 @@ public class SyncExecutionRuntime {
             String failedNodeError = null;
             // 승인 전이라 제출하지 않고 멈춰 둔 APPROVAL 노드. dispatch()(메인 스레드)만 쓴다.
             List<String> waitingGates = new ArrayList<>();
+            // 재개 시각이 아직 오지 않아 제출하지 않고 보류한 DELAY 노드(nodeId → 계산 결과). dispatch()만 쓴다.
+            Map<String, DelayPlan> waitingDelays = new LinkedHashMap<>();
             try (ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, parallelism))) {
                 CompletionService<NodeOutcome> completion = new ExecutorCompletionService<>(pool);
                 int inFlight = 0;
@@ -281,7 +290,7 @@ public class SyncExecutionRuntime {
                     Deque<Node> ready = new ArrayDeque<>();
                     ready.add(triggerNode);   // 트리거는 incoming 0 → 최초 ready
                     inFlight += dispatch(ready, cursor, completion, executionId, workflowId,
-                        preCompleted, waitingGates);
+                        preCompleted, waitingGates, waitingDelays);
 
                     while (inFlight > 0) {
                         var completed = completion.take();
@@ -339,7 +348,7 @@ public class SyncExecutionRuntime {
                                 skippedNode.getType(), 0L));
                         }
                         inFlight += dispatch(newReady, cursor, completion, executionId, workflowId,
-                            preCompleted, waitingGates);
+                            preCompleted, waitingGates, waitingDelays);
                     }
                 } finally {
                     // 실패/예외 시 남은 in-flight 작업 드레인(완료 대기) 후 close()로 풀 종료.
@@ -369,9 +378,9 @@ public class SyncExecutionRuntime {
                 return;
             }
 
-            // 실패가 없고 게이트가 남았으면 승인 대기로 멈춘다(실패가 대기보다 우선 — 위에서 이미 return).
-            if (!waitingGates.isEmpty()) {
-                pauseForApproval(executionId, workflowId, waitingGates);
+            // 실패가 없고 게이트·DELAY가 남았으면 대기로 멈춘다(실패가 대기보다 우선 — 위에서 이미 return).
+            if (!waitingGates.isEmpty() || !waitingDelays.isEmpty()) {
+                pause(executionId, workflowId, waitingGates, waitingDelays);
                 return;
             }
 
@@ -419,6 +428,46 @@ public class SyncExecutionRuntime {
             attempted, executionId, finalStatus);
         eventPublisher.publish(executionId,
             ExecutionEvent.executionCompleted(executionId, workflowId, finalStatus));
+    }
+
+    /**
+     * 대기 게이트·DELAY가 남은 실행을 멈춘다. DELAY가 있으면 재개 시각 = 가장 늦은 {@code scheduledFor}(A1)이다.
+     *
+     * <p>게이트가 있으면 상태는 {@code WAITING_APPROVAL}이다 — 재개 시각은 {@code recordDelayWait}로 <b>먼저</b>
+     * 남긴다(승인 API가 대기 상태를 보는 순간 재개 시각이 이미 있어야 한다). 게이트가 없으면 {@code WAITING_DELAY}.
+     * 둘 다 {@code RUNNING}일 때만 쓰는 조건부 UPDATE라 0행이면 DB 상태로 종료 이벤트만 흘린다. 실패 알림은 없다.
+     */
+    private void pause(UUID executionId, UUID workflowId, List<String> gateIds,
+                       Map<String, DelayPlan> delays) throws JsonProcessingException {
+        if (delays.isEmpty()) {
+            pauseForApproval(executionId, workflowId, gateIds);
+            return;
+        }
+        assertOwnership(executionId);
+        Instant latest = delays.values().stream().map(DelayPlan::scheduledFor)
+            .max(Comparator.naturalOrder()).orElseThrow();
+        LocalDateTime resumeAt = LocalDateTime.ofInstant(latest, ZoneId.systemDefault());
+        Map<String, Object> waiting = new LinkedHashMap<>();
+        delays.forEach((nodeId, plan) -> waiting.put(nodeId, plan.waitingOutput()));
+        String delayJson = objectMapper.writeValueAsString(waiting);
+        LocalDateTime now = LocalDateTime.now();
+
+        if (!gateIds.isEmpty()) {
+            if (workflowExecutionRepository.recordDelayWait(executionId, resumeAt, delayJson, now) == 0) {
+                publishAlreadyFinished(executionId, workflowId, ExecutionStatus.WAITING_APPROVAL);
+                return;
+            }
+            pauseForApproval(executionId, workflowId, gateIds);
+            return;
+        }
+        if (workflowExecutionRepository.pauseForDelay(executionId, resumeAt, delayJson, now) == 0) {
+            publishAlreadyFinished(executionId, workflowId, ExecutionStatus.WAITING_DELAY);
+            return;
+        }
+        log.info("[Runtime] 기다리기로 일시정지 — executionId: {}, resumeAt: {}, nodes: {}",
+            executionId, resumeAt, delays.keySet());
+        eventPublisher.publish(executionId, ExecutionEvent.executionCompleted(
+            executionId, workflowId, ExecutionStatus.WAITING_DELAY));
     }
 
     /**
@@ -510,14 +559,20 @@ public class SyncExecutionRuntime {
      * 게이트의 하류는 이 실행에서 절대 ready가 되지 않는다. 사전 완료 검사가 executor 조회보다
      * 먼저여야 승인 뒤 이어진 실행에서 게이트가 SKIPPED로 통과한다.
      *
-     * @param waitingGates 대기에 넣은 게이트 ID가 추가된다
-     * @return 제출한 노드 수(대기 게이트는 세지 않는다)
+     * <p>사전 완료가 아닌 DELAY 노드는 메인 스레드에서 재개 시각을 계산한다(큐는 슬롯 예약). 실패는 노드 FAILED,
+     * 지금 통과면 SUCCESS로 제출하고, 그 밖엔 제출하지 않고 {@code waitingDelays}에 보류한다 — 게이트와 같이
+     * 하류가 막히고 {@code node_runs} 행도 남지 않는다(행은 재개 때 쓴다).
+     *
+     * @param waitingGates  대기에 넣은 게이트 ID가 추가된다
+     * @param waitingDelays 보류한 DELAY 노드의 계산 결과가 추가된다
+     * @return 제출한 노드 수(대기 게이트·보류 DELAY는 세지 않는다)
      */
     private int dispatch(Deque<Node> ready, ExecutionCursor cursor,
                          CompletionService<NodeOutcome> completion, UUID executionId,
                          UUID workflowId,
                          Map<String, Map<String, Object>> preCompleted,
-                         List<String> waitingGates) {
+                         List<String> waitingGates,
+                         Map<String, DelayPlan> waitingDelays) {
         int count = 0;
         while (!ready.isEmpty()) {
             assertOwnership(executionId);
@@ -538,6 +593,33 @@ public class SyncExecutionRuntime {
                 waitingGates.add(node.getId());
                 eventPublisher.publish(executionId,
                     ExecutionEvent.approvalRequested(executionId, workflowId, node.getId()));
+                continue;
+            }
+            if (node.getType() == NodeType.DELAY) {
+                if (!(executorMap.get(NodeType.DELAY) instanceof DelayNodeExecutor delay)) {
+                    throw new IllegalStateException("NodeExecutor 없음 — type: DELAY");
+                }
+                Map<String, Object> input = prepareNodeInput(node, cursor);
+                eventPublisher.publish(executionId, ExecutionEvent.nodeStarted(
+                    executionId, workflowId, node.getId(), node.getType()));
+                DelayPlan plan;
+                try {
+                    // 큐 슬롯은 이 실행 ID로 잡는다 — 재배달이면 같은 슬롯, 실행이 FAILED로 끝나면 대기 수에서 빠진다.
+                    plan = delay.plan(node.getEvent(), input, cursor.getContext().getUserId(), executionId);
+                } catch (DelayFailure f) {
+                    completion.submit(() -> new NodeOutcome(node, input,
+                        ExecutorResult.failure(f.getMessage(), 0L), 0L, 1, false, false));
+                    count++;
+                    continue;
+                }
+                if (plan.immediate()) {
+                    completion.submit(() -> new NodeOutcome(node, input,
+                        ExecutorResult.success(plan.releasedOutput(plan.decidedAt()), 0L), 0L, 1, false, false));
+                    count++;
+                    continue;
+                }
+                log.info("[Runtime] 기다리기 보류 — nodeId: {}, scheduledFor: {}", node.getId(), plan.scheduledFor());
+                waitingDelays.put(node.getId(), plan);
                 continue;
             }
             // executor 존재는 execute() 진입부에서 사전 검증됨 — 여기선 안전망.

@@ -19,6 +19,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.Builder;
@@ -39,7 +40,8 @@ import org.hibernate.annotations.ColumnDefault;
         @Index(name = "idx_workflow_runs_status", columnList = "status"),
         @Index(name = "idx_workflow_runs_trigger_type", columnList = "trigger_type"),
         @Index(name = "idx_workflow_runs_trace_id", columnList = "trace_id"),
-        @Index(name = "idx_workflow_runs_retried_by", columnList = "retried_by_execution_id")
+        @Index(name = "idx_workflow_runs_retried_by", columnList = "retried_by_execution_id"),
+        @Index(name = "idx_workflow_runs_status_resume_at", columnList = "status, resume_at")
     }
 )
 @Slf4j
@@ -131,6 +133,20 @@ public class WorkflowExecution extends BaseEntity {
     @Column(name = "approval_deadline")
     private LocalDateTime approvalDeadline;
 
+    /**
+     * 기다리기 재개 시각(병렬 DELAY가 여럿이면 가장 늦은 시각). 지나면 sweeper가 이어진 실행으로 재개한다.
+     * 런타임이 멈출 때 조건부 UPDATE({@code pauseForDelay}·{@code recordDelayWait})로만 쓴다.
+     */
+    @Column(name = "resume_at")
+    private LocalDateTime resumeAt;
+
+    /**
+     * 기다리는 DELAY 노드별 대기 출력(JSON 객체 {@code {nodeId: {scheduledFor, queuePosition?}}}).
+     * 재개 때 노드마다 SUCCESS 행을 남기는 근거다. 재개 뒤에도 지우지 않는다(이력).
+     */
+    @Column(name = "waiting_delay_nodes", columnDefinition = "TEXT")
+    private String waitingDelayNodes;
+
     @Builder
     private WorkflowExecution(
         Workflow workflow,
@@ -200,5 +216,29 @@ public class WorkflowExecution extends BaseEntity {
             log.warn("[WorkflowExecution] 대기 게이트 목록 해석 실패 — 빈 목록으로 처리. executionId: {}", id, e);
             return List.of();
         }
+    }
+
+    /**
+     * {@link #waitingDelayNodes}를 맵으로 읽는다. 값이 없거나 해석에 실패하면 빈 맵.
+     *
+     * <p>빈 맵이면 재개가 DELAY 행을 남기지 못해 이어진 실행이 다시 기다린다 — 대기를 우회하는 쪽으로는 실패하지 않는다.
+     */
+    public Map<String, Map<String, Object>> waitingDelayNodeMap() {
+        if (waitingDelayNodes == null) {
+            return Map.of();
+        }
+        try {
+            Map<String, Map<String, Object>> map =
+                JSON.readValue(waitingDelayNodes, new TypeReference<Map<String, Map<String, Object>>>() {});
+            return map == null ? Map.of() : map;
+        } catch (Exception e) {
+            log.warn("[WorkflowExecution] 대기 DELAY 노드 해석 실패 — 빈 맵으로 처리. executionId: {}", id, e);
+            return Map.of();
+        }
+    }
+
+    /** 승인을 재개 시각 전에 받았을 때 — 상태만 기다리기로 바꾼다(재개 시각·대기 노드는 런타임이 이미 썼다). */
+    public void waitForDelay() {
+        this.status = ExecutionStatus.WAITING_DELAY;
     }
 }

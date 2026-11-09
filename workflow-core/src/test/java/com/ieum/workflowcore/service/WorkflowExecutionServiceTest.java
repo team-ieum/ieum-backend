@@ -198,6 +198,30 @@ class WorkflowExecutionServiceTest {
     }
 
     @Test
+    @DisplayName("기다리기 실행 스냅샷은 terminal=true, 종료 이벤트는 WAITING_DELAY + 멈춘 시각(updatedAt), 게이트 재생 없음")
+    void 기다리기_실행_스냅샷() {
+        UUID workflowId = UUID.randomUUID();
+        UUID executionId = UUID.randomUUID();
+        LocalDateTime pausedAt = LocalDateTime.of(2026, 11, 9, 10, 30, 0);
+
+        WorkflowExecution execution = mockExecution(workflowId, ExecutionStatus.WAITING_DELAY);
+        given(execution.getUpdatedAt()).willReturn(pausedAt);
+        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+        given(workflowExecutionLogRepository.findByExecutionIdOrderByCreatedAtAsc(executionId))
+            .willReturn(List.of());
+
+        ExecutionEventSnapshot snapshot = service.loadEventSnapshot(workflowId, executionId);
+
+        assertThat(snapshot.terminal()).isTrue();
+        var last = snapshot.events().get(snapshot.events().size() - 1);
+        assertThat(last.type()).isEqualTo(ExecutionEventType.EXECUTION_COMPLETED);
+        assertThat(last.executionStatus()).isEqualTo(ExecutionStatus.WAITING_DELAY);
+        assertThat(last.occurredAt()).isEqualTo(pausedAt.atZone(ZoneId.systemDefault()).toInstant());
+        assertThat(snapshot.events()).extracting(e -> e.type())
+            .doesNotContain(ExecutionEventType.APPROVAL_REQUESTED);
+    }
+
+    @Test
     @DisplayName("승인 대기 스냅샷은 게이트마다 APPROVAL_REQUESTED를 되살린 뒤 EXECUTION_COMPLETED로 끝난다 — 라이브와 같은 모양")
     void 승인대기_스냅샷_게이트_재생() {
         UUID workflowId = UUID.randomUUID();
@@ -529,6 +553,38 @@ class WorkflowExecutionServiceTest {
             // 게이트는 실행되지 않은 노드다 — SKIPPED 행과 같은 규칙으로 시도 횟수 0.
             assertThat(row.getAttemptCount()).isZero();
         });
+    }
+
+    @Test
+    @DisplayName("기다리기 해제는 대기 DELAY 노드마다 SUCCESS 한 행 — 저장된 출력 + waitedUntil")
+    void recordDelayRelease_노드마다_SUCCESS_한_행() throws Exception {
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        Map<String, Map<String, Object>> waiting = new java.util.LinkedHashMap<>();
+        waiting.put("d1", new java.util.LinkedHashMap<>(Map.of(
+            "scheduledFor", "2026-11-09T10:40:00+09:00", "queuePosition", 2)));
+        waiting.put("d2", new java.util.LinkedHashMap<>(Map.of("scheduledFor", "2026-11-09T12:30:00+09:00")));
+        given(execution.waitingDelayNodeMap()).willReturn(waiting);
+        given(execution.getTraceId()).willReturn("11112222333344445555666677778888");
+
+        service.recordDelayRelease(execution, java.time.Instant.parse("2026-11-09T03:30:20Z"));
+
+        ArgumentCaptor<WorkflowExecutionLog> captor = ArgumentCaptor.forClass(WorkflowExecutionLog.class);
+        verify(workflowExecutionLogRepository, times(2)).save(captor.capture());
+        assertThat(captor.getAllValues()).extracting(WorkflowExecutionLog::getNodeId).containsExactly("d1", "d2");
+        assertThat(captor.getAllValues()).allSatisfy(row -> {
+            assertThat(row.getExecution()).isSameAs(execution);
+            assertThat(row.getNodeType()).isEqualTo(NodeType.DELAY);
+            assertThat(row.getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
+            assertThat(row.getDurationMs()).isZero();
+            assertThat(row.getAttemptCount()).isZero();
+            assertThat(row.getTraceId()).isEqualTo("11112222333344445555666677778888");
+        });
+        Map<?, ?> d1 = new ObjectMapper().readValue(captor.getAllValues().get(0).getOutputJson(), Map.class);
+        assertThat(d1).isEqualTo(Map.of("scheduledFor", "2026-11-09T10:40:00+09:00", "queuePosition", 2,
+            "waitedUntil", "2026-11-09T12:30:20+09:00"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> d2 = new ObjectMapper().readValue(captor.getAllValues().get(1).getOutputJson(), Map.class);
+        assertThat(d2).doesNotContainKey("queuePosition");
     }
 
     @Test

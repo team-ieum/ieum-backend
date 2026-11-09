@@ -178,6 +178,20 @@ class ExecutionJobWorkerTest {
     }
 
     @Test
+    @DisplayName("회수한 잡의 실행이 기다리기 대기면 재실행하지 않고 ack만 한다 — DELAY 앞 노드를 처음부터 다시 돌리지 않는다")
+    void onMessage_waitingDelay_acknowledgesWithoutRerun() throws Exception {
+        WorkflowExecution execution = execution(ExecutionStatus.WAITING_DELAY);
+        when(workflowExecutionRepository.findWithVersionById(executionId))
+            .thenReturn(Optional.of(execution));
+
+        worker.onMessage(jobRecord(executionId.toString()));
+
+        verify(syncExecutionRuntime, never()).execute(any(), any(), any(), any());
+        verify(redisTemplate).execute(eq(ExecutionJobQueue.ACKNOWLEDGE_AND_DELETE),
+            org.mockito.ArgumentMatchers.anyList(), eq(ExecutionJobQueue.GROUP), eq(RECORD_ID.getValue()));
+    }
+
+    @Test
     @DisplayName("실행 레코드가 없으면 잡을 폐기(ack)한다")
     void onMessage_executionMissing_acknowledgesAndDrops() throws Exception {
         when(workflowExecutionRepository.findWithVersionById(executionId))

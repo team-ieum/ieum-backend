@@ -26,6 +26,7 @@ import com.ieum.workflowcore.engine.ExecutionCursor;
 import com.ieum.workflowcore.engine.ExecutorResult;
 import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.executor.ConditionNodeExecutor;
+import com.ieum.workflowcore.engine.executor.DelayNodeExecutor;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.engine.executor.TransformNodeExecutor;
@@ -442,6 +443,23 @@ class NodeTestRunnerTest {
         NodeTestResult downstream =
             runner.run(workflow, transform("node-2", "승인자 {{nodes.gate.output.approvedBy}}"), Map.of());
         assertThat(downstream.output()).isEqualTo(Map.of("v", "승인자 " + userId));
+    }
+
+    @Test
+    @DisplayName("DELAY는 기다리지 않고 예정 시각을 샘플로 남긴다 — 실행기 조회 경로로 돈다")
+    void DELAY_노드는_기다리지_않고_예정_시각을_샘플로() {
+        java.time.Clock fixedClock = java.time.Clock.fixed(
+            java.time.Instant.parse("2026-11-09T01:30:00Z"), java.time.ZoneId.of("Asia/Seoul"));
+        NodeTestRunner withDelay = new NodeTestRunner(
+            List.of(new DelayNodeExecutor(mock(DelayQueueService.class), fixedClock)), sampleRepository,
+            crudService, new RetryProperties(), idempotencyStore, objectMapper);
+
+        NodeTestResult result = withDelay.run(workflow, new Node("d", NodeType.DELAY, "기다리기",
+            Map.of("amount", 10, "unit", "minutes"), "delay.for"), Map.of());
+
+        assertThat(result.status()).isEqualTo(SampleStatus.SUCCESS);
+        assertThat(stored("d").getStatus()).isEqualTo(SampleStatus.SUCCESS);
+        assertThat(result.output()).containsKeys("scheduledFor", "waitedUntil");
     }
 
     @Test

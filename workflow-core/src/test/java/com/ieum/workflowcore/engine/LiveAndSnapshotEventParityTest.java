@@ -24,6 +24,11 @@ import com.ieum.workflowcore.engine.event.ExecutionEventPublisher;
 import com.ieum.workflowcore.engine.event.ExecutionEventType;
 import com.ieum.workflowcore.engine.event.NodeEventStatus;
 import com.ieum.workflowcore.engine.executor.AlertNotifier;
+import com.ieum.workflowcore.engine.executor.DelayNodeExecutor;
+import com.ieum.workflowcore.service.DelayQueueService;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
 import com.ieum.workflowcore.engine.validation.WorkflowValidationClient;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
@@ -59,6 +64,8 @@ class LiveAndSnapshotEventParityTest {
     /** 비교 대상 — 프론트가 노드 상태를 그리는 데 쓰는 값들. */
     private record NodeEventShape(String nodeId, ExecutionEventType type,
                                   NodeEventStatus status, Long durationMs) {}
+
+    private static final Instant NOW = Instant.parse("2026-11-09T01:30:00Z");
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final UUID executionId = UUID.randomUUID();
@@ -116,7 +123,8 @@ class LiveAndSnapshotEventParityTest {
             objectMapper, logRepository, executionRepository, crudService, eventPublisher,
             List.of(new FakeExecutor(NodeType.TRIGGER, conditionResults),
                 new FakeExecutor(NodeType.AI, conditionResults),
-                new FakeExecutor(NodeType.CONDITION, conditionResults)),
+                new FakeExecutor(NodeType.CONDITION, conditionResults),
+                new DelayNodeExecutor(mock(DelayQueueService.class), Clock.fixed(NOW, ZoneId.of("Asia/Seoul")))),
             new RetryProperties(), mock(IdempotencyStore.class), mock(AlertNotifier.class),
             mock(WorkflowValidationClient.class));
         runtime.initExecutorMap();
@@ -246,5 +254,25 @@ class LiveAndSnapshotEventParityTest {
         assertThat(live).containsExactlyElementsOf(snapshotShapes());
         assertThat(live).contains(new NodeEventShape(
             "g", ExecutionEventType.APPROVAL_REQUESTED, NodeEventStatus.PENDING, null));
+    }
+
+    @Test
+    @DisplayName("기다리기: 새 이벤트 없이(A5) 라이브와 재생이 같은 모양 — 대기 DELAY는 노드 종료 이벤트가 없다")
+    void delay_wait_has_same_shape_in_both_paths() throws Exception {
+        when(executionRepository.pauseForDelay(any(), any(), any(), any())).thenReturn(1);
+        Map<String, Object> d = node("d", "DELAY");
+        d.put("event", "delay.for");
+        d.put("config", new HashMap<>(Map.of("amount", 10, "unit", "minutes")));
+        stubDefinition(
+            List.of(node("t", "TRIGGER"), d, node("b", "AI")),
+            List.of(edge("t", "d", null), edge("d", "b", null))
+        );
+
+        runRuntime(Map.of());
+        when(execution.getStatus()).thenReturn(ExecutionStatus.WAITING_DELAY);
+
+        List<NodeEventShape> live = liveShapes();
+        assertThat(live).containsExactlyElementsOf(snapshotShapes());
+        assertThat(live).extracting(NodeEventShape::nodeId).containsExactly("t");
     }
 }

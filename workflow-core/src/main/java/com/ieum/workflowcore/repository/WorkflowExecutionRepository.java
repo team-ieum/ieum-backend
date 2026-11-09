@@ -122,7 +122,8 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
         + "WHERE e.id = :id AND e.status NOT IN ("
         + "com.ieum.workflowcore.domain.enums.ExecutionStatus.SUCCESS, "
         + "com.ieum.workflowcore.domain.enums.ExecutionStatus.FAILED, "
-        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL)")
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL, "
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_DELAY)")
     int finishIfNotTerminal(@Param("id") UUID id, @Param("status") ExecutionStatus status,
                             @Param("retryExhausted") boolean retryExhausted,
                             @Param("now") LocalDateTime now);
@@ -143,7 +144,8 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
         + "WHERE e.id = :id AND e.status NOT IN ("
         + "com.ieum.workflowcore.domain.enums.ExecutionStatus.SUCCESS, "
         + "com.ieum.workflowcore.domain.enums.ExecutionStatus.FAILED, "
-        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL)")
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL, "
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_DELAY)")
     int startIfNotTerminal(@Param("id") UUID id, @Param("now") LocalDateTime now);
 
     /**
@@ -160,7 +162,8 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
         + "WHERE e.id = :id AND e.status NOT IN ("
         + "com.ieum.workflowcore.domain.enums.ExecutionStatus.SUCCESS, "
         + "com.ieum.workflowcore.domain.enums.ExecutionStatus.FAILED, "
-        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL)")
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL, "
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_DELAY)")
     int recordErrorIfNotTerminal(@Param("id") UUID id, @Param("errorMessage") String errorMessage,
                                  @Param("now") LocalDateTime now);
 
@@ -179,6 +182,52 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
         + "AND e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.RUNNING")
     int pauseForApproval(@Param("id") UUID id, @Param("nodeIds") String waitingNodeIdsJson,
                          @Param("deadline") LocalDateTime deadline, @Param("now") LocalDateTime now);
+
+    /**
+     * {@code RUNNING}인 실행만 기다리기로 멈춘다({@code WAITING_DELAY} + 재개 시각·대기 노드). 멈췄으면 1, 아니면 0.
+     * {@link #pauseForApproval}과 같은 이유의 조건부 UPDATE다.
+     */
+    @Transactional
+    @Modifying
+    @Query("UPDATE WorkflowExecution e "
+        + "SET e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_DELAY, "
+        + "e.resumeAt = :resumeAt, e.waitingDelayNodes = :delayNodes, e.updatedAt = :now "
+        + "WHERE e.id = :id "
+        + "AND e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.RUNNING")
+    int pauseForDelay(@Param("id") UUID id, @Param("resumeAt") LocalDateTime resumeAt,
+                      @Param("delayNodes") String delayNodesJson, @Param("now") LocalDateTime now);
+
+    /**
+     * {@code RUNNING}인 실행에 재개 시각·대기 노드만 기록한다(상태는 그대로). 승인과 함께 멈출 때
+     * {@link #pauseForApproval}보다 먼저 불러, 승인 API가 대기 상태를 보는 순간 재개 시각이 이미 있게 한다.
+     */
+    @Transactional
+    @Modifying
+    @Query("UPDATE WorkflowExecution e "
+        + "SET e.resumeAt = :resumeAt, e.waitingDelayNodes = :delayNodes, e.updatedAt = :now "
+        + "WHERE e.id = :id "
+        + "AND e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.RUNNING")
+    int recordDelayWait(@Param("id") UUID id, @Param("resumeAt") LocalDateTime resumeAt,
+                        @Param("delayNodes") String delayNodesJson, @Param("now") LocalDateTime now);
+
+    /** 재개 sweeper 페이지 한 행. */
+    interface DueDelay {
+        UUID getId();
+
+        LocalDateTime getResumeAt();
+    }
+
+    /**
+     * 재개 시각이 지난 기다리기 실행 한 페이지. (resumeAt, id) 키셋으로 커서 다음부터 읽는다 — 재개에 실패해 남은 행이
+     * 다음 페이지를 막지 않는다. 첫 페이지는 아주 이른 시각·0 UUID를 커서로 넘긴다.
+     */
+    @Query("SELECT e.id AS id, e.resumeAt AS resumeAt FROM WorkflowExecution e "
+        + "WHERE e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_DELAY "
+        + "AND e.resumeAt <= :now "
+        + "AND (e.resumeAt > :afterAt OR (e.resumeAt = :afterAt AND e.id > :afterId)) "
+        + "ORDER BY e.resumeAt, e.id")
+    List<DueDelay> findDueDelayPage(@Param("now") LocalDateTime now, @Param("afterAt") LocalDateTime afterAt,
+                                    @Param("afterId") UUID afterId, Pageable pageable);
 
     List<WorkflowExecution> findByWorkflow(Workflow workflow);
 

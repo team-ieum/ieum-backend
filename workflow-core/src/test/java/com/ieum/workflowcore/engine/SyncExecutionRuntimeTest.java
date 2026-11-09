@@ -30,6 +30,8 @@ import com.ieum.workflowcore.engine.event.ExecutionEventType;
 import com.ieum.workflowcore.engine.event.NodeEventStatus;
 import com.ieum.workflowcore.engine.executor.AlertNotifier;
 import com.ieum.workflowcore.engine.executor.ConditionNodeExecutor;
+import com.ieum.workflowcore.engine.executor.DelayNodeExecutor;
+import com.ieum.workflowcore.service.DelayQueueService;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.engine.executor.TriggerNodeExecutor;
@@ -1662,6 +1664,228 @@ class SyncExecutionRuntimeTest {
             ExecutionEvent lastEvent = events.get(events.size() - 1);
             assertThat(lastEvent.type()).isEqualTo(ExecutionEventType.EXECUTION_COMPLETED);
             assertThat(lastEvent.executionStatus()).isEqualTo(ExecutionStatus.FAILED);
+        }
+    }
+
+    @Nested
+    @DisplayName("기다리기 (DELAY, IEUM-BE-117)")
+    class DelayWait {
+
+        private final java.time.Instant NOW = java.time.Instant.parse("2026-11-09T01:30:00Z");
+
+        @BeforeEach
+        void stubDelayWrites() {
+            when(executionRepository.pauseForDelay(any(), any(), any(), any())).thenReturn(1);
+            when(executionRepository.recordDelayWait(any(), any(), any(), any())).thenReturn(1);
+        }
+
+        private final DelayQueueService queues = mock(DelayQueueService.class);
+
+        private SyncExecutionRuntime delayRuntime() {
+            return runtimeWith(trigger(), ai(), new DelayNodeExecutor(queues,
+                java.time.Clock.fixed(NOW, java.time.ZoneId.of("Asia/Seoul"))));
+        }
+
+        @Test
+        @DisplayName("큐 DELAY는 실행 중엔 슬롯을 예약(reserve)한다 — peek이면 같은 큐가 전부 같은 슬롯에 풀린다")
+        void 큐_delay는_슬롯을_예약한다() throws Exception {
+            UUID owner = workflow.getUserId();
+            when(queues.reserve(owner, "slack", Duration.ofMinutes(1), NOW, executionId))
+                .thenReturn(new DelayQueueService.Slot(NOW.plus(Duration.ofMinutes(30)), 2));
+            stubDefinition(List.of(node("t", "TRIGGER"), delayNode("q", "delay.queue",
+                    Map.of("queueName", "slack", "amount", 1, "unit", "minutes")), node("b", "AI")),
+                List.of(edge("t", "q", null), edge("q", "b", null)));
+
+            runDelay();
+
+            verify(queues, times(1)).reserve(owner, "slack", Duration.ofMinutes(1), NOW, executionId);
+            verify(queues, never()).peek(any(), any(), any(), any());
+            verify(executionRepository).pauseForDelay(eq(executionId),
+                eq(local(NOW.plus(Duration.ofMinutes(30)))),
+                eq("{\"q\":{\"scheduledFor\":\"2026-11-09T11:00:00+09:00\",\"queuePosition\":2}}"), any());
+        }
+
+        private void runDelay() throws Exception {
+            delayRuntime().execute(mock(WorkflowVersion.class), executionId, new HashMap<>());
+        }
+
+        private Map<String, Object> delayNode(String id, String event, Map<String, Object> config) {
+            Map<String, Object> n = node(id, "DELAY");
+            n.put("event", event);
+            n.put("config", new HashMap<>(config));
+            return n;
+        }
+
+        private Map<String, Object> tenMinutes(String id) {
+            return delayNode(id, "delay.for", Map.of("amount", 10, "unit", "minutes"));
+        }
+
+        private List<ExecutionEvent> publishedEvents() {
+            ArgumentCaptor<ExecutionEvent> captor = ArgumentCaptor.forClass(ExecutionEvent.class);
+            verify(eventPublisher, atLeastOnce()).publish(eq(executionId), captor.capture());
+            return captor.getAllValues();
+        }
+
+        private LocalDateTime local(java.time.Instant instant) {
+            return LocalDateTime.ofInstant(instant, java.time.ZoneId.systemDefault());
+        }
+
+        @Test
+        @DisplayName("DELAY만 있으면 WAITING_DELAY로 멈추고 하류는 돌지 않는다")
+        void delay만_있으면_WAITING_DELAY로_멈추고_하류는_돌지_않는다() throws Exception {
+            stubDefinition(List.of(node("t", "TRIGGER"), tenMinutes("d"), node("b", "AI")),
+                List.of(edge("t", "d", null), edge("d", "b", null)));
+
+            runDelay();
+
+            verify(executionRepository).pauseForDelay(eq(executionId),
+                eq(local(NOW.plus(Duration.ofMinutes(10)))),
+                eq("{\"d\":{\"scheduledFor\":\"2026-11-09T10:40:00+09:00\"}}"), any());
+            assertThat(log).doesNotContain("b");
+            List<ExecutionEvent> events = publishedEvents();
+            ExecutionEvent last = events.get(events.size() - 1);
+            assertThat(last.type()).isEqualTo(ExecutionEventType.EXECUTION_COMPLETED);
+            assertThat(last.executionStatus()).isEqualTo(ExecutionStatus.WAITING_DELAY);
+            verify(executionRepository, never()).finishIfNotTerminal(any(), any(), anyBoolean(), any());
+            verify(executionRepository, never()).pauseForApproval(any(), any(), any(), any());
+            verify(alertNotifier, never()).notifyExecutionFailed(any());
+        }
+
+        @Test
+        @DisplayName("대기 중인 DELAY는 node_runs 행을 남기지 않는다 — 행은 재개 때만 쓴다")
+        void 대기_중_delay는_node_runs를_남기지_않는다() throws Exception {
+            stubDefinition(List.of(node("t", "TRIGGER"), tenMinutes("d"), node("b", "AI")),
+                List.of(edge("t", "d", null), edge("d", "b", null)));
+
+            runDelay();
+
+            assertThat(savedLogs()).extracting(WorkflowExecutionLog::getNodeId).doesNotContain("d");
+        }
+
+        @Test
+        @DisplayName("DELAY와 무관한 갈래는 끝까지 돌고, 그 뒤에 WAITING_DELAY로 멈춘다")
+        void 다른_갈래는_끝까지_돈다() throws Exception {
+            stubDefinition(List.of(node("t", "TRIGGER"), tenMinutes("d"), node("b", "AI"), node("c", "AI")),
+                List.of(edge("t", "d", null), edge("d", "b", null), edge("t", "c", null)));
+
+            runDelay();
+
+            assertThat(log).containsExactlyInAnyOrder("t", "c");
+            verify(executionRepository).pauseForDelay(eq(executionId), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("병렬 DELAY가 여럿이면 가장 늦은 시각에 재개한다(A1)")
+        void 병렬_delay_여러개면_가장_늦은_시각() throws Exception {
+            stubDefinition(List.of(node("t", "TRIGGER"), tenMinutes("d1"),
+                    delayNode("d2", "delay.for", Map.of("amount", 2, "unit", "hours"))),
+                List.of(edge("t", "d1", null), edge("t", "d2", null)));
+
+            runDelay();
+
+            ArgumentCaptor<String> json = ArgumentCaptor.forClass(String.class);
+            verify(executionRepository).pauseForDelay(eq(executionId),
+                eq(local(NOW.plus(Duration.ofHours(2)))), json.capture(), any());
+            assertThat(objectMapper.readValue(json.getValue(), Map.class)).containsOnlyKeys("d1", "d2");
+        }
+
+        @Test
+        @DisplayName("지난 시각이 허용 범위 안이면 기다리지 않고 바로 통과한다")
+        void 지난_시각_허용범위면_바로_통과() throws Exception {
+            stubDefinition(List.of(node("t", "TRIGGER"),
+                    delayNode("d", "delay.until", Map.of("until", "2026-11-09T10:20")), node("b", "AI")),
+                List.of(edge("t", "d", null), edge("d", "b", null)));
+
+            runDelay();
+
+            assertThat(log).contains("b");
+            WorkflowExecutionLog d = logOf(savedLogs(), "d");
+            assertThat(d.getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
+            assertThat(objectMapper.readValue(d.getOutputJson(), Map.class))
+                .containsEntry("waitedUntil", "2026-11-09T10:30:00+09:00");
+            verifyFinished(ExecutionStatus.SUCCESS, false);
+        }
+
+        @Test
+        @DisplayName("재개 시각 계산 실패는 DELAY 노드 FAILED — 실행도 FAILED")
+        void 계산_실패는_노드_FAILED() throws Exception {
+            stubDefinition(List.of(node("t", "TRIGGER"),
+                    delayNode("d", "delay.for", Map.of("amount", 0, "unit", "minutes")), node("b", "AI")),
+                List.of(edge("t", "d", null), edge("d", "b", null)));
+
+            runDelay();
+
+            assertThat(publishedEvents()).anySatisfy(e -> {
+                assertThat(e.type()).isEqualTo(ExecutionEventType.NODE_FAILED);
+                assertThat(e.nodeId()).isEqualTo("d");
+                assertThat(e.errorMessage()).isEqualTo("'기다릴 양'은 1 이상의 정수여야 해요");
+            });
+            verifyFinished(ExecutionStatus.FAILED, false);
+            verify(executionRepository, never()).pauseForDelay(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("다른 갈래가 실패하면 대기보다 실패가 우선이다")
+        void 실패가_대기보다_우선() throws Exception {
+            failNodeIds.add("x");
+            stubDefinition(List.of(node("t", "TRIGGER"), tenMinutes("d"), node("x", "AI")),
+                List.of(edge("t", "d", null), edge("t", "x", null)));
+
+            runDelay();
+
+            verifyFinished(ExecutionStatus.FAILED, false);
+            verify(executionRepository, never()).pauseForDelay(any(), any(), any(), any());
+            verify(executionRepository, never()).recordDelayWait(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("승인과 함께 멈추면 재개 시각을 먼저 기록한 뒤 WAITING_APPROVAL로 멈춘다")
+        void 승인과_함께면_WAITING_APPROVAL과_재개시각() throws Exception {
+            stubDefinition(List.of(node("t", "TRIGGER"), node("g", "APPROVAL"), tenMinutes("d")),
+                List.of(edge("t", "g", null), edge("t", "d", null)));
+
+            runDelay();
+
+            InOrder order = inOrder(executionRepository);
+            order.verify(executionRepository).recordDelayWait(eq(executionId),
+                eq(local(NOW.plus(Duration.ofMinutes(10)))), any(), any());
+            order.verify(executionRepository).pauseForApproval(eq(executionId), any(), any(), any());
+            verify(executionRepository, never()).pauseForDelay(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("recordDelayWait가 0행이면 승인 멈춤도 하지 않고 DB 상태로 종료 이벤트를 낸다")
+        void recordDelayWait_0행이면_승인_멈춤도_없다() throws Exception {
+            when(executionRepository.recordDelayWait(any(), any(), any(), any())).thenReturn(0);
+            when(executionRepository.findById(executionId)).thenReturn(Optional.of(execution));
+            when(execution.getStatus()).thenReturn(ExecutionStatus.FAILED);
+            stubDefinition(List.of(node("t", "TRIGGER"), node("g", "APPROVAL"), tenMinutes("d")),
+                List.of(edge("t", "g", null), edge("t", "d", null)));
+
+            runDelay();
+
+            verify(executionRepository, never()).pauseForApproval(any(), any(), any(), any());
+            List<ExecutionEvent> events = publishedEvents();
+            ExecutionEvent last = events.get(events.size() - 1);
+            assertThat(last.type()).isEqualTo(ExecutionEventType.EXECUTION_COMPLETED);
+            assertThat(last.executionStatus()).isEqualTo(ExecutionStatus.FAILED);
+        }
+
+        @Test
+        @DisplayName("사전 완료된 DELAY는 SKIPPED로 통과하고 멈추지 않는다")
+        void 사전완료_delay는_SKIPPED로_통과() throws Exception {
+            stubDefinition(List.of(node("t", "TRIGGER"), tenMinutes("d"), node("b", "AI")),
+                List.of(edge("t", "d", null), edge("d", "b", null)));
+
+            delayRuntime().execute(mock(WorkflowVersion.class), executionId, new HashMap<>(),
+                Map.of("d", Map.of("scheduledFor", "2026-11-09T10:40:00+09:00",
+                    "waitedUntil", "2026-11-09T10:40:05+09:00")));
+
+            assertThat(log).contains("b");
+            assertThat(logOf(savedLogs(), "d").getStatus()).isEqualTo(ExecutionLogStatus.SKIPPED);
+            verify(executionRepository, never()).pauseForDelay(any(), any(), any(), any());
+            verify(executionRepository, never()).recordDelayWait(any(), any(), any(), any());
+            verifyFinished(ExecutionStatus.SUCCESS, false);
         }
     }
 

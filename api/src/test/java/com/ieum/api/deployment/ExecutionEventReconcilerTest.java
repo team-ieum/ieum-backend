@@ -30,4 +30,25 @@ class ExecutionEventReconcilerTest {
             .expectNextMatches(event -> event.executionStatus() == ExecutionStatus.SUCCESS)
             .verifyComplete();
     }
+
+    @Test
+    void waitingDelay도_종료_이벤트를_받아들인다() {
+        var publisher = spy(new ExecutionEventPublisher());
+        var executions = mock(WorkflowExecutionRepository.class);
+        var execution = mock(WorkflowExecution.class);
+        var workflow = mock(Workflow.class);
+        UUID id = UUID.randomUUID();
+        UUID workflowId = UUID.randomUUID();
+        when(execution.getId()).thenReturn(id);
+        when(execution.getWorkflow()).thenReturn(workflow);
+        when(workflow.getId()).thenReturn(workflowId);
+        when(execution.getStatus()).thenReturn(ExecutionStatus.WAITING_DELAY);
+        when(publisher.observedExecutionIds()).thenReturn(java.util.Set.of(id));
+        when(executions.findAllById(any())).thenReturn(List.of(execution));
+
+        new ExecutionEventReconciler(publisher, executions).reconcile();
+
+        verify(publisher).acceptRemote(eq(id), argThat(event ->
+            event.executionStatus() == ExecutionStatus.WAITING_DELAY));
+    }
 }

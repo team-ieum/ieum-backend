@@ -103,6 +103,53 @@ class ExecutionApprovalServiceTest {
     }
 
     @Test
+    @DisplayName("승인과 기다리기가 함께 걸렸고 재개 시각 전이면 원 실행은 WAITING_DELAY로 남고 이어진 실행을 만들지 않는다")
+    void 승인_재개시각_전이면_WAITING_DELAY() {
+        WorkflowExecution original = waitingOriginal();
+        given(original.getId()).willReturn(executionId);
+        given(original.getWorkflowVersion()).willReturn(version);
+        given(original.waitingDelayNodeMap())
+            .willReturn(Map.of("d", Map.of("scheduledFor", "2026-11-09T10:40:00+09:00")));
+        given(original.getResumeAt()).willReturn(LocalDateTime.now().plusHours(1));
+
+        WorkflowExecutionResponse response = service.approve(userId, executionId);
+
+        InOrder order = inOrder(workflowExecutionService, original);
+        order.verify(workflowExecutionService).recordApprovalDecision(
+            eq(original), eq(ExecutionLogStatus.SUCCESS), any(), isNull());
+        order.verify(original).waitForDelay();
+        verify(original, never()).complete();
+        verify(executionRetryService, never()).startContinuation(any(), any());
+        verify(workflowExecutionService, never()).recordDelayRelease(any(), any());
+        assertThat(response.getId()).isEqualTo(executionId);
+    }
+
+    @Test
+    @DisplayName("승인과 기다리기가 함께 걸렸고 재개 시각이 지났으면 DELAY도 해제하고 이어진 실행을 만든다")
+    void 승인_재개시각_지났으면_DELAY도_해제하고_이어간다() {
+        WorkflowExecution original = waitingOriginal();
+        given(original.waitingDelayNodeMap())
+            .willReturn(Map.of("d", Map.of("scheduledFor", "2026-11-09T10:40:00+09:00")));
+        given(original.getResumeAt()).willReturn(LocalDateTime.now().minusMinutes(1));
+        WorkflowExecution continuation = mock(WorkflowExecution.class);
+        given(continuation.getId()).willReturn(continuationId);
+        given(continuation.getWorkflow()).willReturn(workflow);
+        given(continuation.getWorkflowVersion()).willReturn(version);
+        given(executionRetryService.startContinuation(workflow, original)).willReturn(continuation);
+
+        WorkflowExecutionResponse response = service.approve(userId, executionId);
+
+        InOrder order = inOrder(workflowExecutionService, original, executionRetryService);
+        order.verify(workflowExecutionService).recordApprovalDecision(
+            eq(original), eq(ExecutionLogStatus.SUCCESS), any(), isNull());
+        order.verify(workflowExecutionService).recordDelayRelease(eq(original), any(Instant.class));
+        order.verify(original).complete();
+        order.verify(executionRetryService).startContinuation(workflow, original);
+        verify(original, never()).waitForDelay();
+        assertThat(response.getId()).isEqualTo(continuationId);
+    }
+
+    @Test
     @DisplayName("거부: 게이트 FAILED 행(거부자·사유) → 원 실행 FAILED + 사유. 사용자 결정이라 알림 경로(markAsFailed)를 타지 않는다")
     void reject_recordsGatesAndFailsWithoutAlert() {
         WorkflowExecution original = waitingOriginal();

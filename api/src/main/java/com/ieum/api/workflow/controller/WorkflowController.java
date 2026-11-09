@@ -8,6 +8,7 @@ import com.ieum.api.workflow.dto.WorkflowExecutionLogResponse;
 import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
 import com.ieum.api.workflow.dto.WorkflowResponse;
 import com.ieum.api.workflow.service.ExecutionApprovalService;
+import com.ieum.api.workflow.service.ExecutionDelayService;
 import com.ieum.api.workflow.service.ExecutionRetryService;
 import com.ieum.api.workflow.service.WorkflowService;
 import com.ieum.api.workflow.service.WorkflowValidationService;
@@ -24,6 +25,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -51,6 +53,9 @@ public class WorkflowController implements WorkflowControllerDocs {
     private final ExecutionRetryService executionRetryService;
     private final ExecutionApprovalService executionApprovalService;
     private final WorkflowValidationService workflowValidationService;
+    /** 필드 주입 — 여러 테스트가 이 컨트롤러 생성자를 직접 호출해 생성자 인자를 늘리지 않는다. */
+    @Autowired
+    private ExecutionDelayService executionDelayService;
 
     @PostMapping
     public ResponseEntity<ApiResponse<WorkflowResponse>> create(
@@ -172,6 +177,16 @@ public class WorkflowController implements WorkflowControllerDocs {
         String reason = request != null ? request.getReason() : null;
         WorkflowExecutionResponse response =
             executionApprovalService.reject(userDetails.getId(), executionId, reason);
+        return ResponseEntity.ok(ApiResponse.ok(response));
+    }
+
+    @PostMapping("/executions/{executionId}/cancel")
+    public ResponseEntity<ApiResponse<WorkflowExecutionResponse>> cancelExecution(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable UUID executionId) {
+
+        WorkflowExecutionResponse response =
+            executionDelayService.cancel(userDetails.getId(), executionId);
         return ResponseEntity.ok(ApiResponse.ok(response));
     }
 

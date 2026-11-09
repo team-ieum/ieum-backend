@@ -414,7 +414,9 @@ public interface WorkflowControllerDocs {
             + "만든다(원 실행은 SUCCESS). 게이트 앞에서 이미 성공한 노드는 재사용되어 SKIPPED로 기록된다. "
             + "응답은 **새 실행**이다 — 진행 SSE는 새 실행 ID로 다시 구독할 것. 게이트 출력 "
             + "`{approved, approvedBy, approvedAt}`은 하류에서 `{{nodes.<게이트ID>.output.approvedBy}}`로 참조한다. "
-            + "워크플로우 소유자만 가능. 대기 상태가 아니면 409.")
+            + "워크플로우 소유자만 가능. 대기 상태가 아니면 409. "
+            + "기다리기(DELAY)와 함께 멈춘 실행이고 재개 시각 전이면 원 실행이 WAITING_DELAY로 남고 응답은 원 실행이다 "
+            + "(재개 시각이 지나면 자동으로 이어진다).")
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<WorkflowExecutionResponse>> approveExecution(
             CustomUserDetails userDetails,
@@ -430,12 +432,20 @@ public interface WorkflowControllerDocs {
             @Parameter(description = "거부할 실행 ID") UUID executionId,
             @Valid RejectExecutionRequest request);
 
+    @Operation(summary = "기다리는 실행 취소",
+        description = "WAITING_DELAY 실행을 FAILED로 끝낸다(errorMessage = \"사용자가 취소\"). 실패 알림 없음. "
+            + "소유자만. 기다리는 상태가 아니면 409.")
+    @PreAuthorize("hasRole('USER')")
+    ResponseEntity<ApiResponse<WorkflowExecutionResponse>> cancelExecution(
+            CustomUserDetails userDetails,
+            @Parameter(description = "취소할 실행 ID") UUID executionId);
+
     @Operation(summary = "실행 목록 조회")
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<PageResponse<WorkflowExecutionResponse>>> getExecutions(
             CustomUserDetails userDetails,
             @Parameter(description = "워크플로우 ID") UUID id,
-            @Parameter(description = "실행 상태 필터 (PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROVAL)") ExecutionStatus status,
+            @Parameter(description = "실행 상태 필터 (PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROVAL/WAITING_DELAY)") ExecutionStatus status,
             @Parameter(description = "시작 시각 하한 (ISO-8601, 예: 2026-07-01T00:00:00)") LocalDateTime from,
             @Parameter(description = "시작 시각 상한 (ISO-8601)") LocalDateTime to,
             @Parameter(description = "커서 (페이지 번호)") String cursor,

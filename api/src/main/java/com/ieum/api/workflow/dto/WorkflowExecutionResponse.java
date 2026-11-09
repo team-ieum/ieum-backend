@@ -28,6 +28,13 @@ public class WorkflowExecutionResponse {
     private List<String> waitingApprovalNodeIds;
     /** 승인 기한. 지나면 최대 10분(sweeper 주기) 안에 FAILED("승인 만료")가 된다 */
     private LocalDateTime approvalDeadline;
+    /** 기다리기(DELAY) 재개 시각. 기다린 적 없는 실행은 null */
+    private LocalDateTime resumeAt;
+    /**
+     * 기다리기에서 멈췄을 때 대기 중인 DELAY 노드 ID. 없던 실행은 빈 배열.
+     * 재개·취소 뒤에도 이력으로 남는다 — "기다리는 중"은 {@code status = WAITING_DELAY}일 때만의 의미다.
+     */
+    private List<String> waitingDelayNodeIds;
 
     public static WorkflowExecutionResponse from(WorkflowExecution execution) {
         return WorkflowExecutionResponse.builder()
@@ -41,6 +48,8 @@ public class WorkflowExecutionResponse {
             .createdAt(execution.getCreatedAt())
             .waitingApprovalNodeIds(execution.waitingApprovalNodeIdList())
             .approvalDeadline(execution.getApprovalDeadline())
+            .resumeAt(execution.getResumeAt())
+            .waitingDelayNodeIds(List.copyOf(execution.waitingDelayNodeMap().keySet()))
             .build();
     }
 }

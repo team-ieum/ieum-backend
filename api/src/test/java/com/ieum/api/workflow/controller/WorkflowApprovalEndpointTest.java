@@ -14,6 +14,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.ieum.api.common.GlobalExceptionHandler;
 import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
 import com.ieum.api.workflow.service.ExecutionApprovalService;
+import com.ieum.api.workflow.service.ExecutionDelayService;
 import com.ieum.api.workflow.service.ExecutionRetryService;
 import com.ieum.api.workflow.service.WorkflowService;
 import com.ieum.api.workflow.service.WorkflowValidationService;
@@ -32,6 +33,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.method.annotation.AuthenticationPrincipalArgumentResolver;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.test.util.ReflectionTestUtils;
 
 /**
  * 승인·거부 엔드포인트의 HTTP 계약(상태 코드·본문 검증·로그인 사용자 전달).
@@ -41,16 +43,20 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 class WorkflowApprovalEndpointTest {
 
     private final ExecutionApprovalService approvalService = mock(ExecutionApprovalService.class);
+    private final ExecutionDelayService delayService = mock(ExecutionDelayService.class);
     private final UUID userId = UUID.randomUUID();
     private final UUID executionId = UUID.randomUUID();
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
+        WorkflowController controller = new WorkflowController(
+            mock(WorkflowService.class), mock(ExecutionRetryService.class), approvalService,
+            mock(WorkflowValidationService.class));
+        // ExecutionDelayService는 필드 주입이다(생성자를 여러 테스트가 직접 호출).
+        ReflectionTestUtils.setField(controller, "executionDelayService", delayService);
         mockMvc = MockMvcBuilders
-            .standaloneSetup(new WorkflowController(
-                mock(WorkflowService.class), mock(ExecutionRetryService.class), approvalService,
-                mock(WorkflowValidationService.class)))
+            .standaloneSetup(controller)
             .setControllerAdvice(new GlobalExceptionHandler())
             .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
             .build();
@@ -119,6 +125,29 @@ class WorkflowApprovalEndpointTest {
             new CustomException(ErrorCode.EXECUTION_NOT_WAITING_APPROVAL, "현재 상태: SUCCESS"));
 
         mockMvc.perform(post("/api/v1/workflows/executions/{executionId}/approve", executionId))
+            .andExpect(status().isConflict());
+    }
+
+    @Test
+    @DisplayName("POST .../cancel → 200, 로그인 사용자로 취소하고 FAILED인 원 실행을 돌려준다")
+    void cancel_returns200() throws Exception {
+        given(delayService.cancel(userId, executionId)).willReturn(
+            WorkflowExecutionResponse.builder().id(executionId).status(ExecutionStatus.FAILED).build());
+
+        mockMvc.perform(post("/api/v1/workflows/executions/{executionId}/cancel", executionId))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.success").value(true))
+            .andExpect(jsonPath("$.data.id").value(executionId.toString()))
+            .andExpect(jsonPath("$.data.status").value("FAILED"));
+    }
+
+    @Test
+    @DisplayName("기다리는 상태가 아닌 실행 취소 → 409")
+    void cancel_notWaitingDelay_returns409() throws Exception {
+        given(delayService.cancel(userId, executionId)).willThrow(
+            new CustomException(ErrorCode.EXECUTION_NOT_WAITING_DELAY, "현재 상태: WAITING_APPROVAL"));
+
+        mockMvc.perform(post("/api/v1/workflows/executions/{executionId}/cancel", executionId))
             .andExpect(status().isConflict());
     }
 }
