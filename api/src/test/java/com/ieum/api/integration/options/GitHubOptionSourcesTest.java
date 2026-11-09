@@ -48,6 +48,8 @@ class GitHubOptionSourcesTest {
     private final GitHubApiReader reader = new GitHubApiReader(tokenProvider, restTemplate);
     private final GitHubOwnersOptionSource owners = new GitHubOwnersOptionSource(reader);
     private final GitHubReposOptionSource repos = new GitHubReposOptionSource(reader);
+    private final GitHubBranchesOptionSource branches = new GitHubBranchesOptionSource(reader);
+    private final GitHubMilestonesOptionSource milestones = new GitHubMilestonesOptionSource(reader);
     private final UUID userId = UUID.randomUUID();
 
     @AfterEach
@@ -77,7 +79,83 @@ class GitHubOptionSourcesTest {
     @Test
     @DisplayName("공급원 키는 agent 카탈로그 optionsSource와 1:1 계약")
     void keys() {
-        assertThat(List.of(owners.key(), repos.key())).containsExactly("github.owners", "github.repos");
+        assertThat(List.of(owners.key(), repos.key(), branches.key(), milestones.key()))
+            .containsExactly("github.owners", "github.repos", "github.branches", "github.milestones");
+    }
+
+    // ──────────────────────────── branches ────────────────────────────
+
+    private static final String REPO_PATH = BASE + "/repos/dobee/ieum-backend";
+    private static final Map<String, String> REPO_INPUTS = Map.of("owner", "dobee", "repo", "ieum-backend");
+
+    @Test
+    @DisplayName("branches — q 없으면 /branches?per_page=20&page=1, Link rel=next면 nextCursor 2")
+    void branchesListPaging() {
+        connected();
+        server.expect(requestTo(startsWith(REPO_PATH + "/branches?")))
+            .andExpect(queryParam("per_page", "20"))
+            .andExpect(queryParam("page", "1"))
+            .andRespond(withSuccess("[{\"name\":\"main\"}]", MediaType.APPLICATION_JSON)
+                .header("Link", "<https://api.github.com/repositories/1/branches?page=2>; rel=\"next\""));
+
+        OptionPage page = branches.fetch(userId, REPO_INPUTS, null);
+
+        assertThat(page.items()).containsExactly(new OptionItem("main", "main"));
+        assertThat(page.nextCursor()).isEqualTo("2");
+    }
+
+    @Test
+    @DisplayName("branches — q는 / 세그먼트를 유지해 matching-refs/heads/… 접두 일치, refs/heads/를 뗀 이름")
+    void branchesPrefixQueryKeepsSlashSegments() {
+        connected();
+        server.expect(requestTo(REPO_PATH + "/git/matching-refs/heads/feature/a%20b"))
+            .andRespond(withSuccess("[{\"ref\":\"refs/heads/feature/a b1\"}]", MediaType.APPLICATION_JSON));
+
+        Map<String, String> inputs = Map.of("owner", "dobee", "repo", "ieum-backend", "q", "feature/a b");
+        OptionPage page = branches.fetch(userId, inputs, null);
+
+        assertThat(page.items()).containsExactly(new OptionItem("feature/a b1", "feature/a b1"));
+        assertThat(page.nextCursor()).isNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"../x", "a//b", "a/./b", "/a"})
+    @DisplayName("branches — q에 빈·. ·.. 세그먼트가 있으면 HTTP 호출 전에 INVALID_INPUT (경로 탈출 차단)")
+    void branchesQueryRejectsDotSegments(String q) {
+        Map<String, String> inputs = Map.of("owner", "dobee", "repo", "ieum-backend", "q", q);
+
+        assertErrorCode(() -> branches.fetch(userId, inputs, null), ErrorCode.INVALID_INPUT);
+        verifyNoInteractions(tokenProvider);
+    }
+
+    // ──────────────────────────── milestones ────────────────────────────
+
+    @Test
+    @DisplayName("milestones — 열린 마일스톤 due_on순 20개(값=번호·이름=제목), q는 100개 받아 제목 부분 일치(대소문자 무시)")
+    void milestonesListAndQuery() {
+        connected();
+        server.expect(requestTo(startsWith(REPO_PATH + "/milestones?")))
+            .andExpect(queryParam("state", "open"))
+            .andExpect(queryParam("sort", "due_on"))
+            .andExpect(queryParam("per_page", "20"))
+            .andExpect(queryParam("page", "1"))
+            .andRespond(withSuccess("[{\"number\":3,\"title\":\"v1.0\"}]", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith(REPO_PATH + "/milestones?")))
+            .andExpect(queryParam("state", "open"))
+            .andExpect(queryParam("sort", "due_on"))
+            .andExpect(queryParam("per_page", "100"))
+            .andExpect(queryParam("page", "1"))
+            .andRespond(withSuccess("[{\"number\":3,\"title\":\"v1.0\"},{\"number\":4,\"title\":\"v2.0\"}]",
+                MediaType.APPLICATION_JSON)
+                .header("Link", "<https://api.github.com/repositories/1/milestones?page=2>; rel=\"next\""));
+
+        OptionPage list = milestones.fetch(userId, REPO_INPUTS, null);
+        assertThat(list.items()).containsExactly(new OptionItem("3", "v1.0"));
+
+        Map<String, String> inputs = Map.of("owner", "dobee", "repo", "ieum-backend", "q", "V1");
+        OptionPage searched = milestones.fetch(userId, inputs, null);
+        assertThat(searched.items()).containsExactly(new OptionItem("3", "v1.0"));
+        assertThat(searched.nextCursor()).isNull();
     }
 
     // ──────────────────────────── owners ────────────────────────────
