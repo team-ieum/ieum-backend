@@ -3,6 +3,7 @@ package com.ieum.api.trigger.github;
 import static org.hamcrest.Matchers.startsWith;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
@@ -24,6 +25,7 @@ import com.ieum.workflowcore.repository.AppTriggerSubscriptionRepository;
 import com.ieum.workflowcore.trigger.PollStart;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
@@ -124,6 +126,38 @@ class GitHubWebhookIntegrationTest {
         verify(appTriggerFirer, timeout(5000)).fire(eq(inWorkflow), eq(TriggerType.GITHUB_NEW_ISSUE), anyMap());
         server.verify(Duration.ofSeconds(5)); // 비동기 디스패치가 두 소유자의 설치 범위 조회(요청 4개)를 다 쓸 때까지
         verify(appTriggerFirer, never()).fire(eq(outWorkflow), any(), any());
+    }
+
+    @Test
+    @DisplayName("pull_request/opened(멤버) — 서명된 webhook 202, 설치 범위 안 GITHUB_NEW_PR 구독이 발화")
+    void pullRequestFiresSubscription() throws Exception {
+        UUID member = UUID.randomUUID();
+        UUID workflow = UUID.randomUUID();
+        repository.save(AppTriggerSubscription.create(workflow, "t1", member, TriggerType.GITHUB_NEW_PR, "123",
+            Map.of("repoId", 123L, "actions", List.of("opened"), "excludeDrafts", true), PollStart.NONE));
+        given(gitHubTokenService.getValidAccessToken(member)).willReturn("t-in");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
+        expectInstalled(server, "t-in", 123);
+        byte[] body = """
+            {"action": "opened",
+             "pull_request": {"number": 5, "title": "기능", "body": "본문", "html_url": "https://github.com/team/r123/pull/5",
+                              "user": {"login": "u"}, "author_association": "MEMBER", "draft": false,
+                              "created_at": "2026-11-09T01:02:03Z",
+                              "base": {"ref": "main", "repo": {"name": "r123", "full_name": "team/r123", "owner": {"login": "team"}}},
+                              "head": {"ref": "feat", "sha": "abc"}},
+             "repository": {"id": 123, "full_name": "team/r123"}}""".getBytes(StandardCharsets.UTF_8);
+
+        mockMvc.perform(post("/api/v1/integrations/github/webhook")
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("X-Hub-Signature-256", GitHubWebhookServiceTest.sign(SECRET, body))
+                .header("X-GitHub-Event", "pull_request")
+                .header("X-GitHub-Delivery", UUID.randomUUID().toString())
+                .content(body))
+            .andExpect(status().isAccepted());
+
+        verify(appTriggerFirer, timeout(5000)).fire(eq(workflow), eq(TriggerType.GITHUB_NEW_PR),
+            argThat(out -> Integer.valueOf(5).equals(out.get("prNumber")) && "team/r123".equals(out.get("repo"))));
+        server.verify(Duration.ofSeconds(5));
     }
 
     @Test

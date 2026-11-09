@@ -9,6 +9,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
@@ -47,9 +49,10 @@ class GitHubWebhookServiceTest {
 
     private final IdempotencyStore idempotency = mock(IdempotencyStore.class);
     private final GitHubIssueDispatcher dispatcher = mock(GitHubIssueDispatcher.class);
+    private final GitHubPullRequestDispatcher prDispatcher = mock(GitHubPullRequestDispatcher.class);
     private final AppTriggerSubscriptionService subscriptions = mock(AppTriggerSubscriptionService.class);
     private final GitHubWebhookService service =
-        new GitHubWebhookService(idempotency, dispatcher, subscriptions, new ObjectMapper(), SECRET);
+        new GitHubWebhookService(idempotency, dispatcher, prDispatcher, subscriptions, new ObjectMapper(), SECRET);
 
     /** {@code appId} App이 사용자 토큰으로 만든 이슈의 opened payload — 공식 스키마 모양(client_id 없음). */
     private static String openedBy(long appId) {
@@ -109,7 +112,7 @@ class GitHubWebhookServiceTest {
     @Test
     @DisplayName("[Review Focus 3] secret 미설정(env 누락 = 빈 기본값)이면 어떤 서명이든 401(fail closed)")
     void blankSecretRejectsEverything() throws Exception {
-        GitHubWebhookService unset = new GitHubWebhookService(idempotency, dispatcher, subscriptions, new ObjectMapper(), "");
+        GitHubWebhookService unset = new GitHubWebhookService(idempotency, dispatcher, prDispatcher, subscriptions, new ObjectMapper(), "");
         byte[] body = bytes(OPENED);
         // 빈 키 HMAC는 JDK가 만들지 못한다(SecretKeySpec: Empty key) — 서비스는 서명 계산 전에 blank secret을 거부하므로 아무 서명이나 넣는다
         assertErrorCode(() -> unset.receive(sign("any-secret", body), "issues", DELIVERY, HOOK_TARGET, body), ErrorCode.UNAUTHORIZED);
@@ -120,7 +123,7 @@ class GitHubWebhookServiceTest {
     @DisplayName("[Review Focus 3] GitHub 문서 테스트 벡터 서명을 받는다 — 접두·소문자 hex·UTF-8 형식이 GitHub과 같다")
     void githubDocVector() {
         GitHubWebhookService docs =
-            new GitHubWebhookService(idempotency, dispatcher, subscriptions, new ObjectMapper(), "It's a Secret to Everybody");
+            new GitHubWebhookService(idempotency, dispatcher, prDispatcher, subscriptions, new ObjectMapper(), "It's a Secret to Everybody");
         // docs.github.com validating-webhook-deliveries — ping은 서명 통과 후 202로 끝나므로 예외가 없으면 형식 일치
         docs.receive("sha256=757107ea0eb2509fc211221cce984b8a37570b6d7586c22c46f4379c8b043e17",
             "ping", DELIVERY, HOOK_TARGET, bytes("Hello, World!"));
@@ -205,6 +208,115 @@ class GitHubWebhookServiceTest {
         byte[] body = bytes(OPENED);
 
         assertErrorCode(() -> service.receive(sign(SECRET, body), "issues", DELIVERY, HOOK_TARGET, body), ErrorCode.INTERNAL_SERVER_ERROR);
+        verify(idempotency).clearInFlight("github-delivery:" + DELIVERY);
+    }
+
+    // ──────────── pull_request ────────────
+
+    private static String pullRequest(String action, String association) {
+        return """
+            {"action": "%s",
+             "pull_request": {"number": 5, "title": "기능", "body": null, "html_url": "https://github.com/o/r/pull/5",
+                              "user": {"login": "u"}, "author_association": "%s", "draft": false,
+                              "created_at": "2026-11-09T01:02:03Z",
+                              "base": {"ref": "main", "repo": {"name": "r", "full_name": "o/r", "owner": {"login": "o"}}},
+                              "head": {"ref": "feat", "sha": "abc"}},
+             "repository": {"id": 123, "full_name": "o/r"}}""".formatted(action, association);
+    }
+
+    private void prSubscribed() {
+        given(subscriptions.findByResource(TriggerType.GITHUB_NEW_PR, "123"))
+            .willReturn(List.of(mock(AppTriggerSubscription.class)));
+    }
+
+    @Test
+    @DisplayName("pull_request/opened를 멤버가 열면 delivery 마킹 후 정규화 출력으로 디스패치")
+    @SuppressWarnings("unchecked")
+    void pull_request_opened_멤버면_디스패치() throws Exception {
+        prSubscribed();
+        given(idempotency.markInFlight("github-delivery:" + DELIVERY, Duration.ofDays(4))).willReturn(true);
+        byte[] body = bytes(pullRequest("opened", "MEMBER"));
+
+        service.receive(sign(SECRET, body), "pull_request", DELIVERY, HOOK_TARGET, body);
+
+        ArgumentCaptor<Map<String, Object>> output = ArgumentCaptor.forClass(Map.class);
+        verify(prDispatcher).dispatch(eq(123L), eq("opened"), eq(false), output.capture());
+        assertThat(output.getValue()).containsEntry("prNumber", 5).containsEntry("repo", "o/r")
+            .containsEntry("action", "opened").containsEntry("headSha", "abc");
+        verifyNoInteractions(dispatcher);
+    }
+
+    @Test
+    @DisplayName("[Review Focus 3] 비멤버(CONTRIBUTOR·FIRST_TIME_CONTRIBUTOR·NONE) PR은 구독 조회·마킹·디스패치 없이 끝(202)")
+    void pull_request_비멤버면_무시() throws Exception {
+        prSubscribed();
+        for (String association : List.of("CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "NONE")) {
+            byte[] body = bytes(pullRequest("opened", association));
+            service.receive(sign(SECRET, body), "pull_request", DELIVERY, HOOK_TARGET, body);
+        }
+        verify(subscriptions, never()).findByResource(eq(TriggerType.GITHUB_NEW_PR), any());
+        verifyNoInteractions(idempotency, prDispatcher);
+    }
+
+    @Test
+    @DisplayName("ACTIONS에 없는 action(closed)은 구독 조회·마킹 없이 끝(202)")
+    void pull_request_closed는_무시() throws Exception {
+        prSubscribed();
+        byte[] body = bytes(pullRequest("closed", "MEMBER"));
+
+        service.receive(sign(SECRET, body), "pull_request", DELIVERY, HOOK_TARGET, body);
+
+        verify(subscriptions, never()).findByResource(eq(TriggerType.GITHUB_NEW_PR), any());
+        verifyNoInteractions(idempotency, prDispatcher);
+    }
+
+    @Test
+    @DisplayName("GITHUB_NEW_PR 구독 0건 레포는 delivery 마커를 쓰지 않는다")
+    void pull_request_구독없으면_마커_안씀() throws Exception {
+        given(subscriptions.findByResource(TriggerType.GITHUB_NEW_PR, "123")).willReturn(List.of());
+        byte[] body = bytes(pullRequest("synchronize", "OWNER"));
+
+        service.receive(sign(SECRET, body), "pull_request", DELIVERY, HOOK_TARGET, body);
+
+        verifyNoInteractions(idempotency, prDispatcher);
+    }
+
+    @Test
+    @DisplayName("같은 delivery가 두 번 오면 한 번만 디스패치")
+    void pull_request_같은_delivery_두번이면_한번만() throws Exception {
+        prSubscribed();
+        given(idempotency.markInFlight(any(), any())).willReturn(true, false);
+        byte[] body = bytes(pullRequest("reopened", "COLLABORATOR"));
+
+        service.receive(sign(SECRET, body), "pull_request", DELIVERY, HOOK_TARGET, body);
+        service.receive(sign(SECRET, body), "pull_request", DELIVERY, HOOK_TARGET, body);
+
+        verify(prDispatcher, times(1)).dispatch(eq(123L), eq("reopened"), eq(false), anyMap());
+    }
+
+    @Test
+    @DisplayName("pull_request 객체·repository.id가 없으면 무시(202), 깨진 JSON은 issues와 같게 400")
+    void pull_request_본문이_비정상이면_issues와_같게() throws Exception {
+        prSubscribed();
+        byte[] noPr = bytes("{\"action\": \"opened\", \"repository\": {\"id\": 123}}");
+        service.receive(sign(SECRET, noPr), "pull_request", DELIVERY, HOOK_TARGET, noPr);
+        byte[] broken = bytes("{not json");
+        assertErrorCode(() -> service.receive(sign(SECRET, broken), "pull_request", DELIVERY, HOOK_TARGET, broken),
+            ErrorCode.INVALID_INPUT);
+        verifyNoInteractions(idempotency, prDispatcher);
+    }
+
+    @Test
+    @DisplayName("PR 디스패치도 비동기 큐가 거절하면 마커를 지우고 500")
+    void pull_request_큐_거절이면_마커_삭제() throws Exception {
+        prSubscribed();
+        given(idempotency.markInFlight(any(), any())).willReturn(true);
+        willThrow(new TaskRejectedException("full")).given(prDispatcher)
+            .dispatch(anyLong(), any(), org.mockito.ArgumentMatchers.anyBoolean(), anyMap());
+        byte[] body = bytes(pullRequest("opened", "MEMBER"));
+
+        assertErrorCode(() -> service.receive(sign(SECRET, body), "pull_request", DELIVERY, HOOK_TARGET, body),
+            ErrorCode.INTERNAL_SERVER_ERROR);
         verify(idempotency).clearInFlight("github-delivery:" + DELIVERY);
     }
 }
