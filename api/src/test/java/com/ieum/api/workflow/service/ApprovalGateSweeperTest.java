@@ -16,7 +16,9 @@ import com.ieum.workflowcore.deployment.BackgroundOwnership;
 import com.ieum.workflowcore.domain.ApprovalGate;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
+import com.ieum.workflowcore.engine.executor.ApprovalFailure;
 import com.ieum.workflowcore.repository.ApprovalGateRepository;
+import com.ieum.workflowcore.repository.WorkflowExecutionRepository.ExpiredApproval;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.time.LocalDateTime;
@@ -45,7 +47,7 @@ class ApprovalGateSweeperTest {
 
     @BeforeEach
     void setUp() {
-        given(workflowExecutionService.findExpiredApprovalExecutionIds(any())).willReturn(List.of());
+        given(workflowExecutionService.findExpiredApprovals(any())).willReturn(List.of());
         given(approvalGateRepository.findUnnotified(any(), any())).willReturn(List.of());
         given(approvalGateRepository.findDueReminders(any(), any())).willReturn(List.of());
         given(workflowCrudService.getWorkflowById(workflowId))
@@ -57,6 +59,17 @@ class ApprovalGateSweeperTest {
             "approval.request", "{}", UUID.randomUUID(), LocalDateTime.now().plusHours(1), null);
         ReflectionTestUtils.setField(g, "id", UUID.randomUUID());
         return g;
+    }
+
+    private static ExpiredApproval expired(UUID id, LocalDateTime deadline) {
+        return new ExpiredApproval() {
+            @Override public UUID getId() { return id; }
+            @Override public LocalDateTime getApprovalDeadline() { return deadline; }
+        };
+    }
+
+    private static ExpiredApproval recent(UUID id) {
+        return expired(id, LocalDateTime.now().minusMinutes(1));
     }
 
     private List<ApprovalGate> gates(int n) {
@@ -105,7 +118,7 @@ class ApprovalGateSweeperTest {
 
         sweeper.sweep();
 
-        verify(workflowExecutionService, never()).findExpiredApprovalExecutionIds(any());
+        verify(workflowExecutionService, never()).findExpiredApprovals(any());
         verify(approvalGateRepository, never()).findUnnotified(any(), any());
         verify(approvalGateRepository, never()).findDueReminders(any(), any());
         verify(approvalGateService, never()).expire(any(), any());
@@ -116,7 +129,7 @@ class ApprovalGateSweeperTest {
     void 한_건_실패가_나머지를_막지_않는다() {
         UUID first = UUID.randomUUID();
         UUID second = UUID.randomUUID();
-        given(workflowExecutionService.findExpiredApprovalExecutionIds(any())).willReturn(List.of(first, second));
+        given(workflowExecutionService.findExpiredApprovals(any())).willReturn(List.of(recent(first), recent(second)));
         org.mockito.BDDMockito.willThrow(new IllegalStateException("boom"))
             .given(approvalGateService).expire(eq(first), any());
         ApprovalGate bad = gate();
@@ -136,8 +149,8 @@ class ApprovalGateSweeperTest {
     void 영구_오류만_닫는다() {
         UUID permanent = UUID.randomUUID();
         UUID transientId = UUID.randomUUID();
-        given(workflowExecutionService.findExpiredApprovalExecutionIds(any()))
-            .willReturn(List.of(permanent, transientId));
+        given(workflowExecutionService.findExpiredApprovals(any()))
+            .willReturn(List.of(recent(permanent), recent(transientId)));
         org.mockito.BDDMockito.willThrow(new CustomException(ErrorCode.INVALID_WORKFLOW))
             .given(approvalGateService).expire(eq(permanent), any());
         org.mockito.BDDMockito.willThrow(new DataAccessResourceFailureException("db"))
@@ -148,6 +161,37 @@ class ApprovalGateSweeperTest {
         verify(workflowExecutionService).markAsFailed(
             eq(permanent), eq(ApprovalGateSweeper.EXPIRE_FAILED), eq(ExecutionStatus.WAITING_APPROVAL));
         verify(workflowExecutionService, never()).markAsFailed(eq(transientId), any(), any());
+    }
+
+    @Test
+    @DisplayName("CustomException이 아닌 영구 오류(ApprovalFailure)는 기한이 1일 넘게 지났을 때 닫고, 그 전엔 닫지 않는다")
+    void 만료_영구오류는_하루_지나면_닫는다() {
+        UUID overdue = UUID.randomUUID();
+        UUID fresh = UUID.randomUUID();
+        given(workflowExecutionService.findExpiredApprovals(any()))
+            .willReturn(List.of(expired(overdue, LocalDateTime.now().minusDays(2)), recent(fresh)));
+        org.mockito.BDDMockito.willThrow(new ApprovalFailure("제한 시간은 5분~7일이에요"))
+            .given(approvalGateService).expire(any(), any());
+
+        sweeper.sweep();
+
+        verify(workflowExecutionService).markAsFailed(
+            eq(overdue), eq(ApprovalGateSweeper.EXPIRE_FAILED), eq(ExecutionStatus.WAITING_APPROVAL));
+        verify(workflowExecutionService, never()).markAsFailed(eq(fresh), any(), any());
+    }
+
+    @Test
+    @DisplayName("DB 일시 오류는 기한이 1일 넘게 지났어도 닫지 않는다")
+    void 만료_DB_일시오류는_닫지_않는다() {
+        UUID id = UUID.randomUUID();
+        given(workflowExecutionService.findExpiredApprovals(any()))
+            .willReturn(List.of(expired(id, LocalDateTime.now().minusDays(2))));
+        org.mockito.BDDMockito.willThrow(new DataAccessResourceFailureException("db"))
+            .given(approvalGateService).expire(eq(id), any());
+
+        sweeper.sweep();
+
+        verify(workflowExecutionService, never()).markAsFailed(any(), any(), any());
     }
 
     @Test

@@ -230,9 +230,9 @@ public class WorkflowExecutionService {
         return workflowExecutionRepository.findStuckRunningIds(threshold);
     }
 
-    /** 승인 기한이 {@code now}보다 앞선 {@code WAITING_APPROVAL} 실행의 ID(승인 만료 sweeper용). */
-    public List<UUID> findExpiredApprovalExecutionIds(LocalDateTime now) {
-        return workflowExecutionRepository.findExpiredApprovalIds(now);
+    /** 승인 기한이 {@code now}보다 앞선 {@code WAITING_APPROVAL} 실행의 ID·기한(승인 만료 sweeper용). */
+    public List<WorkflowExecutionRepository.ExpiredApproval> findExpiredApprovals(LocalDateTime now) {
+        return workflowExecutionRepository.findExpiredApprovals(now);
     }
 
     /** 재개 시각이 {@code now} 이하인 {@code WAITING_DELAY} 실행 한 페이지 — (afterAt, afterId) 커서 다음부터, 재개 시각 순. */
