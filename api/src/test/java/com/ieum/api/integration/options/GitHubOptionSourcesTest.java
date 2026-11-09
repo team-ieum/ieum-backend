@@ -187,6 +187,24 @@ class GitHubOptionSourcesTest {
         verifyNoInteractions(tokenProvider);
     }
 
+    // ──────────────────────────── 공용 입력 검사 ────────────────────────────
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", ".", "..", "a/b", "{{nodes.x.output.repo}}", "r?x=1",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+    @DisplayName("repo가 비었거나 . / .. / 경로·쿼리 문자 / 참조식 / 101자면 INVALID_INPUT — 요청 없음")
+    void requireRepoRejects(String raw) {
+        assertErrorCode(() -> GitHubApiReader.requireRepo(Map.of("repo", raw)), ErrorCode.INVALID_INPUT);
+        verifyNoInteractions(tokenProvider);
+    }
+
+    @Test
+    @DisplayName("검색어 q는 strip 후 비면 null, 200자를 넘으면 INVALID_INPUT")
+    void searchTextBlankIsNull() {
+        assertThat(GitHubApiReader.searchText(Map.of("q", "  "))).isNull();
+        assertErrorCode(() -> GitHubApiReader.searchText(Map.of("q", "x".repeat(201))), ErrorCode.INVALID_INPUT);
+    }
+
     @Test
     @DisplayName("없는 org(404)는 500이 아니라 INVALID_INPUT")
     void unknownOrgIs400() {

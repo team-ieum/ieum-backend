@@ -1,14 +1,11 @@
 package com.ieum.api.integration.options;
 
 import com.ieum.api.integration.options.OptionPage.OptionItem;
-import com.ieum.common.exception.CustomException;
-import com.ieum.common.exception.ErrorCode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -23,10 +20,6 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class GitHubReposOptionSource implements OptionSource {
 
-    /** GitHub login 규칙(영숫자·하이픈, 최대 39자 — EMU의 밑줄 포함). URL 경로에 쓰므로 이 형식만 받는다. */
-    private static final Pattern OWNER = Pattern.compile("[A-Za-z0-9_-]{1,39}");
-    private static final int MAX_PAGE = 1000;
-
     private final GitHubApiReader gitHubApiReader;
 
     @Override
@@ -37,8 +30,8 @@ public class GitHubReposOptionSource implements OptionSource {
     @Override
     public OptionPage fetch(UUID userId, Map<String, String> inputs, String cursor) {
         // 형식 검증은 토큰 조회·HTTP 호출보다 먼저다
-        String owner = requireOwner(inputs);
-        int page = parsePage(cursor);
+        String owner = GitHubApiReader.requireOwner(inputs);
+        int page = GitHubApiReader.parsePage(cursor);
 
         String login = gitHubApiReader.get(userId, List.of("user"), Map.of()).body().path("login").asText("");
         boolean mine = owner.equalsIgnoreCase(login);
@@ -63,28 +56,5 @@ public class GitHubReposOptionSource implements OptionSource {
             }
         });
         return new OptionPage(items, repos.hasNext() ? String.valueOf(page + 1) : null);
-    }
-
-    private static String requireOwner(Map<String, String> inputs) {
-        String owner = inputs.get("owner") == null ? "" : inputs.get("owner").strip();
-        if (!OWNER.matcher(owner).matches()) {
-            throw new CustomException(ErrorCode.INVALID_INPUT, "owner가 없거나 올바르지 않습니다.");
-        }
-        return owner;
-    }
-
-    private static int parsePage(String cursor) {
-        if (cursor == null) {
-            return 1;
-        }
-        try {
-            int page = Integer.parseInt(cursor.strip());
-            if (page >= 1 && page <= MAX_PAGE) {
-                return page;
-            }
-        } catch (NumberFormatException ignored) {
-            // 아래에서 같은 오류로 처리
-        }
-        throw new CustomException(ErrorCode.INVALID_INPUT, "cursor가 올바르지 않습니다.");
     }
 }
