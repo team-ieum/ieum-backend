@@ -35,9 +35,10 @@ class DelayNodeExecutorTest {
     private final DelayNodeExecutor executor =
         new DelayNodeExecutor(queues, Clock.fixed(NOW, ConditionValues.KST));
     private final UUID u = UUID.randomUUID();
+    private final UUID exec = UUID.randomUUID();
 
     private DelayPlan plan(String event, Map<String, Object> input) {
-        return executor.plan(event, input, u, true);
+        return executor.plan(event, input, u, exec);
     }
 
     private static Map<String, Object> config(Object... kv) {
@@ -142,6 +143,13 @@ class DelayNodeExecutorTest {
     }
 
     @Test
+    void until_읽지_못한_원문은_50자까지() {
+        String longText = "가".repeat(60);
+
+        assertFails("delay.until", config("until", longText), "시각으로 읽지 못했어요: '" + "가".repeat(50) + "…'");
+    }
+
+    @Test
     void until_ifPast_목록밖() {
         assertFails("delay.until", config("until", "2026-11-09T15:00", "ifPast", "soon"),
             "'이미 지난 시각이면' 값이 올바르지 않아요");
@@ -149,11 +157,11 @@ class DelayNodeExecutorTest {
 
     @Test
     void queue_예약() {
-        given(queues.reserve(u, "slack", Duration.ofMinutes(1), NOW))
+        given(queues.reserve(u, "slack", Duration.ofMinutes(1), NOW, exec))
             .willReturn(new Slot(NOW.plus(Duration.ofMinutes(10)), 3));
 
         DelayPlan p = executor.plan("delay.queue", config("queueName", " slack ", "amount", 1, "unit", "minutes"),
-            u, true);
+            u, exec);
 
         assertThat(p.scheduledFor()).isEqualTo(NOW.plus(Duration.ofMinutes(10)));
         assertThat(p.queuePosition()).isEqualTo(3);
@@ -164,10 +172,10 @@ class DelayNodeExecutorTest {
     void queue_테스트는_peek() {
         given(queues.peek(u, "slack", Duration.ofMinutes(1), NOW)).willReturn(new Slot(NOW, 0));
 
-        executor.plan("delay.queue", config("queueName", "slack", "amount", 1, "unit", "minutes"), u, false);
+        executor.plan("delay.queue", config("queueName", "slack", "amount", 1, "unit", "minutes"), u, null);
 
         verify(queues).peek(u, "slack", Duration.ofMinutes(1), NOW);
-        verify(queues, never()).reserve(any(), any(), any(), any());
+        verify(queues, never()).reserve(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -180,7 +188,7 @@ class DelayNodeExecutorTest {
 
     @Test
     void queue_한도_실패는_그대로() {
-        given(queues.reserve(any(), any(), any(), any()))
+        given(queues.reserve(any(), any(), any(), any(), any()))
             .willThrow(new DelayFailure("큐 'slack'에 기다리는 실행이 100개를 넘었어요"));
 
         assertFails("delay.queue", config("queueName", "slack", "amount", 1, "unit", "minutes"),

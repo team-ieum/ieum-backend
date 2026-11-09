@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.ieum.api.credential.repository.CredentialRepository;
@@ -18,6 +19,7 @@ import com.ieum.auth.repository.RefreshTokenRepository;
 import com.ieum.auth.repository.UserRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.service.DelayQueueService;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import java.util.Optional;
 import java.util.UUID;
@@ -36,6 +38,7 @@ class UserServiceTest {
     @Mock private SlackDisconnectService slackDisconnectService;
     @Mock private DiscordDisconnectService discordDisconnectService;
     @Mock private WorkflowCrudService workflowCrudService;
+    @Mock private DelayQueueService delayQueueService;
     @Mock private CredentialRepository credentialRepository;
     @Mock private WebhookCredentialRepository webhookCredentialRepository;
     @Mock private McpServerCatalogRepository mcpServerCatalogRepository;
@@ -61,6 +64,7 @@ class UserServiceTest {
         order.verify(discordDisconnectService).disconnectAll(userId); // 링크가 남으면 "남은 링크 0"에 못 닿아 봇이 영구 잔존
         order.verify(userRepository).flush();
         order.verify(workflowCrudService).deleteAllByUserId(userId);
+        verify(delayQueueService).deleteAllByUserId(userId); // 기다리기 큐·슬롯 — 이름이 탈퇴 뒤에 남지 않게
         order.verify(credentialRepository).deleteByUserId(userId);
         order.verify(webhookCredentialRepository).deleteByUserId(userId);
         order.verify(mcpServerCatalogRepository).deleteByUserId(userId);

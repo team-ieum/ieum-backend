@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.Transactional;
@@ -98,7 +99,27 @@ class DelayExecutionRepositoryTest {
         execution(ExecutionStatus.FAILED, now.minusMinutes(1));
         entityManager.clear();
 
-        assertThat(executions.findDueDelayIds(now)).containsExactly(due.getId());
+        assertThat(executions.findDueDelayPage(now, FIRST_AT, FIRST_ID, PageRequest.of(0, 100)))
+            .extracting(WorkflowExecutionRepository.DueDelay::getId).containsExactly(due.getId());
+    }
+
+    private static final LocalDateTime FIRST_AT = LocalDateTime.of(1970, 1, 1, 0, 0);
+    private static final UUID FIRST_ID = new UUID(0L, 0L);
+
+    @Test
+    void findDueDelayPage_재개시각_순서와_커서_이후() {
+        LocalDateTime now = LocalDateTime.now().withNano(0);
+        var older = execution(ExecutionStatus.WAITING_DELAY, now.minusMinutes(3));
+        var middle = execution(ExecutionStatus.WAITING_DELAY, now.minusMinutes(2));
+        var newer = execution(ExecutionStatus.WAITING_DELAY, now.minusMinutes(1));
+        entityManager.clear();
+
+        var first = executions.findDueDelayPage(now, FIRST_AT, FIRST_ID, PageRequest.of(0, 2));
+        assertThat(first).extracting(WorkflowExecutionRepository.DueDelay::getId)
+            .containsExactly(older.getId(), middle.getId());
+        var last = first.get(1);
+        assertThat(executions.findDueDelayPage(now, last.getResumeAt(), last.getId(), PageRequest.of(0, 2)))
+            .extracting(WorkflowExecutionRepository.DueDelay::getId).containsExactly(newer.getId());
     }
 
     private WorkflowExecution execution(ExecutionStatus status) {

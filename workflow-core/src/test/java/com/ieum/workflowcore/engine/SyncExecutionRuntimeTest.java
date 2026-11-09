@@ -1690,7 +1690,7 @@ class SyncExecutionRuntimeTest {
         @DisplayName("큐 DELAY는 실행 중엔 슬롯을 예약(reserve)한다 — peek이면 같은 큐가 전부 같은 슬롯에 풀린다")
         void 큐_delay는_슬롯을_예약한다() throws Exception {
             UUID owner = workflow.getUserId();
-            when(queues.reserve(owner, "slack", Duration.ofMinutes(1), NOW))
+            when(queues.reserve(owner, "slack", Duration.ofMinutes(1), NOW, executionId))
                 .thenReturn(new DelayQueueService.Slot(NOW.plus(Duration.ofMinutes(30)), 2));
             stubDefinition(List.of(node("t", "TRIGGER"), delayNode("q", "delay.queue",
                     Map.of("queueName", "slack", "amount", 1, "unit", "minutes")), node("b", "AI")),
@@ -1698,7 +1698,7 @@ class SyncExecutionRuntimeTest {
 
             runDelay();
 
-            verify(queues, times(1)).reserve(owner, "slack", Duration.ofMinutes(1), NOW);
+            verify(queues, times(1)).reserve(owner, "slack", Duration.ofMinutes(1), NOW, executionId);
             verify(queues, never()).peek(any(), any(), any(), any());
             verify(executionRepository).pauseForDelay(eq(executionId),
                 eq(local(NOW.plus(Duration.ofMinutes(30)))),

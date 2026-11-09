@@ -210,11 +210,24 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
     int recordDelayWait(@Param("id") UUID id, @Param("resumeAt") LocalDateTime resumeAt,
                         @Param("delayNodes") String delayNodesJson, @Param("now") LocalDateTime now);
 
-    /** 재개 시각이 지난 기다리기 실행의 ID(재개 sweeper용). */
-    @Query("SELECT e.id FROM WorkflowExecution e "
+    /** 재개 sweeper 페이지 한 행. */
+    interface DueDelay {
+        UUID getId();
+
+        LocalDateTime getResumeAt();
+    }
+
+    /**
+     * 재개 시각이 지난 기다리기 실행 한 페이지. (resumeAt, id) 키셋으로 커서 다음부터 읽는다 — 재개에 실패해 남은 행이
+     * 다음 페이지를 막지 않는다. 첫 페이지는 아주 이른 시각·0 UUID를 커서로 넘긴다.
+     */
+    @Query("SELECT e.id AS id, e.resumeAt AS resumeAt FROM WorkflowExecution e "
         + "WHERE e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_DELAY "
-        + "AND e.resumeAt <= :now")
-    List<UUID> findDueDelayIds(@Param("now") LocalDateTime now);
+        + "AND e.resumeAt <= :now "
+        + "AND (e.resumeAt > :afterAt OR (e.resumeAt = :afterAt AND e.id > :afterId)) "
+        + "ORDER BY e.resumeAt, e.id")
+    List<DueDelay> findDueDelayPage(@Param("now") LocalDateTime now, @Param("afterAt") LocalDateTime afterAt,
+                                    @Param("afterId") UUID afterId, Pageable pageable);
 
     List<WorkflowExecution> findByWorkflow(Workflow workflow);
 

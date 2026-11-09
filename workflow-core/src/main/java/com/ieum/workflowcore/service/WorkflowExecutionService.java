@@ -35,6 +35,7 @@ import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -234,9 +235,10 @@ public class WorkflowExecutionService {
         return workflowExecutionRepository.findExpiredApprovalIds(now);
     }
 
-    /** 재개 시각이 {@code now} 이하인 {@code WAITING_DELAY} 실행의 ID(기다리기 재개 sweeper용). */
-    public List<UUID> findDueDelayExecutionIds(LocalDateTime now) {
-        return workflowExecutionRepository.findDueDelayIds(now);
+    /** 재개 시각이 {@code now} 이하인 {@code WAITING_DELAY} 실행 한 페이지 — (afterAt, afterId) 커서 다음부터, 재개 시각 순. */
+    public List<WorkflowExecutionRepository.DueDelay> findDueDelayPage(
+            LocalDateTime now, LocalDateTime afterAt, UUID afterId, int size) {
+        return workflowExecutionRepository.findDueDelayPage(now, afterAt, afterId, PageRequest.of(0, size));
     }
 
     /**

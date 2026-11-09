@@ -56,7 +56,7 @@
 이벤트 `delay.for`(amount·unit)·`delay.until`(until·ifPast)·`delay.queue`(queueName·amount·unit). 재개 시각은 `DelayNodeExecutor.plan`이 계산한다(기다림 1분~30일, 시간대 없는 값은 KST, 실패는 `DelayFailure` = 사용자 문구). 스레드를 붙잡지 않는다 — `dispatch()`가 사전 완료가 아닌 DELAY를 메인 스레드에서 계산해, 실패면 노드 FAILED, 지금 통과면 SUCCESS(`waitedUntil` = 지금)로 제출하고, 그 밖엔 **제출하지 않고** 보류한다(게이트처럼 하류가 막히고 `node_runs` 행도 없다).
 - 루프가 끝나면 실패 우선. 보류 DELAY가 있으면 재개 시각 = 가장 늦은 `scheduledFor`(병렬 DELAY도 함께 해제). 게이트가 없으면 `pauseForDelay`(RUNNING일 때만)로 `WAITING_DELAY` + `EXECUTION_COMPLETED(WAITING_DELAY)`, 실패 알림 없음. 게이트도 있으면 `recordDelayWait`로 재개 시각을 **먼저** 남기고 `pauseForApproval` — 상태는 `WAITING_APPROVAL`이고, 승인이 재개 시각 전이면 api가 `WAITING_DELAY`로 넘긴다. 새 SSE 이벤트는 없다
 - 재개(api `ExecutionDelayService`·`DelayResumeSweeper`) = DELAY 노드마다 `node_runs` SUCCESS 행(`recordDelayRelease`, 출력 `{scheduledFor, queuePosition?, waitedUntil}`) + 원 실행 SUCCESS + `startContinuation`. 이어진 실행에서 DELAY는 사전 완료(SKIPPED)로 통과한다. 취소·비활성 실패한 실행엔 DELAY 행이 없어 재처리하면 다시 기다린다(우회 없음)
-- 큐는 `DelayQueueService`(`delay_queues` 행 잠금, "마지막 내보낼 시각 + 간격", 대기 100개·30일 한도). 노드 테스트는 기다리지 않고 큐 슬롯도 쓰지 않는다(`peek`)
+- 큐는 `DelayQueueService` — 실행별 슬롯 행(`delay_queue_slots`)으로 센다. `reserve(…, executionId)`는 큐 행(`delay_queues`)을 잠근 뒤 같은 실행 슬롯이 있으면 그대로 돌려주고(재배달 멱등), 없으면 차례 = max(지금, FAILED가 아닌 실행의 마지막 차례 + 간격), position = 차례 &gt; 지금이고 실행이 RUNNING·WAITING_DELAY·WAITING_APPROVAL인 슬롯 수(간격이 섞여도 정확). 대기 100개·30일 한도. 취소·실패 훅 없이 `workflow_runs` 상태 조인으로 빈 슬롯이 저절로 빠진다. 이미 나간(재개된) 슬롯도 간격 기준이라, 정리는 30일(최대 간격)이 지난 슬롯만 재개 sweeper가 지운다. 회원 탈퇴(api `UserService`)가 사용자 큐·슬롯을 지운다. 노드 테스트는 기다리지 않고 슬롯도 쓰지 않는다(`peek`)
 - `WAITING_DELAY`도 `isTerminalOrWaiting()` — 시작·종료 조건부 UPDATE·워커·스냅샷이 종료로 취급한다
 
 ### 노드 단일 테스트 (NodeTestRunner, service/)
@@ -157,7 +157,8 @@ enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROV
 새 컬럼·테이블 (IEUM-BE-117, `docs/schema/V15`):
 - `workflow_runs.resume_at` — 기다리기 재개 시각(가장 늦은 DELAY). `pauseForDelay`·`recordDelayWait`만 쓴다. 인덱스 `(status, resume_at)`(재개 sweeper)
 - `workflow_runs.waiting_delay_nodes` — 대기 DELAY 노드별 출력 JSON `{nodeId: {scheduledFor, queuePosition?}}`. 이력으로 남는다. 읽기는 `waitingDelayNodeMap()`(해석 실패 시 빈 맵 → 재대기, 우회 아님)
-- `delay_queues` — 기다리기 큐(UNIQUE user_id+name, `last_release_at`). 엔티티 `DelayQueue`
+- `delay_queues` — 기다리기 큐(UNIQUE user_id+name, 예약 직렬화용 잠금 행). 엔티티 `DelayQueue`
+- `delay_queue_slots` — 큐 차례(실행 1개당 1행, UNIQUE queue_id+execution_id, INDEX queue_id+release_at, FK 없음). 엔티티 `DelayQueueSlot`
 
 **DDL은 Flyway가 없다** — 마이그레이션 파일 없음. 로컬은 `ddl-auto: update`지만 **dev 배포(Blue/Green)는 `validate`가 강제**라 컬럼·테이블 추가도 자동 반영되지 않는다 — 엔티티를 바꾸면 `docs/schema/V<n>__*.sql`을 남기고 **머지 전에 dev PG에 수동 적용**한다(안 하면 후보 BE가 `Schema-validation: missing column`으로 기동 실패, IEUM-BE-113).
 **`nullable = false` 컬럼을 기존 행이 있는 테이블에 추가할 때는 DDL `DEFAULT`와 엔티티 `@ColumnDefault`가 반드시 필요하다.** 로컬(`update`)에서는 PostgreSQL이 DDL을 거부해도 경고만 남기고 부팅을 계속해 **컬럼 없이 앱이 뜬다.** 테스트는 `ddl-auto: create-drop`(빈 스키마)이라 이 사고를 잡지 못한다 — 이번에 `retry_exhausted`·`alert_target`이 걸릴 뻔했다.

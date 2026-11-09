@@ -604,10 +604,8 @@ public class SyncExecutionRuntime {
                     executionId, workflowId, node.getId(), node.getType()));
                 DelayPlan plan;
                 try {
-                    // ponytail: 큐 슬롯은 여기서 바로 커밋되고 돌려주지 않는다 — 다른 갈래 실패·pauseForDelay 0행·
-                    // 재시작 재배달(슬롯 2개)·취소 때 빈 슬롯만큼 같은 큐의 다음 실행이 밀리고 position이 부푼다.
-                    // 개선 경로: 실행 ID별 슬롯 행을 두고 해제하거나, 해제 시 last_release_at을 보정한다.
-                    plan = delay.plan(node.getEvent(), input, cursor.getContext().getUserId(), true);
+                    // 큐 슬롯은 이 실행 ID로 잡는다 — 재배달이면 같은 슬롯, 실행이 FAILED로 끝나면 대기 수에서 빠진다.
+                    plan = delay.plan(node.getEvent(), input, cursor.getContext().getUserId(), executionId);
                 } catch (DelayFailure f) {
                     completion.submit(() -> new NodeOutcome(node, input,
                         ExecutorResult.failure(f.getMessage(), 0L), 0L, 1, false, false));

@@ -18,8 +18,8 @@ public interface DelayQueueRepository extends JpaRepository<DelayQueue, UUID> {
      * id는 새 UUID라 걸리는 제약은 {@code uk_delay_queues_user_name}뿐이다. bulk INSERT라 감사 시각을 직접 넣는다.
      */
     @Modifying
-    @Query(value = "INSERT INTO delay_queues (id, user_id, name, last_release_at, created_at, updated_at) "
-        + "VALUES (:id, :userId, :name, NULL, :now, :now) ON CONFLICT DO NOTHING", nativeQuery = true)
+    @Query(value = "INSERT INTO delay_queues (id, user_id, name, created_at, updated_at) "
+        + "VALUES (:id, :userId, :name, :now, :now) ON CONFLICT DO NOTHING", nativeQuery = true)
     int insertIfAbsent(@Param("id") UUID id, @Param("userId") UUID userId, @Param("name") String name,
                        @Param("now") LocalDateTime now);
 
@@ -29,4 +29,9 @@ public interface DelayQueueRepository extends JpaRepository<DelayQueue, UUID> {
     Optional<DelayQueue> findForUpdate(@Param("userId") UUID userId, @Param("name") String name);
 
     Optional<DelayQueue> findByUserIdAndName(UUID userId, String name);
+
+    /** 회원 탈퇴 — 그 사용자의 큐 행을 지운다(슬롯을 먼저 지울 것). */
+    @Modifying
+    @Query("DELETE FROM DelayQueue q WHERE q.userId = :userId")
+    void deleteByUserId(@Param("userId") UUID userId);
 }

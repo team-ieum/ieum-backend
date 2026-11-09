@@ -13,6 +13,7 @@ import com.ieum.auth.repository.RefreshTokenRepository;
 import com.ieum.auth.repository.UserRepository;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
+import com.ieum.workflowcore.service.DelayQueueService;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +29,7 @@ public class UserService {
     private final SlackDisconnectService slackDisconnectService;
     private final DiscordDisconnectService discordDisconnectService;
     private final WorkflowCrudService workflowCrudService;
+    private final DelayQueueService delayQueueService;
     private final CredentialRepository credentialRepository;
     private final WebhookCredentialRepository webhookCredentialRepository;
     private final McpServerCatalogRepository mcpServerCatalogRepository;
@@ -68,6 +70,7 @@ public class UserService {
         userRepository.flush();
 
         workflowCrudService.deleteAllByUserId(userId);
+        delayQueueService.deleteAllByUserId(userId);
         credentialRepository.deleteByUserId(userId);
         webhookCredentialRepository.deleteByUserId(userId);
         mcpServerCatalogRepository.deleteByUserId(userId);

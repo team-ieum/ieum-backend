@@ -52,8 +52,12 @@ public class DelayNodeExecutor implements NodeExecutor {
         return NodeType.DELAY;
     }
 
-    /** 재개 시각을 계산한다. {@code reserveQueue}가 false면 큐 슬롯을 쓰지 않는다(노드 테스트). 실패는 {@link DelayFailure}. */
-    public DelayPlan plan(String event, Map<String, Object> input, UUID userId, boolean reserveQueue) {
+    /**
+     * 재개 시각을 계산한다. 실패는 {@link DelayFailure}.
+     *
+     * @param executionId 큐 슬롯을 예약할 실행. null이면 슬롯을 쓰지 않고 차례만 본다(노드 테스트)
+     */
+    public DelayPlan plan(String event, Map<String, Object> input, UUID userId, UUID executionId) {
         Instant now = clock.instant();
         if (event == null || !EVENTS.contains(event)) {
             throw new DelayFailure("지원하지 않는 기다리기예요: " + event);
@@ -61,7 +65,7 @@ public class DelayNodeExecutor implements NodeExecutor {
         return switch (event) {
             case "delay.for" -> new DelayPlan(now.plus(span(input)), now, null);
             case "delay.until" -> new DelayPlan(until(input, now), now, null);
-            default -> queue(input, userId, reserveQueue, now);
+            default -> queue(input, userId, executionId, now);
         };
     }
 
@@ -69,7 +73,7 @@ public class DelayNodeExecutor implements NodeExecutor {
     public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor) {
         long start = System.currentTimeMillis();
         try {
-            DelayPlan plan = plan(node.getEvent(), input, cursor.getContext().getUserId(), false);
+            DelayPlan plan = plan(node.getEvent(), input, cursor.getContext().getUserId(), null);
             Instant waitedUntil = plan.immediate() ? plan.decidedAt() : plan.scheduledFor();
             return ExecutorResult.success(plan.releasedOutput(waitedUntil), System.currentTimeMillis() - start);
         } catch (DelayFailure f) {
@@ -77,13 +81,15 @@ public class DelayNodeExecutor implements NodeExecutor {
         }
     }
 
-    private DelayPlan queue(Map<String, Object> input, UUID userId, boolean reserve, Instant now) {
+    private DelayPlan queue(Map<String, Object> input, UUID userId, UUID executionId, Instant now) {
         Object raw = input.get("queueName");
         String name = raw == null ? "" : String.valueOf(raw).strip();
         if (name.isEmpty()) throw new DelayFailure("'큐 이름' 칸이 비어 있어요");
         if (name.length() > MAX_QUEUE_NAME) throw new DelayFailure("'큐 이름'은 100자 이하여야 해요");
         Duration interval = span(input);
-        Slot slot = reserve ? queues.reserve(userId, name, interval, now) : queues.peek(userId, name, interval, now);
+        Slot slot = executionId != null
+            ? queues.reserve(userId, name, interval, now, executionId)
+            : queues.peek(userId, name, interval, now);
         return new DelayPlan(slot.releaseAt(), now, slot.position());
     }
 
@@ -117,7 +123,7 @@ public class DelayNodeExecutor implements NodeExecutor {
         Object raw = input.get("until");
         Instant target = ConditionValues.date(raw, ZonedDateTime.now(clock))
             .map(ConditionValues.When::instant)
-            .orElseThrow(() -> new DelayFailure("시각으로 읽지 못했어요: '" + raw + "'"));
+            .orElseThrow(() -> new DelayFailure("시각으로 읽지 못했어요: '" + clip(raw) + "'"));
         if (target.isAfter(now)) {
             // 미래면 30일 상한만 본다 — 1분 미만이면 다음 sweep에 재개한다.
             if (target.isAfter(now.plus(MAX_WAIT))) throw new DelayFailure(RANGE);
@@ -128,6 +134,14 @@ public class DelayNodeExecutor implements NodeExecutor {
         }
         return target;
     }
+
+    /** 실패 문구에 싣는 원문은 50자까지 — 상류 참조값(메일 본문 등)이 SSE·로그에 통째로 실리지 않게. */
+    private static String clip(Object raw) {
+        String s = String.valueOf(raw);
+        return s.length() <= MAX_ECHO ? s : s.substring(0, MAX_ECHO) + "…";
+    }
+
+    private static final int MAX_ECHO = 50;
 
     /** 지난 시각을 허용하는 한도. null = 늘 통과(always). */
     private static Duration pastLimit(Object value) {
