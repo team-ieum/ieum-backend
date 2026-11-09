@@ -1,6 +1,7 @@
 package com.ieum.workflowcore.engine.executor;
 
 import java.math.BigDecimal;
+import java.time.DateTimeException;
 import java.time.Duration;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
@@ -224,9 +225,17 @@ public final class ApprovalGateConfig {
                 if (b == null) throw new ApprovalFailure(label + "은 예/아니오여야 해요");
                 yield b;
             }
-            case "date" -> ConditionValues.date(value, ZonedDateTime.now(ConditionValues.KST))
-                .map(w -> DelayPlan.format(w.instant()))
-                .orElseThrow(() -> new ApprovalFailure(label + "을 날짜로 읽지 못했어요: '" + clip(value) + "'"));
+            case "date" -> {
+                String error = label + "을 날짜로 읽지 못했어요: '" + clip(value) + "'";
+                try {
+                    yield ConditionValues.date(value, ZonedDateTime.now(ConditionValues.KST))
+                        .map(w -> DelayPlan.format(w.instant()))
+                        .orElseThrow(() -> new ApprovalFailure(error));
+                } catch (DateTimeException e) {
+                    // 읽히지만 KST로 옮기면 범위 밖인 극단값(+999999999년 등)
+                    throw new ApprovalFailure(error);
+                }
+            }
             case "choice" -> {
                 String s = String.valueOf(value).strip();
                 if (!f.options().contains(s)) throw new ApprovalFailure(label + "은 보기 중에서 골라 주세요");

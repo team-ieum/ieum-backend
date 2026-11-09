@@ -138,6 +138,19 @@ class ApprovalGateConfigTest {
     }
 
     @Test
+    @DisplayName("coerce_극단_날짜는_ApprovalFailure")
+    void extremeDateIsApprovalFailure() {
+        String extreme = "+999999999-12-31T23:59:59Z";
+        Map<String, Object> d = field("d", "date");
+        d.put("default", extreme);
+        ApprovalGateConfig c = ApprovalGateConfig.parse(COLLECT, collect(List.of(d)));
+
+        assertThatThrownBy(() -> ApprovalGateConfig.coerce(c.fields(), Map.of("d", extreme)))
+            .isInstanceOf(ApprovalFailure.class).hasMessageContaining("'d'");
+        assertThat(c.defaultValues()).doesNotContainKey("d");
+    }
+
+    @Test
     @DisplayName("만료_기본값은_변환_실패_칸을_뺀다")
     void defaultValuesSkipUnconvertible() {
         Map<String, Object> n = field("n", "number");
