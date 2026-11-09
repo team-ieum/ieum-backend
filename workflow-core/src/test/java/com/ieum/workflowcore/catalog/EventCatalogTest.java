@@ -98,7 +98,7 @@ class EventCatalogTest {
         assertThat(e.nodeType()).isEqualTo(NodeType.ACTION);
         assertThat(e.triggerType()).isNull();
         assertThat(e.toolKey()).isEqualTo("builtin:github_create_issue");
-        assertThat(e.optionsSources()).containsExactlyInAnyOrder("github.owners", "github.repos");
+        assertThat(e.optionsSources()).containsExactlyInAnyOrder("github.owners", "github.repos", "github.milestones");
         assertThat(CATALOG.triggerTypeOf("github.create_issue")).isEmpty();
     }
 
