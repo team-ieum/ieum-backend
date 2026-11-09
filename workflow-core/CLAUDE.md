@@ -52,6 +52,13 @@
 - 거부된 실행의 게이트 FAILED 행은 재사용 대상(SUCCESS·SKIPPED)이 아니고 만료된 실행엔 게이트 행 자체가 없어, 재처리해도 게이트가 다시 멈춘다 — 우회 경로 없음
 - `WAITING_APPROVAL`은 런타임·워커 입장에서 종료 상태다: `startIfNotTerminal`·`finishIfNotTerminal`·`ExecutionJobWorker`·`loadEventSnapshot`이 전부 종료로 취급한다. 2-인자 `markAsFailed`(고립 sweeper·워커·러너)도 `PENDING`·`RUNNING`만 끝내고 대기는 건드리지 않는다 — **대기를 끝내는 건 승인·거부·만료뿐이다**
 
+### 기다리기 (DELAY, IEUM-BE-117)
+이벤트 `delay.for`(amount·unit)·`delay.until`(until·ifPast)·`delay.queue`(queueName·amount·unit). 재개 시각은 `DelayNodeExecutor.plan`이 계산한다(기다림 1분~30일, 시간대 없는 값은 KST, 실패는 `DelayFailure` = 사용자 문구). 스레드를 붙잡지 않는다 — `dispatch()`가 사전 완료가 아닌 DELAY를 메인 스레드에서 계산해, 실패면 노드 FAILED, 지금 통과면 SUCCESS(`waitedUntil` = 지금)로 제출하고, 그 밖엔 **제출하지 않고** 보류한다(게이트처럼 하류가 막히고 `node_runs` 행도 없다).
+- 루프가 끝나면 실패 우선. 보류 DELAY가 있으면 재개 시각 = 가장 늦은 `scheduledFor`(병렬 DELAY도 함께 해제). 게이트가 없으면 `pauseForDelay`(RUNNING일 때만)로 `WAITING_DELAY` + `EXECUTION_COMPLETED(WAITING_DELAY)`, 실패 알림 없음. 게이트도 있으면 `recordDelayWait`로 재개 시각을 **먼저** 남기고 `pauseForApproval` — 상태는 `WAITING_APPROVAL`이고, 승인이 재개 시각 전이면 api가 `WAITING_DELAY`로 넘긴다. 새 SSE 이벤트는 없다
+- 재개(api `ExecutionDelayService`·`DelayResumeSweeper`) = DELAY 노드마다 `node_runs` SUCCESS 행(`recordDelayRelease`, 출력 `{scheduledFor, queuePosition?, waitedUntil}`) + 원 실행 SUCCESS + `startContinuation`. 이어진 실행에서 DELAY는 사전 완료(SKIPPED)로 통과한다. 취소·비활성 실패한 실행엔 DELAY 행이 없어 재처리하면 다시 기다린다(우회 없음)
+- 큐는 `DelayQueueService`(`delay_queues` 행 잠금, "마지막 내보낼 시각 + 간격", 대기 100개·30일 한도). 노드 테스트는 기다리지 않고 큐 슬롯도 쓰지 않는다(`peek`)
+- `WAITING_DELAY`도 `isTerminalOrWaiting()` — 시작·종료 조건부 UPDATE·워커·스냅샷이 종료로 취급한다
+
 ### 노드 단일 테스트 (NodeTestRunner, service/)
 노드 하나를 `SyncExecutionRuntime` 밖에서 실행하고 `node_test_samples`에 최신 1건으로 upsert한다 — 워크플로우 JSON·`workflow_runs`·`node_runs`엔 쓰지 않는다. 전 타입 — APPROVAL은 실행기 없이 런타임 승인 출력 모양(`{approved: true, approvedBy: 소유자 ID, approvedAt}`)의 SUCCESS 샘플만 저장한다(하류 참조 테스트용).
 - 실행기는 `List<NodeExecutor>`에서 타입으로 골라 직접 부른다. 실행기가 읽는 커서 상태는 userId·traceId·nodeOutputs와 치환 메서드뿐이라 테스트용 `ExecutionContext`·`ExecutionCursor(allNodes=[노드], allEdges=[])`로 충분하다. AI 쿼터 예약·토큰 차감은 실행기 안에 있어 그대로 적용되고 **쓰기 액션은 실제로 실행된다**
@@ -63,7 +70,7 @@
 - 트랜잭션을 걸지 않는다(외부 호출을 한 트랜잭션에 묶지 않기 위해, 저장소 호출은 각자 트랜잭션. OSIV 기본 on이라 커넥션은 요청 끝까지 유지됨)
 
 ### 노드 타입 (NodeType)
-`TRIGGER`, `AI`, `CONDITION`, `HTTP`, `TRANSFORM`, `APPROVAL`, `ACTION` — 7종. 노드 종류의 진실원은 `Node.event`(카탈로그 이벤트 이름 `앱.이벤트`, `EventCatalog`)이고 `type`은 저장 때 event의 `node_type`으로 계산된 값이다. `ACTION`은 앱 도구 하나를 LLM 없이 실행하는 결정론적 노드다(config는 입력 칸 평면 `config.<칸>` + 서버가 쓰는 `brand`, 실행 도구는 노드 `event`의 카탈로그 `tool_key` — `tools`·`serviceType` 없음). 그 외 외부 서비스(Gmail·Notion 등) 연동은 AI 노드의 도구/HTTP 노드로 처리한다. `APPROVAL`은 NodeExecutor가 없다(위 "승인 게이트").
+`TRIGGER`, `AI`, `CONDITION`, `HTTP`, `TRANSFORM`, `APPROVAL`, `ACTION`, `DELAY` — 8종. 노드 종류의 진실원은 `Node.event`(카탈로그 이벤트 이름 `앱.이벤트`, `EventCatalog`)이고 `type`은 저장 때 event의 `node_type`으로 계산된 값이다. `ACTION`은 앱 도구 하나를 LLM 없이 실행하는 결정론적 노드다(config는 입력 칸 평면 `config.<칸>` + 서버가 쓰는 `brand`, 실행 도구는 노드 `event`의 카탈로그 `tool_key` — `tools`·`serviceType` 없음). 그 외 외부 서비스(Gmail·Notion 등) 연동은 AI 노드의 도구/HTTP 노드로 처리한다. `APPROVAL`은 NodeExecutor가 없다(위 "승인 게이트"). `DELAY`는 `DelayNodeExecutor`가 시각만 계산하고 런타임이 보류한다(위 "기다리기").
 
 ### NodeExecutor
 `NodeExecutor` 인터페이스 + 타입별 구현체(`AgentNodeExecutor`, `ActionNodeExecutor`, `ConditionNodeExecutor`, `HttpNodeExecutor`, `TransformNodeExecutor`, `TriggerNodeExecutor`). 결과는 `ExecutorResult`. 트리거 종류는 노드 event → `EventCatalog.triggerTypeOf`(없으면 MANUAL). WEBHOOK·앱 트리거는 심어 둔 페이로드를 그대로 출력한다(config 에코 아님 — config `{}`인 WEBHOOK도 페이로드). MANUAL은 페이로드에 치환된 config(brand 제외)를 덮는다.
@@ -132,7 +139,7 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 | `WorkflowWebhookToken` | `workflow_webhook_tokens` | 웹훅 수신 주소 토큰, 워크플로우당 1개(UNIQUE workflow_id, FK 없음). 평문 없이 SHA-256 hex만 저장, 재발급은 같은 행의 해시 교체. 수신 조회 `findWorkflowIdByToken`은 JDBC(OSIV 커넥션 점유 방지). 삭제는 `deleteWorkflowInternal` |
 | `WorkflowDefinitionDocument` | Mongo | nodes/edges 정의. PG `mongoDefinitionId`로 조인 |
 
-enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROVAL, `ExecutionLogStatus`=SUCCESS/FAILED/SKIPPED, `TriggerType`=MANUAL/WEBHOOK/SCHEDULE/GMAIL_NEW_EMAIL/GITHUB_NEW_ISSUE(종류별 동작은 `trigger/TriggerHandler` — 구독형은 `subscribes()`).
+enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROVAL/WAITING_DELAY, `ExecutionLogStatus`=SUCCESS/FAILED/SKIPPED, `TriggerType`=MANUAL/WEBHOOK/SCHEDULE/GMAIL_NEW_EMAIL/GITHUB_NEW_ISSUE(종류별 동작은 `trigger/TriggerHandler` — 구독형은 `subscribes()`).
 
 새 컬럼 (IEUM-BE-46):
 - `node_runs.attempt_count` — 결과가 나오기까지의 시도 횟수. 재시도 없이 끝나면 1, **`SKIPPED`(재처리 스킵)은 0**
@@ -146,6 +153,11 @@ enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROV
 새 컬럼 (IEUM-BE-45):
 - `workflow_runs.waiting_approval_node_ids` — 멈춘 순간 대기 중인 게이트 ID(JSON 배열 TEXT). `pauseForApproval`만 쓴다. 승인·거부 뒤에도 지우지 않는다(이력) — "대기 중"은 `status = WAITING_APPROVAL`일 때만의 의미. 읽기는 `WorkflowExecution.waitingApprovalNodeIdList()`(해석 실패 시 빈 목록 → 게이트 재대기, 우회 아님)
 - `workflow_runs.approval_deadline` — 멈춘 시각 + `ieum.workflow.approval.timeout`
+
+새 컬럼·테이블 (IEUM-BE-117, `docs/schema/V15`):
+- `workflow_runs.resume_at` — 기다리기 재개 시각(가장 늦은 DELAY). `pauseForDelay`·`recordDelayWait`만 쓴다. 인덱스 `(status, resume_at)`(재개 sweeper)
+- `workflow_runs.waiting_delay_nodes` — 대기 DELAY 노드별 출력 JSON `{nodeId: {scheduledFor, queuePosition?}}`. 이력으로 남는다. 읽기는 `waitingDelayNodeMap()`(해석 실패 시 빈 맵 → 재대기, 우회 아님)
+- `delay_queues` — 기다리기 큐(UNIQUE user_id+name, `last_release_at`). 엔티티 `DelayQueue`
 
 **DDL은 Flyway가 없다** — 마이그레이션 파일 없음. 로컬은 `ddl-auto: update`지만 **dev 배포(Blue/Green)는 `validate`가 강제**라 컬럼·테이블 추가도 자동 반영되지 않는다 — 엔티티를 바꾸면 `docs/schema/V<n>__*.sql`을 남기고 **머지 전에 dev PG에 수동 적용**한다(안 하면 후보 BE가 `Schema-validation: missing column`으로 기동 실패, IEUM-BE-113).
 **`nullable = false` 컬럼을 기존 행이 있는 테이블에 추가할 때는 DDL `DEFAULT`와 엔티티 `@ColumnDefault`가 반드시 필요하다.** 로컬(`update`)에서는 PostgreSQL이 DDL을 거부해도 경고만 남기고 부팅을 계속해 **컬럼 없이 앱이 뜬다.** 테스트는 `ddl-auto: create-drop`(빈 스키마)이라 이 사고를 잡지 못한다 — 이번에 `retry_exhausted`·`alert_target`이 걸릴 뻔했다.

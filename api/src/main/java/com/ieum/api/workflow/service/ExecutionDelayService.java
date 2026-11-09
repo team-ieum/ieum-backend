@@ -1,8 +1,12 @@
 package com.ieum.api.workflow.service;
 
+import com.ieum.api.workflow.dto.WorkflowExecutionResponse;
+import com.ieum.common.exception.CustomException;
+import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
+import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -28,9 +32,29 @@ import org.springframework.transaction.annotation.Transactional;
 public class ExecutionDelayService {
 
     static final String INACTIVE_REASON = "워크플로우가 꺼져 있어 재개하지 않았어요";
+    static final String CANCEL_REASON = "사용자가 취소";
 
     private final WorkflowExecutionService workflowExecutionService;
     private final ExecutionRetryService executionRetryService;
+    private final WorkflowCrudService workflowCrudService;
+
+    /**
+     * 기다리는 실행을 FAILED로 끝낸다. 사용자 결정이라 알림을 거는 {@code markAsFailed}를 타지 않는다(승인 거부와 같다).
+     *
+     * @throws CustomException WORKFLOW_NOT_FOUND(비소유자) / EXECUTION_NOT_WAITING_DELAY(409)
+     */
+    @Transactional
+    public WorkflowExecutionResponse cancel(UUID userId, UUID executionId) {
+        WorkflowExecution execution = workflowExecutionService.lockExecutionWithVersion(executionId);
+        workflowCrudService.getWorkflowByOwner(userId, execution.getWorkflow().getId());
+        if (execution.getStatus() != ExecutionStatus.WAITING_DELAY) {
+            throw new CustomException(ErrorCode.EXECUTION_NOT_WAITING_DELAY, "현재 상태: " + execution.getStatus());
+        }
+        execution.fail();
+        execution.recordError(CANCEL_REASON);
+        log.info("[ExecutionDelayService] 취소 — executionId: {}", executionId);
+        return WorkflowExecutionResponse.from(execution);
+    }
 
     /** @return 이어진 실행 ID. 아무것도 하지 않았으면 empty */
     @Transactional
