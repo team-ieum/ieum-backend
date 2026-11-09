@@ -7,6 +7,7 @@ import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.enums.ExecutionLogStatus;
 import com.ieum.workflowcore.domain.enums.ExecutionStatus;
+import com.ieum.workflowcore.repository.ApprovalGateRepository;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.time.Instant;
@@ -42,6 +43,8 @@ public class ExecutionApprovalService {
     private final WorkflowCrudService workflowCrudService;
     private final WorkflowExecutionService workflowExecutionService;
     private final ExecutionRetryService executionRetryService;
+    private final ApprovalGateRepository approvalGateRepository;
+    private final ApprovalGateService approvalGateService;
 
     /**
      * @return 이어진 새 실행 — 프론트는 이 ID로 SSE를 다시 구독한다. 단 기다리기(DELAY)가 함께 걸렸고 재개 시각 전이면
@@ -57,6 +60,9 @@ public class ExecutionApprovalService {
         Workflow workflow =
             workflowCrudService.getWorkflowByOwner(userId, original.getWorkflow().getId());
         requireWaiting(original);
+        if (hasGates(executionId)) {
+            return approvalGateService.decideAll(userId, executionId, true, null);
+        }
 
         // 하류가 {{nodes.<gate>.output.approvedBy}}로 참조하는 게이트 출력이다.
         Map<String, Object> decision = Map.of(
@@ -92,6 +98,9 @@ public class ExecutionApprovalService {
         WorkflowExecution original = workflowExecutionService.lockExecutionWithVersion(executionId);
         workflowCrudService.getWorkflowByOwner(userId, original.getWorkflow().getId());
         requireWaiting(original);
+        if (hasGates(executionId)) {
+            return approvalGateService.decideAll(userId, executionId, false, reason);
+        }
 
         boolean hasReason = reason != null && !reason.isBlank();
         String errorMessage = hasReason ? "승인 거부: " + reason.strip() : "승인 거부";
@@ -107,6 +116,11 @@ public class ExecutionApprovalService {
 
         log.info("[ExecutionApprovalService] 거부 — executionId: {}", executionId);
         return WorkflowExecutionResponse.from(original);
+    }
+
+    /** 잠근 뒤에 읽는다 — 게이트 행이 없으면 배포 전에 멈춘 레거시 실행이라 아래 일괄 경로 그대로다. */
+    private boolean hasGates(UUID executionId) {
+        return !approvalGateRepository.findByExecutionIdOrderByCreatedAtAsc(executionId).isEmpty();
     }
 
     private void requireWaiting(WorkflowExecution execution) {

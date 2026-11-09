@@ -353,25 +353,35 @@ public class WorkflowExecutionService {
     @Transactional
     public void recordApprovalDecision(WorkflowExecution execution, ExecutionLogStatus status,
             Map<String, Object> output, String errorMessage) {
+        for (String gateId : execution.waitingApprovalNodeIdList()) {
+            recordGateDecision(execution, gateId, status, output, errorMessage);
+        }
+    }
+
+    /**
+     * 게이트 하나의 결정을 {@code node_runs} 한 행으로 남긴다(게이트별 결정, api {@code ApprovalGateService}).
+     * 출력 마스킹은 호출자 몫이다. 호출자 트랜잭션에 참여한다.
+     */
+    @Transactional
+    public void recordGateDecision(WorkflowExecution execution, String nodeId, ExecutionLogStatus status,
+            Map<String, Object> output, String errorMessage) {
         String outputJson;
         try {
             outputJson = objectMapper.writeValueAsString(output);
         } catch (JsonProcessingException e) {
             throw new CustomException(ErrorCode.INTERNAL_SERVER_ERROR, "승인 결정을 기록하지 못했습니다.");
         }
-        for (String gateId : execution.waitingApprovalNodeIdList()) {
-            workflowExecutionLogRepository.save(WorkflowExecutionLog.builder()
-                .execution(execution)
-                .nodeId(gateId)
-                .nodeType(NodeType.APPROVAL)
-                .status(status)
-                .outputJson(outputJson)
-                .errorMessage(errorMessage)
-                .durationMs(0L)
-                .traceId(execution.getTraceId())
-                .attemptCount(0)
-                .build());
-        }
+        workflowExecutionLogRepository.save(WorkflowExecutionLog.builder()
+            .execution(execution)
+            .nodeId(nodeId)
+            .nodeType(NodeType.APPROVAL)
+            .status(status)
+            .outputJson(outputJson)
+            .errorMessage(errorMessage)
+            .durationMs(0L)
+            .traceId(execution.getTraceId())
+            .attemptCount(0)
+            .build());
     }
 
     /**
