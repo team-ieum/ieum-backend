@@ -28,6 +28,7 @@ import java.time.ZoneId;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InOrder;
@@ -73,7 +74,8 @@ class ExecutionDelayServiceTest {
     }
 
     @Test
-    void resume_재개시각_지나면_DELAY_해제_후_이어진실행() {
+    @DisplayName("resume_재개시각_지나면_DELAY_해제_후_이어진실행")
+    void resume_afterResumeAt_releasesDelayAndStartsContinuation() {
         WorkflowExecution continuation = mock(WorkflowExecution.class);
         given(continuation.getId()).willReturn(continuationId);
         given(executionRetryService.startContinuation(workflow, original)).willReturn(continuation);
@@ -88,7 +90,8 @@ class ExecutionDelayServiceTest {
     }
 
     @Test
-    void resume_비활성이면_실패_알림_경로() {
+    @DisplayName("resume_비활성이면_실패_알림_경로")
+    void resume_inactiveWorkflow_failsWithAlert() {
         given(workflow.isActive()).willReturn(false);
 
         Optional<UUID> result = service.resume(executionId, NOW);
@@ -101,7 +104,8 @@ class ExecutionDelayServiceTest {
     }
 
     @Test
-    void resume_이미_취소된_실행은_건드리지_않는다() {
+    @DisplayName("resume_이미_취소된_실행은_건드리지_않는다")
+    void resume_alreadyFailed_doesNothing() {
         given(original.getStatus()).willReturn(ExecutionStatus.FAILED);
 
         assertThat(service.resume(executionId, NOW)).isEmpty();
@@ -109,7 +113,8 @@ class ExecutionDelayServiceTest {
     }
 
     @Test
-    void resume_재개시각_전이면_no_op() {
+    @DisplayName("resume_재개시각_전이면_no_op")
+    void resume_beforeResumeAt_doesNothing() {
         given(original.getResumeAt()).willReturn(local(NOW.plus(Duration.ofMinutes(1))));
 
         assertThat(service.resume(executionId, NOW)).isEmpty();
@@ -117,7 +122,8 @@ class ExecutionDelayServiceTest {
     }
 
     @Test
-    void resume_재개시각_없으면_no_op() {
+    @DisplayName("resume_재개시각_없으면_no_op")
+    void resume_withoutResumeAt_doesNothing() {
         given(original.getResumeAt()).willReturn(null);
 
         assertThat(service.resume(executionId, NOW)).isEmpty();
@@ -136,7 +142,8 @@ class ExecutionDelayServiceTest {
     }
 
     @Test
-    void cancel_대기면_FAILED_사유_알림없음() {
+    @DisplayName("cancel_대기면_FAILED_사유_알림없음")
+    void cancel_waitingDelay_failsWithReasonWithoutAlert() {
         ownedBy(userId);
         doAnswer(i -> given(original.getStatus()).willReturn(ExecutionStatus.FAILED)).when(original).fail();
 
@@ -150,7 +157,8 @@ class ExecutionDelayServiceTest {
     }
 
     @Test
-    void cancel_WAITING_APPROVAL이면_409() {
+    @DisplayName("cancel_WAITING_APPROVAL이면_409")
+    void cancel_waitingApproval_returns409() {
         ownedBy(userId);
         given(original.getStatus()).willReturn(ExecutionStatus.WAITING_APPROVAL);
 
@@ -161,7 +169,23 @@ class ExecutionDelayServiceTest {
     }
 
     @Test
-    void cancel_남의_실행은_상태를_건드리지_않는다() {
+    @DisplayName("cancel_남의_실행이면_WAITING_APPROVAL이어도_WORKFLOW_NOT_FOUND — 소유자 검증이 상태 검사보다 먼저")
+    void cancel_notOwnerAndWaitingApproval_throwsWorkflowNotFound() {
+        given(workflow.getId()).willReturn(workflowId);
+        lenient().when(original.getStatus()).thenReturn(ExecutionStatus.WAITING_APPROVAL);
+        given(workflowCrudService.getWorkflowByOwner(userId, workflowId))
+            .willThrow(new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
+
+        assertThatThrownBy(() -> service.cancel(userId, executionId))
+            .isInstanceOfSatisfying(CustomException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WORKFLOW_NOT_FOUND));
+        verify(original, never()).fail();
+        verify(original, never()).recordError(any());
+    }
+
+    @Test
+    @DisplayName("cancel_남의_실행은_상태를_건드리지_않는다")
+    void cancel_notOwner_leavesStateUntouched() {
         given(workflow.getId()).willReturn(workflowId);
         given(workflowCrudService.getWorkflowByOwner(userId, workflowId))
             .willThrow(new CustomException(ErrorCode.WORKFLOW_NOT_FOUND));
@@ -174,7 +198,8 @@ class ExecutionDelayServiceTest {
     }
 
     @Test
-    void 응답에_재개시각과_대기노드() {
+    @DisplayName("응답에_재개시각과_대기노드")
+    void response_carriesResumeAtAndWaitingDelayNodeIds() {
         LocalDateTime t = local(NOW);
         lenient().when(original.getWorkflowVersion()).thenReturn(mock(WorkflowVersion.class));
         given(workflow.getId()).willReturn(workflowId);
