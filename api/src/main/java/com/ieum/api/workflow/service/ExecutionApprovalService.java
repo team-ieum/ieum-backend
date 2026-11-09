@@ -10,6 +10,7 @@ import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -63,6 +64,16 @@ public class ExecutionApprovalService {
             "approvedAt", Instant.now().toString());
         workflowExecutionService.recordApprovalDecision(
             original, ExecutionLogStatus.SUCCESS, decision, null);
+        // 기다리기와 함께 멈춘 실행 — 둘 다 풀려야 이어간다. 재개 시각 전이면 기다리기로 넘기고 sweeper가 이어간다.
+        if (!original.waitingDelayNodeMap().isEmpty()) {
+            if (original.getResumeAt() != null && original.getResumeAt().isAfter(LocalDateTime.now())) {
+                original.waitForDelay();
+                log.info("[ExecutionApprovalService] 승인 — 재개 시각 전이라 기다리기로 남김. executionId: {}",
+                    executionId);
+                return WorkflowExecutionResponse.from(original);
+            }
+            workflowExecutionService.recordDelayRelease(original, Instant.now());
+        }
         original.complete();
         WorkflowExecution continuation = executionRetryService.startContinuation(workflow, original);
 
