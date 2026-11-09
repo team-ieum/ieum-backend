@@ -4,6 +4,9 @@ import com.ieum.workflowcore.domain.enums.NodeType;
 import com.ieum.workflowcore.engine.ExecutionCursor;
 import com.ieum.workflowcore.engine.ExecutorResult;
 import com.ieum.workflowcore.engine.Node;
+import com.ieum.workflowcore.util.SensitiveDataMasker;
+import java.time.Clock;
+import java.time.ZonedDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +30,18 @@ import org.springframework.stereotype.Component;
 @Component
 public class TransformNodeExecutor implements NodeExecutor {
 
+    private static final String FORMATTER_PREFIX = "formatter.";
+
+    private final Clock clock;
+
+    public TransformNodeExecutor() {
+        this(Clock.system(ConditionValues.KST));
+    }
+
+    TransformNodeExecutor(Clock clock) {
+        this.clock = clock;
+    }
+
     @Override
     public NodeType getNodeType() {
         return NodeType.TRANSFORM;
@@ -37,6 +52,11 @@ public class TransformNodeExecutor implements NodeExecutor {
     public ExecutorResult execute(Node node, Map<String, Object> input, ExecutionCursor cursor) {
         long startTime = System.currentTimeMillis();
         log.info("[TransformExecutor] 노드 실행 — nodeId: {}", node.getId());
+
+        String event = node.getEvent();
+        if (event != null && event.startsWith(FORMATTER_PREFIX)) {
+            return format(node, event, input, startTime);
+        }
 
         try {
             Map<String, Object> config = node.getConfig();
@@ -58,6 +78,24 @@ public class TransformNodeExecutor implements NodeExecutor {
 
         } catch (Exception e) {
             log.error("[TransformExecutor] 실행 실패 — nodeId: {}", node.getId(), e);
+            return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime);
+        }
+    }
+
+    /** 포맷터는 런타임이 넘긴 input(이미 치환된 사본)만 읽는다 — node config·renderVariables 금지(이중 치환 방지). */
+    private ExecutorResult format(Node node, String event, Map<String, Object> input, long startTime) {
+        try {
+            Map<String, Object> output = Formatter.apply(event, input, ZonedDateTime.now(clock));
+            return ExecutorResult.success(output, System.currentTimeMillis() - startTime);
+        } catch (FormatterFailure e) {
+            // 메시지의 입력 요약에 웹훅 URL이 들어올 수 있다 — 로그엔 가린 값만(결과 메시지는 런타임이 가린다)
+            log.warn("[TransformExecutor] 포맷터 실패 — nodeId: {}, {}",
+                node.getId(), SensitiveDataMasker.maskWebhookUrl(e.getMessage()));
+            return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime);
+        } catch (Exception e) {
+            // 스택트레이스는 원문 메시지를 찍으므로 남기지 않는다
+            log.error("[TransformExecutor] 포맷터 실행 실패 — nodeId: {}, {}: {}", node.getId(),
+                e.getClass().getName(), SensitiveDataMasker.maskWebhookUrl(e.getMessage()));
             return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime);
         }
     }
