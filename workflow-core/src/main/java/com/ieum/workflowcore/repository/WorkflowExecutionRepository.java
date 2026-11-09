@@ -183,6 +183,39 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
     int pauseForApproval(@Param("id") UUID id, @Param("nodeIds") String waitingNodeIdsJson,
                          @Param("deadline") LocalDateTime deadline, @Param("now") LocalDateTime now);
 
+    /**
+     * {@code RUNNING}인 실행만 기다리기로 멈춘다({@code WAITING_DELAY} + 재개 시각·대기 노드). 멈췄으면 1, 아니면 0.
+     * {@link #pauseForApproval}과 같은 이유의 조건부 UPDATE다.
+     */
+    @Transactional
+    @Modifying
+    @Query("UPDATE WorkflowExecution e "
+        + "SET e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_DELAY, "
+        + "e.resumeAt = :resumeAt, e.waitingDelayNodes = :delayNodes, e.updatedAt = :now "
+        + "WHERE e.id = :id "
+        + "AND e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.RUNNING")
+    int pauseForDelay(@Param("id") UUID id, @Param("resumeAt") LocalDateTime resumeAt,
+                      @Param("delayNodes") String delayNodesJson, @Param("now") LocalDateTime now);
+
+    /**
+     * {@code RUNNING}인 실행에 재개 시각·대기 노드만 기록한다(상태는 그대로). 승인과 함께 멈출 때
+     * {@link #pauseForApproval}보다 먼저 불러, 승인 API가 대기 상태를 보는 순간 재개 시각이 이미 있게 한다.
+     */
+    @Transactional
+    @Modifying
+    @Query("UPDATE WorkflowExecution e "
+        + "SET e.resumeAt = :resumeAt, e.waitingDelayNodes = :delayNodes, e.updatedAt = :now "
+        + "WHERE e.id = :id "
+        + "AND e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.RUNNING")
+    int recordDelayWait(@Param("id") UUID id, @Param("resumeAt") LocalDateTime resumeAt,
+                        @Param("delayNodes") String delayNodesJson, @Param("now") LocalDateTime now);
+
+    /** 재개 시각이 지난 기다리기 실행의 ID(재개 sweeper용). */
+    @Query("SELECT e.id FROM WorkflowExecution e "
+        + "WHERE e.status = com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_DELAY "
+        + "AND e.resumeAt <= :now")
+    List<UUID> findDueDelayIds(@Param("now") LocalDateTime now);
+
     List<WorkflowExecution> findByWorkflow(Workflow workflow);
 
     @Modifying(clearAutomatically = true)

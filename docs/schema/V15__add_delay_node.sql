@@ -26,3 +26,11 @@ CREATE TABLE delay_queues (
     updated_at      TIMESTAMP    NOT NULL,
     CONSTRAINT uk_delay_queues_user_name UNIQUE (user_id, name)
 );
+
+-- 3부: 실행 행에 기다리기 재개 시각·대기 노드. 엔티티는 WorkflowExecution(resumeAt·waitingDelayNodes).
+-- nullable이라 옛 BE validate도 통과 — 먼저 적용해도 안전하다. 인덱스는 재개 sweeper 조회(status, resume_at)용.
+ALTER TABLE workflow_runs
+    ADD COLUMN resume_at TIMESTAMP,
+    ADD COLUMN waiting_delay_nodes TEXT;
+
+CREATE INDEX idx_workflow_runs_status_resume_at ON workflow_runs (status, resume_at);

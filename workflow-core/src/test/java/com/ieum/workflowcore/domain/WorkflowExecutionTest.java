@@ -24,4 +24,19 @@ class WorkflowExecutionTest {
         ReflectionTestUtils.setField(execution, "waitingApprovalNodeIds", "null");
         assertThat(execution.waitingApprovalNodeIdList()).isNotNull().isEmpty();
     }
+
+    @Test
+    @DisplayName("기다리는 DELAY 노드 맵은 JSON 객체 컬럼을 읽는다 — 비었거나 깨졌으면 빈 맵(대기 우회가 아니라 재대기 쪽으로 실패)")
+    void waitingDelayNodeMap_읽기() {
+        WorkflowExecution execution = WorkflowExecution.builder().build();
+        assertThat(execution.waitingDelayNodeMap()).isEmpty();
+
+        ReflectionTestUtils.setField(execution, "waitingDelayNodes",
+            "{\"d1\":{\"scheduledFor\":\"2026-11-09T10:40:00+09:00\",\"queuePosition\":2}}");
+        assertThat(execution.waitingDelayNodeMap()).isEqualTo(java.util.Map.of(
+            "d1", java.util.Map.of("scheduledFor", "2026-11-09T10:40:00+09:00", "queuePosition", 2)));
+
+        ReflectionTestUtils.setField(execution, "waitingDelayNodes", "{깨짐");
+        assertThat(execution.waitingDelayNodeMap()).isEmpty();
+    }
 }

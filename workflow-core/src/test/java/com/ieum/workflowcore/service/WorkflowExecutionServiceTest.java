@@ -556,6 +556,38 @@ class WorkflowExecutionServiceTest {
     }
 
     @Test
+    @DisplayName("기다리기 해제는 대기 DELAY 노드마다 SUCCESS 한 행 — 저장된 출력 + waitedUntil")
+    void recordDelayRelease_노드마다_SUCCESS_한_행() throws Exception {
+        WorkflowExecution execution = mock(WorkflowExecution.class);
+        Map<String, Map<String, Object>> waiting = new java.util.LinkedHashMap<>();
+        waiting.put("d1", new java.util.LinkedHashMap<>(Map.of(
+            "scheduledFor", "2026-11-09T10:40:00+09:00", "queuePosition", 2)));
+        waiting.put("d2", new java.util.LinkedHashMap<>(Map.of("scheduledFor", "2026-11-09T12:30:00+09:00")));
+        given(execution.waitingDelayNodeMap()).willReturn(waiting);
+        given(execution.getTraceId()).willReturn("11112222333344445555666677778888");
+
+        service.recordDelayRelease(execution, java.time.Instant.parse("2026-11-09T03:30:20Z"));
+
+        ArgumentCaptor<WorkflowExecutionLog> captor = ArgumentCaptor.forClass(WorkflowExecutionLog.class);
+        verify(workflowExecutionLogRepository, times(2)).save(captor.capture());
+        assertThat(captor.getAllValues()).extracting(WorkflowExecutionLog::getNodeId).containsExactly("d1", "d2");
+        assertThat(captor.getAllValues()).allSatisfy(row -> {
+            assertThat(row.getExecution()).isSameAs(execution);
+            assertThat(row.getNodeType()).isEqualTo(NodeType.DELAY);
+            assertThat(row.getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
+            assertThat(row.getDurationMs()).isZero();
+            assertThat(row.getAttemptCount()).isZero();
+            assertThat(row.getTraceId()).isEqualTo("11112222333344445555666677778888");
+        });
+        Map<?, ?> d1 = new ObjectMapper().readValue(captor.getAllValues().get(0).getOutputJson(), Map.class);
+        assertThat(d1).isEqualTo(Map.of("scheduledFor", "2026-11-09T10:40:00+09:00", "queuePosition", 2,
+            "waitedUntil", "2026-11-09T12:30:20+09:00"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> d2 = new ObjectMapper().readValue(captor.getAllValues().get(1).getOutputJson(), Map.class);
+        assertThat(d2).doesNotContainKey("queuePosition");
+    }
+
+    @Test
     @DisplayName("markAsFailed가 상태를 전이시키면 실패 알림을 발신한다")
     void markAsFailed_statusTransitioned_sendsAlert() {
         UUID executionId = UUID.randomUUID();

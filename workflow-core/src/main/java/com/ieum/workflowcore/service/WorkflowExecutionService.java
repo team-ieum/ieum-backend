@@ -17,6 +17,7 @@ import com.ieum.workflowcore.domain.enums.TriggerType;
 import com.ieum.workflowcore.engine.event.ExecutionEvent;
 import com.ieum.workflowcore.engine.event.ExecutionEventSnapshot;
 import com.ieum.workflowcore.engine.executor.AlertNotifier;
+import com.ieum.workflowcore.engine.executor.DelayPlan;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowQueryRepository;
@@ -233,6 +234,11 @@ public class WorkflowExecutionService {
         return workflowExecutionRepository.findExpiredApprovalIds(now);
     }
 
+    /** 재개 시각이 {@code now} 이하인 {@code WAITING_DELAY} 실행의 ID(기다리기 재개 sweeper용). */
+    public List<UUID> findDueDelayExecutionIds(LocalDateTime now) {
+        return workflowExecutionRepository.findDueDelayIds(now);
+    }
+
     /**
      * 실행 시점 버전까지 즉시 로딩해 조회한다. 조회한 버전을 트랜잭션·영속성 컨텍스트 밖
      * (@Async 실행 스레드 등)으로 넘길 때 쓴다 — {@link #getExecution}이 주는 lazy 프록시를
@@ -359,6 +365,36 @@ public class WorkflowExecutionService {
                 .status(status)
                 .outputJson(outputJson)
                 .errorMessage(errorMessage)
+                .durationMs(0L)
+                .traceId(execution.getTraceId())
+                .attemptCount(0)
+                .build());
+        }
+    }
+
+    /**
+     * 기다리기 해제를 대기 DELAY 노드마다 {@code node_runs} SUCCESS 한 행으로 남긴다({@link #recordApprovalDecision}과
+     * 같은 모양). 출력 = 저장된 대기 출력 + {@code waitedUntil}. 이어진 실행이 이 출력으로 DELAY를 SKIPPED 통과시킨다.
+     * 출력은 시각·순번뿐이라 마스킹하지 않는다. 호출자 트랜잭션에 참여한다.
+     */
+    @Transactional
+    public void recordDelayRelease(WorkflowExecution execution, Instant waitedUntil) {
+        String waited = DelayPlan.format(waitedUntil);
+        for (Map.Entry<String, Map<String, Object>> node : execution.waitingDelayNodeMap().entrySet()) {
+            Map<String, Object> output = new LinkedHashMap<>(node.getValue());
+            output.put("waitedUntil", waited);
+            String outputJson;
+            try {
+                outputJson = objectMapper.writeValueAsString(output);
+            } catch (JsonProcessingException e) {
+                throw new CustomException(ErrorCode.INTERNAL_SERVER_ERROR, "기다리기 해제를 기록하지 못했습니다.");
+            }
+            workflowExecutionLogRepository.save(WorkflowExecutionLog.builder()
+                .execution(execution)
+                .nodeId(node.getKey())
+                .nodeType(NodeType.DELAY)
+                .status(ExecutionLogStatus.SUCCESS)
+                .outputJson(outputJson)
                 .durationMs(0L)
                 .traceId(execution.getTraceId())
                 .attemptCount(0)
