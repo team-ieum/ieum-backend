@@ -14,3 +14,15 @@ ALTER TABLE node_runs
     DROP CONSTRAINT node_runs_node_type_check,
     ADD CONSTRAINT node_runs_node_type_check
         CHECK (node_type IN ('TRIGGER', 'AI', 'CONDITION', 'HTTP', 'TRANSFORM', 'APPROVAL', 'ACTION', 'DELAY'));
+
+-- 2부: 기다리기 큐(delay.queue). 사용자·이름 단위 행 하나를 잠가 "마지막 내보낼 시각 + 간격"으로 차례를 정한다.
+-- 엔티티는 DelayQueue. dev는 validate라 자동으로 생기지 않는다 — 새 테이블이라 옛 BE validate도 통과하므로 먼저 적용해도 안전하다.
+CREATE TABLE delay_queues (
+    id              UUID         PRIMARY KEY,
+    user_id         UUID         NOT NULL,
+    name            VARCHAR(100) NOT NULL,
+    last_release_at TIMESTAMP,
+    created_at      TIMESTAMP    NOT NULL,
+    updated_at      TIMESTAMP    NOT NULL,
+    CONSTRAINT uk_delay_queues_user_name UNIQUE (user_id, name)
+);
