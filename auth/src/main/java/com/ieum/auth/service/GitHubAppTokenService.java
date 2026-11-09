@@ -44,6 +44,7 @@ public class GitHubAppTokenService {
     // api 모듈 GitHubIssueSource.REPO_NOT_INSTALLED와 같은 글자(모듈 방향상 참조 불가 — 복사)
     static final String REPO_NOT_INSTALLED =
         "이 레포에 GitHub 앱 설치가 필요합니다. GitHub App 설치 범위에 저장소를 추가해 주세요.";
+    static final String PERMISSION_NOT_APPROVED = "설치 계정에서 GitHub App의 새 권한(Pull requests)을 승인해 주세요.";
     private static final Duration REFRESH_MARGIN = Duration.ofMinutes(5);
     private static final Pattern PATH_SEGMENT = Pattern.compile("[A-Za-z0-9_.-]+");
 
@@ -144,6 +145,10 @@ public class GitHubAppTokenService {
         }
         if (status == 404) {
             return new CustomException(ErrorCode.INVALID_INPUT, REPO_NOT_INSTALLED);
+        }
+        // 422 = 요청한 권한(pull_requests:write)을 설치 계정이 아직 승인하지 않음 — 관리자가 아니라 설치 계정이 고친다
+        if (status == 422) {
+            return new CustomException(ErrorCode.INVALID_INPUT, PERMISSION_NOT_APPROVED);
         }
         // 401(JWT 거부: 키·client-id 불일치)·그 밖 4xx(App 권한 부족 등) — 사용자가 못 고치는 서버 설정 문제
         return new CustomException(ErrorCode.GITHUB_BOT_NOT_CONFIGURED);

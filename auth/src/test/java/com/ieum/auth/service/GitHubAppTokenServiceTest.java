@@ -183,6 +183,21 @@ class GitHubAppTokenServiceTest {
     }
 
     @Test
+    @DisplayName("access_tokens 422(새 권한 미승인)는 INVALID_INPUT·설치 계정 승인 문구")
+    void access_tokens_422는_권한_승인_문구() {
+        server.expect(requestTo(API + "/repos/o/r/installation"))
+            .andRespond(withSuccess("{\"id\":42}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(API + "/app/installations/42/access_tokens"))
+            .andRespond(withStatus(HttpStatus.UNPROCESSABLE_ENTITY));
+
+        assertThatThrownBy(() -> service.installationToken("o", "r"))
+            .isInstanceOfSatisfying(CustomException.class, e -> {
+                assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_INPUT);
+                assertThat(e.getMessage()).isEqualTo("설치 계정에서 GitHub App의 새 권한(Pull requests)을 승인해 주세요.");
+            });
+    }
+
+    @Test
     @DisplayName("응답 token이 공백이면 GITHUB_API_UNAVAILABLE이고 캐시하지 않는다(다음 호출은 다시 발급)")
     void 빈_token은_GITHUB_API_UNAVAILABLE() {
         server.expect(requestTo(API + "/repos/o/r/installation"))

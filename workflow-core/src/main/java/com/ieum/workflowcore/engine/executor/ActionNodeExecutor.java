@@ -110,6 +110,13 @@ public class ActionNodeExecutor implements NodeExecutor {
                 return ExecutorResult.failure("ACTION 노드에 카탈로그 ACTION event가 필요합니다.",
                     System.currentTimeMillis() - startTime, FailureKind.CLIENT_ERROR);
             }
+            // event·author는 카탈로그 ref:false지만 agent 정적 검증은 fail-open이고 노드 테스트는 거치지 않는다 —
+            // AI 출력 참조식으로 봇이 APPROVE하지 못하게 렌더 전 원본에서 막는다
+            if (SUBMIT_PR_REVIEW.equals(toolKey) && node.getConfig() != null
+                && (isReference(node.getConfig().get("event")) || isReference(node.getConfig().get("author")))) {
+                return ExecutorResult.failure("리뷰 작성자·리뷰 결과 칸에는 참조식을 쓸 수 없어요",
+                    System.currentTimeMillis() - startTime, FailureKind.CLIENT_ERROR);
+            }
 
             // 합성 도구 하나만 전처리한다 — config 안의 다른 키(tools 등)가 토큰 조회·인증 헤더에 끼어들지 못한다.
             // brand는 서버가 쓰는 표시용 키라 agent에 보내지 않는다. 사본이라 노드 원본은 그대로다.
@@ -192,6 +199,10 @@ public class ActionNodeExecutor implements NodeExecutor {
             return ExecutorResult.failure(e.getMessage(), System.currentTimeMillis() - startTime,
                 FailureClassifier.fromException(e));
         }
+    }
+
+    private static boolean isReference(Object value) {
+        return value instanceof String s && s.contains("{{");
     }
 
     private static String stringOrNull(Object value) {

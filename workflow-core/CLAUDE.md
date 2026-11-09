@@ -79,7 +79,7 @@
 3-인자 `execute(node, input, cursor)`가 기본이고, 외부 호출이 멱등 가드를 적용해야 하는 Executor(HTTP·AI·ACTION)만 4-인자 오버로드 `execute(node, input, cursor, NodeAttempt)`를 override한다. `NodeAttempt(attempt, idempotencyKey, policy)`가 회차·멱등성 키·재시도 정책을 실어 온다 — **`ExecutionCursor`/`ExecutionContext`에 attempt 정보를 넣지 말 것**(워커 스레드 간 공유 객체다).
 
 ### Provider 포트 + Stub 패턴
-workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능은 **포트 인터페이스**로 선언하고 api 모듈이 구현체를 제공한다. 포트마다 `@ConditionalOnMissingBean` Stub이 있어 workflow-core 단독 테스트가 가능하다 (현재 13개).
+workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능은 **포트 인터페이스**로 선언하고 api 모듈이 구현체를 제공한다. 포트마다 `@ConditionalOnMissingBean` Stub이 있어 workflow-core 단독 테스트가 가능하다 (현재 14개).
 
 | 포트 | 실구현 위치 |
 |------|------------|
@@ -87,6 +87,7 @@ workflow-core는 api/auth 모듈에 의존할 수 없으므로, 필요한 기능
 | `GoogleTokenProvider` | api (OAuth 토큰) |
 | `NotionTokenProvider` | api (OAuth 토큰) |
 | `GitHubTokenProvider` | api (OAuth 토큰) |
+| `GitHubBotTokenProvider` | api (C7 PR 리뷰 봇 설치 토큰 — 설치 범위·쓰기 권한 확인 뒤. Stub은 늘 `GITHUB_BOT_NOT_CONFIGURED`. `ActionNodeExecutor`가 `builtin:github_submit_pr_review`이고 `author`≠`me`(없음 포함)일 때만 `X-GitHub-Token`을 덮는다 — `ToolAuthResolver`엔 두지 않는다(AI 노드로 봇 토큰이 샌다). `event`·`author` 원본에 `{{`가 있으면 노드 실패) |
 | `SlackTokenProvider` | api (Slack 봇 토큰 — 미연결이면 `SLACK_NOT_CONNECTED` 예외) |
 | `DiscordAccessProvider` | api (Discord 봇 토큰 + 사용자 연결 서버 ID — 링크 0이면 `DISCORD_NOT_CONNECTED` 예외) |
 | `WebhookCredentialProvider` | api (송신 웹훅 URL + 실패 알림 대상 웹훅) |

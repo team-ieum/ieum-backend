@@ -529,6 +529,24 @@ class ActionNodeExecutorTest {
         verify(botTokenProvider, never()).getBotToken(any(), any(), any());
     }
 
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"event", "author"})
+    @DisplayName("[M5] C7의 event·author 원본 값에 참조식이 있으면 마커·봇·agent 전에 노드 실패")
+    void submit_pr_review_참조식이면_노드_실패(String key) {
+        Node node = reviewNode("bot");
+        node.getConfig().put(key, "{{nodes.ai-1.output.decision}}");
+
+        ExecutorResult result = executor.execute(node, NO_INPUT, cursor(userId),
+            new NodeExecutor.NodeAttempt(1, "idem-key", policy(1, IdempotencyMode.MARKER)));
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getErrorMessage()).isEqualTo("리뷰 작성자·리뷰 결과 칸에는 참조식을 쓸 수 없어요");
+        assertThat(result.getFailureKind()).isEqualTo(FailureKind.CLIENT_ERROR);
+        assertThat(mockWebServer.getRequestCount()).isZero();
+        verify(idempotencyStore, never()).markInFlight(any(), any());
+        verify(botTokenProvider, never()).getBotToken(any(), any(), any());
+    }
+
     @Test
     @DisplayName("봇 거부 예외는 노드 실패(메시지 그대로, 재시도 없음) — agent를 부르지 않는다")
     void 봇_거부_예외는_노드_실패() {
