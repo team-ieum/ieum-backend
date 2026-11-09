@@ -259,4 +259,12 @@ class TextFormatsTest {
         assertThat(out("text_url_encode", "input", "")).isEqualTo("");
         assertThat(out("text_length", "input", "")).isEqualTo(0L);
     }
+
+    @Test
+    @Timeout(value = 1, unit = TimeUnit.SECONDS)
+    @DisplayName("text_extract url: 끝에 짝 없는 닫는 괄호가 10만 개 가까이 붙어도 선형으로 떼어 낸다")
+    void urlTrailingParensLinear() {
+        assertThat(out("text_extract", "input", "https://a" + ")".repeat(99_990), "kind", "url"))
+            .isEqualTo("https://a");
+    }
 }

@@ -6,6 +6,7 @@ import static com.ieum.workflowcore.engine.executor.FormatterInputs.list;
 import static com.ieum.workflowcore.engine.executor.FormatterInputs.positiveInt;
 import static com.ieum.workflowcore.engine.executor.FormatterInputs.text;
 
+import java.math.BigDecimal;
 import java.time.ZonedDateTime;
 import java.util.HashMap;
 import java.util.List;
@@ -20,7 +21,7 @@ final class ListFormats {
 
     /** 키는 글자 그대로(앞뒤 공백만 제거). 값은 문자열이면 그대로, 그 밖은 JSON 글자, null은 {@code ""}. */
     static Map<String, Object> lookupTable(Map<String, Object> in, ZonedDateTime now) {
-        if (!(in.get("table") instanceof Map<?, ?> table)) {
+        if (!(table(in.get("table")) instanceof Map<?, ?> table)) {
             throw new FormatterFailure("'대응표' 칸이 대응표(키-값) 모양이 아니에요");
         }
         if (table.size() > FormatterInputs.MAX_ITEMS) {
@@ -37,7 +38,12 @@ final class ListFormats {
         return Map.of("output", value == null ? "" : json(value));
     }
 
-    /** 고른 원소를 그대로(객체면 Map). JSON null 원소는 null 출력. */
+    /** 참조식으로 치환된 대응표는 JSON 객체 문자열로 온다 — {@code {}로 시작하고 객체로 읽히면 Map. */
+    private static Object table(Object value) {
+        return value instanceof String s && s.strip().startsWith("{") ? FormatterInputs.jsonObject(s.strip()) : value;
+    }
+
+    /** 고른 원소를 그대로(객체면 Map, 소수는 plain 글자). JSON null 원소는 null 출력. */
     static Map<String, Object> pick(Map<String, Object> in, ZonedDateTime now) {
         List<Object> items = items(in);
         if (items.isEmpty()) {
@@ -51,8 +57,9 @@ final class ListFormats {
         if (i >= items.size()) {
             throw new FormatterFailure((i + 1) + "번째 항목이 없어요(목록 " + items.size() + "개)");
         }
+        Object picked = items.get(i);
         Map<String, Object> out = new HashMap<>();
-        out.put("output", items.get(i));
+        out.put("output", picked instanceof BigDecimal d ? d.toPlainString() : picked);
         return out;
     }
 

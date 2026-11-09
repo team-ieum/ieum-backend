@@ -117,8 +117,13 @@ final class DateFormats {
     private static ConditionValues.When read(
         Map<String, Object> in, String key, String fieldTitle, ZonedDateTime now, ZoneId zone) {
         String s = FormatterInputs.required(in, key, fieldTitle);
-        return ConditionValues.date(s, now, zone).orElseThrow(() ->
-            new FormatterFailure("'" + FormatterInputs.summary(s) + "'를 날짜로 읽지 못했어요"));
+        FormatterFailure failure = new FormatterFailure("'" + FormatterInputs.summary(s) + "'를 날짜로 읽지 못했어요");
+        try {
+            return ConditionValues.date(s, now, zone).orElseThrow(() -> failure);
+        } catch (DateTimeException e) {
+            // 범위 끝 값(+999999999-12-31T23:59:59-18:00)은 KST 날짜로 바꾸다 넘친다
+            throw failure;
+        }
     }
 
     /** 비우면 KST. */

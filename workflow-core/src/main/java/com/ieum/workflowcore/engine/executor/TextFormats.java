@@ -220,13 +220,20 @@ final class TextFormats {
                 break;
             }
         }
+        // 괄호 짝은 한 번 세고 끝 글자를 뗄 때마다 갱신 — 매번 다시 세면 O(L²)이고 이 루프는 정규식 마감 밖이다
+        int parens = 0;
+        int brackets = 0;
+        for (int i = 0; i < g.length(); i++) {
+            char c = g.charAt(i);
+            parens += c == ')' ? 1 : c == '(' ? -1 : 0;
+            brackets += c == ']' ? 1 : c == '[' ? -1 : 0;
+        }
         int end = g.length();
         while (end > 0) {
             char c = g.charAt(end - 1);
-            String head = g.substring(0, end);
-            if (URL_TRAILING.indexOf(c) >= 0
-                || c == ')' && unbalanced(head, '(', ')')
-                || c == ']' && unbalanced(head, '[', ']')) {
+            if (URL_TRAILING.indexOf(c) >= 0 || c == ')' && parens > 0 || c == ']' && brackets > 0) {
+                parens += c == ')' ? -1 : c == '(' ? 1 : 0;
+                brackets += c == ']' ? -1 : c == '[' ? 1 : 0;
                 end--;
             } else {
                 break;
@@ -235,10 +242,6 @@ final class TextFormats {
         g = g.substring(0, end);
         String rest = g.substring(g.indexOf("://") + 3);
         return rest.isEmpty() || !Character.isLetterOrDigit(rest.charAt(0)) ? null : g;
-    }
-
-    private static boolean unbalanced(String s, char open, char close) {
-        return s.chars().filter(ch -> ch == close).count() > s.chars().filter(ch -> ch == open).count();
     }
 
     private static List<Object> capped(List<Object> items) {

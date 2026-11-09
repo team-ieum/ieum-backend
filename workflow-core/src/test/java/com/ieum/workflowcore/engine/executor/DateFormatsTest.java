@@ -146,4 +146,27 @@ class DateFormatsTest {
         fails("date_add", "input", "", "expression", "+1일");
         fails("date_compare", "input", "", "other", "2026-11-07");
     }
+
+    private static final String EDGE = "+999999999-12-31T23:59:59-18:00";
+
+    @Test
+    @DisplayName("date_format: 읽는 중 범위를 넘는 날짜는 '날짜로 읽지 못했어요' 실패")
+    void formatReadOutOfRange() {
+        assertThatThrownBy(() -> run("date_format", "input", EDGE))
+            .isInstanceOf(FormatterFailure.class).hasMessageContaining("날짜로 읽지 못했어요");
+    }
+
+    @Test
+    @DisplayName("date_add: 읽는 중 범위를 넘는 날짜는 '날짜로 읽지 못했어요' 실패")
+    void addReadOutOfRange() {
+        assertThatThrownBy(() -> run("date_add", "input", EDGE, "expression", "+1일"))
+            .isInstanceOf(FormatterFailure.class).hasMessageContaining("날짜로 읽지 못했어요");
+    }
+
+    @Test
+    @DisplayName("date_compare: 읽는 중 범위를 넘는 날짜는 '날짜로 읽지 못했어요' 실패")
+    void compareReadOutOfRange() {
+        assertThatThrownBy(() -> run("date_compare", "input", "2026-11-07", "other", EDGE))
+            .isInstanceOf(FormatterFailure.class).hasMessageContaining("날짜로 읽지 못했어요");
+    }
 }

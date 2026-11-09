@@ -48,7 +48,7 @@ class ListFormatsTest {
         assertThat(out("lookup_table", "input", "URGENT", "table", TABLE, "fallback", "x")).isEqualTo("x");
         assertThat(out("lookup_table", "input", "URGENT", "table", TABLE)).isEqualTo("");
         assertThat(out("lookup_table", "input", "", "table", TABLE, "fallback", "x")).isEqualTo("");
-        fails("lookup_table", "input", "urgent", "table", "{\"urgent\":\"긴급\"}");
+        fails("lookup_table", "input", "urgent", "table", "urgent=긴급");
         fails("lookup_table", "input", "urgent");
         Map<String, Object> big = new HashMap<>();
         for (int i = 0; i <= FormatterInputs.MAX_ITEMS; i++) {
@@ -135,5 +135,26 @@ class ListFormatsTest {
         fails("list_to_text", "input", "a", "separator", "x".repeat(FormatterInputs.MAX_TEXT + 1));
         fails("list_to_text", "input", List.of("y".repeat(60_000), "z".repeat(60_000)));
         assertThat(out("list_to_text", "input", many, "separator", "x".repeat(10))).asString().hasSize(99_990);
+    }
+
+    @Test
+    @DisplayName("목록 속 소수는 지수 표기 없이·정밀도 그대로 글자로 나간다")
+    void decimalsStayPlain() {
+        assertThat(out("list_to_text", "input", "[12345678.9, 0.0001, 100000000000000000000.5]"))
+            .isEqualTo("12345678.9, 0.0001, 100000000000000000000.5");
+        assertThat(out("list_pick", "input", "[12345678.9]")).isEqualTo("12345678.9");
+        assertThat(out("list_pick", "input", "[0.0001]")).isEqualTo("0.0001");
+        ExecutionCursor cursor = new ExecutionCursor();
+        cursor.setContext(new ExecutionContext());
+        cursor.getContext().setNodeOutput("f", run("list_pick", "input", "[{\"price\":12345678.9}]"));
+        assertThat(cursor.renderVariables("{{nodes.f.output.output}}")).isEqualTo("{\"price\":12345678.9}");
+    }
+
+    @Test
+    @DisplayName("lookup_table: 참조식으로 치환된 JSON 객체 문자열 대응표를 읽고, 객체가 아니면 실패")
+    void lookupTableJsonString() {
+        assertThat(out("lookup_table", "table", "{\"x\":\"y\"}", "input", "x")).isEqualTo("y");
+        fails("lookup_table", "table", "[1]", "input", "x");
+        fails("lookup_table", "table", "{broken", "input", "x");
     }
 }

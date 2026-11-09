@@ -1,5 +1,6 @@
 package com.ieum.workflowcore.engine.executor;
 
+import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,9 +23,14 @@ final class FormatterInputs {
 
     private static final int SUMMARY_LENGTH = 50;
 
-    /** 뒤 글자를 거절해야 {@code "[2026] 보고서"}가 배열로 읽히지 않는다. 스레드 안전하다. */
+    /**
+     * 뒤 글자를 거절해야 {@code "[2026] 보고서"}가 배열로 읽히지 않는다. 소수는 BigDecimal로 읽고 plain으로 써서
+     * {@code 12345678.9}가 {@code 1.23456789E7}이 되지 않는다. 스레드 안전하다.
+     */
     private static final ObjectMapper JSON = new ObjectMapper()
-        .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+        .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+        .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+        .enable(JsonGenerator.Feature.WRITE_BIGDECIMAL_AS_PLAIN);
 
     private FormatterInputs() {
     }
@@ -114,10 +120,25 @@ final class FormatterInputs {
         }
     }
 
-    /** 문자열은 그대로, 그 밖은 JSON. */
+    /** JSON 객체 문자열 → Map, 읽지 못하면 null. 10만 자 초과는 실패. */
+    static Map<?, ?> jsonObject(String s) {
+        if (s.length() > MAX_TEXT) {
+            throw new FormatterFailure("'table' 칸이 10만 자를 넘어요");
+        }
+        try {
+            return JSON.readValue(s, Map.class);
+        } catch (JsonProcessingException e) {
+            return null;
+        }
+    }
+
+    /** 문자열은 그대로, BigDecimal은 plain 글자, 그 밖은 JSON. */
     static String json(Object value) {
         if (value instanceof String s) {
             return s;
+        }
+        if (value instanceof BigDecimal d) {
+            return d.toPlainString();
         }
         try {
             return JSON.writeValueAsString(value);
