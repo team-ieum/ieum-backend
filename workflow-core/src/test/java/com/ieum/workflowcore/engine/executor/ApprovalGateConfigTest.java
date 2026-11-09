@@ -92,6 +92,18 @@ class ApprovalGateConfigTest {
     }
 
     @Test
+    @DisplayName("민감_키_이름은_실패")
+    void sensitiveKeyNameFails() {
+        assertThatThrownBy(() -> ApprovalGateConfig.parse(REQUEST,
+                Map.of("items", List.of(Map.of("key", "apiKey", "value", "x")))))
+            .isInstanceOf(ApprovalFailure.class)
+            .hasMessage("'apiKey'은 민감정보 이름이라 쓸 수 없어요. 다른 이름을 써 주세요");
+        assertThatThrownBy(() -> ApprovalGateConfig.parse(COLLECT, collect(List.of(field("maxTokens", "number")))))
+            .isInstanceOf(ApprovalFailure.class)
+            .hasMessage("'maxTokens'은 민감정보 이름이라 쓸 수 없어요. 다른 이름을 써 주세요");
+    }
+
+    @Test
     @DisplayName("choice는_options_필수")
     void choiceRequiresOptions() {
         assertThatThrownBy(() -> ApprovalGateConfig.parse(COLLECT, collect(List.of(field("pick", "choice")))))

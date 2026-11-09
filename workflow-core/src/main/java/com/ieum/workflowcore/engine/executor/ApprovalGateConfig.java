@@ -1,5 +1,6 @@
 package com.ieum.workflowcore.engine.executor;
 
+import com.ieum.workflowcore.util.SensitiveDataMasker;
 import java.math.BigDecimal;
 import java.time.DateTimeException;
 import java.time.Duration;
@@ -346,6 +347,10 @@ public final class ApprovalGateConfig {
         String key = raw == null ? "" : String.valueOf(raw);
         if (!KEY.matcher(key).matches()) {
             throw new ApprovalFailure("이름은 영문·숫자·밑줄로 써 주세요: '" + clip(key) + "'");
+        }
+        // 마스킹 대상 이름이면 값이 하류에서 조용히 ***가 된다
+        if (SensitiveDataMasker.isSensitiveKey(key)) {
+            throw new ApprovalFailure("'" + key + "'은 민감정보 이름이라 쓸 수 없어요. 다른 이름을 써 주세요");
         }
         if (!seen.add(key)) throw new ApprovalFailure("이름이 겹쳐요: '" + key + "'");
         return key;

@@ -59,8 +59,7 @@ class ApprovalGateRecorderTest {
     @DisplayName("렌더 결과는 item마다 마스킹하고 상한에서 자른다")
     void 렌더_결과는_마스킹하고_자른다() throws Exception {
         ApprovalGateConfig config = request(List.of(
-            Map.of("key", "apiKey", "value", "sk-1"),
-            Map.of("key", "hook", "value", "https://discord.com/api/webhooks/1/abc"),
+            Map.of("key", "draft", "value", "초안: https://discord.com/api/webhooks/1/abc"),
             Map.of("key", "big", "value", "x".repeat(12_000))));
 
         recorder.record(executionId, workflowId, userId, Map.of("g", config), now, d -> 1);
@@ -68,9 +67,8 @@ class ApprovalGateRecorderTest {
         assertThat(rows).hasSize(1);
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> items = (List<Map<String, Object>>) view(rows.get(0)).get("items");
-        assertThat(items.get(0).get("value")).isEqualTo("***");
-        assertThat((String) items.get(1).get("value")).doesNotContain("abc").contains("discord.com/api/webhooks/");
-        assertThat((String) items.get(2).get("value")).hasSize(10_001);
+        assertThat((String) items.get(0).get("value")).doesNotContain("abc").startsWith("초안: https://discord.com/api/webhooks/");
+        assertThat((String) items.get(1).get("value")).hasSize(10_001).endsWith("…");
     }
 
     @Test
@@ -112,7 +110,7 @@ class ApprovalGateRecorderTest {
             "message", "확인: https://discord.com/api/webhooks/1/abc",
             "reminder", true,
             "fields", List.of(
-                Map.of("key", "token", "default", "sk-1"),
+                Map.of("key", "note1", "default", "https://discord.com/api/webhooks/3/dft"),
                 Map.of("key", "hook", "label", "https://discord.com/api/webhooks/2/lbl",
                     "default", "https://discord.com/api/webhooks/1/abc"))));
 
@@ -120,11 +118,11 @@ class ApprovalGateRecorderTest {
 
         ApprovalGate gate = rows.get(0);
         Map<String, Object> view = view(gate);
-        assertThat(gate.getViewJson()).doesNotContain("abc").doesNotContain("lbl").doesNotContain("sk-1");
+        assertThat(gate.getViewJson()).doesNotContain("abc").doesNotContain("lbl").doesNotContain("dft");
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> fields = (List<Map<String, Object>>) view.get("fields");
-        assertThat(fields.get(0).get("default")).isEqualTo("***");
-        assertThat(fields.get(0).get("key")).isEqualTo("token");
+        assertThat((String) fields.get(0).get("default")).contains("discord.com/api/webhooks/");
+        assertThat(fields.get(0).get("key")).isEqualTo("note1");
         assertThat((String) fields.get(1).get("default")).contains("discord.com/api/webhooks/");
         assertThat((String) view.get("message")).startsWith("확인: https://discord.com/api/webhooks/");
         // view 키 이름이 민감 키로 걸려 통째로 가려지지 않는다

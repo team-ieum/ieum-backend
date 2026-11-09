@@ -164,7 +164,7 @@ public final class SensitiveDataMasker {
         return Pattern.compile("(?i)https://" + prefix + "/[^\\s\"']+");
     }
 
-    private static boolean isSensitiveKey(String key) {
+    public static boolean isSensitiveKey(String key) {
         String lowered = key.toLowerCase();
         return SENSITIVE_KEYS.stream().anyMatch(s -> lowered.contains(s.toLowerCase()));
     }
