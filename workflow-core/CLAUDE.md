@@ -46,6 +46,7 @@
 ### 승인 게이트 (HITL, IEUM-BE-45)
 `APPROVAL` 노드는 NodeExecutor가 없다 — `dispatch()`가 사전 완료 출력(`preCompleted`)이 없는 APPROVAL을 **제출하지 않고** 대기 목록에 넣고 `APPROVAL_REQUESTED`를 발행한다. 제출하지 않으니 `propagate`가 불리지 않아 하류의 남은 입력 수가 줄지 않는다 — 미승인 게이트의 하류는 이 실행에서 절대 ready가 되지 않는다. 게이트와 무관한 분기는 계속 돈다.
 - 루프가 끝나면: 실패 있음 → `FAILED`(실패가 대기보다 우선) / 대기 게이트 있음 → `pauseForApproval` 조건부 UPDATE(`RUNNING`일 때만)로 `WAITING_APPROVAL` + `EXECUTION_COMPLETED(WAITING_APPROVAL)` / 둘 다 없음 → `SUCCESS`. 0행이면 `publishAlreadyFinished`. **실패 알림 없음**
+- 게이트 config는 `ApprovalGateConfig`(engine/executor, `approval.request`·`approval.collect`, 기한 5분~7일, 잘못되면 `ApprovalFailure` → 게이트 FAILED)가 해석한다. 대기 전이와 게이트 행(`approval_gates`) 기록은 `ApprovalGateRecorder.record`가 **한 트랜잭션**으로 한다 — 전이(RUNNING일 때만)에 성공했을 때만 그 실행의 기존 게이트 행을 지우고 이번 집합을 새로 쓴다(재배달은 이번 게이트만 남김, 중복 런타임은 남의 결정을 안 지움). 결정은 api `ApprovalGateService`
 - `dispatch()`에서 사전 완료 검사가 executor 조회보다 **먼저**다 — 승인 뒤 이어진 실행에서 게이트는 재처리 스킵 경로(SKIPPED)로 통과한다. 순서를 뒤집으면 APPROVAL에서 "NodeExecutor 없음"이 난다. `execute()`의 executor 사전 검증도 APPROVAL만 뺀다
 - CONDITION 죽은 분기의 게이트는 dispatch되지 않아 대기에 들지 않는다. 그래서 대기 집합을 그래프에서 역산하지 않고 `waiting_approval_node_ids`에 저장한다
 - 승인(api `ExecutionApprovalService`) = 게이트마다 `node_runs` SUCCESS 행(출력 `{approved, approvedBy, approvedAt}`, `WorkflowExecutionService.recordApprovalDecision`) + 원 실행 SUCCESS + 재처리와 같은 경로로 이어진 새 실행(`retriedBy` 링크). 거부 = 게이트 FAILED 행 + 원 실행 FAILED(`error_message = "승인 거부: <사유>"`, 사유 없으면 `"승인 거부"`), 알림 없음. 만료 = sweeper가 `markAsFailed(id, "승인 만료", WAITING_APPROVAL)`, 알림 있음
@@ -60,7 +61,7 @@
 - `WAITING_DELAY`도 `isTerminalOrWaiting()` — 시작·종료 조건부 UPDATE·워커·스냅샷이 종료로 취급한다
 
 ### 노드 단일 테스트 (NodeTestRunner, service/)
-노드 하나를 `SyncExecutionRuntime` 밖에서 실행하고 `node_test_samples`에 최신 1건으로 upsert한다 — 워크플로우 JSON·`workflow_runs`·`node_runs`엔 쓰지 않는다. 전 타입 — APPROVAL은 실행기 없이 런타임 승인 출력 모양(`{approved: true, approvedBy: 소유자 ID, approvedAt}`)의 SUCCESS 샘플만 저장한다(하류 참조 테스트용).
+노드 하나를 `SyncExecutionRuntime` 밖에서 실행하고 `node_test_samples`에 최신 1건으로 upsert한다 — 워크플로우 JSON·`workflow_runs`·`node_runs`엔 쓰지 않는다. 전 타입 — APPROVAL은 실행기 없이 소유자가 처리한 결정 출력 모양(request: `approved`·`decision`·`approvedBy`·`approvedAt`·`reviewer`·`content`(렌더된 items) / collect: `decision:submitted`·…·`values`(`defaultValues()`))의 샘플을 저장한다(하류 참조 테스트용, 참조 샘플 규칙은 다른 노드와 같고 설정 오류는 FAILED).
 - 실행기는 `List<NodeExecutor>`에서 타입으로 골라 직접 부른다. 실행기가 읽는 커서 상태는 userId·traceId·nodeOutputs와 치환 메서드뿐이라 테스트용 `ExecutionContext`·`ExecutionCursor(allNodes=[노드], allEdges=[])`로 충분하다. AI 쿼터 예약·토큰 차감은 실행기 안에 있어 그대로 적용되고 **쓰기 액션은 실제로 실행된다**
 - **단일 시도** — 재시도·모델 fallback 없음. `NodeAttempt(1, "test-<uuid>:<nodeId>", RetryPolicy.from(...))`, MARKER 모드면 러너가 `clearInFlight`
 - config가 **직접 참조한** 노드의 SUCCESS 샘플만 `nodeOutputs`에 넣는다(`ExecutionCursor.referencedNodeIds`). 하나라도 없으면 `TestSampleMissingException`(400, `missingNodeIds`). 실패(FAILED) 샘플은 참조 해석에 쓰지 않고, **실패한 재테스트는 이전 SUCCESS 샘플을 덮어쓴다**
@@ -152,7 +153,7 @@ enum 실제 값: `ExecutionStatus`=PENDING/RUNNING/SUCCESS/FAILED/WAITING_APPROV
 
 새 컬럼 (IEUM-BE-45):
 - `workflow_runs.waiting_approval_node_ids` — 멈춘 순간 대기 중인 게이트 ID(JSON 배열 TEXT). `pauseForApproval`만 쓴다. 승인·거부 뒤에도 지우지 않는다(이력) — "대기 중"은 `status = WAITING_APPROVAL`일 때만의 의미. 읽기는 `WorkflowExecution.waitingApprovalNodeIdList()`(해석 실패 시 빈 목록 → 게이트 재대기, 우회 아님)
-- `workflow_runs.approval_deadline` — 멈춘 시각 + `ieum.workflow.approval.timeout`
+- `workflow_runs.approval_deadline` — 남은(결정 안 된) 게이트 기한의 최솟값(IEUM-BE-119). 기한은 노드별(`ApprovalGateConfig`, 5분~7일)이고, 멈출 때 쓰고 결정·만료 뒤 다시 계산한다
 
 새 컬럼·테이블 (IEUM-BE-117, `docs/schema/V15`):
 - `workflow_runs.resume_at` — 기다리기 재개 시각(가장 늦은 DELAY). `pauseForDelay`·`recordDelayWait`만 쓴다. 인덱스 `(status, resume_at)`(재개 sweeper)
@@ -197,11 +198,9 @@ Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `Sche
 `WorkflowScheduleJob`은 `ExecutionJobEnqueuer`로 api의 잡 큐에 넣고 바로 반환한다(IEUM-BE-51) — 수동·웹훅·재처리와 같은 재시작 복구를 받는다. 투입이 실패하면(Redis 장애·Stub) 유실되지 않게 `SyncExecutionRuntime`을 직접 부르고, 이 경우만 내구성이 없다.
 **겹침 방지는 `@DisallowConcurrentExecution`만으로 성립하지 않는다** — 잡이 실행 끝까지 블록하지 않으니 다음 발화가 그대로 들어온다. 그래서 같은 워크플로우에 끝나지 않은(PENDING/RUNNING) SCHEDULE 실행이 있으면 `prepareExecution` 전에 스킵한다(`WorkflowExecutionService.hasUnfinishedScheduleRun`). 판정은 `startedAt > now - workflow.execution.stuck.threshold`로 하한을 둔다 — sweeper는 `RUNNING`만 정리하므로 준비만 되고 버려진 고아 `PENDING`이 하한 없이 잡히면 그 스케줄이 **영구히 멈춘다.** `@DisallowConcurrentExecution`은 여전히 필요하다(JobKey가 워크플로우당 1개라 판정↔레코드 생성 사이에 다른 발화가 끼지 않게 직렬화). 재처리 API가 만든 실행도 원본의 `triggerType`(SCHEDULE)을 물려받으므로 겹침 판정에 걸린다.
 
-`WorkflowCleanupScheduler`는 세 가지를 돈다(셋 다 `@Scheduled` cron, Quartz 아님):
+`WorkflowCleanupScheduler`는 두 가지를 돈다(둘 다 `@Scheduled` cron, Quartz 아님). 승인 만료는 api `ApprovalGateSweeper`가 맡는다:
 - `cleanupOrphanWorkflows()` — 고아 빈 워크플로우 hard delete
 - `failStuckRunningExecutions()` — **고립 `RUNNING` 실행 sweeper**(IEUM-BE-50). 프로세스가 죽어 런타임이 종료 처리를 못 한 실행은 영원히 `RUNNING`으로 남고, 재처리 API가 `FAILED`만 받으므로 다시 돌릴 수 없다. 재처리로 생긴 실행이 이렇게 굳으면 원본까지 "재처리 진행 중"으로 판정돼 **영구히 막힌다.** 확정은 `WorkflowExecutionService.markAsFailed()`에 맡긴다 — 런타임 밖 실패 확정 경로가 이미 종료 상태 가드·알림·커밋 후 발신을 갖췄다. 런타임의 `finalizeFailure`는 실행 중 인스턴스 상태를 쥔 private 경로라 타지 않는다. `retryExhausted`는 false(재시도 소진이 아니라 재시도 판정 자체가 못 이뤄진 실패)
-- `expireWaitingApprovals()` — 승인 기한(`approval_deadline`)이 지난 `WAITING_APPROVAL`을 `markAsFailed(id, "승인 만료", WAITING_APPROVAL)`로 확정(IEUM-BE-45) — 기대 상태를 넘겨 그 사이 승인·거부로 끝난 실행은 건드리지 않는다. 행 잠금이라 같은 순간의 승인·거부와 하나만 이긴다. SSE는 건드리지 않는다(멈출 때 이미 닫혔다). 정밀도는 주기(10분)
-
 ## 설정 (workflow-core가 읽는 키)
 | 키 | 기본값 | 용도 |
 |----|--------|------|
@@ -213,8 +212,6 @@ Quartz. `WorkflowScheduler`(등록/해제), `WorkflowScheduleJob`(실행), `Sche
 | `workflow.execution.retry.max-backoff-ms` | 30000 | 단일 대기 상한 |
 | `workflow.execution.retry.jitter` | true | full jitter 적용 여부 |
 | `workflow.execution.stuck.threshold` | `PT2H` | 이 시간 넘게 `RUNNING`인 실행을 고립으로 보고 `FAILED`로 확정. **내리지 말 것** — 잡 큐 회수(`reclaim-min-idle` 10분)로 복구될 실행을 먼저 FAILED로 굳히면 워커가 종료 상태로 보고 건너뛰어 복구가 취소된다. 스케줄 겹침 판정의 하한으로도 쓴다 |
-| `ieum.workflow.approval.timeout` | `PT24H` | 승인 게이트 기한(멈춘 시각 + 이 값). `SyncExecutionRuntime`의 `@Value` 기본값이고 yml에 선언돼 있지 않다 |
-
 `retry.*`는 `RetryProperties`(`@ConfigurationProperties`)의 필드 기본값이고 yml에 선언돼 있지 않다 — 장애 시 `ai-max-attempts: 1`로 재시도를 전역으로 끌 수 있게 코드 상수가 아니라 설정으로 뒀다. 노드 config의 `retry` 선언이 이 기본값보다 우선한다.
 
 ## 주의사항

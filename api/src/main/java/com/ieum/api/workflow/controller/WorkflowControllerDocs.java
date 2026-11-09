@@ -410,7 +410,9 @@ public interface WorkflowControllerDocs {
             @Parameter(description = "재처리할 실행 ID") UUID executionId);
 
     @Operation(summary = "승인 대기 실행 승인",
-        description = "WAITING_APPROVAL 실행의 대기 게이트를 모두 승인하고, 게이트 다음부터 이어지는 새 실행을 "
+        description = "레거시 일괄 처리 — 게이트별 처리는 /api/v1/approvals/{gateId}/approve. "
+            + "남은 approval.collect 게이트가 있으면 409 APPROVAL_GATE_ACTION_MISMATCH. "
+            + "WAITING_APPROVAL 실행의 남은 대기 게이트를 모두 승인하고, 게이트 다음부터 이어지는 새 실행을 "
             + "만든다(원 실행은 SUCCESS). 게이트 앞에서 이미 성공한 노드는 재사용되어 SKIPPED로 기록된다. "
             + "응답은 **새 실행**이다 — 진행 SSE는 새 실행 ID로 다시 구독할 것. 게이트 출력 "
             + "`{approved, approvedBy, approvedAt}`은 하류에서 `{{nodes.<게이트ID>.output.approvedBy}}`로 참조한다. "
@@ -423,7 +425,10 @@ public interface WorkflowControllerDocs {
             @Parameter(description = "승인할 실행 ID") UUID executionId);
 
     @Operation(summary = "승인 대기 실행 거부",
-        description = "WAITING_APPROVAL 실행을 FAILED로 끝낸다(errorMessage = \"승인 거부: <사유>\"). "
+        description = "레거시 일괄 처리 — 남은 대기 게이트 전부를 거절한다(게이트별은 /api/v1/approvals/{gateId}/reject). "
+            + "남은 approval.collect 게이트가 있으면 409 APPROVAL_GATE_ACTION_MISMATCH. "
+            + "남은 게이트가 모두 onReject=continue면 이어가고, 아니면 "
+            + "WAITING_APPROVAL 실행을 FAILED로 끝낸다(errorMessage = \"승인 거부: <사유>\"). "
             + "사용자 결정이라 실패 알림은 가지 않는다. 본문과 사유는 선택이며 사유는 200자 이하. "
             + "워크플로우 소유자만 가능. 대기 상태가 아니면 409.")
     @PreAuthorize("hasRole('USER')")

@@ -446,6 +446,49 @@ class NodeTestRunnerTest {
     }
 
     @Test
+    @DisplayName("승인 요청 샘플은 decision·reviewer와 렌더된 검토 내용(content)을 싣는다")
+    void 승인_요청_샘플에_decision과_content() {
+        seed(workflow, "ai", SampleStatus.SUCCESS, "{\"reply\":\"초안입니다\"}");
+        Node gate = new Node("gate", NodeType.APPROVAL, "승인", new HashMap<>(Map.of("items",
+            List.of(Map.of("key", "draft", "value", "{{nodes.ai.output.reply}}")))), "approval.request");
+
+        NodeTestResult result = runner.run(workflow, gate, Map.of());
+
+        assertThat(result.status()).isEqualTo(SampleStatus.SUCCESS);
+        assertThat(result.output()).containsEntry("approved", true).containsEntry("decision", "approved")
+            .containsEntry("approvedBy", userId.toString()).containsKey("approvedAt")
+            .containsEntry("content", Map.of("draft", "초안입니다"));
+        assertThat(result.output().get("reviewer"))
+            .isEqualTo(new HashMap<>(Map.of("via", "web", "id", userId.toString())) {{ put("name", null); }});
+    }
+
+    @Test
+    @DisplayName("값 입력받기 샘플은 decision:submitted와 타입대로 바꾼 기본값(values)을 싣는다")
+    void 값_입력_샘플은_기본값() {
+        Node gate = new Node("gate", NodeType.APPROVAL, "값 입력", new HashMap<>(Map.of("fields",
+            List.of(Map.of("key", "count", "type", "number", "default", "3")))), "approval.collect");
+
+        NodeTestResult result = runner.run(workflow, gate, Map.of());
+
+        assertThat(result.status()).isEqualTo(SampleStatus.SUCCESS);
+        assertThat(result.output()).containsEntry("decision", "submitted").containsKeys("approvedBy", "approvedAt")
+            .doesNotContainKey("approved");
+        assertThat(runner.findSample(workflow.getId(), "gate").orElseThrow().output())
+            .containsEntry("values", Map.of("count", 3));
+    }
+
+    @Test
+    @DisplayName("사람 확인 설정이 잘못되면 그 문구로 FAILED 샘플을 남긴다")
+    void 승인_설정_오류는_실패_샘플() {
+        Node gate = new Node("gate", NodeType.APPROVAL, "값 입력", new HashMap<>(), "approval.collect");
+
+        NodeTestResult result = runner.run(workflow, gate, Map.of());
+
+        assertThat(result.status()).isEqualTo(SampleStatus.FAILED);
+        assertThat(result.error()).isEqualTo("입력받을 칸을 하나 이상 추가해 주세요");
+    }
+
+    @Test
     @DisplayName("DELAY는 기다리지 않고 예정 시각을 샘플로 남긴다 — 실행기 조회 경로로 돈다")
     void DELAY_노드는_기다리지_않고_예정_시각을_샘플로() {
         java.time.Clock fixedClock = java.time.Clock.fixed(

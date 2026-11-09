@@ -17,6 +17,8 @@ import com.ieum.workflowcore.engine.ExecutorResult;
 import com.ieum.workflowcore.engine.FailureClassifier;
 import com.ieum.workflowcore.engine.Node;
 import com.ieum.workflowcore.engine.RetryPolicy;
+import com.ieum.workflowcore.engine.executor.ApprovalFailure;
+import com.ieum.workflowcore.engine.executor.ApprovalGateConfig;
 import com.ieum.workflowcore.engine.executor.IdempotencyStore;
 import com.ieum.workflowcore.engine.executor.NodeExecutor;
 import com.ieum.workflowcore.repository.NodeTestSampleRepository;
@@ -81,23 +83,52 @@ public class NodeTestRunner {
      * @param node     테스트할 노드(편집 중 정의 또는 저장된 노드)
      * @param input    MANUAL 트리거의 페이로드 또는 앱 트리거 정규화 페이로드. 그 외 노드는 쓰지 않는다
      * @throws TestSampleMissingException 직접 참조한 노드 중 SUCCESS 샘플이 없는 것이 있을 때
-     * @throws CustomException            실행기가 없는 타입일 때(INVALID_INPUT). APPROVAL은 실행 없이 승인 출력 샘플을 남긴다
+     * @throws CustomException            실행기가 없는 타입일 때(INVALID_INPUT). APPROVAL은 실행 없이 결정 출력 샘플을 남긴다
      */
     public NodeTestResult run(Workflow workflow, Node node, Map<String, Object> input) {
         if (node.getType() == NodeType.TRIGGER) {
             return runTrigger(workflow, node, input);
         }
-        if (node.getType() == NodeType.APPROVAL) {
-            // 실행기 없이 런타임 승인 출력(ExecutionApprovalService.approve)과 같은 모양을 샘플로 남긴다 —
-            // 하류의 {{nodes.<gate>.output.approvedBy}} 참조를 테스트할 수 있게. 승인은 소유자만 하므로 값도 같다.
-            return saveSample(workflow, node.getId(), ExecutorResult.success(Map.of(
-                "approved", true, "approvedBy", workflow.getUserId().toString(),
-                "approvedAt", Instant.now().toString()), 0));
-        }
-        NodeExecutor executor = executorFor(node);
+        NodeExecutor executor = node.getType() == NodeType.APPROVAL ? null : executorFor(node);
         ExecutionCursor cursor = newCursor(workflow, node);
         loadReferencedSamples(workflow, node, cursor.getContext());
+        if (executor == null) {
+            return saveSample(workflow, node.getId(), approvalSample(workflow, node, renderedConfig(node, cursor)));
+        }
         return saveSample(workflow, node.getId(), execute(executor, node, renderedConfig(node, cursor), cursor));
+    }
+
+    /**
+     * 실행기 없이 런타임 결정 출력(api {@code ApprovalGateService})과 같은 모양을 샘플로 남긴다 — 하류 참조 테스트용.
+     * 처리는 소유자만 하므로 값도 같다. {@code reviewer.name}은 auth 조회가 없어 null이다.
+     */
+    private ExecutorResult approvalSample(Workflow workflow, Node node, Map<String, Object> rendered) {
+        ApprovalGateConfig config;
+        try {
+            config = ApprovalGateConfig.parse(node.getEvent(), rendered);
+        } catch (ApprovalFailure e) {
+            return ExecutorResult.failure(e.getMessage(), 0);
+        }
+        String owner = workflow.getUserId().toString();
+        Map<String, Object> reviewer = new LinkedHashMap<>();
+        reviewer.put("via", "web");
+        reviewer.put("id", owner);
+        reviewer.put("name", null);
+        Map<String, Object> output = new LinkedHashMap<>();
+        boolean collect = ApprovalGateConfig.COLLECT.equals(config.event());
+        if (!collect) {
+            output.put("approved", true);
+        }
+        output.put("decision", collect ? "submitted" : "approved");
+        output.put("approvedBy", owner);
+        output.put("approvedAt", Instant.now().toString());
+        output.put("reviewer", reviewer);
+        if (collect) {
+            output.put("values", config.defaultValues());
+        } else {
+            output.put("content", config.contentValues());
+        }
+        return ExecutorResult.success(output, 0);
     }
 
     /**
