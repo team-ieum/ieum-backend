@@ -11,6 +11,7 @@ import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.ApprovalGate;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.repository.ApprovalGateRepository;
+import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowRepository;
 import java.util.List;
 import java.util.Map;
@@ -34,6 +35,7 @@ public class ApprovalQueryService {
 
     private final ApprovalGateRepository approvalGateRepository;
     private final WorkflowRepository workflowRepository;
+    private final WorkflowExecutionRepository workflowExecutionRepository;
     private final ObjectMapper objectMapper;
 
     /** 커서는 기존 실행 목록과 같은 페이지 번호 문자열이다. size는 1~50으로 맞춘다. */
@@ -65,7 +67,9 @@ public class ApprovalQueryService {
             .filter(g -> g.getUserId().equals(userId))
             .orElseThrow(() -> new CustomException(ErrorCode.APPROVAL_GATE_NOT_FOUND));
         String workflowName = workflowRepository.findById(gate.getWorkflowId()).map(Workflow::getName).orElse(null);
-        return ApprovalGateDetailResponse.from(gate, workflowName, view(gate));
+        String executionStatus = workflowExecutionRepository.findById(gate.getExecutionId())
+            .map(e -> e.getStatus().name()).orElse(null);
+        return ApprovalGateDetailResponse.from(gate, workflowName, view(gate), executionStatus);
     }
 
     private String title(ApprovalGate gate) {

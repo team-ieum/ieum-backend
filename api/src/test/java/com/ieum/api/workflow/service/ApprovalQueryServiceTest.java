@@ -16,6 +16,10 @@ import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.domain.ApprovalGate;
 import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.repository.ApprovalGateRepository;
+import com.ieum.workflowcore.domain.WorkflowExecution;
+import com.ieum.workflowcore.domain.enums.ExecutionStatus;
+import com.ieum.workflowcore.domain.enums.TriggerType;
+import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.WorkflowRepository;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -43,6 +47,7 @@ class ApprovalQueryServiceTest {
 
     @Mock private ApprovalGateRepository approvalGateRepository;
     @Mock private WorkflowRepository workflowRepository;
+    @Mock private WorkflowExecutionRepository workflowExecutionRepository;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
     @InjectMocks private ApprovalQueryService service;
 
@@ -82,6 +87,27 @@ class ApprovalQueryServiceTest {
         ApprovalGateDetailResponse detail = service.detail(userId, mine.getId());
         assertThat(detail.getView()).containsEntry("message", "내 것");
         assertThat(detail.getWorkflowName()).isEqualTo("결재");
+    }
+
+    @Test
+    @DisplayName("상세는 실행 상태를 싣는다 — 거절(멈춤)로 닫힌 실행의 남은 게이트는 decision이 null이어도 처리할 수 없다")
+    void 상세_실행상태를_싣는다() throws Exception {
+        ApprovalGate open = gate(userId, "대기");
+        ApprovalGate closed = gate(userId, "닫힘");
+        given(workflowExecutionRepository.findById(open.getExecutionId()))
+            .willReturn(Optional.of(execution(ExecutionStatus.WAITING_APPROVAL)));
+        given(workflowExecutionRepository.findById(closed.getExecutionId()))
+            .willReturn(Optional.of(execution(ExecutionStatus.FAILED)));
+
+        assertThat(service.detail(userId, open.getId()).getExecutionStatus()).isEqualTo("WAITING_APPROVAL");
+        ApprovalGateDetailResponse detail = service.detail(userId, closed.getId());
+        assertThat(detail.getDecision()).isNull();
+        assertThat(detail.getExecutionStatus()).isEqualTo("FAILED");
+    }
+
+    private WorkflowExecution execution(ExecutionStatus status) {
+        return WorkflowExecution.builder().workflow(workflow).status(status)
+            .triggerType(TriggerType.MANUAL).startedAt(LocalDateTime.now()).build();
     }
 
     @Test
