@@ -139,7 +139,8 @@ class GitHubOptionSourcesTest {
             .andExpect(queryParam("sort", "due_on"))
             .andExpect(queryParam("per_page", "20"))
             .andExpect(queryParam("page", "1"))
-            .andRespond(withSuccess("[{\"number\":3,\"title\":\"v1.0\"}]", MediaType.APPLICATION_JSON));
+            .andRespond(withSuccess("[{\"number\":3,\"title\":\"v1.0\"}]", MediaType.APPLICATION_JSON)
+                .header("Link", "<https://api.github.com/repositories/1/milestones?page=2>; rel=\"next\""));
         server.expect(requestTo(startsWith(REPO_PATH + "/milestones?")))
             .andExpect(queryParam("state", "open"))
             .andExpect(queryParam("sort", "due_on"))
@@ -151,6 +152,7 @@ class GitHubOptionSourcesTest {
 
         OptionPage list = milestones.fetch(userId, REPO_INPUTS, null);
         assertThat(list.items()).containsExactly(new OptionItem("3", "v1.0"));
+        assertThat(list.nextCursor()).isEqualTo("2");
 
         Map<String, String> inputs = Map.of("owner", "dobee", "repo", "ieum-backend", "q", "V1");
         OptionPage searched = milestones.fetch(userId, inputs, null);
@@ -272,8 +274,22 @@ class GitHubOptionSourcesTest {
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
     @DisplayName("repo가 비었거나 . / .. / 경로·쿼리 문자 / 참조식 / 101자면 INVALID_INPUT — 요청 없음")
     void requireRepoRejects(String raw) {
-        assertErrorCode(() -> GitHubApiReader.requireRepo(Map.of("repo", raw)), ErrorCode.INVALID_INPUT);
+        Map<String, String> inputs = Map.of("owner", "dobee", "repo", raw);
+
+        assertErrorCode(() -> branches.fetch(userId, inputs, null), ErrorCode.INVALID_INPUT);
         verifyNoInteractions(tokenProvider);
+    }
+
+    @Test
+    @DisplayName("점이 든 정상 repo 이름(ieum.io)은 통과해 그대로 경로에 쓰인다")
+    void repoWithDotIsAccepted() {
+        connected();
+        server.expect(requestTo(startsWith(BASE + "/repos/dobee/ieum.io/branches?")))
+            .andRespond(withSuccess("[{\"name\":\"main\"}]", MediaType.APPLICATION_JSON));
+
+        OptionPage page = branches.fetch(userId, Map.of("owner", "dobee", "repo", "ieum.io"), null);
+
+        assertThat(page.items()).containsExactly(new OptionItem("main", "main"));
     }
 
     @Test
