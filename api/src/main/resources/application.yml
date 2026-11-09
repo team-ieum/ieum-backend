@@ -181,6 +181,7 @@ github:
     frontend-redirect-uri: ${GITHUB_APP_FRONTEND_REDIRECT_URI}
     webhook-secret: ${GITHUB_APP_WEBHOOK_SECRET:}
     slug: ${GITHUB_APP_SLUG:ieum-service}
+    private-key: ${GITHUB_APP_PRIVATE_KEY:}
 
 # Slack 봇 연결 (spec 2026-10-20 §4-4). 기본값 없음 — 빠지면 기동 실패라 .env·secrets가 배포보다 먼저다.
 # bot-scopes는 env가 아니라 코드와 같이 바뀌는 상수다 — Slack scope는 더하면 기존 설치 전원이 재설치해야 한다(D3).
