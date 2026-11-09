@@ -19,5 +19,7 @@ public enum TriggerType {
     /** Gmail 새 메일 — BE 폴링(app_trigger_subscriptions) */
     GMAIL_NEW_EMAIL,
     /** GitHub 새 이슈 — GitHub App webhook(app_trigger_subscriptions, resource_key = repoId) */
-    GITHUB_NEW_ISSUE
+    GITHUB_NEW_ISSUE,
+    /** GitHub 새 PR — GitHub App webhook(app_trigger_subscriptions, resource_key = repoId) */
+    GITHUB_NEW_PR
 }

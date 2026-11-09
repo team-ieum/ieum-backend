@@ -119,7 +119,8 @@ class ActionNodeRuntimeTest {
             idempotencyStore,
             30,
             CATALOG,
-            "");
+            "",
+            mock(com.ieum.workflowcore.engine.executor.GitHubBotTokenProvider.class));
 
         List<NodeExecutor> executors = List.of(new TriggerNodeExecutor(CATALOG, new TriggerHandlerRegistry(List.of(
             new ManualTriggerHandler(), new ScheduleTriggerHandler(), new WebhookTriggerHandler()))), action);

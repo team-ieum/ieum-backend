@@ -30,6 +30,7 @@ OAuth 로그인은 Google만, Notion·GitHub는 연동(커넥터 토큰) 용도�
 - `TokenInfo` DTO — accessToken, refreshToken 쌍
 - `AuthService` — 회원가입, 로그인, 토큰 갱신 로직
 - `GoogleOAuthService` / `GoogleTokenService` / `GitHubTokenService` — OAuth 인증·토큰 갱신
+- `GitHubAppTokenService` (IEUM-BE-116) — GitHub App 설치 토큰(봇 명의). App JWT(`iss` = `github.app.client-id`, 키 `GITHUB_APP_PRIVATE_KEY` base64 PKCS#8 — 비면 `enabled()` false·발급은 `GITHUB_BOT_NOT_CONFIGURED`, 깨졌으면 기동 실패) → `GET /repos/{o}/{r}/installation` → `POST access_tokens`(레포 하나·`pull_requests:write`). 만료 5분 전까지 메모리 캐시(키 대소문자 무시). 404 = INVALID_INPUT 설치 필요, 422 = INVALID_INPUT 설치 계정 새 권한 승인 필요, rate limit·5xx = `GITHUB_API_UNAVAILABLE`, 그 밖 4xx = `GITHUB_BOT_NOT_CONFIGURED`. 사용자 권한 검사는 호출자(api `DefaultGitHubBotTokenProvider`)가 한다
 - `SlackTokenService` / `SlackApiClient` — Slack 봇 토큰 조회·갱신(REQUIRES_NEW, 만료 임박이면 설치 행 락 뒤 회전) / Slack Web API 호출·revoke
 - `DiscordApiClient` — Discord HTTP API v10 호출(code 교환·사용자·서버·채널·봇 퇴장·revoke). 실패는 `RestClientException` 그대로 던지고 판정은 호출자, 429만 1회 재시도
 - `UserRepository` — JpaRepository (커맨드용)

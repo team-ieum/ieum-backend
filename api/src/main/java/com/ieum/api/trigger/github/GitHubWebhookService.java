@@ -44,15 +44,18 @@ public class GitHubWebhookService {
 
     private final IdempotencyStore idempotencyStore;
     private final GitHubIssueDispatcher dispatcher;
+    private final GitHubPullRequestDispatcher prDispatcher;
     private final AppTriggerSubscriptionService subscriptionService;
     private final ObjectMapper objectMapper;
     private final byte[] secret;
 
     public GitHubWebhookService(IdempotencyStore idempotencyStore, GitHubIssueDispatcher dispatcher,
+                                GitHubPullRequestDispatcher prDispatcher,
                                 AppTriggerSubscriptionService subscriptionService, ObjectMapper objectMapper,
                                 @Value("${github.app.webhook-secret}") String secret) {
         this.idempotencyStore = idempotencyStore;
         this.dispatcher = dispatcher;
+        this.prDispatcher = prDispatcher;
         this.subscriptionService = subscriptionService;
         this.objectMapper = objectMapper;
         this.secret = secret == null ? new byte[0] : secret.getBytes(StandardCharsets.UTF_8);
@@ -64,6 +67,10 @@ public class GitHubWebhookService {
         if (!signatureMatches(signature, raw)) {
             log.warn("[GitHubWebhook] 서명 불일치 — 요청 거부");
             throw new CustomException(ErrorCode.UNAUTHORIZED, "웹훅 서명이 올바르지 않습니다.");
+        }
+        if ("pull_request".equals(event)) {
+            receivePullRequest(deliveryId, parse(raw));
+            return;
         }
         if (!"issues".equals(event)) {
             return;
@@ -88,6 +95,38 @@ public class GitHubWebhookService {
         if (subscriptionService.findByResource(TriggerType.GITHUB_NEW_ISSUE, String.valueOf(repoId)).isEmpty()) {
             return;
         }
+        dispatchOnce(deliveryId, () -> dispatcher.dispatch(repoId,
+            GitHubIssueSource.normalize(payload.path("issue"), repository.path("full_name").asText(""))));
+    }
+
+    /**
+     * pull_request — 지원 action → 레포 멤버가 연 PR만(외부인 PR로 소유자 LLM 키가 돌지 않게, 구독 조회 전) → 구독 있는 레포 →
+     * delivery 멱등 → 비동기 넘김. 구독별 필터(action·초안)는 디스패처가 한다. 봇은 push하지 않아 자기 발화 가드가 없다.
+     */
+    private void receivePullRequest(String deliveryId, JsonNode payload) {
+        String action = payload.path("action").asText();
+        if (!GitHubPullRequestSource.ACTIONS.contains(action)) {
+            return;
+        }
+        JsonNode pr = payload.path("pull_request");
+        if (!GitHubPullRequestSource.MEMBER_ASSOCIATIONS.contains(pr.path("author_association").asText())) {
+            return;
+        }
+        long repoId = payload.path("repository").path("id").asLong(0);
+        if (repoId <= 0 || !pr.isObject()) {
+            log.warn("[GitHubWebhook] pull_request인데 repository.id·pull_request가 없음 — 무시");
+            return;
+        }
+        if (subscriptionService.findByResource(TriggerType.GITHUB_NEW_PR, String.valueOf(repoId)).isEmpty()) {
+            return;
+        }
+        boolean draft = pr.path("draft").asBoolean(false);
+        dispatchOnce(deliveryId,
+            () -> prDispatcher.dispatch(repoId, action, draft, GitHubPullRequestSource.normalize(pr, action)));
+    }
+
+    /** delivery 검사·마킹 후 디스패치. 큐 포화면 마커를 지우고 500 — issues·pull_request 공유 */
+    private void dispatchOnce(String deliveryId, Runnable dispatch) {
         if (deliveryId == null || !DELIVERY_ID.matcher(deliveryId).matches()) {
             throw new CustomException(ErrorCode.INVALID_INPUT, "X-GitHub-Delivery 헤더가 올바르지 않습니다.");
         }
@@ -97,8 +136,7 @@ public class GitHubWebhookService {
             return;
         }
         try {
-            dispatcher.dispatch(repoId,
-                GitHubIssueSource.normalize(payload.path("issue"), repository.path("full_name").asText("")));
+            dispatch.run();
         } catch (TaskRejectedException e) {
             // 마커를 남기면 GitHub 화면의 Redeliver까지 중복으로 버려진다
             idempotencyStore.clearInFlight(key);
