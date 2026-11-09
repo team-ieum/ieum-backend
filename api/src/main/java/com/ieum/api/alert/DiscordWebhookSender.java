@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpStatusCodeException;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 /**
@@ -32,14 +33,26 @@ public class DiscordWebhookSender {
      * @return 발신 성공 여부
      */
     public boolean send(String webhookUrl, String content) {
+        return sendOnce(webhookUrl, content) == SendResult.SENT;
+    }
+
+    /** 한 번 보낸 결과. 다시 보내 볼 만한 실패(429·5xx·연결/IO 오류)는 RETRYABLE, 그 밖의 실패는 PERMANENT. */
+    public enum SendResult { SENT, RETRYABLE, PERMANENT }
+
+    /** {@link #send}와 같이 보내되 실패를 분류해 돌려준다. 예외를 던지지 않고 URL을 로그에 남기지 않는다. */
+    public SendResult sendOnce(String webhookUrl, String content) {
         try {
             // allowed_mentions.parse = [] — 상류 값에 든 @everyone·@here·역할 멘션이 울리지 않게 한다.
             restTemplate.postForEntity(webhookUrl,
                 Map.of("content", content, "allowed_mentions", Map.of("parse", List.of())), Void.class);
-            return true;
+            return SendResult.SENT;
         } catch (Exception e) {
             log.warn("[DiscordWebhookSender] 발신 실패 — {}", describe(e));
-            return false;
+            if (e instanceof HttpStatusCodeException s) {
+                return s.getStatusCode().value() == 429 || s.getStatusCode().is5xxServerError()
+                    ? SendResult.RETRYABLE : SendResult.PERMANENT;
+            }
+            return e instanceof ResourceAccessException ? SendResult.RETRYABLE : SendResult.PERMANENT;
         }
     }
 

@@ -58,6 +58,20 @@ public interface ApprovalGateRepository extends JpaRepository<ApprovalGate, UUID
         + "WHERE g.id = :id AND g.remindedAt IS NULL")
     int markReminded(@Param("id") UUID id, @Param("now") LocalDateTime now);
 
+    /** 첫 알림 선점 되돌리기 — 발송이 일시 실패했을 때, {@code claimedAt}으로 선점한 행만 다음 스윕에 다시 잡히게 한다. */
+    @Transactional
+    @Modifying
+    @Query("UPDATE ApprovalGate g SET g.notifiedAt = NULL, g.updatedAt = :claimedAt "
+        + "WHERE g.id = :id AND g.notifiedAt = :claimedAt")
+    int unmarkNotified(@Param("id") UUID id, @Param("claimedAt") LocalDateTime claimedAt);
+
+    /** 리마인더 선점 되돌리기 — {@link #unmarkNotified}와 같다. */
+    @Transactional
+    @Modifying
+    @Query("UPDATE ApprovalGate g SET g.remindedAt = NULL, g.updatedAt = :claimedAt "
+        + "WHERE g.id = :id AND g.remindedAt = :claimedAt")
+    int unmarkReminded(@Param("id") UUID id, @Param("claimedAt") LocalDateTime claimedAt);
+
     /** 게이트의 실행 ID만 — 엔티티를 영속성 컨텍스트에 올리지 않고 실행 잠금을 먼저 잡기 위해. */
     @Query("SELECT g.executionId FROM ApprovalGate g WHERE g.id = :id")
     Optional<UUID> findExecutionIdById(@Param("id") UUID gateId);

@@ -1,6 +1,7 @@
 package com.ieum.api.workflow.service;
 
 import com.ieum.api.alert.ApprovalNotifier;
+import com.ieum.api.alert.DiscordWebhookSender.SendResult;
 import com.ieum.common.exception.CustomException;
 import com.ieum.workflowcore.deployment.BackgroundOwnership;
 import com.ieum.workflowcore.domain.ApprovalGate;
@@ -10,9 +11,11 @@ import com.ieum.workflowcore.repository.WorkflowExecutionRepository.ExpiredAppro
 import com.ieum.workflowcore.service.WorkflowCrudService;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
-import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import lombok.RequiredArgsConstructor;
@@ -58,16 +61,18 @@ public class ApprovalGateSweeper {
 
     @Scheduled(fixedDelay = 60_000, initialDelayString = "${ieum.workflow.approval.sweep-initial-delay:PT1M}")
     public void sweep() {
-        LocalDateTime now = LocalDateTime.now();
+        // 선점 시각을 그대로 되돌리기 조건으로 쓴다 — DB(마이크로초) 정밀도에 맞춰 둔다.
+        LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MICROS);
         if (!isOwner()) return;
         for (ExpiredApproval expired : workflowExecutionService.findExpiredApprovals(now)) {
             if (!isOwner()) return;
             expireOne(expired, now);
         }
-        announce(page -> approvalGateRepository.findUnnotified(now, page),
-            approvalGateRepository::markNotified, approvalNotifier::notifyRequested, now);
-        announce(page -> approvalGateRepository.findDueReminders(now, page),
-            approvalGateRepository::markReminded, approvalNotifier::notifyReminder, now);
+        Set<UUID> limitedWebhooks = new HashSet<>();
+        announce(page -> approvalGateRepository.findUnnotified(now, page), approvalGateRepository::markNotified,
+            approvalGateRepository::unmarkNotified, approvalNotifier::notifyRequested, now, limitedWebhooks);
+        announce(page -> approvalGateRepository.findDueReminders(now, page), approvalGateRepository::markReminded,
+            approvalGateRepository::unmarkReminded, approvalNotifier::notifyReminder, now, limitedWebhooks);
     }
 
     private boolean isOwner() {
@@ -97,18 +102,31 @@ public class ApprovalGateSweeper {
         }
     }
 
+    /**
+     * 일시 실패(RETRYABLE)면 선점을 되돌려 다음 스윕에 다시 잡히게 하고, 그 웹훅은 이 스윕에서 더 보내지 않는다
+     * (레이트 리밋에 연달아 부딪히지 않게). 되돌린 행·막힌 웹훅의 행은 이 스윕에서 다시 선점하지 않아 0번 페이지 반복이
+     * 끝난다. PERMANENT는 되돌리지 않는다.
+     */
     private void announce(Function<Pageable, List<ApprovalGate>> find,
                           BiFunction<UUID, LocalDateTime, Integer> claim,
-                          BiConsumer<ApprovalGate, String> send, LocalDateTime now) {
+                          BiFunction<UUID, LocalDateTime, Integer> unclaim,
+                          BiFunction<ApprovalGate, String, SendResult> send, LocalDateTime now,
+                          Set<UUID> limitedWebhooks) {
+        Set<UUID> released = new HashSet<>();
         while (isOwner()) {
             List<ApprovalGate> page = find.apply(PageRequest.of(0, PAGE_SIZE));
             int claimed = 0;
             for (ApprovalGate gate : page) {
+                if (released.contains(gate.getId()) || limitedWebhooks.contains(gate.getWebhookId())) continue;
                 try {
                     String workflowName = workflowCrudService.getWorkflowById(gate.getWorkflowId()).getName();
                     if (claim.apply(gate.getId(), now) != 1) continue;
                     claimed++;
-                    send.accept(gate, workflowName);
+                    if (send.apply(gate, workflowName) == SendResult.RETRYABLE) {
+                        limitedWebhooks.add(gate.getWebhookId());
+                        released.add(gate.getId());
+                        unclaim.apply(gate.getId(), now);
+                    }
                 } catch (Exception e) {
                     log.error("[ApprovalGateSweeper] 알림 실패 — gateId: {}, cause: {}",
                         gate.getId(), e.getClass().getSimpleName());

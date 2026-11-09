@@ -10,6 +10,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import com.ieum.api.alert.ApprovalNotifier;
+import com.ieum.api.alert.DiscordWebhookSender.SendResult;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.deployment.BackgroundOwnership;
@@ -55,8 +56,12 @@ class ApprovalGateSweeperTest {
     }
 
     private ApprovalGate gate() {
+        return gate(UUID.randomUUID());
+    }
+
+    private ApprovalGate gate(UUID webhookId) {
         ApprovalGate g = ApprovalGate.open(UUID.randomUUID(), workflowId, UUID.randomUUID(), "g",
-            "approval.request", "{}", UUID.randomUUID(), LocalDateTime.now().plusHours(1), null);
+            "approval.request", "{}", webhookId, LocalDateTime.now().plusHours(1), null);
         ReflectionTestUtils.setField(g, "id", UUID.randomUUID());
         return g;
     }
@@ -221,5 +226,77 @@ class ApprovalGateSweeperTest {
 
         verify(approvalGateRepository, times(1)).findUnnotified(any(), any());
         verify(approvalNotifier, never()).notifyRequested(any(), any());
+    }
+
+    @Test
+    @DisplayName("일시 실패(RETRYABLE)면 선점 시각으로 선점을 되돌려 다음 스윕에 다시 보낸다")
+    void 일시_실패는_다음_스윕에_다시_보낸다() {
+        ApprovalGate g = gate();
+        given(approvalGateRepository.findUnnotified(any(), any())).willReturn(List.of(g));
+        given(approvalGateRepository.markNotified(eq(g.getId()), any())).willReturn(1);
+        given(approvalNotifier.notifyRequested(eq(g), any())).willReturn(SendResult.RETRYABLE, SendResult.SENT);
+
+        sweeper.sweep();
+
+        ArgumentCaptor<LocalDateTime> claimedAt = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(approvalGateRepository).markNotified(eq(g.getId()), claimedAt.capture());
+        verify(approvalGateRepository).unmarkNotified(g.getId(), claimedAt.getValue());
+
+        sweeper.sweep();
+
+        verify(approvalNotifier, times(2)).notifyRequested(eq(g), any());
+        verify(approvalGateRepository, times(1)).unmarkNotified(any(), any());
+    }
+
+    @Test
+    @DisplayName("같은 웹훅이 429면 그 스윕에선 그 웹훅으로 더 선점·발송하지 않는다 — 다른 웹훅은 보낸다")
+    void 같은_웹훅이_429면_그_스윕에서_그만_보낸다() {
+        UUID limited = UUID.randomUUID();
+        ApprovalGate first = gate(limited);
+        ApprovalGate second = gate(limited);
+        ApprovalGate other = gate(UUID.randomUUID());
+        ApprovalGate reminder = gate(limited);
+        given(approvalGateRepository.findUnnotified(any(), any())).willReturn(List.of(first, second, other));
+        given(approvalGateRepository.findDueReminders(any(), any())).willReturn(List.of(reminder));
+        given(approvalGateRepository.markNotified(any(), any())).willReturn(1);
+        given(approvalGateRepository.markReminded(any(), any())).willReturn(1);
+        given(approvalNotifier.notifyRequested(eq(first), any())).willReturn(SendResult.RETRYABLE);
+        given(approvalNotifier.notifyRequested(eq(other), any())).willReturn(SendResult.SENT);
+
+        sweeper.sweep();
+
+        verify(approvalGateRepository, never()).markNotified(eq(second.getId()), any());
+        verify(approvalNotifier, never()).notifyRequested(eq(second), any());
+        verify(approvalNotifier).notifyRequested(eq(other), any());
+        verify(approvalGateRepository, never()).markReminded(eq(reminder.getId()), any());
+        verify(approvalGateRepository, times(1)).unmarkNotified(any(), any());
+    }
+
+    @Test
+    @DisplayName("영구 실패(PERMANENT)는 선점을 되돌리지 않는다 — 다시 보내지 않는다")
+    void 영구_실패는_다시_보내지_않는다() {
+        ApprovalGate g = gate();
+        given(approvalGateRepository.findUnnotified(any(), any())).willReturn(List.of(g));
+        given(approvalGateRepository.markNotified(eq(g.getId()), any())).willReturn(1);
+        given(approvalNotifier.notifyRequested(eq(g), any())).willReturn(SendResult.PERMANENT);
+
+        sweeper.sweep();
+
+        verify(approvalGateRepository, never()).unmarkNotified(any(), any());
+    }
+
+    @Test
+    @DisplayName("되돌린 행은 같은 스윕에서 다시 선점하지 않는다 — 꽉 찬 페이지가 전부 되돌려져도 멈춘다")
+    void 되돌린_행은_같은_스윕에서_다시_선점하지_않는다() {
+        List<ApprovalGate> full = gates(100);
+        given(approvalGateRepository.findUnnotified(any(), any())).willReturn(full);
+        given(approvalGateRepository.markNotified(any(), any())).willReturn(1);
+        given(approvalNotifier.notifyRequested(any(), any())).willReturn(SendResult.RETRYABLE);
+
+        sweeper.sweep();
+
+        verify(approvalGateRepository, times(2)).findUnnotified(any(), any());
+        verify(approvalGateRepository, times(100)).markNotified(any(), any());
+        verify(approvalGateRepository, times(100)).unmarkNotified(any(), any());
     }
 }

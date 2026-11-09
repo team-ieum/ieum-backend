@@ -113,6 +113,22 @@ class ApprovalGateRepositoryTest {
     }
 
     @Test
+    @DisplayName("선점_되돌리기는_그_시각으로_선점한_행만")
+    void unmark_onlyOwnClaim() {
+        ApprovalGate g = gates.save(gate(run(ExecutionStatus.WAITING_APPROVAL), "n1", UUID.randomUUID(), null));
+        gates.markNotified(g.getId(), NOW);
+        gates.markReminded(g.getId(), NOW);
+
+        assertThat(gates.unmarkNotified(g.getId(), NOW.minusSeconds(1))).isZero();
+        assertThat(gates.unmarkReminded(g.getId(), NOW.minusSeconds(1))).isZero();
+        assertThat(gates.unmarkNotified(g.getId(), NOW)).isEqualTo(1);
+        assertThat(gates.unmarkReminded(g.getId(), NOW)).isEqualTo(1);
+
+        assertThat(gates.markNotified(g.getId(), NOW)).isEqualTo(1);
+        assertThat(gates.markReminded(g.getId(), NOW)).isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("리마인더_대상은_시각이_지난_미발송만")
     void dueReminders_onlyPastUnsent() {
         UUID e = run(ExecutionStatus.WAITING_APPROVAL);

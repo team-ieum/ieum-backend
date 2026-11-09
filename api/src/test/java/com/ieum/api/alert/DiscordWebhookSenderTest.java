@@ -21,6 +21,7 @@ import org.mockito.Mockito;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
@@ -64,6 +65,26 @@ class DiscordWebhookSenderTest {
 
         verify(restTemplate).postForEntity(eq(URL),
                 eq(Map.of("content", "실패 알림", "allowed_mentions", Map.of("parse", List.of()))), eq(Void.class));
+    }
+
+    @Test
+    @DisplayName("sendOnce 분류 — 성공 SENT, 429·5xx·연결 오류 RETRYABLE, 그 밖 4xx PERMANENT")
+    void sendOnce_분류() {
+        assertThat(sender.sendOnce(URL, "a")).isEqualTo(DiscordWebhookSender.SendResult.SENT);
+
+        when(restTemplate.postForEntity(eq(URL), any(), eq(Void.class)))
+                .thenThrow(new HttpClientErrorException(HttpStatus.TOO_MANY_REQUESTS))
+                .thenThrow(new HttpServerErrorException(HttpStatus.SERVICE_UNAVAILABLE))
+                .thenThrow(new ResourceAccessException("I/O error on POST request for \"" + URL + "\""))
+                .thenThrow(new HttpClientErrorException(HttpStatus.NOT_FOUND))
+                .thenThrow(new HttpClientErrorException(HttpStatus.BAD_REQUEST));
+
+        assertThat(sender.sendOnce(URL, "a")).isEqualTo(DiscordWebhookSender.SendResult.RETRYABLE);
+        assertThat(sender.sendOnce(URL, "a")).isEqualTo(DiscordWebhookSender.SendResult.RETRYABLE);
+        assertThat(sender.sendOnce(URL, "a")).isEqualTo(DiscordWebhookSender.SendResult.RETRYABLE);
+        assertThat(sender.sendOnce(URL, "a")).isEqualTo(DiscordWebhookSender.SendResult.PERMANENT);
+        assertThat(sender.sendOnce(URL, "a")).isEqualTo(DiscordWebhookSender.SendResult.PERMANENT);
+        assertThat(logOutput()).doesNotContain("superSecretToken");
     }
 
     @Test

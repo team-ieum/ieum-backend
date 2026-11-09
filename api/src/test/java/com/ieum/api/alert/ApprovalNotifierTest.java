@@ -10,6 +10,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ieum.api.alert.DiscordWebhookSender.SendResult;
 import com.ieum.workflowcore.domain.ApprovalGate;
 import com.ieum.workflowcore.engine.executor.WebhookCredentialProvider;
 import java.time.LocalDateTime;
@@ -50,7 +51,7 @@ class ApprovalNotifierTest {
 
     private String sent() {
         ArgumentCaptor<String> content = ArgumentCaptor.forClass(String.class);
-        verify(sender).send(eq(DISCORD), content.capture());
+        verify(sender).sendOnce(eq(DISCORD), content.capture());
         return content.getValue();
     }
 
@@ -94,9 +95,9 @@ class ApprovalNotifierTest {
     void 남의_웹훅은_보내지_않는다() throws Exception {
         given(provider.resolveWebhookUrl(any(), any())).willReturn(Optional.empty());
 
-        notifier.notifyRequested(gate("approval.request", "확인"), "wf");
+        assertThat(notifier.notifyRequested(gate("approval.request", "확인"), "wf")).isEqualTo(SendResult.PERMANENT);
 
-        verify(sender, never()).send(anyString(), anyString());
+        verify(sender, never()).sendOnce(anyString(), anyString());
     }
 
     @Test
@@ -105,18 +106,28 @@ class ApprovalNotifierTest {
         given(provider.resolveWebhookUrl(webhookId, userId))
             .willReturn(Optional.of("https://hooks.slack.com/services/T/B/x"));
 
-        notifier.notifyRequested(gate("approval.request", "확인"), "wf");
+        assertThat(notifier.notifyRequested(gate("approval.request", "확인"), "wf")).isEqualTo(SendResult.PERMANENT);
 
-        verify(sender, never()).send(anyString(), anyString());
+        verify(sender, never()).sendOnce(anyString(), anyString());
     }
 
     @Test
     @DisplayName("웹훅 조회가 예외를 던져도 밖으로 던지지 않는다")
     void 예외를_던지지_않는다() throws Exception {
-        given(provider.resolveWebhookUrl(any(), any())).willThrow(new IllegalStateException("db"));
+        given(provider.resolveWebhookUrl(any(), any())).willThrow(new IllegalStateException("x"));
 
-        notifier.notifyRequested(gate("approval.request", "확인"), "wf");
+        assertThat(notifier.notifyRequested(gate("approval.request", "확인"), "wf")).isEqualTo(SendResult.PERMANENT);
 
-        verify(sender, never()).send(anyString(), anyString());
+        verify(sender, never()).sendOnce(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("발송 결과를 그대로 돌려준다 — 429면 RETRYABLE")
+    void 발송_결과를_돌려준다() throws Exception {
+        given(sender.sendOnce(eq(DISCORD), anyString())).willReturn(SendResult.SENT, SendResult.RETRYABLE);
+        ApprovalGate g = gate("approval.request", "확인");
+
+        assertThat(notifier.notifyRequested(g, "wf")).isEqualTo(SendResult.SENT);
+        assertThat(notifier.notifyReminder(g, "wf")).isEqualTo(SendResult.RETRYABLE);
     }
 }
