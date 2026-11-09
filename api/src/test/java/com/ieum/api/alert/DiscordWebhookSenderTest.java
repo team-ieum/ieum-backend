@@ -10,11 +10,13 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -56,11 +58,22 @@ class DiscordWebhookSenderTest {
     }
 
     @Test
-    @DisplayName("content 필드 하나만 담은 페이로드를 POST한다")
+    @DisplayName("content 필드를 담은 페이로드를 POST한다")
     void send_postsContentPayload() {
         assertThat(sender.send(URL, "실패 알림")).isTrue();
 
-        verify(restTemplate).postForEntity(eq(URL), eq(Map.of("content", "실패 알림")), eq(Void.class));
+        verify(restTemplate).postForEntity(eq(URL),
+                eq(Map.of("content", "실패 알림", "allowed_mentions", Map.of("parse", List.of()))), eq(Void.class));
+    }
+
+    @Test
+    @DisplayName("모든 요청에 allowed_mentions.parse = []를 실어 @everyone 같은 멘션을 막는다")
+    void 멘션을_막는다() {
+        sender.send(URL, "@everyone 승인 요청");
+
+        ArgumentCaptor<Object> body = ArgumentCaptor.forClass(Object.class);
+        verify(restTemplate).postForEntity(eq(URL), body.capture(), eq(Void.class));
+        assertThat(((Map<?, ?>) body.getValue()).get("allowed_mentions")).isEqualTo(Map.of("parse", List.of()));
     }
 
     @Test

@@ -369,4 +369,149 @@ class ApprovalGateServiceTest {
             ErrorCode.APPROVAL_GATE_ACTION_MISMATCH);
         assertThat(r.isDecided()).isFalse();
     }
+
+    @Test
+    @DisplayName("거절(멈춤)로 실행이 FAILED면 응답의 대기 게이트는 빈 목록이다")
+    void 거절_멈춤_응답은_대기_게이트가_없다() throws Exception {
+        ApprovalGate g1 = request("g1");
+        request("g2");
+
+        WorkflowExecutionResponse response = service.reject(userId, g1.getId(), null);
+
+        assertThat(response.getStatus()).isEqualTo(ExecutionStatus.FAILED);
+        assertThat(response.getPendingApprovalNodeIds()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("note가 200자를 넘으면 DTO를 거치지 않아도 400이고 게이트는 미결정 그대로다")
+    void note_200자_넘으면_400() throws Exception {
+        ApprovalGate req = request("g1");
+        ApprovalGate col = collect("g2");
+        String note = "가".repeat(201);
+
+        assertCode(() -> service.approve(userId, req.getId(), note, null), ErrorCode.APPROVAL_INPUT_INVALID);
+        assertCode(() -> service.reject(userId, req.getId(), note), ErrorCode.APPROVAL_INPUT_INVALID);
+        assertCode(() -> service.submit(userId, col.getId(), Map.of("amount", 1), note),
+            ErrorCode.APPROVAL_INPUT_INVALID);
+        assertCode(() -> service.decideAll(userId, executionId, false, note), ErrorCode.APPROVAL_INPUT_INVALID);
+        assertThat(req.isDecided()).isFalse();
+        assertThat(col.isDecided()).isFalse();
+    }
+
+    @Test
+    @DisplayName("만료(멈춤) — 승인 만료로 닫고 알림 경로(markAsFailed)를 탄다")
+    void 만료_멈춤은_실패_알림() throws Exception {
+        gate("g", ApprovalGateConfig.REQUEST, Map.of(), LocalDateTime.now().minusMinutes(1));
+
+        service.expire(executionId, LocalDateTime.now());
+
+        verify(workflowExecutionService).markAsFailed(executionId, "승인 만료", ExecutionStatus.WAITING_APPROVAL);
+        verify(executionRetryService, never()).startContinuation(any(), any());
+    }
+
+    @Test
+    @DisplayName("만료(계속) — decision timeout과 원래 content로 이어간다")
+    void 만료_계속은_timeout으로_이어간다() throws Exception {
+        gate("g", ApprovalGateConfig.REQUEST, Map.of("onTimeout", "continue",
+            "items", List.of(Map.of("key", "draft", "value", "초안"))), LocalDateTime.now().minusMinutes(1));
+
+        service.expire(executionId, LocalDateTime.now());
+
+        verify(workflowExecutionService).recordGateDecision(
+            eq(execution), eq("g"), eq(ExecutionLogStatus.SUCCESS), output.capture(), isNull());
+        assertThat(output.getValue()).containsEntry("decision", "timeout").containsEntry("approved", false)
+            .containsEntry("content", Map.of("draft", "초안"));
+        verify(executionRetryService).startContinuation(workflow, execution);
+        verify(workflowExecutionService, never()).markAsFailed(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("만료(계속)인데 워크플로우가 꺼져 있으면 비활성 문구로 닫고 이어가지 않는다")
+    void 만료_계속_비활성이면_닫는다() throws Exception {
+        workflow.deactivate();
+        gate("g", ApprovalGateConfig.REQUEST, Map.of("onTimeout", "continue"), LocalDateTime.now().minusMinutes(1));
+
+        service.expire(executionId, LocalDateTime.now());
+
+        verify(workflowExecutionService).markAsFailed(
+            executionId, "워크플로우가 꺼져 있어 이어가지 않았어요", ExecutionStatus.WAITING_APPROVAL);
+        verify(executionRetryService, never()).startContinuation(any(), any());
+    }
+
+    @Test
+    @DisplayName("만료(계속)·비활성이어도 재개 시각이 미래인 기다리기는 막지 않고 기다리기로 넘긴다")
+    void 만료_계속_비활성이어도_기다리기는_넘긴다() throws Exception {
+        workflow.deactivate();
+        ReflectionTestUtils.setField(execution, "waitingDelayNodes",
+            "{\"d\":{\"scheduledFor\":\"2026-11-09T10:40:00+09:00\"}}");
+        ReflectionTestUtils.setField(execution, "resumeAt", LocalDateTime.now().plusHours(1));
+        gate("g", ApprovalGateConfig.REQUEST, Map.of("onTimeout", "continue"), LocalDateTime.now().minusMinutes(1));
+
+        service.expire(executionId, LocalDateTime.now());
+
+        assertThat(execution.getStatus()).isEqualTo(ExecutionStatus.WAITING_DELAY);
+        verify(workflowExecutionService, never()).markAsFailed(any(), any(), any());
+        verify(executionRetryService, never()).startContinuation(any(), any());
+    }
+
+    @Test
+    @DisplayName("사용자 결정은 비활성 워크플로우여도 닫지 않는다 — 이어가기의 INVALID_WORKFLOW로 롤백된다")
+    void 사용자_결정은_비활성이면_롤백된다() throws Exception {
+        workflow.deactivate();
+        given(executionRetryService.startContinuation(workflow, execution))
+            .willThrow(new CustomException(ErrorCode.INVALID_WORKFLOW));
+        ApprovalGate g = request("g");
+
+        assertCode(() -> service.approve(userId, g.getId(), null, null), ErrorCode.INVALID_WORKFLOW);
+        verify(workflowExecutionService, never()).markAsFailed(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("일부 게이트만 만료면 timeout으로 결정하고 기한을 남은 게이트로 다시 잡는다")
+    void 일부만_만료면_기한을_다시_계산() throws Exception {
+        LocalDateTime now = LocalDateTime.now();
+        ApprovalGate past = gate("g1", ApprovalGateConfig.REQUEST, Map.of("onTimeout", "continue"),
+            now.minusMinutes(30));
+        ApprovalGate later = gate("g2", ApprovalGateConfig.REQUEST, Map.of(), now.plusHours(2));
+        ReflectionTestUtils.setField(execution, "approvalDeadline", past.getDeadline());
+
+        service.expire(executionId, now);
+
+        assertThat(past.getDecision()).isEqualTo("timeout");
+        assertThat(later.isDecided()).isFalse();
+        assertThat(execution.getApprovalDeadline()).isEqualTo(later.getDeadline());
+        assertThat(execution.getStatus()).isEqualTo(ExecutionStatus.WAITING_APPROVAL);
+        verify(executionRetryService, never()).startContinuation(any(), any());
+    }
+
+    @Test
+    @DisplayName("기한 지난 게이트가 이미 처리됐으면 결정은 그대로 두고 기한만 다시 잡는다")
+    void 만료_대상이_없으면_기한만_다시_잡는다() throws Exception {
+        LocalDateTime now = LocalDateTime.now();
+        ApprovalGate past = gate("g1", ApprovalGateConfig.REQUEST, Map.of(), now.minusMinutes(30));
+        ApprovalGate later = gate("g2", ApprovalGateConfig.REQUEST, Map.of(), now.plusHours(2));
+        past.decide("approved", "{}", now.minusMinutes(40));
+        ReflectionTestUtils.setField(execution, "approvalDeadline", past.getDeadline());
+
+        service.expire(executionId, now);
+
+        assertThat(past.getDecision()).isEqualTo("approved");
+        assertThat(later.isDecided()).isFalse();
+        assertThat(execution.getApprovalDeadline()).isEqualTo(later.getDeadline());
+        verify(workflowExecutionService, never()).markAsFailed(any(), any(), any());
+        verify(executionRetryService, never()).startContinuation(any(), any());
+    }
+
+    @Test
+    @DisplayName("게이트 행이 없는 레거시 실행은 기한이 지났을 때만 승인 만료로 닫는다")
+    void 레거시_만료는_기한이_지났을_때만() {
+        LocalDateTime now = LocalDateTime.now();
+        ReflectionTestUtils.setField(execution, "approvalDeadline", now.plusMinutes(1));
+        service.expire(executionId, now);
+        verify(workflowExecutionService, never()).markAsFailed(any(), any(), any());
+
+        ReflectionTestUtils.setField(execution, "approvalDeadline", now.minusMinutes(1));
+        service.expire(executionId, now);
+        verify(workflowExecutionService).markAsFailed(executionId, "승인 만료", ExecutionStatus.WAITING_APPROVAL);
+    }
 }

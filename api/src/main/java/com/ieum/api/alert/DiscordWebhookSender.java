@@ -1,5 +1,6 @@
 package com.ieum.api.alert;
 
+import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -32,7 +33,9 @@ public class DiscordWebhookSender {
      */
     public boolean send(String webhookUrl, String content) {
         try {
-            restTemplate.postForEntity(webhookUrl, Map.of("content", content), Void.class);
+            // allowed_mentions.parse = [] — 상류 값에 든 @everyone·@here·역할 멘션이 울리지 않게 한다.
+            restTemplate.postForEntity(webhookUrl,
+                Map.of("content", content, "allowed_mentions", Map.of("parse", List.of())), Void.class);
             return true;
         } catch (Exception e) {
             log.warn("[DiscordWebhookSender] 발신 실패 — {}", describe(e));

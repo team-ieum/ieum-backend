@@ -660,6 +660,24 @@ class ExecutionRetryQueueIntegrationTest {
     }
 
     @Test
+    @DisplayName("게이트 행이 없는 레거시 실행(배포 전 멈춤)도 /approve로 이어지고 하류가 승인자를 참조한다")
+    void 레거시_승인은_게이트_행_없이_이어간다() {
+        stubGatedDefinition();
+        WorkflowExecution original = givenPausedOriginal();
+        gateRows.clear();   // 배포 전에 멈춘 실행 — 게이트 행이 없다
+
+        UUID continuationId = approveAndCommit(original.getId());
+        consumeOneJob();
+
+        assertThat(original.getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
+        assertThat(nodeRunOf(original.getId(), "g").getStatus()).isEqualTo(ExecutionLogStatus.SUCCESS);
+        assertThat(rows.get(continuationId).getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
+        assertThat(nodeRunOf(continuationId, "g").getStatus()).isEqualTo(ExecutionLogStatus.SKIPPED);
+        assertThat(aiCalls).containsExactly("a", "b");
+        assertThat(aiInputs.get("b")).containsEntry("prompt", userId.toString());
+    }
+
+    @Test
     @DisplayName("하류에 또 게이트가 있으면 이어진 실행이 거기서 다시 멈추고, 두 번째 승인 뒤엔 마지막 구간만 실행된다")
     void approve_chainedGates_pausesAgainAtNextGate() {
         // t → a → g1 → b → g2 → c

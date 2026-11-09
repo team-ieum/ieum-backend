@@ -49,6 +49,9 @@ public class ApprovalGateService {
     static final String APPROVED = "approved";
     static final String REJECTED = "rejected";
     static final String SUBMITTED = "submitted";
+    static final String TIMEOUT = "timeout";
+    static final String EXPIRED_REASON = "승인 만료";
+    static final String INACTIVE_REASON = "워크플로우가 꺼져 있어 이어가지 않았어요";
 
     private final ApprovalGateRepository approvalGateRepository;
     private final WorkflowExecutionService workflowExecutionService;
@@ -63,25 +66,28 @@ public class ApprovalGateService {
     /** @param content editable 게이트에서 고친 검토 내용(선택). 키는 items key, 값은 문자열 */
     @Transactional
     public WorkflowExecutionResponse approve(UUID userId, UUID gateId, String note, Map<String, Object> content) {
+        requireNote(note);
         Locked l = lock(userId, gateId, ApprovalGateConfig.REQUEST);
         Map<String, Object> output = approvedOutput(userId, l.config(), note, content);
         decide(l.gate(), APPROVED, output);
-        return proceed(l.execution());
+        return proceed(l.execution(), false);
     }
 
     @Transactional
     public WorkflowExecutionResponse reject(UUID userId, UUID gateId, String note) {
+        requireNote(note);
         Locked l = lock(userId, gateId, ApprovalGateConfig.REQUEST);
         Map<String, Object> output = rejectedOutput(userId, l.config(), note);
         decide(l.gate(), REJECTED, output);
         if (!l.config().continueOnReject()) {
             return stop(l.execution(), List.of(l.gate()), note);
         }
-        return proceed(l.execution());
+        return proceed(l.execution(), false);
     }
 
     @Transactional
     public WorkflowExecutionResponse submit(UUID userId, UUID gateId, Map<String, Object> values, String note) {
+        requireNote(note);
         Locked l = lock(userId, gateId, ApprovalGateConfig.COLLECT);
         Map<String, Object> coerced;
         try {
@@ -94,7 +100,7 @@ public class ApprovalGateService {
         output.put("decision", SUBMITTED);
         output.put("values", coerced);
         decide(l.gate(), SUBMITTED, output);
-        return proceed(l.execution());
+        return proceed(l.execution(), false);
     }
 
     /**
@@ -103,6 +109,7 @@ public class ApprovalGateService {
      */
     @Transactional
     public WorkflowExecutionResponse decideAll(UUID userId, UUID executionId, boolean approve, String note) {
+        requireNote(note);
         WorkflowExecution original = workflowExecutionService.lockExecutionWithVersion(executionId);
         workflowCrudService.getWorkflowByOwner(userId, original.getWorkflow().getId());
         requireWaiting(original);
@@ -121,7 +128,41 @@ public class ApprovalGateService {
         if (!approve && configs.stream().anyMatch(c -> !c.continueOnReject())) {
             return stop(original, open, note);
         }
-        return proceed(original);
+        return proceed(original, false);
+    }
+
+    /**
+     * 승인 기한 만료 — sweeper가 부른다. 잠근 뒤 {@code WAITING_APPROVAL}이 아니면 끝. 게이트 행이 없으면(레거시) 기한이
+     * 지났을 때 승인 만료로 닫는다. 기한 지난 미결정 게이트 중 멈춤이 있으면 승인 만료로 닫고(알림 있음), 전부 계속이면
+     * {@code decision:"timeout"}으로 결정해 끝 판정으로 넘긴다(비활성이면 닫는다). 기한 지난 미결정 게이트가 없으면
+     * 기한만 남은 게이트로 다시 잡는다.
+     */
+    @Transactional
+    public void expire(UUID executionId, LocalDateTime now) {
+        WorkflowExecution original = workflowExecutionService.lockExecutionWithVersion(executionId);
+        if (original.getStatus() != ExecutionStatus.WAITING_APPROVAL) return;
+        List<ApprovalGate> gates = approvalGateRepository.findByExecutionIdOrderByCreatedAtAsc(executionId);
+        if (gates.isEmpty()) {
+            if (original.getApprovalDeadline() != null && original.getApprovalDeadline().isBefore(now)) {
+                workflowExecutionService.markAsFailed(executionId, EXPIRED_REASON, ExecutionStatus.WAITING_APPROVAL);
+            }
+            return;
+        }
+        List<ApprovalGate> expired = gates.stream()
+            .filter(g -> !g.isDecided() && g.getDeadline().isBefore(now)).toList();
+        if (expired.isEmpty()) {
+            reschedule(original, gates.stream().filter(g -> !g.isDecided()).toList());
+            return;
+        }
+        List<ApprovalGateConfig> configs = expired.stream().map(this::config).toList();
+        if (configs.stream().anyMatch(c -> !c.continueOnTimeout())) {
+            workflowExecutionService.markAsFailed(executionId, EXPIRED_REASON, ExecutionStatus.WAITING_APPROVAL);
+            return;
+        }
+        for (int i = 0; i < expired.size(); i++) {
+            decide(expired.get(i), TIMEOUT, timeoutOutput(configs.get(i)));
+        }
+        proceed(original, true);
     }
 
     private Locked lock(UUID userId, UUID gateId, String event) {
@@ -146,13 +187,16 @@ public class ApprovalGateService {
      * 끝 판정 — 결정 뒤 남은 게이트가 있으면 기한만 다시 잡고 원 실행을 응답한다. 전부 결정됐으면 게이트마다 자기
      * 출력으로 SUCCESS 행을 쓰고, 기다리기가 함께 걸렸으면 DELAY 분기(재개 시각 전이면 {@code WAITING_DELAY})를
      * 탄 뒤 이어간다. 멈춤 결정(거절 stop·만료 stop)은 여기 오지 않는다.
+     *
+     * @param closeIfInactive sweeper 경로 — 이어가기 직전에 워크플로우가 꺼져 있으면 비활성 문구로 닫는다(알림 있음).
+     *                        사용자 결정 경로는 false라 {@code startContinuation}의 INVALID_WORKFLOW로 롤백된다.
+     *                        검사는 DELAY 분기 뒤라 재개 시각이 미래면 기다리기로 넘어간다.
      */
-    private WorkflowExecutionResponse proceed(WorkflowExecution original) {
+    private WorkflowExecutionResponse proceed(WorkflowExecution original, boolean closeIfInactive) {
         List<ApprovalGate> gates = approvalGateRepository.findByExecutionIdOrderByCreatedAtAsc(original.getId());
         List<ApprovalGate> open = gates.stream().filter(g -> !g.isDecided()).toList();
         if (!open.isEmpty()) {
-            open.stream().map(ApprovalGate::getDeadline).min(Comparator.naturalOrder())
-                .ifPresent(original::rescheduleApprovalDeadline);
+            reschedule(original, open);
             return WorkflowExecutionResponse.from(original, nodeIds(open));
         }
         for (ApprovalGate g : gates) {
@@ -168,8 +212,13 @@ public class ApprovalGateService {
             }
             workflowExecutionService.recordDelayRelease(original, Instant.now());
         }
-        original.complete();
         Workflow workflow = original.getWorkflow();
+        if (closeIfInactive && !workflow.isActive()) {
+            workflowExecutionService.markAsFailed(original.getId(), INACTIVE_REASON, ExecutionStatus.WAITING_APPROVAL);
+            log.info("[ApprovalGateService] 비활성 워크플로우라 이어가지 않음 — executionId: {}", original.getId());
+            return WorkflowExecutionResponse.from(original, List.of());
+        }
+        original.complete();
         WorkflowExecution continuation = executionRetryService.startContinuation(workflow, original);
         log.info("[ApprovalGateService] 게이트 전부 결정 — originalId: {}, continuationId: {}",
             original.getId(), continuation.getId());
@@ -187,7 +236,32 @@ public class ApprovalGateService {
         original.fail();
         original.recordError(errorMessage);
         log.info("[ApprovalGateService] 거절(멈춤) — executionId: {}", original.getId());
-        return WorkflowExecutionResponse.from(original, nodeIds(pending(original.getId())));
+        return WorkflowExecutionResponse.from(original, List.of());
+    }
+
+    private static void reschedule(WorkflowExecution original, List<ApprovalGate> open) {
+        open.stream().map(ApprovalGate::getDeadline).min(Comparator.naturalOrder())
+            .ifPresent(original::rescheduleApprovalDeadline);
+    }
+
+    /** 만료(계속) 출력 — 승인 요청은 {@code approved:false}·원래 content, 값 입력받기는 렌더된 기본값. */
+    private static Map<String, Object> timeoutOutput(ApprovalGateConfig config) {
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("decision", TIMEOUT);
+        if (ApprovalGateConfig.COLLECT.equals(config.event())) {
+            output.put("values", config.defaultValues());
+        } else {
+            output.put("approved", false);
+            output.put("content", config.contentValues());
+        }
+        return output;
+    }
+
+    private static void requireNote(String note) {
+        String n = text(note);
+        if (n != null && n.length() > ApprovalGateConfig.MAX_NOTE) {
+            throw new CustomException(ErrorCode.APPROVAL_INPUT_INVALID, "메모는 200자 이하여야 해요");
+        }
     }
 
     private Map<String, Object> approvedOutput(UUID userId, ApprovalGateConfig config, String note,
