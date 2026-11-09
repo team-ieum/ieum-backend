@@ -198,6 +198,30 @@ class WorkflowExecutionServiceTest {
     }
 
     @Test
+    @DisplayName("기다리기 실행 스냅샷은 terminal=true, 종료 이벤트는 WAITING_DELAY + 멈춘 시각(updatedAt), 게이트 재생 없음")
+    void 기다리기_실행_스냅샷() {
+        UUID workflowId = UUID.randomUUID();
+        UUID executionId = UUID.randomUUID();
+        LocalDateTime pausedAt = LocalDateTime.of(2026, 11, 9, 10, 30, 0);
+
+        WorkflowExecution execution = mockExecution(workflowId, ExecutionStatus.WAITING_DELAY);
+        given(execution.getUpdatedAt()).willReturn(pausedAt);
+        given(workflowExecutionRepository.findById(executionId)).willReturn(Optional.of(execution));
+        given(workflowExecutionLogRepository.findByExecutionIdOrderByCreatedAtAsc(executionId))
+            .willReturn(List.of());
+
+        ExecutionEventSnapshot snapshot = service.loadEventSnapshot(workflowId, executionId);
+
+        assertThat(snapshot.terminal()).isTrue();
+        var last = snapshot.events().get(snapshot.events().size() - 1);
+        assertThat(last.type()).isEqualTo(ExecutionEventType.EXECUTION_COMPLETED);
+        assertThat(last.executionStatus()).isEqualTo(ExecutionStatus.WAITING_DELAY);
+        assertThat(last.occurredAt()).isEqualTo(pausedAt.atZone(ZoneId.systemDefault()).toInstant());
+        assertThat(snapshot.events()).extracting(e -> e.type())
+            .doesNotContain(ExecutionEventType.APPROVAL_REQUESTED);
+    }
+
+    @Test
     @DisplayName("승인 대기 스냅샷은 게이트마다 APPROVAL_REQUESTED를 되살린 뒤 EXECUTION_COMPLETED로 끝난다 — 라이브와 같은 모양")
     void 승인대기_스냅샷_게이트_재생() {
         UUID workflowId = UUID.randomUUID();

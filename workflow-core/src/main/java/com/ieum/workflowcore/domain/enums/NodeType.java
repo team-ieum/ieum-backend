@@ -20,5 +20,10 @@ public enum NodeType {
      * 사람 승인 게이트. NodeExecutor가 없다 — 런타임이 이 노드에서 실행을 멈추고(WAITING_APPROVAL),
      * 승인되면 이어진 실행에서 사전 완료 출력으로 통과한다.
      */
-    APPROVAL
+    APPROVAL,
+    /**
+     * 기다리기. 실행기 {@code DelayNodeExecutor}가 재개 시각을 계산하고, 런타임이 보류한다 —
+     * 실행은 WAITING_DELAY로 멈췄다가 재개 시각이 지나면 이어진 실행에서 통과한다.
+     */
+    DELAY
 }

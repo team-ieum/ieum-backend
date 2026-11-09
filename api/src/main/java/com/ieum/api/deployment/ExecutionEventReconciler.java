@@ -26,8 +26,7 @@ public class ExecutionEventReconciler {
         try {
             for (var execution : executions.findAllById(observed)) {
                 ExecutionStatus status = execution.getStatus();
-                if (status == ExecutionStatus.SUCCESS || status == ExecutionStatus.FAILED
-                        || status == ExecutionStatus.WAITING_APPROVAL) {
+                if (status.isTerminalOrWaiting()) {
                     publisher.acceptRemote(execution.getId(), ExecutionEvent.executionCompleted(
                         execution.getId(), execution.getWorkflow().getId(), status));
                 }

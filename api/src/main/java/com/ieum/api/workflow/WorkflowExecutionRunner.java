@@ -4,7 +4,6 @@ import com.ieum.api.workflow.queue.ExecutionJobQueue;
 import com.ieum.api.deployment.ExecutionAdvisoryLocks;
 import com.ieum.workflowcore.engine.ExecutionOwnershipGuard.OwnershipLostException;
 import com.ieum.workflowcore.engine.ExecutionOwnershipGuard.OwnershipUncertainException;
-import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.domain.WorkflowExecution;
@@ -84,7 +83,7 @@ public class WorkflowExecutionRunner {
                 // Recheck only after acquiring the shared lock. A different owner may have finished
                 // between the worker's first lookup and this lock acquisition.
                 var existing = executionRepository.findById(executionId);
-                if (existing.isEmpty() || isTerminal(existing.get().getStatus())) {
+                if (existing.isEmpty() || existing.get().getStatus().isTerminalOrWaiting()) {
                     lease.close();
                     return true;
                 }
@@ -131,11 +130,6 @@ public class WorkflowExecutionRunner {
             active.decrementAndGet();
             closeLease(lease, executionId);
         }
-    }
-
-    private boolean isTerminal(ExecutionStatus status) {
-        return status == ExecutionStatus.SUCCESS || status == ExecutionStatus.FAILED
-            || status == ExecutionStatus.WAITING_APPROVAL;
     }
 
     private void closeLease(ExecutionAdvisoryLocks.Lease lease, UUID executionId) {

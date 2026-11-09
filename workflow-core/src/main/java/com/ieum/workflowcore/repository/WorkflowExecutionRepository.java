@@ -122,7 +122,8 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
         + "WHERE e.id = :id AND e.status NOT IN ("
         + "com.ieum.workflowcore.domain.enums.ExecutionStatus.SUCCESS, "
         + "com.ieum.workflowcore.domain.enums.ExecutionStatus.FAILED, "
-        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL)")
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL, "
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_DELAY)")
     int finishIfNotTerminal(@Param("id") UUID id, @Param("status") ExecutionStatus status,
                             @Param("retryExhausted") boolean retryExhausted,
                             @Param("now") LocalDateTime now);
@@ -143,7 +144,8 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
         + "WHERE e.id = :id AND e.status NOT IN ("
         + "com.ieum.workflowcore.domain.enums.ExecutionStatus.SUCCESS, "
         + "com.ieum.workflowcore.domain.enums.ExecutionStatus.FAILED, "
-        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL)")
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL, "
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_DELAY)")
     int startIfNotTerminal(@Param("id") UUID id, @Param("now") LocalDateTime now);
 
     /**
@@ -160,7 +162,8 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
         + "WHERE e.id = :id AND e.status NOT IN ("
         + "com.ieum.workflowcore.domain.enums.ExecutionStatus.SUCCESS, "
         + "com.ieum.workflowcore.domain.enums.ExecutionStatus.FAILED, "
-        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL)")
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_APPROVAL, "
+        + "com.ieum.workflowcore.domain.enums.ExecutionStatus.WAITING_DELAY)")
     int recordErrorIfNotTerminal(@Param("id") UUID id, @Param("errorMessage") String errorMessage,
                                  @Param("now") LocalDateTime now);
 

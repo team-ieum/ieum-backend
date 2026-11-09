@@ -6,7 +6,6 @@ import static com.ieum.api.workflow.queue.ExecutionJobQueue.STREAM_KEY;
 
 import com.ieum.api.workflow.WorkflowExecutionRunner;
 import com.ieum.workflowcore.domain.WorkflowExecution;
-import com.ieum.workflowcore.domain.enums.ExecutionStatus;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.time.Duration;
@@ -123,7 +122,9 @@ public class ExecutionJobWorker implements StreamListener<String, MapRecord<Stri
             }
 
             WorkflowExecution execution = found.get();
-            if (isTerminal(execution.getStatus())) {
+            // 종료·대기(승인·기다리기) 실행은 돌리지 않고 ack — 대기 실행은 이어진 새 실행이 돈다.
+            // 재배달된 대기 실행을 돌리면 게이트·DELAY 앞 노드(부작용 포함)가 처음부터 다시 실행된다.
+            if (execution.getStatus().isTerminalOrWaiting()) {
                 // 재시작 회수분이 이미 끝난 실행일 수 있다. 재실행하면 중복 실행이 된다.
                 log.info("[ExecutionJobWorker] 이미 종료된 실행 — 재실행 없이 ack. executionId: {}, status: {}",
                     executionId, execution.getStatus());
@@ -143,16 +144,6 @@ public class ExecutionJobWorker implements StreamListener<String, MapRecord<Stri
             // pending에 남지 않아 재시작 복구 대상에서 빠진다.
             if (completed) acknowledge(record);
         }
-    }
-
-    /**
-     * 실행하지 않고 ack할 상태 — 종료(SUCCESS/FAILED)와 승인 대기(WAITING_APPROVAL).
-     * 대기 실행은 승인되면 원 실행이 아니라 이어진 새 실행이 돈다. 재배달된 대기 실행을 돌리면
-     * 게이트 앞 노드(부작용 포함)가 처음부터 다시 실행된다.
-     */
-    private boolean isTerminal(ExecutionStatus status) {
-        return status == ExecutionStatus.SUCCESS || status == ExecutionStatus.FAILED
-            || status == ExecutionStatus.WAITING_APPROVAL;
     }
 
     private UUID parseExecutionId(MapRecord<String, String, String> record) {
