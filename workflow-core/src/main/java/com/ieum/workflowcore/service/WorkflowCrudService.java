@@ -12,6 +12,7 @@ import com.ieum.workflowcore.domain.Workflow;
 import com.ieum.workflowcore.domain.WorkflowExecution;
 import com.ieum.workflowcore.domain.WorkflowVersion;
 import com.ieum.workflowcore.domain.enums.TriggerType;
+import com.ieum.workflowcore.repository.ApprovalGateRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionLogRepository;
 import com.ieum.workflowcore.repository.WorkflowExecutionRepository;
 import com.ieum.workflowcore.repository.NodeTestSampleRepository;
@@ -68,6 +69,7 @@ public class WorkflowCrudService {
     private final WorkflowWebhookTokenRepository webhookTokenRepository;
     private final ChatSessionRepository chatSessionRepository;
     private final ChatMessageRepository chatMessageRepository;
+    private final ApprovalGateRepository approvalGateRepository;
 
     // ------------------------------------------------------------------ WRITE
 
@@ -324,6 +326,8 @@ public class WorkflowCrudService {
         // 채팅 세션은 workflow_id FK가 없어 지우지 않으면 고아로 남는다. 메시지 → 세션 순서(session_id FK).
         chatMessageRepository.deleteByWorkflowId(workflowId);
         chatSessionRepository.deleteByWorkflowId(workflowId);
+        // 승인 게이트도 FK가 없어 고아로 남는다.
+        approvalGateRepository.deleteByWorkflowId(workflowId);
         workflowRepository.delete(workflow);
         // 바로 flush한다 — 이어지는 bulk DELETE(clearAutomatically)가 영속성 컨텍스트를 비우면 flush 전의 이 삭제가 버려진다.
         // 한 트랜잭션에서 여러 워크플로우를 지우는 회원 탈퇴(deleteAllByUserId)에서 실제로 행이 남았다.
