@@ -182,6 +182,78 @@ class GitHubAppTokenServiceTest {
             .isEqualTo(ErrorCode.GITHUB_API_UNAVAILABLE);
     }
 
+    @Test
+    @DisplayName("응답 token이 공백이면 GITHUB_API_UNAVAILABLE이고 캐시하지 않는다(다음 호출은 다시 발급)")
+    void 빈_token은_GITHUB_API_UNAVAILABLE() {
+        server.expect(requestTo(API + "/repos/o/r/installation"))
+            .andRespond(withSuccess("{\"id\":42}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(API + "/app/installations/42/access_tokens"))
+            .andRespond(withSuccess("{\"token\":\"  \",\"expires_at\":\"" + EXPIRES_AT + "\"}", MediaType.APPLICATION_JSON));
+        expectIssue("o", "r");
+
+        assertErrorCode(() -> service.installationToken("o", "r"), ErrorCode.GITHUB_API_UNAVAILABLE);
+        assertThat(service.installationToken("o", "r")).isEqualTo("ghs_installation");
+    }
+
+    @Test
+    @DisplayName("응답 expires_at을 읽을 수 없으면 GITHUB_API_UNAVAILABLE")
+    void 잘못된_expires_at은_GITHUB_API_UNAVAILABLE() {
+        server.expect(requestTo(API + "/repos/o/r/installation"))
+            .andRespond(withSuccess("{\"id\":42}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(API + "/app/installations/42/access_tokens"))
+            .andRespond(withSuccess("{\"token\":\"ghs_x\",\"expires_at\":\"tomorrow\"}", MediaType.APPLICATION_JSON));
+
+        assertErrorCode(() -> service.installationToken("o", "r"), ErrorCode.GITHUB_API_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("installation id가 정수가 아니면 GITHUB_API_UNAVAILABLE")
+    void 정수_아닌_installation_id는_GITHUB_API_UNAVAILABLE() {
+        server.expect(requestTo(API + "/repos/o/r/installation"))
+            .andRespond(withSuccess("{\"id\":\"42/../x\"}", MediaType.APPLICATION_JSON));
+
+        assertErrorCode(() -> service.installationToken("o", "r"), ErrorCode.GITHUB_API_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("owner·repo가 경로 조각 하나가 아니면 HTTP 없이 INVALID_INPUT")
+    void 경로_조각이_아니면_INVALID_INPUT() {
+        assertErrorCode(() -> service.installationToken("a/../b", "r"), ErrorCode.INVALID_INPUT);
+        assertErrorCode(() -> service.installationToken("o", ".."), ErrorCode.INVALID_INPUT);
+        assertErrorCode(() -> service.installationToken("o", "."), ErrorCode.INVALID_INPUT);
+    }
+
+    @Test
+    @DisplayName("rate limit 헤더 없는 403(앱 권한 부족 등) → GITHUB_BOT_NOT_CONFIGURED")
+    void 헤더_없는_403은_GITHUB_BOT_NOT_CONFIGURED() {
+        server.expect(requestTo(API + "/repos/o/r/installation")).andRespond(withStatus(HttpStatus.FORBIDDEN));
+
+        assertErrorCode(() -> service.installationToken("o", "r"), ErrorCode.GITHUB_BOT_NOT_CONFIGURED);
+    }
+
+    @Test
+    @DisplayName("429 → GITHUB_API_UNAVAILABLE")
+    void _429는_GITHUB_API_UNAVAILABLE() {
+        server.expect(requestTo(API + "/repos/o/r/installation")).andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS));
+
+        assertErrorCode(() -> service.installationToken("o", "r"), ErrorCode.GITHUB_API_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("500 → GITHUB_API_UNAVAILABLE")
+    void _500은_GITHUB_API_UNAVAILABLE() {
+        server.expect(requestTo(API + "/repos/o/r/installation")).andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR));
+
+        assertErrorCode(() -> service.installationToken("o", "r"), ErrorCode.GITHUB_API_UNAVAILABLE);
+    }
+
+    private static void assertErrorCode(org.assertj.core.api.ThrowableAssert.ThrowingCallable call, ErrorCode code) {
+        assertThatThrownBy(call)
+            .isInstanceOf(CustomException.class)
+            .extracting(e -> ((CustomException) e).getErrorCode())
+            .isEqualTo(code);
+    }
+
     private void expectIssue(String owner, String repo) {
         server.expect(once(), requestTo(API + "/repos/" + owner + "/" + repo + "/installation"))
             .andRespond(withSuccess("{\"id\":42}", MediaType.APPLICATION_JSON));

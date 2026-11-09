@@ -9,12 +9,14 @@ import java.security.spec.PKCS8EncodedKeySpec;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.Base64;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -43,6 +45,7 @@ public class GitHubAppTokenService {
     static final String REPO_NOT_INSTALLED =
         "이 레포에 GitHub 앱 설치가 필요합니다. GitHub App 설치 범위에 저장소를 추가해 주세요.";
     private static final Duration REFRESH_MARGIN = Duration.ofMinutes(5);
+    private static final Pattern PATH_SEGMENT = Pattern.compile("[A-Za-z0-9_.-]+");
 
     private final String clientId;
     private final PrivateKey privateKey;
@@ -76,6 +79,10 @@ public class GitHubAppTokenService {
      *                         GITHUB_API_UNAVAILABLE — rate limit·장애
      */
     public String installationToken(String owner, String repo) {
+        // 템플릿 변수는 '/'를 인코딩하지 않는다 — 경로 조각 하나로만 받는다(경로 조작 방지)
+        if (!isPathSegment(owner) || !isPathSegment(repo)) {
+            throw new CustomException(ErrorCode.INVALID_INPUT, "GitHub 레포 이름 형식이 올바르지 않습니다.");
+        }
         if (!enabled()) {
             throw new CustomException(ErrorCode.GITHUB_BOT_NOT_CONFIGURED);
         }
@@ -100,7 +107,7 @@ public class GitHubAppTokenService {
                 API_BASE + "/repos/{owner}/{repo}/installation", HttpMethod.GET,
                 new HttpEntity<>(headers), Map.class, owner, repo).getBody();
             Object id = installation == null ? null : installation.get("id");
-            if (id == null) {
+            if (!(id instanceof Integer || id instanceof Long)) {
                 throw new CustomException(ErrorCode.GITHUB_API_UNAVAILABLE);
             }
             Map<String, Object> body = Map.of(
@@ -111,10 +118,14 @@ public class GitHubAppTokenService {
                 new HttpEntity<>(body, headers), Map.class, id).getBody();
             Object token = response == null ? null : response.get("token");
             Object expiresAt = response == null ? null : response.get("expires_at");
-            if (token == null || expiresAt == null) {
+            if (!(token instanceof String t) || t.isBlank() || expiresAt == null) {
                 throw new CustomException(ErrorCode.GITHUB_API_UNAVAILABLE);
             }
-            return new Cached(token.toString(), Instant.parse(expiresAt.toString()));
+            try {
+                return new Cached(t, Instant.parse(expiresAt.toString()));
+            } catch (DateTimeParseException e) {
+                throw new CustomException(ErrorCode.GITHUB_API_UNAVAILABLE);
+            }
         } catch (HttpClientErrorException e) {
             int status = e.getStatusCode().value();
             log.warn("[GitHubAppTokenService] 설치 토큰 발급 거부 — {}/{} status: {}", owner, repo, status);
@@ -136,6 +147,10 @@ public class GitHubAppTokenService {
         }
         // 401(JWT 거부: 키·client-id 불일치)·그 밖 4xx(App 권한 부족 등) — 사용자가 못 고치는 서버 설정 문제
         return new CustomException(ErrorCode.GITHUB_BOT_NOT_CONFIGURED);
+    }
+
+    private static boolean isPathSegment(String s) {
+        return s != null && PATH_SEGMENT.matcher(s).matches() && !s.equals(".") && !s.equals("..");
     }
 
     private String appJwt() {
