@@ -44,7 +44,8 @@ public class ExecutionApprovalService {
     private final ExecutionRetryService executionRetryService;
 
     /**
-     * @return 이어진 새 실행 — 프론트는 이 ID로 SSE를 다시 구독한다
+     * @return 이어진 새 실행 — 프론트는 이 ID로 SSE를 다시 구독한다. 단 기다리기(DELAY)가 함께 걸렸고 재개 시각 전이면
+     *         이어진 실행을 만들지 않고 {@code WAITING_DELAY}로 바뀐 원 실행을 돌려준다(재개 시각이 지나면 sweeper가 이어간다)
      * @throws CustomException EXECUTION_NOT_FOUND / WORKFLOW_NOT_FOUND(비소유자 — 실행 조회가 소유자 검증보다 먼저라
      *                         없는 실행(EXECUTION_NOT_FOUND)과 남의 실행이 구분된다. 재처리와 같은 패턴)
      *                         / EXECUTION_NOT_WAITING_APPROVAL(409) / INVALID_WORKFLOW(대기 중 비활성화된 워크플로우 —

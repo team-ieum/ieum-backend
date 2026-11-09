@@ -116,6 +116,14 @@ class ExecutionDelayServiceTest {
         verifyNoWrites();
     }
 
+    @Test
+    void resume_재개시각_없으면_no_op() {
+        given(original.getResumeAt()).willReturn(null);
+
+        assertThat(service.resume(executionId, NOW)).isEmpty();
+        verifyNoWrites();
+    }
+
     // ──────────────────────────── 취소 ────────────────────────────
 
     private final UUID userId = UUID.randomUUID();

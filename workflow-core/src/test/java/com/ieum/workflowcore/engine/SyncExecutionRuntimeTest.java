@@ -1679,9 +1679,30 @@ class SyncExecutionRuntimeTest {
             when(executionRepository.recordDelayWait(any(), any(), any(), any())).thenReturn(1);
         }
 
+        private final DelayQueueService queues = mock(DelayQueueService.class);
+
         private SyncExecutionRuntime delayRuntime() {
-            return runtimeWith(trigger(), ai(), new DelayNodeExecutor(mock(DelayQueueService.class),
+            return runtimeWith(trigger(), ai(), new DelayNodeExecutor(queues,
                 java.time.Clock.fixed(NOW, java.time.ZoneId.of("Asia/Seoul"))));
+        }
+
+        @Test
+        @DisplayName("큐 DELAY는 실행 중엔 슬롯을 예약(reserve)한다 — peek이면 같은 큐가 전부 같은 슬롯에 풀린다")
+        void 큐_delay는_슬롯을_예약한다() throws Exception {
+            UUID owner = workflow.getUserId();
+            when(queues.reserve(owner, "slack", Duration.ofMinutes(1), NOW))
+                .thenReturn(new DelayQueueService.Slot(NOW.plus(Duration.ofMinutes(30)), 2));
+            stubDefinition(List.of(node("t", "TRIGGER"), delayNode("q", "delay.queue",
+                    Map.of("queueName", "slack", "amount", 1, "unit", "minutes")), node("b", "AI")),
+                List.of(edge("t", "q", null), edge("q", "b", null)));
+
+            runDelay();
+
+            verify(queues, times(1)).reserve(owner, "slack", Duration.ofMinutes(1), NOW);
+            verify(queues, never()).peek(any(), any(), any(), any());
+            verify(executionRepository).pauseForDelay(eq(executionId),
+                eq(local(NOW.plus(Duration.ofMinutes(30)))),
+                eq("{\"q\":{\"scheduledFor\":\"2026-11-09T11:00:00+09:00\",\"queuePosition\":2}}"), any());
         }
 
         private void runDelay() throws Exception {

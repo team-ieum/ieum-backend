@@ -1,5 +1,6 @@
 package com.ieum.api.workflow.service;
 
+import com.ieum.common.exception.CustomException;
 import com.ieum.workflowcore.deployment.BackgroundOwnership;
 import com.ieum.workflowcore.service.WorkflowExecutionService;
 import java.time.Instant;
@@ -34,7 +35,10 @@ public class DelayResumeSweeper {
             try {
                 executionDelayService.resume(id, Instant.now());
             } catch (Exception e) {
-                log.error("[DelayResumeSweeper] 재개 실패 — executionId: {}", id);
+                // 원인은 예외 종류·메시지(CustomException이면 ErrorCode)만 — 스택·입력값은 남기지 않는다.
+                String cause = e instanceof CustomException ce ? ce.getErrorCode().name() : e.getClass().getSimpleName();
+                log.error("[DelayResumeSweeper] 재개 실패 — executionId: {}, cause: {}, message: {}",
+                    id, cause, e.getMessage());
             }
         }
     }
