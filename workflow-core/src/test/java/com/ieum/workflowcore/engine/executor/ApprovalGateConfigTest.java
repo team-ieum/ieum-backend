@@ -170,8 +170,12 @@ class ApprovalGateConfigTest {
 
         assertThatThrownBy(() -> ApprovalGateConfig.coerce(fields, Map.of("n", "1e999999999")))
             .isInstanceOf(ApprovalFailure.class).hasMessageContaining("'n'");
-        assertThat((BigDecimal) ApprovalGateConfig.coerce(fields, Map.of("n", "1e999")).get("n"))
-            .isEqualByComparingTo("1e999");
+        assertThatThrownBy(() -> ApprovalGateConfig.coerce(fields, Map.of("n", "1e309")))
+            .isInstanceOf(ApprovalFailure.class).hasMessageContaining("'n'");
+        assertThatThrownBy(() -> ApprovalGateConfig.coerce(fields, Map.of("n", "-1e400")))
+            .isInstanceOf(ApprovalFailure.class);
+        assertThat((BigDecimal) ApprovalGateConfig.coerce(fields, Map.of("n", "1e308")).get("n"))
+            .isEqualByComparingTo("1e308");
     }
 
     @Test

@@ -227,6 +227,10 @@ public final class ApprovalGateConfig {
                 if (!NumberFormats.withinDigits(n)) {
                     throw new ApprovalFailure(label + "은 정수·소수 각 1000자리까지예요");
                 }
+                // node_runs는 기본 ObjectMapper(Double)로 다시 읽어 1.8e308을 넘으면 "Infinity"가 된다
+                if (Double.isInfinite(n.doubleValue())) {
+                    throw new ApprovalFailure(label + "은 너무 큰 숫자예요");
+                }
                 yield n;
             }
             case "boolean" -> {
