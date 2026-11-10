@@ -88,6 +88,7 @@ class GoogleOptionSourcesTest {
     private final GoogleEventsOptionSource events = new GoogleEventsOptionSource(reader);
     private final GoogleFilesOptionSource files = new GoogleFilesOptionSource(reader);
     private final GoogleFoldersOptionSource folders = new GoogleFoldersOptionSource(reader);
+    private final GoogleFormsOptionSource forms = new GoogleFormsOptionSource(reader);
     private final GmailSendAsOptionSource gmailSendAs = new GmailSendAsOptionSource(reader);
     private final GmailLabelsOptionSource gmailLabels = new GmailLabelsOptionSource(reader);
     private final GmailMessagesOptionSource gmailMessages = new GmailMessagesOptionSource(reader);
@@ -810,15 +811,45 @@ class GoogleOptionSourcesTest {
     }
 
     @Test
+    @DisplayName("폼 목록 — Drive files를 폼·휴지통 제외·수정순 50개로 조회")
+    void formsListsDriveFiles() {
+        connected("openid email " + DRIVE);
+        server.expect(requestTo(startsWith("https://www.googleapis.com/drive/v3/files?")))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Authorization", "Bearer g-token"))
+            .andExpect(requestTo(containsString(
+                "q=mimeType%3D%27application%2Fvnd.google-apps.form%27%20and%20trashed%3Dfalse")))
+            .andExpect(requestTo(containsString("orderBy=modifiedTime%20desc")))
+            .andExpect(requestTo(containsString("pageSize=50")))
+            .andRespond(withSuccess(
+                "{\"nextPageToken\":\"tok-2\",\"files\":[{\"id\":\"1FAIp\",\"name\":\"고객 설문\"}]}",
+                MediaType.APPLICATION_JSON));
+
+        OptionPage page = forms.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(new OptionItem("1FAIp", "고객 설문"));
+        assertThat(page.nextCursor()).isEqualTo("tok-2");
+    }
+
+    @Test
+    @DisplayName("spreadsheets scope만 있으면 폼 목록은 토큰·Google 호출 없이 GOOGLE_SCOPE_REQUIRED — drive가 필요하다")
+    void formsNeedDriveScope() {
+        connected("openid " + SHEETS);
+
+        assertErrorCode(() -> forms.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
+        verify(tokenService, never()).getValidAccessToken(any());
+    }
+
+    @Test
     @DisplayName("공급원 키는 카탈로그 optionsSource와 1:1 계약")
     void keysMatchAgentOptionsSource() {
         assertThat(List.of(spreadsheets.key(), worksheets.key(), calendars.key(), writableCalendars.key(),
                 events.key(), files.key(), folders.key(), gmailSendAs.key(), gmailLabels.key(), sheetColumns.key(),
-                gmailMessages.key(), gmailThreads.key()))
+                gmailMessages.key(), gmailThreads.key(), forms.key()))
             .containsExactly("google.spreadsheets", "google.worksheets", "google.calendars",
                 "google.writable_calendars", "google.events", "google.files", "google.folders",
                 "google.gmail_send_as", "google.gmail_labels", "google.sheet_columns",
-                "google.gmail_messages", "google.gmail_threads");
+                "google.gmail_messages", "google.gmail_threads", "google.forms");
     }
 
     @Test
