@@ -3,7 +3,6 @@ package com.ieum.api.trigger.forms;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.startsWith;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
@@ -150,7 +149,7 @@ class FormsTriggerHandlerTest {
     }
 
     @Test
-    @DisplayName("노드 테스트 — 가벼운 목록에서 제출 시각 최신 1건을 골라 그 건만 전체로 읽어 정규화, T2만 isUpdate")
+    @DisplayName("노드 테스트 — 가벼운 목록에서 제출 시각 최신 1건을 골라 그 건만 단건 조회해 정규화, T2만 isUpdate")
     void fetchSampleNewest() {
         connected();
         for (int i = 0; i < 2; i++) {
@@ -162,13 +161,11 @@ class FormsTriggerHandlerTest {
                       {"responseId":"bad","createTime":"x","lastSubmittedTime":"not-a-time"},
                       {"responseId":"new","createTime":"2026-11-10T01:00:00Z","lastSubmittedTime":"2026-11-10T02:00:00.5Z"}]}""",
                     MediaType.APPLICATION_JSON));
-            server.expect(requestTo(startsWith(FORMS_API + "1FAIp/responses?")))
-                .andExpect(requestTo(containsString("filter=timestamp%20%3E%3D%202026-11-10T02%3A00%3A00.5Z")))
-                .andExpect(requestTo(not(containsString("fields="))))
+            server.expect(requestTo(FORMS_API + "1FAIp/responses/new"))
                 .andRespond(withSuccess("""
-                    {"responses":[{"responseId":"new","createTime":"2026-11-10T01:00:00Z",
+                    {"responseId":"new","createTime":"2026-11-10T01:00:00Z",
                       "lastSubmittedTime":"2026-11-10T02:00:00.5Z",
-                      "answers":{"q1":{"questionId":"q1","textAnswers":{"answers":[{"value":"김"}]}}}}]}""",
+                      "answers":{"q1":{"questionId":"q1","textAnswers":{"answers":[{"value":"김"}]}}}}""",
                     MediaType.APPLICATION_JSON));
             server.expect(requestTo(startsWith(FORMS_API + "1FAIp?fields=")))
                 .andRespond(withSuccess(FORM, MediaType.APPLICATION_JSON));
@@ -189,6 +186,19 @@ class FormsTriggerHandlerTest {
         connected();
         server.expect(requestTo(startsWith(FORMS_API + "1FAIp/responses?")))
             .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+
+        assertThat(t1.fetchSample(userId, Map.of("form_id", "1FAIp"))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("노드 테스트 — 고른 응답이 단건 조회에서 404(그 사이 삭제)면 empty, forms.get 없음")
+    void fetchSampleGoneIsEmpty() {
+        connected();
+        server.expect(requestTo(startsWith(FORMS_API + "1FAIp/responses?")))
+            .andRespond(withSuccess("""
+                {"responses":[{"responseId":"r1","createTime":"2026-11-10T01:00:00Z",
+                  "lastSubmittedTime":"2026-11-10T01:00:00Z"}]}""", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(FORMS_API + "1FAIp/responses/r1")).andRespond(withStatus(HttpStatus.NOT_FOUND));
 
         assertThat(t1.fetchSample(userId, Map.of("form_id", "1FAIp"))).isEmpty();
     }

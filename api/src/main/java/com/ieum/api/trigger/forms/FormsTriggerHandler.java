@@ -107,7 +107,7 @@ public class FormsTriggerHandler implements TriggerHandler {
 
     /**
      * 최근 30일 중 제출 시각이 가장 늦은 1건. 후보 목록은 시각만 받고({@link #LIGHT_FIELDS}), 고른 건만
-     * {@code timestamp >= 그 시각}으로 다시 받아 전체 답을 읽는다. 시각 형식이 어긋난 응답은 건너뛴다.
+     * 단건 조회({@link GoogleFormsReader#response})로 전체 답을 읽는다. 시각 형식이 어긋난 응답은 건너뛴다.
      */
     @Override
     public Optional<Map<String, Object>> fetchSample(UUID userId, Map<String, Object> config) {
@@ -123,11 +123,7 @@ public class FormsTriggerHandler implements TriggerHandler {
         if (newest.isEmpty()) {
             return Optional.empty();
         }
-        String responseId = newest.get().path("responseId").asText();
-        String submitted = newest.get().path("lastSubmittedTime").asText();
-        Optional<JsonNode> full = reader.listResponses(userId, formId, "timestamp >= " + submitted, null).stream()
-            .filter(r -> responseId.equals(r.path("responseId").asText()))
-            .findFirst();
+        Optional<JsonNode> full = reader.response(userId, formId, newest.get().path("responseId").asText());
         if (full.isEmpty()) {
             return Optional.empty();   // 두 조회 사이에 지워졌다
         }

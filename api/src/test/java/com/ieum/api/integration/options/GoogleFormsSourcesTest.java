@@ -174,6 +174,29 @@ class GoogleFormsSourcesTest {
     }
 
     @Test
+    @DisplayName("응답 단건 조회 — 폼 ID·응답 ID 모두 엄격 인코딩, 본문을 그대로 돌려준다")
+    void responseGetEncodesIds() {
+        connected("openid " + DRIVE);
+        server.expect(requestTo(FORMS_API + "1FAIp_-9/responses/a%2Fb%3Fc"))
+            .andExpect(method(HttpMethod.GET))
+            .andRespond(withSuccess("{\"responseId\":\"a/b?c\",\"answers\":{}}", MediaType.APPLICATION_JSON));
+
+        assertThat(formsReader.response(userId, "1FAIp_-9", "a/b?c"))
+            .hasValueSatisfying(r -> assertThat(r.path("responseId").asText()).isEqualTo("a/b?c"));
+    }
+
+    @Test
+    @DisplayName("응답 단건 조회 — 404(지워진 응답)면 empty, 그 밖 오류는 그대로")
+    void responseGetNotFoundIsEmpty() {
+        connected("openid " + DRIVE);
+        server.expect(requestTo(FORMS_API + "f1/responses/gone")).andRespond(withStatus(HttpStatus.NOT_FOUND));
+        server.expect(requestTo(FORMS_API + "f1/responses/r1")).andRespond(withStatus(HttpStatus.UNAUTHORIZED));
+
+        assertThat(formsReader.response(userId, "f1", "gone")).isEmpty();
+        assertErrorCode(() -> formsReader.response(userId, "f1", "r1"), ErrorCode.AUTHENTICATION_REQUIRED);
+    }
+
+    @Test
     @DisplayName("spreadsheets scope만 있으면 GOOGLE_SCOPE_REQUIRED — drive가 필요하다")
     void formQuestionsNeedDriveScope() {
         connected("openid " + SHEETS);

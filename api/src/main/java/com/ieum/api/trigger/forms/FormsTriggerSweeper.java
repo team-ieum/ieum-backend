@@ -13,6 +13,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -101,7 +102,9 @@ public class FormsTriggerSweeper {
         }
         UUID userId = subscription.getUserId();
         long lowSec = cursor.lowSec();
-        List<JsonNode> batch = reader.listResponses(userId, formId, handler.filter(lowSec), null).stream()
+        // 후보는 시각만 받은 가벼운 목록으로 고른다 — 밀린 응답 본문 전체를 매 폴링 받으면 수천 건에서 힙이 터진다
+        List<JsonNode> batch = reader.listResponses(userId, formId, handler.filter(lowSec),
+                FormsTriggerHandler.LIGHT_FIELDS).stream()
             .filter(r -> {
                 Long sec = handler.eventSec(r);   // 시각 형식이 어긋난 응답은 건너뛴다
                 return sec != null && sec >= lowSec && !cursor.seen(handler.dedupeKey(r));
@@ -114,11 +117,16 @@ public class FormsTriggerSweeper {
             return;
         }
         List<FormQuestion> questions = reader.questions(userId, formId);
-        for (JsonNode response : batch) {
-            if (!firer.fire(subscription.getWorkflowId(), handler.type(), handler.output(response, questions))) {
+        for (JsonNode candidate : batch) {
+            // 본문은 고른 건만 단건으로 받는다. 404(그 사이 삭제)면 건너뛴다 — 커서 키·시각은 목록 값 그대로
+            Optional<JsonNode> response = reader.response(userId, formId, candidate.path("responseId").asText());
+            if (response.isEmpty()) {
+                continue;
+            }
+            if (!firer.fire(subscription.getWorkflowId(), handler.type(), handler.output(response.get(), questions))) {
                 return; // 비활성·삭제 — sync가 곧 행을 지운다
             }
-            cursor.advance(handler.dedupeKey(response), handler.eventSec(response));
+            cursor.advance(handler.dedupeKey(candidate), handler.eventSec(candidate));
         }
     }
 

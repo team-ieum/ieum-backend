@@ -30,6 +30,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.DisplayName;
@@ -81,8 +82,13 @@ class FormsTriggerSweeperTest {
             .put("lastSubmittedTime", iso(submittedSec));
     }
 
+    /** 가벼운 목록(시각만)으로 후보를 주고, 단건 조회는 같은 응답을 본문으로 돌려준다 */
     private void listed(JsonNode... responses) {
-        given(reader.listResponses(eq(userId), eq(FORM), anyString(), isNull())).willReturn(List.of(responses));
+        given(reader.listResponses(eq(userId), eq(FORM), anyString(), eq(FormsTriggerHandler.LIGHT_FIELDS)))
+            .willReturn(List.of(responses));
+        for (JsonNode r : responses) {
+            given(reader.response(userId, FORM, r.path("responseId").asText())).willReturn(Optional.of(r));
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -110,8 +116,10 @@ class FormsTriggerSweeperTest {
 
         sweeper.sweep();
 
-        verify(reader).listResponses(userId, FORM, "timestamp >= " + iso(AFTER), null);
+        verify(reader).listResponses(userId, FORM, "timestamp >= " + iso(AFTER), FormsTriggerHandler.LIGHT_FIELDS);
+        verify(reader, never()).listResponses(any(), any(), any(), isNull());   // 본문 전체 목록은 받지 않는다
         verify(reader, times(1)).questions(userId, FORM);
+        verify(reader, times(3)).response(eq(userId), eq(FORM), anyString());
         assertThat(fired(TriggerType.FORMS_NEW_RESPONSE, 3)).extracting(o -> o.get("responseId"))
             .containsExactly("r1", "r2", "r3");
         Map<String, Object> cursor = recordedCursor(s, null);
@@ -173,6 +181,24 @@ class FormsTriggerSweeperTest {
 
         assertThat(fired(TriggerType.FORMS_NEW_RESPONSE, 20).get(19)).containsEntry("responseId", "r20");
         assertThat(recordedCursor(s, null)).containsEntry("afterSec", AFTER + 20);
+        // 본문은 고른 20건만 받는다(밀린 25건 전부가 아니다)
+        verify(reader, times(20)).response(eq(userId), eq(FORM), anyString());
+        verify(reader, never()).response(userId, FORM, "r21");
+    }
+
+    @Test
+    @DisplayName("단건 조회가 404(그 사이 삭제)면 그 건만 건너뛰고 다음 건을 발화한다 — 건너뛴 건은 seen에 없다")
+    @SuppressWarnings("unchecked")
+    void skipsResponseGoneOnGet() {
+        AppTriggerSubscription s = subscription(TriggerType.FORMS_NEW_RESPONSE, List.of());
+        listed(response("r1", AFTER + 1, AFTER + 1), response("r2", AFTER + 2, AFTER + 2));
+        given(reader.response(userId, FORM, "r1")).willReturn(Optional.empty());
+        given(firer.fire(any(), any(), any())).willReturn(true);
+
+        sweeper.sweep();
+
+        assertThat(fired(TriggerType.FORMS_NEW_RESPONSE, 1)).extracting(o -> o.get("responseId")).containsExactly("r2");
+        assertThat((Map<String, Long>) recordedCursor(s, null).get("seen")).containsOnlyKeys("r2");
     }
 
     @Test
