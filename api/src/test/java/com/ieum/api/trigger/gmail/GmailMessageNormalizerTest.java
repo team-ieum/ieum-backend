@@ -1,10 +1,12 @@
 package com.ieum.api.trigger.gmail;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
@@ -64,6 +66,31 @@ class GmailMessageNormalizerTest {
             {"mimeType":"text/html","headers":%s,"body":{"data":"%s"}}""".formatted(HEADERS, b64(html))));
 
         assertThat(out.get("bodyText")).isEqualTo("안녕 & 반가워");
+    }
+
+    @Test
+    @DisplayName("닫히지 않은 <style> 40,000개 HTML도 1초 안에 정규화된다 — 폴링 스레드가 메일 한 통에 멈추지 않게")
+    void unclosedStylesAreLinear() {
+        String html = "<style>".repeat(40_000);
+
+        String text = assertTimeoutPreemptively(Duration.ofSeconds(1), () -> GmailMessageNormalizer.stripHtml(html));
+
+        assertThat(text).isEmpty();
+    }
+
+    @Test
+    @DisplayName("닫는 태그 없는 script 뒤는 끝까지 버리고, 대소문자 무시")
+    void unclosedScriptDropsRest() {
+        assertThat(GmailMessageNormalizer.stripHtml("앞<SCRIPT a=1>x()</Script>중간<style>p{} 뒤"))
+            .isEqualTo("앞 중간");
+    }
+
+    @Test
+    @DisplayName("200,000자 넘는 HTML은 앞 200,000자만 읽는다")
+    void capsHtmlInput() {
+        String text = GmailMessageNormalizer.stripHtml("가".repeat(200_000) + "나");
+
+        assertThat(text).hasSize(200_000).doesNotContain("나");
     }
 
     @Test
