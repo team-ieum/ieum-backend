@@ -155,13 +155,14 @@ public final class EventCatalog {
     }
 
     /**
-     * fields(칸 → 부분 Field)와 inputFields(Field 목록)를 children까지 훑어 {@code attr}(optionsSource·fieldsSource)
-     * 문자열 값을 모은다.
+     * fields(칸 → 부분 Field)·inputFields·outputFields(Field 목록)를 children까지 훑어
+     * {@code attr}(optionsSource·fieldsSource) 문자열 값을 모은다.
      */
     private static Set<String> sources(Map<String, Object> raw, String attr) {
         Set<String> out = new TreeSet<>();
         collectSources(raw.get("fields"), attr, out);
         collectSources(raw.get("inputFields"), attr, out);
+        collectSources(raw.get("outputFields"), attr, out);
         return Collections.unmodifiableSet(out);
     }
 
