@@ -52,7 +52,7 @@ public interface IntegrationOptionControllerDocs {
             + "nextCursor가 있으면 cursor로 다음 페이지를 조회하고, null이면 마지막 페이지입니다. "
             + "오류 code: GOOGLE_SCOPE_REQUIRED(403, Google 권한 증분 동의 필요 — scope_groups는 "
             + "spreadsheets·worksheets·sheet_columns=sheets, files·folders·forms=drive, calendars·writable_calendars·events=calendar, gmail_send_as·gmail_labels·gmail_messages·gmail_threads=gmail. "
-            + "sheets 그룹은 drive를 포함해 파일·폴더도 충족), "
+            + "sheets 그룹은 drive를 포함해 파일·폴더·폼도 충족), "
             + "ACCOUNT_NOT_CONNECTED(400), SLACK_NOT_CONNECTED(400), DISCORD_NOT_CONNECTED(400), DISCORD_GUILD_NOT_CONNECTED(403, 연결하지 않은 서버), "
             + "AUTHENTICATION_REQUIRED(401, 재연동 필요), GOOGLE_RESOURCE_NOT_FOUND(404), "
             + "GOOGLE_API_UNAVAILABLE(503), NOTION_API_UNAVAILABLE(503), GITHUB_API_UNAVAILABLE(503), SLACK_API_UNAVAILABLE(503), DISCORD_API_UNAVAILABLE(503), "
