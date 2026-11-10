@@ -91,6 +91,20 @@ class EventCatalogTest {
     }
 
     @Test
+    @DisplayName("Forms 트리거 2개 — trigger_type, answers 출력 동적 칸 공급원(S1 children 포함)·응답 드롭다운")
+    void formsEvents_fromRealCatalog() {
+        assertThat(CATALOG.triggerTypeOf("google_forms.new_response")).hasValue(TriggerType.FORMS_NEW_RESPONSE);
+        assertThat(CATALOG.triggerTypeOf("google_forms.new_or_updated_response"))
+            .hasValue(TriggerType.FORMS_ANY_RESPONSE);
+        assertThat(CATALOG.event("google_forms.new_response").orElseThrow().fieldsSources())
+            .containsExactly("google.form_questions");
+        assertThat(CATALOG.event("google_forms.list_responses").orElseThrow().fieldsSources())
+            .containsExactly("google.form_questions");
+        assertThat(CATALOG.event("google_forms.get_response").orElseThrow().optionsSources())
+            .containsExactlyInAnyOrder("google.forms", "google.form_responses");
+    }
+
+    @Test
     @DisplayName("ACTION 이벤트는 tool_key를 갖고, fields의 optionsSource를 모은다 — github.create_issue")
     void githubCreateIssue_toolKeyAndOptionsSources() {
         EventDefinition e = CATALOG.event("github.create_issue").orElseThrow();

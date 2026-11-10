@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
@@ -82,7 +83,7 @@ public class GoogleFormsReader {
         JsonNode form = googleApiReader.get(userId,
             UriComponentsBuilder.fromUriString(FORMS_API + "/{id}")
                 .queryParam("fields", QUESTION_FIELDS)
-                .buildAndExpand(formId).encode().toUri(),
+                .encode().buildAndExpand(formId).toUri(),   // 변수 먼저 엄격 인코딩 — listResponses와 같다
             GoogleApiReader.DRIVE_SCOPE);
         return parseQuestions(form);
     }
@@ -124,6 +125,24 @@ public class GoogleFormsReader {
             pageToken = page.hasNonNull("nextPageToken") ? page.get("nextPageToken").asText() : null;
         } while (pageToken != null);
         return responses;
+    }
+
+    /**
+     * {@code responses.get} 단건(본문 전체). 목록은 가벼운 fields로 고르고 고른 건만 이걸로 읽는다 — 밀린 응답 본문 전체를
+     * 매번 받지 않게. 404(그 사이 삭제)는 empty — 403도 같은 코드로 오지만 권한을 잃었으면 앞선 목록 조회가 먼저 실패한다.
+     */
+    public Optional<JsonNode> response(UUID userId, String formId, String responseId) {
+        try {
+            return Optional.of(googleApiReader.get(userId,
+                UriComponentsBuilder.fromUriString(FORMS_API + "/{id}/responses/{responseId}")
+                    .encode().buildAndExpand(formId, responseId).toUri(),   // 두 ID 모두 엄격 인코딩
+                GoogleApiReader.DRIVE_SCOPE));
+        } catch (CustomException e) {
+            if (e.getErrorCode() == ErrorCode.GOOGLE_RESOURCE_NOT_FOUND) {
+                return Optional.empty();
+            }
+            throw e;
+        }
     }
 
     private static AnswerKind kindOf(JsonNode question) {
