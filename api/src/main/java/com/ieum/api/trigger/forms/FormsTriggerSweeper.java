@@ -118,9 +118,15 @@ public class FormsTriggerSweeper {
         }
         List<FormQuestion> questions = reader.questions(userId, formId);
         for (JsonNode candidate : batch) {
-            // 본문은 고른 건만 단건으로 받는다. 404(그 사이 삭제)면 건너뛴다 — 커서 키·시각은 목록 값 그대로
+            // 본문은 고른 건만 단건으로 받는다 — 커서 키·시각은 목록 값 그대로
             Optional<JsonNode> response = reader.response(userId, formId, candidate.path("responseId").asText());
             if (response.isEmpty()) {
+                // 404(삭제·목록과 어긋난 유령)는 seen에 넣어 다음 폴링 후보에서 뺀다 — 안 넣으면 유령 20건이 배치를 채워
+                // 커서가 영영 멈춘다(폴링은 성공이라 24시간 리셋도 안 걸린다). 커서 시각은 발화한 것만 기준.
+                // ponytail: GoogleApiReader가 403·404를 같은 GOOGLE_RESOURCE_NOT_FOUND로 줘 구분할 수 없어 단건 403도 seen에
+                // 넣는다(그 건은 다시 보지 않음). 권한 상실은 앞선 목록 조회가 먼저 실패하고 Forms 쿼터는 429라 실제 경로는
+                // 없다고 본다 — 단건 403을 다시 보려면 GoogleApiReader가 403을 따로 내야 한다.
+                cursor.skip(handler.dedupeKey(candidate), handler.eventSec(candidate));
                 continue;
             }
             if (!firer.fire(subscription.getWorkflowId(), handler.type(), handler.output(response.get(), questions))) {

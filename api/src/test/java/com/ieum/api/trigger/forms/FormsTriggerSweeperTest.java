@@ -187,7 +187,7 @@ class FormsTriggerSweeperTest {
     }
 
     @Test
-    @DisplayName("단건 조회가 404(그 사이 삭제)면 그 건만 건너뛰고 다음 건을 발화한다 — 건너뛴 건은 seen에 없다")
+    @DisplayName("단건 조회가 404(그 사이 삭제)면 그 건만 건너뛰고 다음 건을 발화한다 — 건너뛴 건은 seen에 넣는다")
     @SuppressWarnings("unchecked")
     void skipsResponseGoneOnGet() {
         AppTriggerSubscription s = subscription(TriggerType.FORMS_NEW_RESPONSE, List.of());
@@ -198,7 +198,35 @@ class FormsTriggerSweeperTest {
         sweeper.sweep();
 
         assertThat(fired(TriggerType.FORMS_NEW_RESPONSE, 1)).extracting(o -> o.get("responseId")).containsExactly("r2");
-        assertThat((Map<String, Long>) recordedCursor(s, null).get("seen")).containsOnlyKeys("r2");
+        // 건너뛴 건도 seen에 넣어 다음 폴링 후보에서 뺀다(유령 응답이 배치를 막지 않게), afterSec은 발화한 r2 기준
+        Map<String, Object> cursor = recordedCursor(s, null);
+        assertThat((Map<String, Long>) cursor.get("seen")).containsOnlyKeys("r1", "r2");
+        assertThat(cursor).containsEntry("afterSec", AFTER + 2);
+    }
+
+    @Test
+    @DisplayName("목록엔 있고 단건은 계속 404인 유령 응답 25건 + 정상 1건 — 다음 폴링이 정상 건을 발화한다(정지 없음)")
+    @SuppressWarnings("unchecked")
+    void ghostResponsesDoNotStallPolling() {
+        AppTriggerSubscription s = subscription(TriggerType.FORMS_NEW_RESPONSE, List.of());
+        List<JsonNode> responses = new ArrayList<>();
+        IntStream.rangeClosed(1, 25).forEach(i -> responses.add(response("g%02d".formatted(i), AFTER + i, AFTER + i)));
+        responses.add(response("ok", AFTER + 26, AFTER + 26));
+        listed(responses.toArray(JsonNode[]::new));
+        IntStream.rangeClosed(1, 25)
+            .forEach(i -> given(reader.response(userId, FORM, "g%02d".formatted(i))).willReturn(Optional.empty()));
+        given(firer.fire(any(), any(), any())).willReturn(true);
+
+        sweeper.sweep();   // 1차: 유령 20건만 보고 발화 없음
+        verify(firer, never()).fire(any(), any(), any());
+        ArgumentCaptor<Map<String, Object>> first = ArgumentCaptor.forClass(Map.class);
+        verify(subscriptions).recordPoll(eq(s.getId()), any(), first.capture(), isNull(), any());
+        assertThat(first.getValue()).containsEntry("afterSec", AFTER);   // 커서 시각은 발화한 것만 기준
+        ReflectionTestUtils.setField(s, "cursor", first.getValue());
+
+        sweeper.sweep();   // 2차: 남은 유령 5건을 건너뛰고 정상 건 발화
+
+        assertThat(fired(TriggerType.FORMS_NEW_RESPONSE, 1)).extracting(o -> o.get("responseId")).containsExactly("ok");
     }
 
     @Test

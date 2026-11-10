@@ -70,6 +70,11 @@ final class FormsCursor {
         seen.put(key, sec);
     }
 
+    /** 발화하지 않고 건너뛴 응답 — seen에만 넣는다(afterSec은 그대로) */
+    void skip(String key, long sec) {
+        seen.put(key, sec);
+    }
+
     Map<String, Object> toMap() {
         long low = lowSec();
         seen.values().removeIf(sec -> sec < low);
