@@ -23,6 +23,7 @@ public interface IntegrationOptionControllerDocs {
             + "google/writable_calendars(일정을 쓸 수 있는 캘린더만 — accessRole writerWithoutPrivateAccess·writer·owner, 꼬리표 없음. 걸러진 페이지는 items가 비어도 nextCursor가 있을 수 있음), "
             + "google/events(calendar_id 선택 — 비우면 기본 캘린더, q 선택 — 검색어, 공백이면 무시. 지금 이후 일정만 시작순 20개씩), google/files, google/folders, "
             + "google/forms(Drive의 Google Forms 파일 — 최근 수정순 50개, q 미지원), "
+            + "google/form_responses(form_id 필수 — 최근 30일 응답을 제출 시각 역순 20개, 값은 응답 ID·이름은 'yyyy-MM-dd HH:mm · 이메일'(KST, 이메일은 수집한 폼만). nextCursor 항상 null. 응답 ID 직접 입력 가능), "
             + "google/gmail_send_as(입력 없음 — 보낼 수 있는 주소: 검증된 별칭과 기본 주소, pending 제외. 값은 주소·이름은 '표시 이름 <주소>'(표시 이름 없으면 주소), 기본 주소가 맨 앞. nextCursor 항상 null), "
             + "google/gmail_labels(입력 없음 — 값은 라벨 ID, 시스템 라벨은 한국어 이름(받은편지함·별표 등), SENT·DRAFT와 그 밖 시스템 라벨 제외, 사용자 라벨은 이름 그대로. nextCursor 항상 null), "
             + "google/gmail_messages(입력 없음 — q 없으면 받은편지함 최근 20개씩, q 선택 — Gmail 검색 문법으로 전체 메일(스팸·휴지통 제외). "
@@ -51,7 +52,7 @@ public interface IntegrationOptionControllerDocs {
             + "q 선택 — 이름 부분 일치(대소문자·앞의 # 무시). nextCursor 항상 null. 서버를 고르기 전에는 열지 않는다), "
             + "nextCursor가 있으면 cursor로 다음 페이지를 조회하고, null이면 마지막 페이지입니다. "
             + "오류 code: GOOGLE_SCOPE_REQUIRED(403, Google 권한 증분 동의 필요 — scope_groups는 "
-            + "spreadsheets·worksheets·sheet_columns=sheets, files·folders·forms=drive, calendars·writable_calendars·events=calendar, gmail_send_as·gmail_labels·gmail_messages·gmail_threads=gmail. "
+            + "spreadsheets·worksheets·sheet_columns=sheets, files·folders·forms·form_responses=drive, calendars·writable_calendars·events=calendar, gmail_send_as·gmail_labels·gmail_messages·gmail_threads=gmail. "
             + "sheets 그룹은 drive를 포함해 파일·폴더·폼도 충족), "
             + "ACCOUNT_NOT_CONNECTED(400), SLACK_NOT_CONNECTED(400), DISCORD_NOT_CONNECTED(400), DISCORD_GUILD_NOT_CONNECTED(403, 연결하지 않은 서버), "
             + "AUTHENTICATION_REQUIRED(401, 재연동 필요), GOOGLE_RESOURCE_NOT_FOUND(404), "
@@ -74,10 +75,13 @@ public interface IntegrationOptionControllerDocs {
             + "지원: notion/properties(data_source_id 필수 — notion/databases의 값. title 칸이 맨 앞, 나머지 이름순. "
             + "formula·rollup·files·생성/수정 정보 등 쓸 수 없는 속성은 칸이 없음), "
             + "google/sheet_columns(spreadsheet_id·sheet_id 필수 — 1행 헤더 열마다 string 칸, key는 열 문자·title은 '헤더 (B)'. "
-            + "빈 헤더 '(제목 없음) (C)', 헤더 행이 비면 A~ 열 수(최대 Z)까지 열 문자만). "
+            + "빈 헤더 '(제목 없음) (C)', 헤더 행이 비면 A~ 열 수(최대 Z)까지 열 문자만), "
+            + "google/form_questions(form_id 필수 — 폼 질문마다 칸, key는 질문 ID·title은 질문 제목(격자는 '질문 - 행'). "
+            + "type: 글=string, 체크박스=string list, 배율·별점=number, 파일 업로드=object list(fileId·fileName·mimeType). "
+            + "참조식 글자셋 밖 ID는 칸 없음. 출력 칸(answers)용 — 저장값 없음). "
             + "오류 code: ACCOUNT_NOT_CONNECTED(400), AUTHENTICATION_REQUIRED(401, 재연동 필요), NOTION_API_UNAVAILABLE(503), "
-            + "GOOGLE_SCOPE_REQUIRED(403, scope_groups=sheets), GOOGLE_RESOURCE_NOT_FOUND(404 — 없는 파일·시트), GOOGLE_API_UNAVAILABLE(503), "
-            + "INVALID_INPUT(400 — data_source_id·spreadsheet_id·sheet_id 없음·변수 참조·형식 오류, 연동 권한 부족, 공유되지 않은 DB), "
+            + "GOOGLE_SCOPE_REQUIRED(403, scope_groups=sheets, forms=drive), GOOGLE_RESOURCE_NOT_FOUND(404 — 없는 파일·시트·폼), GOOGLE_API_UNAVAILABLE(503), "
+            + "INVALID_INPUT(400 — data_source_id·spreadsheet_id·sheet_id·form_id 없음·변수 참조·형식 오류, 연동 권한 부족, 공유되지 않은 DB), "
             + "NOT_FOUND(404, 알 수 없는 목록)")
     @PreAuthorize("hasRole('USER')")
     ResponseEntity<ApiResponse<Map<String, List<Map<String, Object>>>>> getFields(

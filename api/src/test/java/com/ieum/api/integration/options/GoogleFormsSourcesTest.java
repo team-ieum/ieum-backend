@@ -17,6 +17,7 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.ieum.api.integration.options.OptionPage.OptionItem;
 import com.ieum.auth.domain.AuthProvider;
 import com.ieum.auth.domain.ConnectedAccount;
 import com.ieum.auth.repository.ConnectedAccountRepository;
@@ -28,6 +29,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -76,6 +79,7 @@ class GoogleFormsSourcesTest {
     private final GoogleApiReader reader = new GoogleApiReader(tokenService, accounts, restTemplate);
     private final GoogleFormsReader formsReader = new GoogleFormsReader(reader);
     private final GoogleFormQuestionsFieldSource questionFields = new GoogleFormQuestionsFieldSource(formsReader);
+    private final GoogleFormResponsesOptionSource formResponses = new GoogleFormResponsesOptionSource(formsReader);
     private final UUID userId = UUID.randomUUID();
 
     @AfterEach
@@ -214,5 +218,58 @@ class GoogleFormsSourcesTest {
     @DisplayName("공급원 키는 카탈로그 fieldsSource와 1:1")
     void formQuestionsKeyMatchesCatalog() {
         assertThat(questionFields.key()).isEqualTo("google.form_questions");
+    }
+
+    @Test
+    @DisplayName("응답 드롭다운 — 최근 30일·가벼운 fields, 제출 시각 역순, 이름 'KST 시각 · 이메일'(이메일 없으면 시각만), nextCursor null")
+    void formResponsesRecentFirstWithEmail() {
+        connected("openid " + DRIVE);
+        server.expect(requestTo(startsWith(FORMS_API + "1FAIp_-9/responses?")))
+            .andExpect(requestTo(containsString("filter=timestamp%20%3E%3D%20")))
+            .andExpect(requestTo(containsString(
+                "fields=nextPageToken%2Cresponses%28responseId%2ClastSubmittedTime%2CrespondentEmail%29")))
+            .andRespond(withSuccess("""
+                {"responses":[
+                  {"responseId":"r1","lastSubmittedTime":"2026-11-09T09:30:00Z"},
+                  {"responseId":"r2","lastSubmittedTime":"2026-11-10T01:00:00.123Z","respondentEmail":"kim@example.com"}]}""",
+                MediaType.APPLICATION_JSON));
+
+        OptionPage page = formResponses.fetch(userId, Map.of("form_id", "1FAIp_-9"), "ignored");
+
+        assertThat(page.items()).containsExactly(
+            new OptionItem("r2", "2026-11-10 10:00 · kim@example.com"),
+            new OptionItem("r1", "2026-11-09 18:30"));
+        assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("응답이 20개를 넘으면 최근 20개만")
+    void formResponsesCapAt20() {
+        connected("openid " + DRIVE);
+        String responses = IntStream.range(0, 25)
+            .mapToObj(i -> "{\"responseId\":\"r%02d\",\"lastSubmittedTime\":\"2026-11-10T01:%02d:00Z\"}".formatted(i, i))
+            .collect(Collectors.joining(",", "{\"responses\":[", "]}"));
+        server.expect(requestTo(startsWith(FORMS_API + "f1/responses?")))
+            .andRespond(withSuccess(responses, MediaType.APPLICATION_JSON));
+
+        List<OptionItem> items = formResponses.fetch(userId, Map.of("form_id", "f1"), null).items();
+
+        assertThat(items).hasSize(20);
+        assertThat(items.get(0)).isEqualTo(new OptionItem("r24", "2026-11-10 10:24"));
+        assertThat(items.get(19).id()).isEqualTo("r05");
+    }
+
+    @Test
+    @DisplayName("참조식 form_id는 토큰 조회 없이 INVALID_INPUT")
+    void formResponsesRejectReferenceFormId() {
+        assertErrorCode(() -> formResponses.fetch(userId, Map.of("form_id", "{{nodes.a.output.id}}"), null),
+            ErrorCode.INVALID_INPUT);
+        verify(tokenService, never()).getValidAccessToken(any());
+    }
+
+    @Test
+    @DisplayName("드롭다운 키는 카탈로그 optionsSource와 1:1")
+    void formResponsesKeyMatchesCatalog() {
+        assertThat(formResponses.key()).isEqualTo("google.form_responses");
     }
 }
