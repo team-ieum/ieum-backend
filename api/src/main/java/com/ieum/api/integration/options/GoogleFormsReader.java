@@ -82,7 +82,7 @@ public class GoogleFormsReader {
         JsonNode form = googleApiReader.get(userId,
             UriComponentsBuilder.fromUriString(FORMS_API + "/{id}")
                 .queryParam("fields", QUESTION_FIELDS)
-                .buildAndExpand(formId).encode().toUri(),
+                .encode().buildAndExpand(formId).toUri(),   // 변수 먼저 엄격 인코딩 — listResponses와 같다
             GoogleApiReader.DRIVE_SCOPE);
         return parseQuestions(form);
     }

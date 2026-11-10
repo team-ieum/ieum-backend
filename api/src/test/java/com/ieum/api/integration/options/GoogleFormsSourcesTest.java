@@ -164,6 +164,16 @@ class GoogleFormsSourcesTest {
     }
 
     @Test
+    @DisplayName("questions()를 직접 불러도 폼 ID는 경로에 엄격 인코딩된다 — '/'가 경로를 벗어나지 않는다(listResponses와 같음)")
+    void questionsEncodesFormIdStrictly() {
+        connected("openid " + DRIVE);
+        server.expect(requestTo(startsWith(FORMS_API + "..%2Fx?fields=")))
+            .andRespond(withSuccess("{\"items\":[]}", MediaType.APPLICATION_JSON));
+
+        assertThat(formsReader.questions(userId, "../x")).isEmpty();
+    }
+
+    @Test
     @DisplayName("spreadsheets scope만 있으면 GOOGLE_SCOPE_REQUIRED — drive가 필요하다")
     void formQuestionsNeedDriveScope() {
         connected("openid " + SHEETS);
