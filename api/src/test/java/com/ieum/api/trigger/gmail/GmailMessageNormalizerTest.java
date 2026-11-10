@@ -95,6 +95,21 @@ class GmailMessageNormalizerTest {
         assertThat(GmailMessageNormalizer.stripHtml("a<!--[if mso]>x<![endif]-->b")).isEqualTo("a x b");
         assertThat(GmailMessageNormalizer.stripHtml("a<![foo[x]]>b")).isEqualTo("a b");
         assertThat(GmailMessageNormalizer.stripHtml("a&rsquo;b")).isEqualTo("a&rsquo;b");
+        assertThat(GmailMessageNormalizer.stripHtml("a<script src=x>alert(1)</SCRIPT>b")).isEqualTo("a b");
+        assertThat(GmailMessageNormalizer.stripHtml("a<style/>x</style>b")).isEqualTo("a b");
+        assertThat(GmailMessageNormalizer.stripHtml("&amp;lt; &nbsp;&lt;&gt;&quot;&#39;")).isEqualTo("&lt; <>\"'");
+        assertThat(GmailMessageNormalizer.stripHtml("a<>b")).isEqualTo("a<>b");
+        assertThat(GmailMessageNormalizer.stripHtml("a<b")).isEqualTo("a<b");
+        assertThat(GmailMessageNormalizer.stripHtml("a<style>끝없음")).isEqualTo("a");
+        assertThat(GmailMessageNormalizer.stripHtml("a<style>x</style")).isEqualTo("a");
+        assertThat(GmailMessageNormalizer.stripHtml("İa<style>x</style>b")).isEqualTo("İa b");
+    }
+
+    @Test
+    @DisplayName("공백 접기·앞뒤 정리는 ASCII 공백류만 — NBSP·전각 공백은 그대로")
+    void collapsesOnlyAsciiWhitespace() {
+        assertThat(GmailMessageNormalizer.stripHtml(" \t\na\u000b\f\rb ")).isEqualTo("a b");
+        assertThat(GmailMessageNormalizer.stripHtml("　a b　")).isEqualTo("　a b　");
     }
 
     @Test

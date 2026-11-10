@@ -90,7 +90,9 @@ public final class GmailMessageNormalizer {
         }
         char[] chars = html.toCharArray();
         for (int k = 0; k < chars.length; k++) {
-            chars[k] = Character.toLowerCase(chars[k]); // 문자 단위라 길이가 그대로 — 인덱스를 html과 공유
+            if (chars[k] >= 'A' && chars[k] <= 'Z') { // ASCII만, 문자 단위라 길이가 그대로 — 인덱스를 html과 공유
+                chars[k] += 'a' - 'A';
+            }
         }
         String lower = new String(chars);
         StringBuilder out = new StringBuilder(html.length());
@@ -124,8 +126,8 @@ public final class GmailMessageNormalizer {
         return out.toString()
             .replace("&nbsp;", " ").replace("&lt;", "<").replace("&gt;", ">")
             .replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&")
-            .replaceAll("\\s+", " ")
-            .strip();
+            .replaceAll("\\s+", " ") // \s 기본 = ASCII 공백류만(NBSP·전각 공백은 그대로) — agent와 같은 규약
+            .replaceAll("^ | $", "");
     }
 
     /** 이름 뒤가 {@code >}·공백류·{@code /}일 때만 — {@code <styles>}는 일반 태그. 여는 태그엔 {@code >}가 있어 끝을 넘지 않는다. */
@@ -134,7 +136,7 @@ public final class GmailMessageNormalizer {
             return false;
         }
         char next = lower.charAt(at + name.length());
-        return next == '>' || next == '/' || Character.isWhitespace(next);
+        return next == '>' || next == '/' || " \t\n\u000b\f\r".indexOf(next) >= 0;
     }
 
     private static String truncate(String text) {
