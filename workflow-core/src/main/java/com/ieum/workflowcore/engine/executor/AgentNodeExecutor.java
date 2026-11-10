@@ -57,6 +57,7 @@ public class AgentNodeExecutor implements NodeExecutor {
     private final UserRoleProvider userRoleProvider;
     private final BetaPlatformProvider betaPlatformProvider;
     private final IdempotencyStore idempotencyStore;
+    private final AiUsageRecorder aiUsageRecorder;
     private final int agentTimeoutSeconds;
 
     public AgentNodeExecutor(
@@ -67,6 +68,7 @@ public class AgentNodeExecutor implements NodeExecutor {
         UserRoleProvider userRoleProvider,
         BetaPlatformProvider betaPlatformProvider,
         IdempotencyStore idempotencyStore,
+        AiUsageRecorder aiUsageRecorder,
         @Value("${ieum.agent.timeout-seconds:120}") int agentTimeoutSeconds,
         @Value("${ieum.agent.internal-token:}") String internalToken
     ) {
@@ -80,6 +82,7 @@ public class AgentNodeExecutor implements NodeExecutor {
         this.userRoleProvider = userRoleProvider;
         this.betaPlatformProvider = betaPlatformProvider;
         this.idempotencyStore = idempotencyStore;
+        this.aiUsageRecorder = aiUsageRecorder;
         this.agentTimeoutSeconds = agentTimeoutSeconds;
     }
 
@@ -174,10 +177,18 @@ public class AgentNodeExecutor implements NodeExecutor {
             String idempotencyHeaderKey =
                 (policy != null && policy.idempotency().usesHeader() && !policy.isDisabled())
                     ? attempt.idempotencyKey() : null;
-            AgentExecutionResult agentResult = callAgentService(
-                request, llmProvider, decryptedApiKey, googleAccessToken,
-                userId, userRole, toolAuthHeaders, useBetaPlatformKey,
-                cursor.getContext().getTraceId(), idempotencyHeaderKey);
+            AgentExecutionResult agentResult;
+            try {
+                agentResult = callAgentService(
+                    request, llmProvider, decryptedApiKey, googleAccessToken,
+                    userId, userRole, toolAuthHeaders, useBetaPlatformKey,
+                    cursor.getContext().getTraceId(), idempotencyHeaderKey);
+                // agent가 응답 본문을 돌려준 호출만 기록한다 — 회차마다 불리므로 재시도·fallback이 각각 1행
+                recordUsage(agentResult, userId, llmProvider, resolvedModel, useBetaPlatformKey,
+                    decryptedApiKey != null, cursor);
+            } catch (WebClientResponseException e) {
+                agentResult = agentServiceError(e);
+            }
 
             ExecutorResult.TokenUsage usage = toTokenUsage(agentResult.getUsage());
 
@@ -334,63 +345,87 @@ public class AgentNodeExecutor implements NodeExecutor {
         String googleAccessToken, UUID userId, String userRole, Map<String, String> toolAuthHeaders,
         boolean useBetaPlatformKey, String traceId, String idempotencyKey
     ) {
+        WebClient.RequestBodySpec requestSpec = webClient.post()
+            .uri("/v1/execute")
+            .contentType(MediaType.APPLICATION_JSON)
+            .header("X-LLM-Provider", useBetaPlatformKey ? "GEMINI" : llmProvider)
+            .header("X-Node-Id", request.getNodeId());
+
+        // 실행 단위 상관관계 ID — agent TraceIdMiddleware가 span 속성 ieum.trace_id로 부착한다.
+        // 헤더가 없으면 agent가 자체 uuid4를 생성해버려 BE 이력과 조인이 끊기므로 있을 때만 보낸다.
+        if (traceId != null) {
+            requestSpec = requestSpec.header("X-Trace-Id", traceId);
+        }
+
+        // ieum-agent가 이 헤더를 소비한다(IEUM-AI-52) — 같은 키의 재요청은 도구를 다시 돌리지
+        // 않고 저장된 응답을 돌려주거나, 앞선 요청이 실행 중이면 DUPLICATE_REQUEST로 거절한다.
+        // agent가 아직 배포되지 않은 환경에서는 헤더가 무시될 뿐이라 배포 순서는 여전히 무관하다.
+        if (idempotencyKey != null) {
+            requestSpec = requestSpec.header("X-Idempotency-Key", idempotencyKey);
+        }
+
+        if (useBetaPlatformKey) {
+            // self-hosted 자격이면 execute()에서 베타 분기 자체에 진입하지 않으므로 여기 도달하지 않는다.
+            requestSpec = requestSpec.header("X-Key-Mode", "platform");
+        } else if (llmApiKey != null) {
+            requestSpec = requestSpec.header("X-LLM-Api-Key", llmApiKey);
+        }
+
+        if (userId != null) {
+            requestSpec = requestSpec.header("X-User-Id", userId.toString());
+            if (userRole != null) {
+                requestSpec = requestSpec.header("X-User-Role", userRole);
+            }
+        }
+
+        if (googleAccessToken != null) {
+            requestSpec = requestSpec.header("X-Google-Access-Token", googleAccessToken);
+            log.debug("[AgentNodeExecutor] X-Google-Access-Token 헤더 주입");
+        }
+
+        for (Map.Entry<String, String> entry : toolAuthHeaders.entrySet()) {
+            requestSpec = requestSpec.header(entry.getKey(), entry.getValue());
+            log.debug("[AgentNodeExecutor] 도구 인증 헤더 주입 — header: {}", entry.getKey());
+        }
+
+        return requestSpec
+            .bodyValue(request)
+            .retrieve()
+            .bodyToMono(AgentExecutionResult.class)
+            .timeout(Duration.ofSeconds(agentTimeoutSeconds))
+            .block();
+    }
+
+    /** agent HTTP 오류(4xx·5xx)를 실패 결과로 바꾼다. 응답 본문 usage가 없어 사용량은 기록하지 않는다. */
+    private static AgentExecutionResult agentServiceError(WebClientResponseException e) {
+        log.error("[AgentNodeExecutor] 에이전트 서비스 오류 — status: {}, body: {}",
+            e.getStatusCode(), e.getResponseBodyAsString());
+        return new AgentExecutionResult(false, null,
+            "에이전트 서비스 오류 (HTTP " + e.getStatusCode().value() + "): "
+                + e.getResponseBodyAsString(), null,
+            FailureClassifier.agentServiceErrorCode(e.getStatusCode().value()), null);
+    }
+
+    /**
+     * agent 응답 1건 = 사용량 1행(IEUM-BE-98). 성공·실패 응답 모두 기록한다 — 실패해도 토큰은 이미 썼다.
+     * 키 없는 self-hosted 호출(ADMIN·TESTER)은 사용자 AI 사용량이 아니라 기록하지 않는다.
+     * 기록 실패는 노드 실행에 영향을 주지 않는다.
+     */
+    private void recordUsage(AgentExecutionResult result, UUID userId, String llmProvider, String requestedModel,
+                             boolean useBetaPlatformKey, boolean byok, ExecutionCursor cursor) {
+        if (result == null || (!useBetaPlatformKey && !byok)) {
+            return;
+        }
         try {
-            WebClient.RequestBodySpec requestSpec = webClient.post()
-                .uri("/v1/execute")
-                .contentType(MediaType.APPLICATION_JSON)
-                .header("X-LLM-Provider", useBetaPlatformKey ? "GEMINI" : llmProvider)
-                .header("X-Node-Id", request.getNodeId());
-
-            // 실행 단위 상관관계 ID — agent TraceIdMiddleware가 span 속성 ieum.trace_id로 부착한다.
-            // 헤더가 없으면 agent가 자체 uuid4를 생성해버려 BE 이력과 조인이 끊기므로 있을 때만 보낸다.
-            if (traceId != null) {
-                requestSpec = requestSpec.header("X-Trace-Id", traceId);
-            }
-
-            // ieum-agent가 이 헤더를 소비한다(IEUM-AI-52) — 같은 키의 재요청은 도구를 다시 돌리지
-            // 않고 저장된 응답을 돌려주거나, 앞선 요청이 실행 중이면 DUPLICATE_REQUEST로 거절한다.
-            // agent가 아직 배포되지 않은 환경에서는 헤더가 무시될 뿐이라 배포 순서는 여전히 무관하다.
-            if (idempotencyKey != null) {
-                requestSpec = requestSpec.header("X-Idempotency-Key", idempotencyKey);
-            }
-
-            if (useBetaPlatformKey) {
-                // self-hosted 자격이면 execute()에서 베타 분기 자체에 진입하지 않으므로 여기 도달하지 않는다.
-                requestSpec = requestSpec.header("X-Key-Mode", "platform");
-            } else if (llmApiKey != null) {
-                requestSpec = requestSpec.header("X-LLM-Api-Key", llmApiKey);
-            }
-
-            if (userId != null) {
-                requestSpec = requestSpec.header("X-User-Id", userId.toString());
-                if (userRole != null) {
-                    requestSpec = requestSpec.header("X-User-Role", userRole);
-                }
-            }
-
-            if (googleAccessToken != null) {
-                requestSpec = requestSpec.header("X-Google-Access-Token", googleAccessToken);
-                log.debug("[AgentNodeExecutor] X-Google-Access-Token 헤더 주입");
-            }
-
-            for (Map.Entry<String, String> entry : toolAuthHeaders.entrySet()) {
-                requestSpec = requestSpec.header(entry.getKey(), entry.getValue());
-                log.debug("[AgentNodeExecutor] 도구 인증 헤더 주입 — header: {}", entry.getKey());
-            }
-
-            return requestSpec
-                .bodyValue(request)
-                .retrieve()
-                .bodyToMono(AgentExecutionResult.class)
-                .timeout(Duration.ofSeconds(agentTimeoutSeconds))
-                .block();
-        } catch (WebClientResponseException e) {
-            log.error("[AgentNodeExecutor] 에이전트 서비스 오류 — status: {}, body: {}",
-                e.getStatusCode(), e.getResponseBodyAsString());
-            return new AgentExecutionResult(false, null,
-                "에이전트 서비스 오류 (HTTP " + e.getStatusCode().value() + "): "
-                    + e.getResponseBodyAsString(), null,
-                FailureClassifier.agentServiceErrorCode(e.getStatusCode().value()));
+            AgentExecutionResult.Usage usage = result.getUsage();
+            aiUsageRecorder.record(new AiUsageRecorder.AiUsageCall(
+                userId, llmProvider, requestedModel, result.getModel(), useBetaPlatformKey,
+                cursor.getContext().getExecutionId(),
+                usage != null ? usage.getPromptTokens() : null,
+                usage != null ? usage.getCompletionTokens() : null,
+                usage != null ? usage.getTotalTokens() : null));
+        } catch (Exception e) {
+            log.warn("[AgentNodeExecutor] 사용량 기록 실패 — 실행은 계속한다. userId: {}", userId, e);
         }
     }
 

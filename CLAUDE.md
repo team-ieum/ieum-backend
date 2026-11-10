@@ -10,6 +10,7 @@ Java 21 + Spring Boot 3.5.11 기반의 **멀티모듈 Gradle 모듈러 모노리
 - **Workflow Engine** 완료 — DAG 위상정렬 + fan-out 병렬 실행, 실행 이력 영속, SSE 진행 스트림, Quartz 스케줄
 - **베타 플랫폼 키** 완료 — BYOK 없이 플랫폼 Gemini 키 체험, Redis 2축 쿼터
 - **실행 신뢰성** 완료 (IEUM-BE-46) — 노드 재시도(지수백오프+jitter)·멱등 가드·모델 fallback, Redis Stream 잡 큐로 재시작 복구(at-least-once), 실패 실행 재처리 API, Discord 실패 알림
+- **AI 토큰 사용량 조회** 완료 (IEUM-BE-98) — 호출 1회 = `ai_token_usage` 1행(워크플로우·채팅), provider → 모델별 합계 + 일별 추이 API
 - 각 모듈의 상세 구현 현황은 해당 모듈의 `CLAUDE.md` 참조
 
 ## 모듈 구조
@@ -92,6 +93,7 @@ QueryDSL (openfeign 7.1), springdoc-openapi 2.8.4, Quartz, Spring @Async (MVP)
 - `scanBasePackages = "com.ieum"` 누락 시 다른 모듈 Bean 스캔 안 됨
 - 공통 의존성(Lombok, Test)은 루트 `build.gradle`의 `subprojects`에 선언 → 모듈별 중복 선언 불필요
 - Q클래스는 `./gradlew build` 후 생성됨 — 빌드 전에는 QueryDSL 코드가 컴파일 에러
+- **QueryDSL 7(openfeign)엔 `sum()`이 없다** — `sumLong()`·`sumAggregate()`를 쓴다. 보고값이 전부 null이면 합도 null이니 0 처리할 것
 - `application-local.yml`은 `.gitignore`에 포함 — 환경변수는 `.env` 파일 사용
 - **스키마는 Flyway가 없다(`db/migration` 디렉터리 자체가 없음).** 앱 yml은 `ddl-auto: update`지만 **dev 배포(Blue/Green, 2026-11-03~)는 컨트롤러가 `validate`를 강제한다**(`docs/operations/bluegreen-secrets.md`, `scripts/bluegreen/backend_env.py`의 예약 키). 그래서 dev에서는 엔티티에 컬럼·테이블을 더해도 자동으로 생기지 않고, 후보 BE가 `Schema-validation: missing column`으로 기동에 실패해 배포가 멈춘다(IEUM-BE-113 `node_runs.detail_json`). **스키마를 바꾸는 PR은 `docs/schema/V<n>__*.sql`에 DDL을 남기고, 머지 전에 dev PG에 수동 적용한다**(nullable 컬럼 추가는 옛 버전 validate도 통과하므로 먼저 적용해도 안전)
 - **`nullable = false` 컬럼을 기존 행이 있는 테이블에 추가할 때는 기본값이 필수** — 수동 DDL에 `DEFAULT`를 넣고 엔티티에도 `@ColumnDefault`를 단다. 로컬(`update`)에서는 PostgreSQL이 DDL을 거부해도 경고만 남기고 **컬럼 없이 앱이 뜨고**, 테스트는 `create-drop`(빈 스키마)이라 이 사고를 잡아 주지 않는다
