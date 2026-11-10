@@ -95,14 +95,14 @@ class IeumApplicationTest {
     }
 
     @Test
-    @DisplayName("@Scheduled는 WebSocket 브로커 스케줄러가 아니라 전용 scheduling- 풀(2)에서 돈다")
+    @DisplayName("@Scheduled는 WebSocket 브로커 스케줄러가 아니라 전용 scheduling- 풀(3)에서 돈다")
     void scheduledTasks_runOnDedicatedScheduler() {
         ScheduledTaskRegistrar registrar =
             (ScheduledTaskRegistrar) ReflectionTestUtils.getField(scheduledProcessor, "registrar");
 
         assertThat(registrar.getScheduler()).isInstanceOfSatisfying(ThreadPoolTaskScheduler.class, s -> {
             assertThat(s.getThreadNamePrefix()).isEqualTo("scheduling-");
-            assertThat(s.getScheduledThreadPoolExecutor().getCorePoolSize()).isEqualTo(2);
+            assertThat(s.getScheduledThreadPoolExecutor().getCorePoolSize()).isEqualTo(3);
         });
     }
 }

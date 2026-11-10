@@ -146,6 +146,9 @@ ieum:
     gmail:
       # Gmail New Email 트리거 폴링 주기(전역). 스윕은 1분마다라 체감 지연은 최대 주기 + 1분.
       poll-interval: ${GMAIL_TRIGGER_POLL_INTERVAL:PT5M}
+    forms:
+      # Google Forms 새 응답 트리거 폴링 주기(전역, T1·T2 공유). 체감 지연은 최대 주기 + 1분.
+      poll-interval: ${FORMS_TRIGGER_POLL_INTERVAL:PT5M}
   app:
     # 승인 알림 링크 주소(<base-url>/approvals/<gateId>). 비면 Discord 알림에서 링크 줄을 뺀다.
     base-url: ${APP_BASE_URL:}
