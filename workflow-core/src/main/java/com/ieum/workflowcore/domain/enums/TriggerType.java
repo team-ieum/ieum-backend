@@ -21,5 +21,9 @@ public enum TriggerType {
     /** GitHub 새 이슈 — GitHub App webhook(app_trigger_subscriptions, resource_key = repoId) */
     GITHUB_NEW_ISSUE,
     /** GitHub 새 PR — GitHub App webhook(app_trigger_subscriptions, resource_key = repoId) */
-    GITHUB_NEW_PR
+    GITHUB_NEW_PR,
+    /** Google Forms 새 응답 — BE 폴링(resource_key = formId) */
+    FORMS_NEW_RESPONSE,
+    /** Google Forms 새 응답 또는 수정 — BE 폴링 */
+    FORMS_ANY_RESPONSE
 }
