@@ -86,6 +86,27 @@ class GmailMessageNormalizerTest {
     }
 
     @Test
+    @DisplayName("agent와 공유하는 스캐너 케이스 — 같은 입력, 같은 기대값")
+    void sharedScannerCases() {
+        assertThat(GmailMessageNormalizer.stripHtml("<p>안녕</p><style>p{}</style>&amp;반가워")).isEqualTo("안녕 &반가워");
+        assertThat(GmailMessageNormalizer.stripHtml("a<style>p{}</style >b")).isEqualTo("a b");
+        assertThat(GmailMessageNormalizer.stripHtml("a<styles>b</styles>c")).isEqualTo("a b c");
+        assertThat(GmailMessageNormalizer.stripHtml("a<STYLE>x</STYLE>b")).isEqualTo("a b");
+        assertThat(GmailMessageNormalizer.stripHtml("a<!--[if mso]>x<![endif]-->b")).isEqualTo("a x b");
+        assertThat(GmailMessageNormalizer.stripHtml("a<![foo[x]]>b")).isEqualTo("a b");
+        assertThat(GmailMessageNormalizer.stripHtml("a&rsquo;b")).isEqualTo("a&rsquo;b");
+    }
+
+    @Test
+    @DisplayName("200KB 넘는 적대 입력도 각각 1초 안에 끝난다")
+    void hostileInputsAreLinear() {
+        for (String html : List.of("<style>".repeat(40_000), "<a ".repeat(66_667), "<!--".repeat(50_000),
+            "a<b".repeat(66_667), "<".repeat(80_000))) {
+            assertTimeoutPreemptively(Duration.ofSeconds(1), () -> GmailMessageNormalizer.stripHtml(html));
+        }
+    }
+
+    @Test
     @DisplayName("200,000자 넘는 HTML은 앞 200,000자만 읽는다")
     void capsHtmlInput() {
         String text = GmailMessageNormalizer.stripHtml("가".repeat(200_000) + "나");

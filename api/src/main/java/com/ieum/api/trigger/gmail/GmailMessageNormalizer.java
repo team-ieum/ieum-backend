@@ -109,22 +109,32 @@ public final class GmailMessageNormalizer {
                 continue;
             }
             out.append(' ');
-            String raw = lower.startsWith("script", lt + 1) ? "script" : lower.startsWith("style", lt + 1) ? "style" : null;
+            String raw = rawTag(lower, lt + 1, "script") ? "script" : rawTag(lower, lt + 1, "style") ? "style" : null;
             if (raw == null) {
                 i = gt + 1;
                 continue;
             }
-            int close = lower.indexOf("</" + raw + ">", gt + 1); // 한 번만 찾고 그 뒤로 건너뛴다 — 재검색 없음
-            if (close < 0) {
+            int close = lower.indexOf("</" + raw, gt + 1); // 한 번만 찾고 그 뒤로 건너뛴다 — 재검색 없음
+            int end = close < 0 ? -1 : html.indexOf('>', close + raw.length() + 2); // "</style >"도 닫는 태그
+            if (end < 0) {
                 break; // 닫히지 않은 script·style — 끝까지 버린다
             }
-            i = close + raw.length() + 3;
+            i = end + 1;
         }
         return out.toString()
             .replace("&nbsp;", " ").replace("&lt;", "<").replace("&gt;", ">")
             .replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&")
             .replaceAll("\\s+", " ")
             .strip();
+    }
+
+    /** 이름 뒤가 {@code >}·공백류·{@code /}일 때만 — {@code <styles>}는 일반 태그. 여는 태그엔 {@code >}가 있어 끝을 넘지 않는다. */
+    private static boolean rawTag(String lower, int at, String name) {
+        if (!lower.startsWith(name, at)) {
+            return false;
+        }
+        char next = lower.charAt(at + name.length());
+        return next == '>' || next == '/' || Character.isWhitespace(next);
     }
 
     private static String truncate(String text) {
