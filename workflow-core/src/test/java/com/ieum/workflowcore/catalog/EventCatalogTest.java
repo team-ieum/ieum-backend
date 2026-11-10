@@ -213,6 +213,24 @@ class EventCatalogTest {
         }
     }
 
+    @Test
+    @DisplayName("outputFields의 fieldsSource·optionsSource도 children까지 모은다")
+    void sources_includeOutputFields(@TempDir Path dir) throws IOException {
+        writeCatalog(dir, Map.of("manual/run.json", """
+                {"node_type":"TRIGGER","kind":"trigger","trigger_type":"MANUAL","tool_key":null,
+                 "fixed":{"type":"TRIGGER","config":{}},
+                 "inputFields":[{"key":"form_id","type":"string","optionsSource":"a.forms"}],
+                 "outputFields":[{"key":"answers","type":"dict","dynamic":true,"fieldsSource":"a.questions","fieldsInputs":["form_id"]},
+                                 {"key":"items","type":"object","list":true,"children":[
+                                   {"key":"answers","type":"dict","fieldsSource":"a.inner"},
+                                   {"key":"pick","type":"string","optionsSource":"a.out"}]}]}"""));
+        try (URLClassLoader loader = loader(dir)) {
+            EventDefinition run = EventCatalog.load(loader).event("manual.run").orElseThrow();
+            assertThat(run.fieldsSources()).containsExactly("a.inner", "a.questions");
+            assertThat(run.optionsSources()).containsExactly("a.forms", "a.out");
+        }
+    }
+
     static Stream<Arguments> invalidEvents() {
         return Stream.of(
                 Arguments.of("node_type이 NodeType 값이 아님", """

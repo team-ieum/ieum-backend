@@ -222,6 +222,18 @@ class CatalogStartupCheckTest {
     }
 
     @Test
+    @DisplayName("출력 칸의 공급원 없는 fieldsSource도 문제 — 키가 있으면 통과")
+    void fixture_missingOutputFieldsSource(@TempDir Path dir) throws IOException {
+        EventCatalog catalog = load(dir, MANUAL_APP, "[]", Map.of("manual/run.json", """
+                {"node_type":"TRIGGER","kind":"trigger","trigger_type":"MANUAL","tool_key":null,
+                 "fixed":{"type":"TRIGGER","config":{}},
+                 "outputFields":[{"key":"answers","type":"dict","fieldsSource":"nope.out","fieldsInputs":[]}]}"""));
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of(), Set.of()))
+                .containsExactly("fieldsSource 공급원 없음: nope.out (manual.run)");
+        assertThat(CatalogStartupCheck.problems(catalog, ALL, Set.of(), Set.of("nope.out"))).isEmpty();
+    }
+
+    @Test
     @DisplayName("카탈로그 PR 모양 — notion.create_row·update_row(builtin:notion_ = notion_token)는 공급원 4개가 있으면 문제 없음")
     void fixture_notionRowsAccepted(@TempDir Path dir) throws IOException {
         EventCatalog catalog = load(dir, MANUAL_APP + """
