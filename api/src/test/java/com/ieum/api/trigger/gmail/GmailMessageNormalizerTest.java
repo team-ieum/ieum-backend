@@ -1,10 +1,12 @@
 package com.ieum.api.trigger.gmail;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
@@ -64,6 +66,67 @@ class GmailMessageNormalizerTest {
             {"mimeType":"text/html","headers":%s,"body":{"data":"%s"}}""".formatted(HEADERS, b64(html))));
 
         assertThat(out.get("bodyText")).isEqualTo("안녕 & 반가워");
+    }
+
+    @Test
+    @DisplayName("닫히지 않은 <style> 40,000개 HTML도 1초 안에 정규화된다 — 폴링 스레드가 메일 한 통에 멈추지 않게")
+    void unclosedStylesAreLinear() {
+        String html = "<style>".repeat(40_000);
+
+        String text = assertTimeoutPreemptively(Duration.ofSeconds(1), () -> GmailMessageNormalizer.stripHtml(html));
+
+        assertThat(text).isEmpty();
+    }
+
+    @Test
+    @DisplayName("닫는 태그 없는 script 뒤는 끝까지 버리고, 대소문자 무시")
+    void unclosedScriptDropsRest() {
+        assertThat(GmailMessageNormalizer.stripHtml("앞<SCRIPT a=1>x()</Script>중간<style>p{} 뒤"))
+            .isEqualTo("앞 중간");
+    }
+
+    @Test
+    @DisplayName("agent와 공유하는 스캐너 케이스 — 같은 입력, 같은 기대값")
+    void sharedScannerCases() {
+        assertThat(GmailMessageNormalizer.stripHtml("<p>안녕</p><style>p{}</style>&amp;반가워")).isEqualTo("안녕 &반가워");
+        assertThat(GmailMessageNormalizer.stripHtml("a<style>p{}</style >b")).isEqualTo("a b");
+        assertThat(GmailMessageNormalizer.stripHtml("a<styles>b</styles>c")).isEqualTo("a b c");
+        assertThat(GmailMessageNormalizer.stripHtml("a<STYLE>x</STYLE>b")).isEqualTo("a b");
+        assertThat(GmailMessageNormalizer.stripHtml("a<!--[if mso]>x<![endif]-->b")).isEqualTo("a x b");
+        assertThat(GmailMessageNormalizer.stripHtml("a<![foo[x]]>b")).isEqualTo("a b");
+        assertThat(GmailMessageNormalizer.stripHtml("a&rsquo;b")).isEqualTo("a&rsquo;b");
+        assertThat(GmailMessageNormalizer.stripHtml("a<script src=x>alert(1)</SCRIPT>b")).isEqualTo("a b");
+        assertThat(GmailMessageNormalizer.stripHtml("a<style/>x</style>b")).isEqualTo("a b");
+        assertThat(GmailMessageNormalizer.stripHtml("&amp;lt; &nbsp;&lt;&gt;&quot;&#39;")).isEqualTo("&lt; <>\"'");
+        assertThat(GmailMessageNormalizer.stripHtml("a<>b")).isEqualTo("a<>b");
+        assertThat(GmailMessageNormalizer.stripHtml("a<b")).isEqualTo("a<b");
+        assertThat(GmailMessageNormalizer.stripHtml("a<style>끝없음")).isEqualTo("a");
+        assertThat(GmailMessageNormalizer.stripHtml("a<style>x</style")).isEqualTo("a");
+        assertThat(GmailMessageNormalizer.stripHtml("İa<style>x</style>b")).isEqualTo("İa b");
+    }
+
+    @Test
+    @DisplayName("공백 접기·앞뒤 정리는 ASCII 공백류만 — NBSP·전각 공백은 그대로")
+    void collapsesOnlyAsciiWhitespace() {
+        assertThat(GmailMessageNormalizer.stripHtml(" \t\na\u000b\f\rb ")).isEqualTo("a b");
+        assertThat(GmailMessageNormalizer.stripHtml("　a b　")).isEqualTo("　a b　");
+    }
+
+    @Test
+    @DisplayName("200KB 넘는 적대 입력도 각각 1초 안에 끝난다")
+    void hostileInputsAreLinear() {
+        for (String html : List.of("<style>".repeat(40_000), "<a ".repeat(66_667), "<!--".repeat(50_000),
+            "a<b".repeat(66_667), "<".repeat(80_000))) {
+            assertTimeoutPreemptively(Duration.ofSeconds(1), () -> GmailMessageNormalizer.stripHtml(html));
+        }
+    }
+
+    @Test
+    @DisplayName("200,000자 넘는 HTML은 앞 200,000자만 읽는다")
+    void capsHtmlInput() {
+        String text = GmailMessageNormalizer.stripHtml("가".repeat(200_000) + "나");
+
+        assertThat(text).hasSize(200_000).doesNotContain("나");
     }
 
     @Test

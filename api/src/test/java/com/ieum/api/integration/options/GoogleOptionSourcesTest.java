@@ -69,6 +69,10 @@ class GoogleOptionSourcesTest {
     private static final String GMAIL = "https://www.googleapis.com/auth/gmail.modify";
     private static final String SEND_AS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs";
     private static final String LABELS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/labels";
+    private static final String MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
+    private static final String THREADS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
+    private static final String METADATA_QUERY =
+        "?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date";
     private static final String SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets/1Bxi_-9";
 
     private final RestTemplate restTemplate = new RestTemplate();
@@ -86,6 +90,8 @@ class GoogleOptionSourcesTest {
     private final GoogleFoldersOptionSource folders = new GoogleFoldersOptionSource(reader);
     private final GmailSendAsOptionSource gmailSendAs = new GmailSendAsOptionSource(reader);
     private final GmailLabelsOptionSource gmailLabels = new GmailLabelsOptionSource(reader);
+    private final GmailMessagesOptionSource gmailMessages = new GmailMessagesOptionSource(reader);
+    private final GmailThreadsOptionSource gmailThreads = new GmailThreadsOptionSource(reader);
     private final GoogleSheetColumnsReader columnsReader = new GoogleSheetColumnsReader(reader);
     private final GoogleSheetColumnsOptionSource sheetColumns = new GoogleSheetColumnsOptionSource(columnsReader);
     private final GoogleSheetColumnsFieldSource sheetColumnFields = new GoogleSheetColumnsFieldSource(columnsReader);
@@ -807,10 +813,12 @@ class GoogleOptionSourcesTest {
     @DisplayName("공급원 키는 카탈로그 optionsSource와 1:1 계약")
     void keysMatchAgentOptionsSource() {
         assertThat(List.of(spreadsheets.key(), worksheets.key(), calendars.key(), writableCalendars.key(),
-                events.key(), files.key(), folders.key(), gmailSendAs.key(), gmailLabels.key(), sheetColumns.key()))
+                events.key(), files.key(), folders.key(), gmailSendAs.key(), gmailLabels.key(), sheetColumns.key(),
+                gmailMessages.key(), gmailThreads.key()))
             .containsExactly("google.spreadsheets", "google.worksheets", "google.calendars",
                 "google.writable_calendars", "google.events", "google.files", "google.folders",
-                "google.gmail_send_as", "google.gmail_labels", "google.sheet_columns");
+                "google.gmail_send_as", "google.gmail_labels", "google.sheet_columns",
+                "google.gmail_messages", "google.gmail_threads");
     }
 
     @Test
@@ -977,5 +985,201 @@ class GoogleOptionSourcesTest {
 
         assertThat(page.items()).isEmpty();
         assertThat(page.nextCursor()).isNull();
+    }
+
+    /** metadata 응답 — subject·from이 null이면 그 헤더가 없다 */
+    private static String metadata(String id, String subject, String from, long internalDate) {
+        StringBuilder headers = new StringBuilder("{\"name\":\"Date\",\"value\":\"Mon, 10 Nov 2025\"}");
+        if (subject != null) {
+            headers.append(",{\"name\":\"Subject\",\"value\":\"").append(subject).append("\"}");
+        }
+        if (from != null) {
+            headers.append(",{\"name\":\"from\",\"value\":\"").append(from).append("\"}");
+        }
+        return "{\"id\":\"" + id + "\",\"internalDate\":\"" + internalDate + "\",\"payload\":{\"headers\":[" + headers + "]}}";
+    }
+
+    private void expectMessage(String id, String body) {
+        server.expect(requestTo(MESSAGES_URL + "/" + id + METADATA_QUERY))
+            .andExpect(header("Authorization", "Bearer g-token"))
+            .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+    }
+
+    @Test
+    @DisplayName("메일 — q 없으면 받은편지함 20개, 항목마다 metadata를 순차 조회해 '제목 — 보낸 사람 · KST 시각'")
+    void messagesDefaultToInbox() {
+        connected("openid " + GMAIL);
+        server.expect(requestTo(MESSAGES_URL + "?labelIds=INBOX&maxResults=20"))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Authorization", "Bearer g-token"))
+            .andRespond(withSuccess("""
+                {"messages":[{"id":"m1","threadId":"t1"},{"id":"m2","threadId":"t2"}],"nextPageToken":"t2"}
+                """, MediaType.APPLICATION_JSON));
+        expectMessage("m1", metadata("m1", "회의", "홍길동 <a@b.c>", 1762732800000L));
+        expectMessage("m2", metadata("m2", " ", "b@c.d", 1762736400000L));
+
+        OptionPage page = gmailMessages.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(
+            new OptionItem("m1", "회의 — 홍길동 <a@b.c> · 2025-11-10 09:00"),
+            new OptionItem("m2", "(제목 없음) — b@c.d · 2025-11-10 10:00"));
+        assertThat(page.nextCursor()).isEqualTo("t2");
+    }
+
+    @Test
+    @DisplayName("메일 — From 헤더가 없으면 ' — 보낸 사람'을 뺀다")
+    void messagesWithoutFromOmitSender() {
+        connected(GMAIL);
+        server.expect(requestTo(startsWith(MESSAGES_URL + "?")))
+            .andRespond(withSuccess("{\"messages\":[{\"id\":\"m1\"}]}", MediaType.APPLICATION_JSON));
+        expectMessage("m1", metadata("m1", "알림", null, 1762732800000L));
+
+        OptionPage page = gmailMessages.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(new OptionItem("m1", "알림 · 2025-11-10 09:00"));
+        assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("메일 — q가 있으면 앞뒤 공백을 떼고 labelIds 없이 전체 메일에서 찾는다")
+    void messagesSearchAllMailWithQ() {
+        connected(GMAIL);
+        server.expect(requestTo(startsWith(MESSAGES_URL + "?")))
+            .andExpect(queryValues("q", "from:boss"))
+            .andExpect(queryValues("labelIds"))
+            .andExpect(queryValues("maxResults", "20"))
+            .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailMessages.fetch(userId, Map.of("q", " from:boss "), null);
+
+        assertThat(page.items()).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "   ", "\t"})
+    @DisplayName("메일 — 공백뿐인 q는 없는 것으로 보고 받은편지함")
+    void messagesBlankQIsInbox(String q) {
+        connected(GMAIL);
+        server.expect(requestTo(startsWith(MESSAGES_URL + "?")))
+            .andExpect(queryValues("q"))
+            .andExpect(queryValues("labelIds", "INBOX"))
+            .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+
+        gmailMessages.fetch(userId, Map.of("q", q), null);
+    }
+
+    @Test
+    @DisplayName("메일 cursor·q에 &·=가 섞여도 쿼리 파라미터로 새지 않는다")
+    void messagesCursorIsStrictlyEncoded() {
+        connected(GMAIL);
+        server.expect(requestTo(containsString("pageToken=x%26labelIds%3DSPAM")))
+            .andExpect(queryValues("labelIds", "INBOX"))
+            .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(containsString("q=a%26labelIds%3DSPAM")))
+            .andExpect(queryValues("labelIds"))
+            .andExpect(queryValues("pageToken", "c-2"))
+            .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+
+        gmailMessages.fetch(userId, Map.of(), "x&labelIds=SPAM");
+        gmailMessages.fetch(userId, Map.of("q", "a&labelIds=SPAM"), "c-2");
+    }
+
+    @Test
+    @DisplayName("메일 — 목록과 상세 사이에 지워진 메일(404)은 건너뛰고, 다 걸러져도 nextCursor는 유지")
+    void messagesSkipItemNotFound() {
+        connected(GMAIL);
+        server.expect(requestTo(startsWith(MESSAGES_URL + "?")))
+            .andRespond(withSuccess("{\"messages\":[{\"id\":\"m1\"},{\"id\":\"m2\"}],\"nextPageToken\":\"n\"}",
+                MediaType.APPLICATION_JSON));
+        server.expect(requestTo(MESSAGES_URL + "/m1" + METADATA_QUERY)).andRespond(withStatus(HttpStatus.NOT_FOUND));
+        expectMessage("m2", metadata("m2", "남은 메일", "b@c.d", 1762732800000L));
+        server.expect(requestTo(startsWith(MESSAGES_URL + "?")))
+            .andRespond(withSuccess("{\"messages\":[{\"id\":\"m3\"}],\"nextPageToken\":\"n2\"}",
+                MediaType.APPLICATION_JSON));
+        server.expect(requestTo(MESSAGES_URL + "/m3" + METADATA_QUERY)).andRespond(withStatus(HttpStatus.NOT_FOUND));
+
+        OptionPage page = gmailMessages.fetch(userId, Map.of(), null);
+        OptionPage filtered = gmailMessages.fetch(userId, Map.of(), "n");
+
+        assertThat(page.items()).containsExactly(new OptionItem("m2", "남은 메일 — b@c.d · 2025-11-10 09:00"));
+        assertThat(filtered.items()).isEmpty();
+        assertThat(filtered.nextCursor()).isEqualTo("n2");
+    }
+
+    @Test
+    @DisplayName("메일 — 항목 조회가 503이면 건너뛰지 않고 GOOGLE_API_UNAVAILABLE을 던진다")
+    void messagesItemUnavailablePropagates() {
+        connected(GMAIL);
+        server.expect(requestTo(startsWith(MESSAGES_URL + "?")))
+            .andRespond(withSuccess("{\"messages\":[{\"id\":\"m1\"}]}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(MESSAGES_URL + "/m1" + METADATA_QUERY))
+            .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+
+        assertErrorCode(() -> gmailMessages.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_API_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("메일 — gmail scope가 없으면 Google 호출 없이 GOOGLE_SCOPE_REQUIRED")
+    void messagesRequireGmailScope() {
+        connected("openid " + CALENDAR);
+
+        assertErrorCode(() -> gmailMessages.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
+    }
+
+    @Test
+    @DisplayName("대화 — q 없으면 받은편지함 20개, 값은 대화 ID·이름은 첫 메일 기준")
+    void threadsDefaultToInbox() {
+        connected("openid " + GMAIL);
+        server.expect(requestTo(THREADS_URL + "?labelIds=INBOX&maxResults=20"))
+            .andExpect(header("Authorization", "Bearer g-token"))
+            .andRespond(withSuccess("{\"threads\":[{\"id\":\"t1\",\"snippet\":\"…\"}],\"nextPageToken\":\"p2\"}",
+                MediaType.APPLICATION_JSON));
+        server.expect(requestTo(THREADS_URL + "/t1" + METADATA_QUERY))
+            .andRespond(withSuccess("{\"id\":\"t1\",\"messages\":["
+                + metadata("m1", "회의", "홍길동 <a@b.c>", 1762732800000L) + ","
+                + metadata("m2", "RE: 회의", "b@c.d", 1762736400000L) + "]}", MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailThreads.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(new OptionItem("t1", "회의 — 홍길동 <a@b.c> · 2025-11-10 09:00"));
+        assertThat(page.nextCursor()).isEqualTo("p2");
+    }
+
+    @Test
+    @DisplayName("대화 — q가 있으면 labelIds 없이 전체 메일에서, cursor는 pageToken으로")
+    void threadsSearchAllMailWithQ() {
+        connected(GMAIL);
+        server.expect(requestTo(startsWith(THREADS_URL + "?")))
+            .andExpect(queryValues("q", "from:boss"))
+            .andExpect(queryValues("labelIds"))
+            .andExpect(queryValues("pageToken", "p2"))
+            .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+
+        assertThat(gmailThreads.fetch(userId, Map.of("q", " from:boss "), "p2").items()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("대화 — 그사이 지워진 대화(404)는 건너뛴다")
+    void threadsSkipItemNotFound() {
+        connected(GMAIL);
+        server.expect(requestTo(startsWith(THREADS_URL + "?")))
+            .andRespond(withSuccess("{\"threads\":[{\"id\":\"t1\"},{\"id\":\"t2\"}]}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(THREADS_URL + "/t1" + METADATA_QUERY)).andRespond(withStatus(HttpStatus.NOT_FOUND));
+        server.expect(requestTo(THREADS_URL + "/t2" + METADATA_QUERY))
+            .andRespond(withSuccess("{\"id\":\"t2\",\"messages\":[" + metadata("m3", "남은 대화", null, 1762732800000L)
+                + "]}", MediaType.APPLICATION_JSON));
+
+        OptionPage page = gmailThreads.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(new OptionItem("t2", "남은 대화 · 2025-11-10 09:00"));
+        assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("대화 — gmail scope가 없으면 Google 호출 없이 GOOGLE_SCOPE_REQUIRED")
+    void threadsRequireGmailScope() {
+        connected("openid " + CALENDAR);
+
+        assertErrorCode(() -> gmailThreads.fetch(userId, Map.of(), null), ErrorCode.GOOGLE_SCOPE_REQUIRED);
     }
 }
