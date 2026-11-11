@@ -25,7 +25,7 @@ DEV_COM_NEW_OPTION       → NEW_OPTION
 이전 `DEV_` 이름으로만 등록한 경우에도 `DEV_COM_` 이름으로 이전해야 한다.
 기존 이름을 자동 재조회·복사·삭제하거나 GitHub 설정을 바꾸지 않았다.
 접두사 없는 기존 Secret·서버 `/home/kwung/deploy/ieum-backend/.env`·기존 runtime·`BACKEND_ENV`
-묶음 Secret에서 누락값을 보충하는 fallback은 없다. Main/AWS workflow는 변경하지 않았다.
+묶음 Secret에서 누락값을 보충하는 fallback은 없다. Main 배포의 별도 접두사·초기 도입 조건은 [Main 블루그린 설정](main-bluegreen-secrets.md)을 따른다. 이 문서의 DEV 계약은 유지한다.
 
 ## 수집과 매번 새로 만드는 후보
 
@@ -201,3 +201,8 @@ workflow `Test` 단계에서도 Gradle 전에 같은 Python 검증을 실행한�
 [GitHub Secrets 컨텍스트](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#secrets-context),
 [toJSON 함수](https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#tojson),
 [GitHub 보안 권고](https://docs.github.com/en/actions/reference/security/secure-use).
+
+## Main 환경과의 분리
+
+수집기의 `--environment dev`는 기존 기본값이며 DEV 동작을 유지한다. `--environment main`은
+`MAIN_COM_`만 선택한다. Main 적용은 별도 [Main 블루그린 설정](main-bluegreen-secrets.md)을 따른다.
