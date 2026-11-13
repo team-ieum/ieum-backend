@@ -39,25 +39,33 @@ classic Docker의 config ID와 containerd의 manifest/index ID를 구분해 참�
 검증 단계가 출력한 서버의 실제 `sha256:...` image ID를 컨트롤러에 전달한다.
 앱 환경설정 파일·Secrets JSON은 artifact에 포함하지 않는다.
 
-앱 Secrets는 배포 직전에만 `toJSON(secrets)`로 받고, 수집기가 `MAIN_COM_`만 선택한다.
-권한 0600인 새 후보 파일에 기록한 후 원본 JSON을 unset하고 컨트롤러를 호출한다.
+앱 Secrets는 배포·bootstrap 설정 준비 단계의 `env:`에 필요한 `secrets.MAIN_COM_*`를
+각각 명시한다. 전체 Secrets JSON을 전달하지 않으며 빌드 단계는 앱 Secrets를 받지 않는다.
+수집기는 `MAIN_SECRET_NAMES`에 선언된 개별 환경변수만 읽고 권한 0600인 새 후보 파일을
+만든다. 컨트롤러 호출 전 `MAIN_COM_*` 환경변수를 unset하며 설정은 후보 파일로 전달한다.
 정상 종료·처리 가능한 실패·INT·TERM에서 후보 파일을 정리한다. SIGKILL·호스트 장애에서
 trap 실행은 보장되지 않으므로 운영자 점검이 필요하다.
 
-`toJSON(secrets)`는 runner에 전달되는 원본 Secrets의 범위를 줄이지 않는다. 필터는 앱에
-전달할 항목을 제한한다. 원문·값·파일 내용을 로그나 artifact로 출력하지 않는다.
+이 변경은 기존 GitHub Secret 이름과 저장 위치를 유지한다. GitHub Environment 생성이나
+Secrets/Variables 이동은 포함하지 않는다. 원문·값·파일 내용을 로그나 artifact로 출력하지 않는다.
 Docker 관리자 및 서버 snapshot 파일에는 평문 설정 접근이 가능하다.
 
 ## 수집 규칙
 
 - CLI: `python3 scripts/bluegreen/backend_env.py PRIVATE_EMPTY_FILE --environment main`
-- `--environment`를 생략하면 기존 `dev` 동작이다.
+- `--environment`를 생략하면 기존 `dev` 동작과 `IEUM_BACKEND_SECRETS_JSON` 입력을 유지한다.
+  Main CLI는 이 JSON을 사용하거나 fallback으로 읽지 않는다.
 - Main은 `MAIN_COM_` 접두사를 한 번만 제거한다. `DEV_COM_`, `DEV_`, `AWS_`,
   접두사 없는 값, `MAIN_BLUE_`, `MAIN_GREEN_`을 앱 설정 fallback으로 사용하지 않는다.
-- 기존 별칭은 Main에서도 유지한다. 별칭과 직접 이름을 동시에 등록하면 충돌이다.
+- 기존 별칭은 Main에서도 유지한다. 별칭과 직접 이름이 모두 비어 있지 않으면 충돌이다.
+  GitHub가 미등록 Secret과 빈 Secret을 모두 빈 문자열로 전달하므로 Main은 빈 입력을
+  생략한다. 필수값이 빠지면 중단하고 선택 설정은 앱 기본값을 유지한다. 선택 설정을 빈
+  문자열로 강제로 덮어쓰는 용도로 사용할 수 없다. 공백만 있는 값은 자동 trim하지 않는다.
 - 입력은 단일 행 literal이다. 공백·달러·따옴표·등호는 자동 확장하지 않는다.
 - 후보는 기존 서버 .env 또는 현재 컨테이너의 설정과 합치지 않고 전체 교체한다.
-- 새 일반 앱 키는 자동 수집하지만 앱이 읽어야 하며, 새 필수 검증 목록은 별도 수정해야 한다.
+- 새 Secret 등록만으로 Main `.env`에 추가되지 않는다. 새 앱 키는 `backend_env.py`의
+  `MAIN_SECRET_NAMES` 구성 목록과 workflow의 deploy·stage-bootstrap `env:` 두 곳에
+  명시해야 한다. 앱이 해당 키를 읽어야 하며 새 필수 검증도 필요하면 함께 추가한다.
 - Blue·Green의 컨테이너·내부 주소·배포 제어 설정은 Main 컨트롤러 소유다.
   이를 일반 앱 Secrets로 덮어쓰는 예약 이름과 동등한 underscore 변형을 거부한다.
 - Main Blue·Green은 Main 공통 설정을 배포 시 읽지만 각 색상 snapshot을 독립 보존한다.
@@ -121,6 +129,22 @@ DISCORD_FRONTEND_REDIRECT_URI AGENT_INTERNAL_TOKEN
 `MAIN_COM_MAIL_HOST`, `MAIN_COM_MAIL_PORT`, `MAIN_COM_MAIL_USERNAME`,
 `MAIN_COM_MAIL_PASSWORD`, `MAIN_COM_OAUTH2_REDIRECT_URI`다. 사용하는 기능의 실제 값이 필요하다.
 `MAIN_COM_SPRING_PROFILES_ACTIVE`는 미등록·빈 값이면 `main`이며 다른 profile은 거부한다.
+아래 선택 항목도 `MAIN_COM_` 접두사를 붙인 기존 이름으로 명시적으로 지원한다.
+등록하지 않으면 앱의 기존 기본값을 사용하므로 모두 새로 등록할 필요는 없다.
+
+```
+APP_BASE_URL BETA_PLATFORM_KEY_ENABLED BETA_DAILY_CALL_QUOTA BETA_TOKEN_BUDGET BETA_ALLOWED_MODELS
+GITHUB_APP_PRIVATE_KEY GITHUB_APP_SLUG DISCORD_OPS_WEBHOOK_URL GOOGLE_OAUTH_INCREMENTAL_AUTH
+MVC_ASYNC_TIMEOUT_MS DB_POOL_MAX_SIZE DB_POOL_MIN_IDLE DB_POOL_CONNECTION_TIMEOUT_MS
+DB_POOL_MAX_LIFETIME_MS DB_POOL_IDLE_TIMEOUT_MS AGENT_TIMEOUT_SECONDS
+QUARTZ_THREAD_COUNT QUARTZ_THREAD_NAME_PREFIX WORKFLOW_EXECUTOR_CORE_POOL_SIZE
+WORKFLOW_EXECUTOR_MAX_POOL_SIZE WORKFLOW_EXECUTOR_QUEUE_CAPACITY WORKFLOW_EXECUTION_PARALLELISM
+GMAIL_TRIGGER_POLL_INTERVAL FORMS_TRIGGER_POLL_INTERVAL
+```
+
+`GITHUB_APP_PRIVATE_KEY`도 기존 단일 행 규칙을 유지한다. PEM의 실제 개행을 그대로
+주입하지 않으며, 앱이 지원하는 한 줄 base64 PKCS#8 RSA 키를 사용한다.
+
 `application-main.yml`로 별도 자동 migration을 추가하지 않는다. Main controller가
 `SPRING_JPA_HIBERNATE_DDL_AUTO=validate`를 강제하며 사용자 입력으로 덮어쓸 수 없다.
 

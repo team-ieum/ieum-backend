@@ -48,6 +48,22 @@ ALIASES = {
     'GH_APP_FRONTEND_REDIRECT_URI': 'GITHUB_APP_FRONTEND_REDIRECT_URI',
     'GH_APP_WEBHOOK_SECRET': 'GITHUB_APP_WEBHOOK_SECRET',
 }
+# MAIN receives these individual step variables, not the repository Secrets JSON.
+# Keep optional application settings absent when GitHub supplies an empty value,
+# so the application's existing defaults still apply.
+MAIN_OPTIONAL_KEYS = (
+    'APP_BASE_URL', 'BETA_PLATFORM_KEY_ENABLED', 'BETA_DAILY_CALL_QUOTA',
+    'BETA_TOKEN_BUDGET', 'BETA_ALLOWED_MODELS', 'GITHUB_APP_PRIVATE_KEY', 'GITHUB_APP_SLUG',
+    'DISCORD_OPS_WEBHOOK_URL', 'GOOGLE_OAUTH_INCREMENTAL_AUTH', 'MVC_ASYNC_TIMEOUT_MS',
+    'DB_POOL_MAX_SIZE', 'DB_POOL_MIN_IDLE', 'DB_POOL_CONNECTION_TIMEOUT_MS',
+    'DB_POOL_MAX_LIFETIME_MS', 'DB_POOL_IDLE_TIMEOUT_MS', 'AGENT_TIMEOUT_SECONDS',
+    'QUARTZ_THREAD_COUNT', 'QUARTZ_THREAD_NAME_PREFIX', 'WORKFLOW_EXECUTOR_CORE_POOL_SIZE',
+    'WORKFLOW_EXECUTOR_MAX_POOL_SIZE', 'WORKFLOW_EXECUTOR_QUEUE_CAPACITY',
+    'WORKFLOW_EXECUTION_PARALLELISM', 'GMAIL_TRIGGER_POLL_INTERVAL', 'FORMS_TRIGGER_POLL_INTERVAL',
+)
+MAIN_SECRET_NAMES = tuple('MAIN_COM_' + key for key in sorted(
+    set(REQUIRED_KEYS) | set(OPTIONAL_KEYS) | set(ALIASES) |
+    set(MAIN_OPTIONAL_KEYS) | {'SPRING_PROFILES_ACTIVE'}))
 # Spring relaxed binding can ignore underscores. Reserve equivalent spellings
 # too, and reject higher-priority configuration / JVM launch escape hatches.
 RESERVED_KEYS = (
@@ -90,6 +106,14 @@ def unique_object(pairs):
 
 def invalid_json_constant(_value):
     raise BackendEnvironmentError('invalid_json')
+
+
+def main_payload(environment):
+    """Read only explicitly supported MAIN inputs, without falling back to DEV or JSON."""
+    # Both a canonical name and its legacy alias appear in the workflow. GitHub
+    # resolves an unregistered secret to '', so exclude it before collision checks.
+    return json.dumps({name: environment[name] for name in MAIN_SECRET_NAMES
+                       if name in environment and environment[name] != ''})
 
 
 def build_environment(payload, environment='dev'):
@@ -199,7 +223,14 @@ def main(argv=None):
     parser.add_argument('--environment', choices=tuple(ENVIRONMENT_PREFIXES), default='dev')
     arguments = parser.parse_args(argv)
     try:
-        write_candidate(arguments.candidate, os.environ.get(SECRETS_VARIABLE), arguments.environment)
+        if arguments.environment == 'main':
+            payload = main_payload(os.environ)
+            for name in MAIN_SECRET_NAMES:
+                os.environ.pop(name, None)
+            os.environ.pop(SECRETS_VARIABLE, None)
+        else:
+            payload = os.environ.get(SECRETS_VARIABLE)
+        write_candidate(arguments.candidate, payload, arguments.environment)
     except BackendEnvironmentError as failure:
         print('Backend environment rejected: ' + failure.code, file=sys.stderr)
         return 1

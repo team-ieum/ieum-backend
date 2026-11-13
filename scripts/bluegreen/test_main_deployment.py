@@ -103,13 +103,89 @@ class MainEnvironmentTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             candidate = Path(directory) / 'candidate.env'
             candidate.touch(mode=0o600)
-            child_env = {'PATH': os.defpath, env.SECRETS_VARIABLE: payload()}
+            child_env = {'PATH': os.defpath, **json.loads(payload())}
             if 'LD_LIBRARY_PATH' in os.environ:
                 child_env['LD_LIBRARY_PATH'] = os.environ['LD_LIBRARY_PATH']
             result = subprocess.run([sys.executable, str(Path(env.__file__)), str(candidate), '--environment', 'main'],
                                     env=child_env, capture_output=True, text=True, timeout=5)
             self.assertEqual((result.returncode, result.stdout, result.stderr), (0, '', ''))
             self.assertEqual(candidate.read_bytes(), env.build_environment(payload(), 'main'))
+
+    def test_explicit_inputs_preserve_aliases_literals_and_optional_defaults(self):
+        values = dict.fromkeys(env.MAIN_SECRET_NAMES, '')
+        values.update(json.loads(payload()))
+        for alias, target in env.ALIASES.items():
+            if values.get('MAIN_COM_' + target):
+                values['MAIN_COM_' + alias] = values['MAIN_COM_' + target]
+                values['MAIN_COM_' + target] = ''
+        literal = '  literal = $HOME `value` "quoted"  '
+        values['MAIN_COM_GITHUB_APP_PRIVATE_KEY'] = literal
+        values['MAIN_COM_APP_BASE_URL'] = 'https://kiacms.co.kr'
+        values['MAIN_COM_BETA_PLATFORM_KEY_ENABLED'] = 'false'
+        values['MAIN_COM_BETA_DAILY_CALL_QUOTA'] = ''
+        actual = records(env.build_environment(env.main_payload(values), 'main'))
+        self.assertEqual(actual['DB_PASSWORD'], SECRET)
+        self.assertEqual(actual['GITHUB_APP_PRIVATE_KEY'], literal)
+        self.assertEqual(actual['APP_BASE_URL'], 'https://kiacms.co.kr')
+        self.assertEqual(actual['BETA_PLATFORM_KEY_ENABLED'], 'false')
+        self.assertEqual(actual['SPRING_PROFILES_ACTIVE'], 'main')
+        for key in ('MAIL_HOST', 'MAIL_PORT', 'BETA_DAILY_CALL_QUOTA', 'DB_POOL_MAX_SIZE'):
+            self.assertNotIn(key, actual)
+
+    def test_explicit_inputs_reject_populated_alias_collisions(self):
+        for alias, target in env.ALIASES.items():
+            values = json.loads(payload())
+            values['MAIN_COM_' + target] = SECRET
+            values['MAIN_COM_' + alias] = SECRET
+            with self.subTest(alias=alias), self.assertRaisesRegex(
+                    env.BackendEnvironmentError, 'duplicate_configuration_key'):
+                env.build_environment(env.main_payload(values), 'main')
+
+    def test_explicit_inputs_ignore_unknown_names_and_never_fall_back(self):
+        values = json.loads(payload()) | {
+            env.SECRETS_VARIABLE: payload(), 'MAIN_COM_NEW_OPTION': SECRET,
+            'DEV_COM_NEW_OPTION': SECRET, 'MAIN_COM_JAVA_VERSION': '21',
+            'MAIN_BLUE_DB_PASSWORD': SECRET, 'DB_PASSWORD': SECRET,
+        }
+        actual = records(env.build_environment(env.main_payload(values), 'main'))
+        self.assertNotIn('NEW_OPTION', actual)
+        self.assertNotIn('JAVA_VERSION', actual)
+        for empty in ('', ' \t '):
+            with self.subTest(value=repr(empty)):
+                values['MAIN_COM_DB_PASSWORD'] = empty
+                values['DEV_COM_DB_PASSWORD'] = SECRET
+                with self.assertRaisesRegex(env.BackendEnvironmentError, 'missing_required_configuration'):
+                    env.build_environment(env.main_payload(values), 'main')
+
+    def test_main_cli_does_not_accept_legacy_all_secrets_transport(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / 'candidate.env'
+            candidate.touch(mode=0o600)
+            with patch.dict(os.environ, {env.SECRETS_VARIABLE: payload()}, clear=True), \
+                    patch('sys.stderr') as stderr:
+                self.assertEqual(env.main([str(candidate), '--environment', 'main']), 1)
+            self.assertEqual(candidate.read_bytes(), b'')
+
+    def test_main_cli_removes_individual_inputs_before_candidate_processing(self):
+        supplied = json.loads(payload()) | {env.SECRETS_VARIABLE: 'ignored-json'}
+        def capture(_path, source, environment):
+            self.assertEqual(environment, 'main')
+            self.assertEqual(records(env.build_environment(source, environment))['DB_PASSWORD'], SECRET)
+            self.assertFalse(set(env.MAIN_SECRET_NAMES) & set(os.environ))
+            self.assertNotIn(env.SECRETS_VARIABLE, os.environ)
+        with patch.dict(os.environ, supplied, clear=True), \
+                patch.object(env, 'write_candidate', side_effect=capture):
+            self.assertEqual(env.main(['/unused/candidate.env', '--environment', 'main']), 0)
+
+    def test_app_configuration_inputs_are_covered_without_controller_owned_routes(self):
+        application = (ROOT / 'api/src/main/resources/application.yml').read_text()
+        names = set(re.findall(r'\$\{([A-Z][A-Z0-9_]*)', application))
+        names.remove('AGENT_SERVICE_URL')
+        exposed = {name.removeprefix('MAIN_COM_') for name in env.MAIN_SECRET_NAMES}
+        self.assertLessEqual(names, exposed)
+        self.assertIn('DISCORD_OPS_WEBHOOK_URL', exposed)
+        for key in env.RESERVED_KEYS:
+            self.assertNotIn(key, exposed)
 
 
 class MainImageArtifactTest(unittest.TestCase):
@@ -230,20 +306,30 @@ class MainWorkflowBoundaryTest(unittest.TestCase):
 
     def test_main_secret_candidate_is_created_only_after_image_validation(self):
         marker = '      - name: Deploy with Main prefixed Secrets\n'
-        self.assertEqual(self.source.count('${{ toJSON(secrets) }}'), 2)
+        self.assertNotIn('toJSON(secrets)', self.source)
         before, step = self.source.split(marker, 1)
-        self.assertNotIn('toJSON(secrets)', before)
+        self.assertNotIn('secrets.MAIN_COM_DB_PASSWORD', before)
         self.assertIn('name: Verify archive and loaded image identity', before)
         self.assertIn('--environment main', step)
-        self.assertIn('unset ' + env.SECRETS_VARIABLE, step)
+        self.assertIn('for secret_name in ${!MAIN_COM_@}', step)
+        self.assertIn('unset "$secret_name"', step)
         self.assertIn('--service ' + APP + ' --image "$IMAGE_ID"', step)
+
+    def test_deploy_and_stage_receive_only_the_same_explicit_runtime_inputs(self):
+        for marker in ('Deploy with Main prefixed Secrets', 'Stage Main bootstrap settings'):
+            body = self.source.split('      - name: ' + marker + '\n', 1)[1]
+            inputs = body.split('        run: |\n', 1)[0]
+            mappings = re.findall(r'^          (MAIN_COM_[A-Z0-9_]+): \$\{\{ secrets\.([A-Z0-9_]+) \}\}$',
+                                  inputs, re.MULTILINE)
+            self.assertEqual(dict(mappings), {name: name for name in env.MAIN_SECRET_NAMES})
+            self.assertEqual(len(mappings), len(env.MAIN_SECRET_NAMES))
 
     def test_bootstrap_staging_is_explicitly_gated_and_does_not_deploy(self):
         stage = self.source.split('  stage_bootstrap:\n', 1)[1]
         self.assertIn("inputs.operation == 'stage-bootstrap' && vars.MAIN_BOOTSTRAP_ENABLED == 'true'", stage)
         self.assertIn('--lock-timeout 30 stage-bootstrap', stage)
         self.assertIn('--environment main', stage)
-        self.assertEqual(stage.count('${{ toJSON(secrets) }}'), 1)
+        self.assertNotIn('toJSON(secrets)', stage)
         self.assertNotIn('--replace-env', stage)
         self.assertNotIn('--job-deadline-epoch', stage)
         self.assertNotIn('docker run', stage)
@@ -263,11 +349,13 @@ class MainWorkflowBoundaryTest(unittest.TestCase):
                 'path=pathlib.Path(args[args.index("--env-file")+1])\n'
                 'pathlib.Path(' + repr(str(result_file)) + ').write_text(json.dumps({'
                 '"values":path.read_text(),"json_inherited":' + repr(env.SECRETS_VARIABLE) + ' in os.environ,'
+                '"secret_names":[k for k in os.environ if k.startswith("MAIN_COM_")],'
                 '"deployment_environment":os.environ.get("IEUM_DEPLOY_ENVIRONMENT"),"args":args}))\n')
             shell = shell.replace('/home/kwung/deploy/bluegreen-main/bluegreen.py', shlex.quote(str(controller)))
             shell = shell.replace('scripts/bluegreen/' + APP + '_env.py', shlex.quote(str(Path(env.__file__))))
             child_env = {'PATH': str(Path(sys.executable).parent) + os.pathsep + os.defpath,
-                         'RUNNER_TEMP': str(root), env.SECRETS_VARIABLE: payload(), 'IMAGE_ID': IDENTITY,
+                         'RUNNER_TEMP': str(root), **json.loads(payload()),
+                         env.SECRETS_VARIABLE: 'ignored-all-secrets', 'IMAGE_ID': IDENTITY,
                          'IEUM_DEPLOY_ENVIRONMENT': 'main', 'IEUM_BLUEGREEN_JOB_DEADLINE_EPOCH': '9999999999'}
             if 'LD_LIBRARY_PATH' in os.environ:
                 child_env['LD_LIBRARY_PATH'] = os.environ['LD_LIBRARY_PATH']
@@ -276,6 +364,7 @@ class MainWorkflowBoundaryTest(unittest.TestCase):
             self.assertEqual((result.returncode, result.stdout, result.stderr), (0, '', ''))
             observed = json.loads(result_file.read_text())
             self.assertFalse(observed['json_inherited'])
+            self.assertEqual(observed['secret_names'], [])
             self.assertEqual(observed['deployment_environment'], 'main')
             self.assertIn('DB_PASSWORD' if APP == 'backend' else 'MONGODB_URL', observed['values'])
             self.assertNotIn(SECRET, ' '.join(observed['args']))
