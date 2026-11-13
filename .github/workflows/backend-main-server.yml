@@ -17,7 +17,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: backend_main_server
+  group: ${{ github.ref == 'refs/heads/main' && 'backend_main_server' || format('backend_main_build_{0}', github.ref) }}
   cancel-in-progress: false
 
 defaults:
@@ -26,7 +26,10 @@ defaults:
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' ||
+      (github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/infra/IEUM-BE-123' && inputs.operation == 'build')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
@@ -145,6 +148,18 @@ jobs:
           python3 scripts/bluegreen/main_image.py package \
             --file "$directory/image.tar" --image "$IMAGE_NAME:$IMAGE_TAG"
           printf 'directory=%s\n' "$directory" >> "$GITHUB_OUTPUT"
+
+      - name: Verify packaged image on GitHub runner
+        env:
+          IMAGE_DIRECTORY: ${{ steps.package.outputs.directory }}
+          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_ID: ${{ steps.package.outputs.image_id }}
+          ARCHIVE_SHA256: ${{ steps.package.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          python3 scripts/bluegreen/main_image.py load \
+            --file "$IMAGE_DIRECTORY/image.tar" --image "$IMAGE_NAME:$IMAGE_TAG" \
+            --image-id "$IMAGE_ID" --sha256 "$ARCHIVE_SHA256"
 
       - name: Upload image archive only
         id: upload
@@ -265,6 +280,7 @@ jobs:
           merge-multiple: true
 
       - name: Verify archive and loaded image identity
+        id: loaded_image
         env:
           IMAGE_DIRECTORY: ${{ steps.image_directory.outputs.directory }}
           IMAGE_NAME: ${{ secrets.MAIN_COM_IMAGE_NAME }}
@@ -279,7 +295,7 @@ jobs:
 
       - name: Deploy with Main prefixed Secrets
         env:
-          IMAGE_ID: ${{ needs.build.outputs.image_id }}
+          IMAGE_ID: ${{ steps.loaded_image.outputs.image_id }}
           IEUM_BACKEND_SECRETS_JSON: ${{ toJSON(secrets) }}
         run: |
           set +x
@@ -361,6 +377,7 @@ jobs:
           merge-multiple: true
 
       - name: Verify archive and loaded image identity
+        id: loaded_image
         env:
           IMAGE_DIRECTORY: ${{ steps.image_directory.outputs.directory }}
           IMAGE_NAME: ${{ secrets.MAIN_COM_IMAGE_NAME }}
@@ -375,7 +392,7 @@ jobs:
 
       - name: Stage Main bootstrap settings
         env:
-          IMAGE_ID: ${{ needs.build.outputs.image_id }}
+          IMAGE_ID: ${{ steps.loaded_image.outputs.image_id }}
           IEUM_BACKEND_SECRETS_JSON: ${{ toJSON(secrets) }}
         run: |
           set +x
