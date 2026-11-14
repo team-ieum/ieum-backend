@@ -10,10 +10,33 @@ MAIN 설정은 [MAIN 배포 설정](main-bluegreen-secrets.md)을 참고하세�
 - 앱 설정은 `DEV_COM_` 접두사를 사용합니다. 예: `DEV_COM_REDIS_HOST` → `REDIS_HOST`.
 - `DEV_`, `DEV_BLUE_`, `DEV_GREEN_`, `MAIN_`, `AWS_`, 접두사 없는 값은 앱 설정으로 수집하지 않습니다.
 - DEV도 MAIN처럼 필요한 이름을 워크플로우와 수집기에 명시합니다. 전체 Secrets JSON은 받지 않습니다.
-- 새 앱 변수는 Secret 등록과 함께 `backend_env.py`의 `DEV_SECRET_NAMES` 구성 목록과
-  DEV 워크플로우 배포 단계의 `env`에 추가합니다. 앱에서 읽는 코드도 필요합니다.
-- 새 필수값이면 수집기의 필수 검증도 갱신합니다. 이름만 등록한 미지원 변수는 전달하지 않습니다.
+- 이름만 등록한 미지원 변수는 전달하지 않습니다. 새 변수는 아래 절차로 추가합니다.
 - 현재 DEV job은 GitHub Environment를 지정하지 않으므로 Environment 전용 Secrets는 사용하지 않습니다.
+
+## 새 앱 변수 추가 절차
+
+이미 지원하는 변수의 **값만 변경**할 때는 Secrets를 갱신하고 새 DEV 배포를 실행합니다.
+아래 절차는 **새 이름을 추가**하여 워크플로우·수집기·앱의 지원 범위를 늘릴 때 적용합니다.
+
+`DEV_COM_NEW_OPTION` → `NEW_OPTION`은 **선택 변수의 구현 예시이며, 현재 지원하는 키가 아닙니다.**
+
+- [ ] 앱에서 `NEW_OPTION`을 읽는 코드와 기본값을 준비합니다.
+- [ ] [backend_env.py](../../scripts/bluegreen/backend_env.py)의 `DEV_OPTIONAL_KEYS`를 확장합니다.
+  현재 `DEV_OPTIONAL_KEYS = MAIN_OPTIONAL_KEYS`이므로 DEV에만 추가하려면
+  `DEV_OPTIONAL_KEYS = MAIN_OPTIONAL_KEYS + ('NEW_OPTION',)`으로 변경합니다. `DEV_SECRET_NAMES`는 이 목록에서 생성됩니다.
+- [ ] [DEV 워크플로우](../../.github/workflows/backend-dev-server.yml)의
+  `Deploy with prefixed GitHub Secrets` 단계 `env`에 다음 한 항목을 추가합니다.
+
+```yaml
+env:
+  DEV_COM_NEW_OPTION: ${{ secrets.DEV_COM_NEW_OPTION }}
+```
+
+- [ ] 백엔드 저장소의 Secrets에 같은 이름을 등록하고, 아래 수집기 검증과 새 키의 전달·빈 값 테스트를 확인합니다.
+- [ ] 변경이 포함된 새 DEV Backend 배포로 반영합니다. Secret 등록만으로 기존 컨테이너는 바뀌지 않습니다.
+
+공유 `MAIN_OPTIONAL_KEYS`에 직접 추가한다면 [MAIN 워크플로우](../../.github/workflows/backend-main-server.yml)의
+deploy·stage-bootstrap 단계에도 대응하는 `MAIN_COM_` 입력을 추가합니다. 공용 `REQUIRED_KEYS`를 바꿀 때도 MAIN 필수 검증에 미치는 영향을 확인합니다.
 
 ## 필수 앱 설정
 
