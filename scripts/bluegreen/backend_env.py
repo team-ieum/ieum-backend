@@ -22,7 +22,7 @@ MAIN_BUILD_KEYS = ('JAVA_VERSION', 'IMAGE_NAME')
 SECRETS_VARIABLE = 'IEUM_BACKEND_SECRETS_JSON'
 FORBIDDEN_CHARACTERS = '\x00\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029'
 
-# Existing app requirements are validation rules, not an allowlist for new keys.
+# Validate the selected application values after the CLI's explicit input selection.
 REQUIRED_KEYS = (
     'DB_URL', 'DB_USERNAME', 'DB_PASSWORD',
     'REDIS_HOST', 'REDIS_PORT', 'MONGO_URI',
@@ -48,7 +48,7 @@ ALIASES = {
     'GH_APP_FRONTEND_REDIRECT_URI': 'GITHUB_APP_FRONTEND_REDIRECT_URI',
     'GH_APP_WEBHOOK_SECRET': 'GITHUB_APP_WEBHOOK_SECRET',
 }
-# MAIN receives these individual step variables, not the repository Secrets JSON.
+# Both environments receive individual step variables, not the repository Secrets JSON.
 # Keep optional application settings absent when GitHub supplies an empty value,
 # so the application's existing defaults still apply.
 MAIN_OPTIONAL_KEYS = (
@@ -64,6 +64,10 @@ MAIN_OPTIONAL_KEYS = (
 MAIN_SECRET_NAMES = tuple('MAIN_COM_' + key for key in sorted(
     set(REQUIRED_KEYS) | set(OPTIONAL_KEYS) | set(ALIASES) |
     set(MAIN_OPTIONAL_KEYS) | {'SPRING_PROFILES_ACTIVE'}))
+DEV_OPTIONAL_KEYS = MAIN_OPTIONAL_KEYS
+DEV_SECRET_NAMES = tuple(SECRET_PREFIX + key for key in sorted(
+    set(REQUIRED_KEYS) | set(OPTIONAL_KEYS) | set(ALIASES) |
+    set(DEV_OPTIONAL_KEYS) | {'SPRING_PROFILES_ACTIVE'}))
 # Spring relaxed binding can ignore underscores. Reserve equivalent spellings
 # too, and reject higher-priority configuration / JVM launch escape hatches.
 RESERVED_KEYS = (
@@ -108,16 +112,24 @@ def invalid_json_constant(_value):
     raise BackendEnvironmentError('invalid_json')
 
 
-def main_payload(environment):
-    """Read only explicitly supported MAIN inputs, without falling back to DEV or JSON."""
+def explicit_payload(environment, names):
+    """Read an explicit input set; other environments and legacy JSON are not fallbacks."""
     # Both a canonical name and its legacy alias appear in the workflow. GitHub
     # resolves an unregistered secret to '', so exclude it before collision checks.
-    return json.dumps({name: environment[name] for name in MAIN_SECRET_NAMES
+    return json.dumps({name: environment[name] for name in names
                        if name in environment and environment[name] != ''})
 
 
+def main_payload(environment):
+    return explicit_payload(environment, MAIN_SECRET_NAMES)
+
+
+def dev_payload(environment):
+    return explicit_payload(environment, DEV_SECRET_NAMES)
+
+
 def build_environment(payload, environment='dev'):
-    """Select the prefix from JSON and rebuild a complete literal environment."""
+    """Validate the CLI-selected serialized values and rebuild a literal environment."""
     if environment not in ENVIRONMENT_PREFIXES:
         raise BackendEnvironmentError('invalid_environment')
     prefix = ENVIRONMENT_PREFIXES[environment]
@@ -225,11 +237,13 @@ def main(argv=None):
     try:
         if arguments.environment == 'main':
             payload = main_payload(os.environ)
-            for name in MAIN_SECRET_NAMES:
-                os.environ.pop(name, None)
-            os.environ.pop(SECRETS_VARIABLE, None)
+            names = MAIN_SECRET_NAMES
         else:
-            payload = os.environ.get(SECRETS_VARIABLE)
+            payload = dev_payload(os.environ)
+            names = DEV_SECRET_NAMES
+        for name in names:
+            os.environ.pop(name, None)
+        os.environ.pop(SECRETS_VARIABLE, None)
         write_candidate(arguments.candidate, payload, arguments.environment)
     except BackendEnvironmentError as failure:
         print('Backend environment rejected: ' + failure.code, file=sys.stderr)
