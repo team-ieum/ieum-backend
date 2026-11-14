@@ -1,158 +1,83 @@
-name: Backend Main Server Deploy
+name: Backend Main Blue Green Deploy
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Build, stage private bootstrap inputs, or deploy Main
+        type: choice
+        required: true
+        default: build
+        options: [build, stage-bootstrap, deploy]
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: backend_main_server
+  group: ${{ github.ref == 'refs/heads/main' && 'backend_main_server' || format('backend_main_build_{0}', github.ref) }}
   cancel-in-progress: false
 
 defaults:
   run:
     shell: bash
 
-env:
-  JAVA_VERSION: ${{ secrets.JAVA_VERSION }}
-  IMAGE_NAME: ${{ secrets.AWS_BACKEND_IMAGE_NAME }}
-  CONTAINER_NAME: ${{ secrets.AWS_BACKEND_CONTAINER_NAME }}
-  DOCKER_NETWORK: ${{ secrets.AWS_DOCKER_NETWORK }}
-  DOCKER_NETWORK_SUBNET: ${{ secrets.AWS_DOCKER_NETWORK_SUBNET }}
-  BACKEND_IP: ${{ secrets.AWS_BACKEND_IP }}
-  BACKEND_PORT: ${{ secrets.AWS_BACKEND_PORT }}
-  BACKEND_HOST_PORT: ${{ secrets.AWS_BACKEND_HOST_PORT }}
-  SPRING_PROFILES_ACTIVE: ${{ secrets.AWS_SPRING_PROFILES_ACTIVE }}
-
 jobs:
-  deploy:
-    name: Deploy Main to EC2
-    runs-on:
-      group: ieum_main_server
-      labels: [self-hosted, linux, x64, ieum-backend, main, deploy]
+  build:
+    if: >-
+      github.ref == 'refs/heads/main' ||
+      (github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/infra/IEUM-BE-123' && inputs.operation == 'build')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      archive_sha256: ${{ steps.package.outputs.archive_sha256 }}
+      image_id: ${{ steps.package.outputs.image_id }}
+    env:
+      JAVA_VERSION: ${{ secrets.MAIN_COM_JAVA_VERSION }}
+      IMAGE_NAME: ${{ secrets.MAIN_COM_IMAGE_NAME }}
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379/tcp
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ieum_ci_test
+          POSTGRES_DB: ieum_ci_test
+          # Disposable CI database only; this is not an application credential.
+          POSTGRES_PASSWORD: ieum_ci_test_only_password
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U ieum_ci_test -d ieum_ci_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: true
+          persist-credentials: false
 
-      - name: Validate deploy secrets
-        run: |
-          set -euo pipefail
+      - name: Validate Main build settings
+        run: python3 scripts/bluegreen/main_image.py validate-build
 
-          missing_vars=()
-          for name in \
-            JAVA_VERSION \
-            IMAGE_NAME \
-            CONTAINER_NAME \
-            DOCKER_NETWORK \
-            DOCKER_NETWORK_SUBNET \
-            BACKEND_IP \
-            BACKEND_PORT \
-            BACKEND_HOST_PORT \
-            SPRING_PROFILES_ACTIVE
-          do
-            [ -n "${!name}" ] || missing_vars+=("$name")
-          done
-
-          if [ ${#missing_vars[@]} -gt 0 ]; then
-            echo "::error::Missing deploy secrets for: ${missing_vars[*]}"
-            exit 1
-          fi
-
-      - name: Validate app secrets
-        env:
-          RDS_DB_URL: ${{ secrets.AWS_RDS_DB_URL }}
-          RDS_DB_USERNAME: ${{ secrets.AWS_RDS_DB_USERNAME }}
-          RDS_DB_PASSWORD: ${{ secrets.AWS_RDS_DB_PASSWORD }}
-          REDIS_HOST: ${{ secrets.AWS_REDIS_HOST }}
-          REDIS_PORT: ${{ secrets.AWS_REDIS_PORT }}
-          MONGO_URI: ${{ secrets.AWS_MONGO_URI }}
-          CORS_ALLOWED_ORIGINS: ${{ secrets.AWS_CORS_ALLOWED_ORIGINS }}
-          JWT_SECRET: ${{ secrets.AWS_JWT_SECRET }}
-          JWT_EXPIRATION: ${{ secrets.AWS_JWT_EXPIRATION }}
-          JWT_REFRESH_EXPIRATION: ${{ secrets.AWS_JWT_REFRESH_EXPIRATION }}
-          AES_SECRET_KEY: ${{ secrets.AWS_AES_SECRET_KEY }}
-          AGENT_SERVICE_URL: ${{ secrets.AWS_AGENT_SERVICE_URL }}
-          AGENT_INTERNAL_TOKEN: ${{ secrets.AWS_AGENT_INTERNAL_TOKEN }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          OAUTH2_REDIRECT_URI: ${{ secrets.AWS_OAUTH2_REDIRECT_URI }}
-          NOTION_CLIENT_ID: ${{ secrets.NOTION_CLIENT_ID }}
-          NOTION_CLIENT_SECRET: ${{ secrets.NOTION_CLIENT_SECRET }}
-          NOTION_AUTH_URL: ${{ secrets.NOTION_AUTH_URL }}
-          NOTION_TOKEN_URL: ${{ secrets.NOTION_TOKEN_URL }}
-          NOTION_REDIRECT_URI: ${{ secrets.AWS_NOTION_REDIRECT_URI }}
-          NOTION_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_NOTION_FRONTEND_REDIRECT_URI }}
-          GITHUB_APP_CLIENT_ID: ${{ secrets.GH_APP_CLIENT_ID }}
-          GITHUB_APP_CLIENT_SECRET: ${{ secrets.GH_APP_CLIENT_SECRET }}
-          GITHUB_APP_TOKEN_URL: ${{ secrets.GH_APP_TOKEN_URL }}
-          GITHUB_APP_REDIRECT_URI: ${{ secrets.AWS_GH_APP_REDIRECT_URI }}
-          GITHUB_APP_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_GH_APP_FRONTEND_REDIRECT_URI }}
-          GITHUB_APP_WEBHOOK_SECRET: ${{ secrets.GH_APP_WEBHOOK_SECRET }}
-          SLACK_CLIENT_ID: ${{ secrets.SLACK_CLIENT_ID }}
-          SLACK_CLIENT_SECRET: ${{ secrets.SLACK_CLIENT_SECRET }}
-          SLACK_REDIRECT_URI: ${{ secrets.AWS_SLACK_REDIRECT_URI }}
-          SLACK_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_SLACK_FRONTEND_REDIRECT_URI }}
-          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
-          DISCORD_CLIENT_SECRET: ${{ secrets.DISCORD_CLIENT_SECRET }}
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          DISCORD_REDIRECT_URI: ${{ secrets.AWS_DISCORD_REDIRECT_URI }}
-          DISCORD_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_DISCORD_FRONTEND_REDIRECT_URI }}
-        run: |
-          set -euo pipefail
-
-          missing_vars=()
-          for name in \
-            RDS_DB_URL \
-            RDS_DB_USERNAME \
-            RDS_DB_PASSWORD \
-            REDIS_HOST \
-            REDIS_PORT \
-            MONGO_URI \
-            CORS_ALLOWED_ORIGINS \
-            JWT_SECRET \
-            JWT_EXPIRATION \
-            JWT_REFRESH_EXPIRATION \
-            AES_SECRET_KEY \
-            AGENT_SERVICE_URL \
-            AGENT_INTERNAL_TOKEN \
-            GOOGLE_CLIENT_ID \
-            GOOGLE_CLIENT_SECRET \
-            OAUTH2_REDIRECT_URI \
-            NOTION_CLIENT_ID \
-            NOTION_CLIENT_SECRET \
-            NOTION_AUTH_URL \
-            NOTION_TOKEN_URL \
-            NOTION_REDIRECT_URI \
-            NOTION_FRONTEND_REDIRECT_URI \
-            GITHUB_APP_CLIENT_ID \
-            GITHUB_APP_CLIENT_SECRET \
-            GITHUB_APP_TOKEN_URL \
-            GITHUB_APP_REDIRECT_URI \
-            GITHUB_APP_FRONTEND_REDIRECT_URI \
-            GITHUB_APP_WEBHOOK_SECRET \
-            SLACK_CLIENT_ID \
-            SLACK_CLIENT_SECRET \
-            SLACK_REDIRECT_URI \
-            SLACK_FRONTEND_REDIRECT_URI \
-            DISCORD_CLIENT_ID \
-            DISCORD_CLIENT_SECRET \
-            DISCORD_BOT_TOKEN \
-            DISCORD_REDIRECT_URI \
-            DISCORD_FRONTEND_REDIRECT_URI
-          do
-            [ -n "${!name}" ] || missing_vars+=("$name")
-          done
-
-          if [ ${#missing_vars[@]} -gt 0 ]; then
-            echo "::error::Missing app secrets for: ${missing_vars[*]}"
-            exit 1
-          fi
+      - name: Setup Python for deployment tests
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
       - name: Setup JDK
         uses: actions/setup-java@v4
@@ -166,11 +91,22 @@ jobs:
       - name: Build
         run: ./gradlew :api:bootJar -x test --no-daemon
 
-      - name: Prepare boot jar
+      - name: Test
+        env:
+          IEUM_TEST_REDIS_HOST: 127.0.0.1
+          IEUM_TEST_REDIS_PORT: ${{ job.services.redis.ports['6379'] }}
+          IEUM_TEST_POSTGRES_URL: jdbc:postgresql://127.0.0.1:${{ job.services.postgres.ports['5432'] }}/ieum_ci_test
+          IEUM_TEST_POSTGRES_USER: ieum_ci_test
+          IEUM_TEST_POSTGRES_PASSWORD: ieum_ci_test_only_password
         run: |
           set -euo pipefail
+          python3 -m unittest discover -s scripts/bluegreen -p 'test_*.py'
+          ./gradlew test --no-daemon
 
+      - name: Prepare boot jar
+        run: |
           mkdir -p .deploy
+
           BOOT_JAR="$(find api/build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*plain.jar' | head -n 1)"
 
           if [ -z "$BOOT_JAR" ]; then
@@ -180,139 +116,467 @@ jobs:
 
           cp "$BOOT_JAR" .deploy/app.jar
 
-      - name: Write Dockerfile
+      - name: Write Main Dockerfile
         run: |
           cat > Dockerfile.ci <<'EOF'
-          FROM eclipse-temurin:21-jre
+          ARG JAVA_MAJOR=21
+          FROM eclipse-temurin:${JAVA_MAJOR}-jre
+          LABEL ieum.bluegreen.capable="true"
+          LABEL ieum.bluegreen.protocol="2"
           WORKDIR /app
           COPY .deploy/app.jar /app/app.jar
           EXPOSE 8080
           ENTRYPOINT ["java", "-jar", "/app/app.jar"]
           EOF
 
-      - name: Build Docker image
-        run: |
-          set -euo pipefail
-
-          docker build \
-            -f Dockerfile.ci \
-            -t "$IMAGE_NAME:${{ github.sha }}" \
-            -t "$IMAGE_NAME:latest" .
-
-      - name: Restart backend container
+      - name: Build Main image
         env:
-          RDS_DB_URL: ${{ secrets.AWS_RDS_DB_URL }}
-          RDS_DB_USERNAME: ${{ secrets.AWS_RDS_DB_USERNAME }}
-          RDS_DB_PASSWORD: ${{ secrets.AWS_RDS_DB_PASSWORD }}
-          REDIS_HOST: ${{ secrets.AWS_REDIS_HOST }}
-          REDIS_PORT: ${{ secrets.AWS_REDIS_PORT }}
-          MONGO_URI: ${{ secrets.AWS_MONGO_URI }}
-          CORS_ALLOWED_ORIGINS: ${{ secrets.AWS_CORS_ALLOWED_ORIGINS }}
-          JWT_SECRET: ${{ secrets.AWS_JWT_SECRET }}
-          JWT_EXPIRATION: ${{ secrets.AWS_JWT_EXPIRATION }}
-          JWT_REFRESH_EXPIRATION: ${{ secrets.AWS_JWT_REFRESH_EXPIRATION }}
-          AES_SECRET_KEY: ${{ secrets.AWS_AES_SECRET_KEY }}
-          AGENT_SERVICE_URL: ${{ secrets.AWS_AGENT_SERVICE_URL }}
-          AGENT_INTERNAL_TOKEN: ${{ secrets.AWS_AGENT_INTERNAL_TOKEN }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          OAUTH2_REDIRECT_URI: ${{ secrets.AWS_OAUTH2_REDIRECT_URI }}
-          NOTION_CLIENT_ID: ${{ secrets.NOTION_CLIENT_ID }}
-          NOTION_CLIENT_SECRET: ${{ secrets.NOTION_CLIENT_SECRET }}
-          NOTION_AUTH_URL: ${{ secrets.NOTION_AUTH_URL }}
-          NOTION_TOKEN_URL: ${{ secrets.NOTION_TOKEN_URL }}
-          NOTION_REDIRECT_URI: ${{ secrets.AWS_NOTION_REDIRECT_URI }}
-          NOTION_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_NOTION_FRONTEND_REDIRECT_URI }}
-          GITHUB_APP_CLIENT_ID: ${{ secrets.GH_APP_CLIENT_ID }}
-          GITHUB_APP_CLIENT_SECRET: ${{ secrets.GH_APP_CLIENT_SECRET }}
-          GITHUB_APP_TOKEN_URL: ${{ secrets.GH_APP_TOKEN_URL }}
-          GITHUB_APP_REDIRECT_URI: ${{ secrets.AWS_GH_APP_REDIRECT_URI }}
-          GITHUB_APP_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_GH_APP_FRONTEND_REDIRECT_URI }}
-          GITHUB_APP_WEBHOOK_SECRET: ${{ secrets.GH_APP_WEBHOOK_SECRET }}
-          SLACK_CLIENT_ID: ${{ secrets.SLACK_CLIENT_ID }}
-          SLACK_CLIENT_SECRET: ${{ secrets.SLACK_CLIENT_SECRET }}
-          SLACK_REDIRECT_URI: ${{ secrets.AWS_SLACK_REDIRECT_URI }}
-          SLACK_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_SLACK_FRONTEND_REDIRECT_URI }}
-          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
-          DISCORD_CLIENT_SECRET: ${{ secrets.DISCORD_CLIENT_SECRET }}
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          DISCORD_REDIRECT_URI: ${{ secrets.AWS_DISCORD_REDIRECT_URI }}
-          DISCORD_FRONTEND_REDIRECT_URI: ${{ secrets.AWS_DISCORD_FRONTEND_REDIRECT_URI }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
+          docker build -f Dockerfile.ci --build-arg JAVA_MAJOR="$BUILD_RUNTIME" \
+            -t "$IMAGE_NAME:$IMAGE_TAG" .
 
-          docker network inspect "$DOCKER_NETWORK" >/dev/null 2>&1 \
-            || docker network create --subnet "$DOCKER_NETWORK_SUBNET" "$DOCKER_NETWORK"
-
-          docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-
-          docker run -d \
-            --name "$CONTAINER_NAME" \
-            --restart unless-stopped \
-            -p "$BACKEND_HOST_PORT:$BACKEND_PORT" \
-            --network "$DOCKER_NETWORK" \
-            --ip "$BACKEND_IP" \
-            -e SPRING_PROFILES_ACTIVE="$SPRING_PROFILES_ACTIVE" \
-            -e DB_URL="$RDS_DB_URL" \
-            -e DB_USERNAME="$RDS_DB_USERNAME" \
-            -e DB_PASSWORD="$RDS_DB_PASSWORD" \
-            -e DB_POOL_MAX_SIZE="10" \
-            -e DB_POOL_MIN_IDLE="2" \
-            -e REDIS_HOST="$REDIS_HOST" \
-            -e REDIS_PORT="$REDIS_PORT" \
-            -e MONGO_URI="$MONGO_URI" \
-            -e CORS_ALLOWED_ORIGINS="$CORS_ALLOWED_ORIGINS" \
-            -e JWT_SECRET="$JWT_SECRET" \
-            -e JWT_EXPIRATION="$JWT_EXPIRATION" \
-            -e JWT_REFRESH_EXPIRATION="$JWT_REFRESH_EXPIRATION" \
-            -e AES_SECRET_KEY="$AES_SECRET_KEY" \
-            -e AGENT_SERVICE_URL="$AGENT_SERVICE_URL" \
-            -e AGENT_INTERNAL_TOKEN="$AGENT_INTERNAL_TOKEN" \
-            -e GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
-            -e GOOGLE_CLIENT_SECRET="$GOOGLE_CLIENT_SECRET" \
-            -e OAUTH2_REDIRECT_URI="$OAUTH2_REDIRECT_URI" \
-            -e NOTION_CLIENT_ID="$NOTION_CLIENT_ID" \
-            -e NOTION_CLIENT_SECRET="$NOTION_CLIENT_SECRET" \
-            -e NOTION_AUTH_URL="$NOTION_AUTH_URL" \
-            -e NOTION_TOKEN_URL="$NOTION_TOKEN_URL" \
-            -e NOTION_REDIRECT_URI="$NOTION_REDIRECT_URI" \
-            -e NOTION_FRONTEND_REDIRECT_URI="$NOTION_FRONTEND_REDIRECT_URI" \
-            -e GITHUB_APP_CLIENT_ID="$GITHUB_APP_CLIENT_ID" \
-            -e GITHUB_APP_CLIENT_SECRET="$GITHUB_APP_CLIENT_SECRET" \
-            -e GITHUB_APP_TOKEN_URL="$GITHUB_APP_TOKEN_URL" \
-            -e GITHUB_APP_REDIRECT_URI="$GITHUB_APP_REDIRECT_URI" \
-            -e GITHUB_APP_FRONTEND_REDIRECT_URI="$GITHUB_APP_FRONTEND_REDIRECT_URI" \
-            -e GITHUB_APP_WEBHOOK_SECRET="$GITHUB_APP_WEBHOOK_SECRET" \
-            -e SLACK_CLIENT_ID="$SLACK_CLIENT_ID" \
-            -e SLACK_CLIENT_SECRET="$SLACK_CLIENT_SECRET" \
-            -e SLACK_REDIRECT_URI="$SLACK_REDIRECT_URI" \
-            -e SLACK_FRONTEND_REDIRECT_URI="$SLACK_FRONTEND_REDIRECT_URI" \
-            -e DISCORD_CLIENT_ID="$DISCORD_CLIENT_ID" \
-            -e DISCORD_CLIENT_SECRET="$DISCORD_CLIENT_SECRET" \
-            -e DISCORD_BOT_TOKEN="$DISCORD_BOT_TOKEN" \
-            -e DISCORD_REDIRECT_URI="$DISCORD_REDIRECT_URI" \
-            -e DISCORD_FRONTEND_REDIRECT_URI="$DISCORD_FRONTEND_REDIRECT_URI" \
-            "$IMAGE_NAME:latest"
-
-      - name: Health check
+      - name: Package verified Main image
+        id: package
+        env:
+          IMAGE_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
+          umask 077
+          directory="$(mktemp -d "$RUNNER_TEMP/ieum-backend-main-image.XXXXXX")"
+          python3 scripts/bluegreen/main_image.py package \
+            --file "$directory/image.tar" --image "$IMAGE_NAME:$IMAGE_TAG"
+          printf 'directory=%s\n' "$directory" >> "$GITHUB_OUTPUT"
 
-          check_http() {
-            local url="$1"
-            local status
-            status="$(curl -sS -o /dev/null -w '%{http_code}' "$url" || true)"
-            [[ "$status" =~ ^[234][0-9][0-9]$ ]]
-          }
+      - name: Verify packaged image on GitHub runner
+        env:
+          IMAGE_DIRECTORY: ${{ steps.package.outputs.directory }}
+          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_ID: ${{ steps.package.outputs.image_id }}
+          ARCHIVE_SHA256: ${{ steps.package.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          python3 scripts/bluegreen/main_image.py load \
+            --file "$IMAGE_DIRECTORY/image.tar" --image "$IMAGE_NAME:$IMAGE_TAG" \
+            --image-id "$IMAGE_ID" --sha256 "$ARCHIVE_SHA256"
 
-          for i in $(seq 1 30); do
-            if check_http "http://$BACKEND_IP:$BACKEND_PORT/actuator/health/readiness" \
-              && check_http "http://127.0.0.1:$BACKEND_HOST_PORT/actuator/health/readiness"; then
-              exit 0
-            fi
+      - name: Upload image archive only
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-main-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.package.outputs.directory }}/image.tar
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
 
-            sleep 2
+      - name: Record immutable build identity
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          IMAGE_ID: ${{ steps.package.outputs.image_id }}
+          ARCHIVE_SHA256: ${{ steps.package.outputs.archive_sha256 }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          python3 - <<'PYSUMMARY'
+          import os
+          import re
+          values = {key: os.environ[key] for key in ('SOURCE_SHA', 'IMAGE_ID', 'ARCHIVE_SHA256', 'ARTIFACT_ID')}
+          for key, pattern in [('SOURCE_SHA', r'[a-f0-9]{40}'), ('IMAGE_ID', r'sha256:[a-f0-9]{64}'),
+                               ('ARCHIVE_SHA256', r'[a-f0-9]{64}'), ('ARTIFACT_ID', r'[1-9][0-9]*')]:
+              if not re.fullmatch(pattern, values[key]):
+                  raise SystemExit('Invalid immutable build metadata')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write('## Verified Main build\n\n| Field | Value |\n|---|---|\n')
+              for key, value in values.items():
+                  output.write('| ' + key + ' | `' + value + '` |\n')
+          PYSUMMARY
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main' && vars.MAIN_DEPLOY_ENABLED == 'true' && (github.event_name == 'push' || inputs.operation == 'deploy')
+    timeout-minutes: 360
+    name: Deploy Main to isolated self-hosted blue-green controller
+    runs-on:
+      group: ieum_main_server
+      labels: [self-hosted, linux, x64, ieum-backend, main, deploy]
+    env:
+      IEUM_DEPLOY_ENVIRONMENT: main
+    steps:
+      - name: Establish deployment job budget
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PYBUDGET'
+          from datetime import datetime, timezone
+          import json
+          import os
+          import time
+          import urllib.request
+
+          try:
+              # A workflow attempt starts before this job, so queue/setup time reduces the budget too.
+              run_id, attempt = os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT']
+              endpoint = (os.environ['GITHUB_API_URL'].rstrip('/') + '/repos/' + os.environ['GITHUB_REPOSITORY']
+                  + '/actions/runs/' + run_id + '/attempts/' + attempt)
+              request = urllib.request.Request(endpoint, headers={
+                  'Authorization': 'Bearer ' + os.environ['GITHUB_TOKEN'],
+                  'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'})
+              with urllib.request.urlopen(request, timeout=15) as response:
+                  raw = response.read(1024 * 1024 + 1)
+              if len(raw) > 1024 * 1024:
+                  raise ValueError()
+              data = json.loads(raw)
+              if str(data['id']) != run_id or str(data['run_attempt']) != attempt:
+                  raise ValueError()
+              started = datetime.fromisoformat(data['run_started_at'].replace('Z', '+00:00'))
+              now = time.time()
+              if started.tzinfo is None or started.timestamp() > now:
+                  raise ValueError()
+              # Leave two minutes before the runner's 360-minute job timeout.
+              deadline = int(started.timestamp()) + 360 * 60 - 120
+              if deadline - now < 9000:
+                  raise ValueError()
+              with open(os.environ['GITHUB_ENV'], 'a') as output:
+                  output.write('IEUM_BLUEGREEN_JOB_DEADLINE_EPOCH=' + str(deadline) + '\n')
+          except Exception:
+              # Never echo the request, token, response or environment.
+              raise SystemExit('Unable to establish sufficient deployment job time; retry in a fresh job') from None
+          PYBUDGET
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify installed Main controller
+        env:
+          CONTROLLER_SHA: ${{ vars.MAIN_BLUEGREEN_CONTROLLER_SHA256 }}
+          HELPER_SHA: ${{ vars.MAIN_BLUEGREEN_HELPER_SHA256 }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$CONTROLLER_SHA" =~ ^[a-f0-9]{64}$ || ! "$HELPER_SHA" =~ ^[a-f0-9]{64}$ ]]; then
+            echo "::error::Configure approved Main controller/helper SHA-256 variables"
+            exit 1
+          fi
+          printf '%s  %s\n' \
+            "$CONTROLLER_SHA" /home/kwung/deploy/bluegreen-main/bluegreen.py \
+            "$HELPER_SHA" /usr/local/sbin/ieum-main-bluegreen-nginx | sha256sum -c - >/dev/null 2>&1
+
+      - name: Create private image download directory
+        id: image_directory
+        run: |
+          set -euo pipefail
+          umask 077
+          directory="$(mktemp -d "$RUNNER_TEMP/ieum-backend-main-download.XXXXXX")"
+          printf 'directory=%s\n' "$directory" >> "$GITHUB_OUTPUT"
+
+      - name: Download exact build artifact
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          path: ${{ steps.image_directory.outputs.directory }}
+          merge-multiple: true
+
+      - name: Verify archive and loaded image identity
+        id: loaded_image
+        env:
+          IMAGE_DIRECTORY: ${{ steps.image_directory.outputs.directory }}
+          IMAGE_NAME: ${{ secrets.MAIN_COM_IMAGE_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_ID: ${{ needs.build.outputs.image_id }}
+          ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          python3 scripts/bluegreen/main_image.py load \
+            --file "$IMAGE_DIRECTORY/image.tar" --image "$IMAGE_NAME:$IMAGE_TAG" \
+            --image-id "$IMAGE_ID" --sha256 "$ARCHIVE_SHA256"
+
+      - name: Deploy with Main prefixed Secrets
+        env:
+          IMAGE_ID: ${{ steps.loaded_image.outputs.image_id }}
+          MAIN_COM_AES_SECRET_KEY: ${{ secrets.MAIN_COM_AES_SECRET_KEY }}
+          MAIN_COM_AGENT_INTERNAL_TOKEN: ${{ secrets.MAIN_COM_AGENT_INTERNAL_TOKEN }}
+          MAIN_COM_AGENT_TIMEOUT_SECONDS: ${{ secrets.MAIN_COM_AGENT_TIMEOUT_SECONDS }}
+          MAIN_COM_APP_BASE_URL: ${{ secrets.MAIN_COM_APP_BASE_URL }}
+          MAIN_COM_BETA_ALLOWED_MODELS: ${{ secrets.MAIN_COM_BETA_ALLOWED_MODELS }}
+          MAIN_COM_BETA_DAILY_CALL_QUOTA: ${{ secrets.MAIN_COM_BETA_DAILY_CALL_QUOTA }}
+          MAIN_COM_BETA_PLATFORM_KEY_ENABLED: ${{ secrets.MAIN_COM_BETA_PLATFORM_KEY_ENABLED }}
+          MAIN_COM_BETA_TOKEN_BUDGET: ${{ secrets.MAIN_COM_BETA_TOKEN_BUDGET }}
+          MAIN_COM_CORS_ALLOWED_ORIGINS: ${{ secrets.MAIN_COM_CORS_ALLOWED_ORIGINS }}
+          MAIN_COM_DB_PASSWORD: ${{ secrets.MAIN_COM_DB_PASSWORD }}
+          MAIN_COM_DB_POOL_CONNECTION_TIMEOUT_MS: ${{ secrets.MAIN_COM_DB_POOL_CONNECTION_TIMEOUT_MS }}
+          MAIN_COM_DB_POOL_IDLE_TIMEOUT_MS: ${{ secrets.MAIN_COM_DB_POOL_IDLE_TIMEOUT_MS }}
+          MAIN_COM_DB_POOL_MAX_LIFETIME_MS: ${{ secrets.MAIN_COM_DB_POOL_MAX_LIFETIME_MS }}
+          MAIN_COM_DB_POOL_MAX_SIZE: ${{ secrets.MAIN_COM_DB_POOL_MAX_SIZE }}
+          MAIN_COM_DB_POOL_MIN_IDLE: ${{ secrets.MAIN_COM_DB_POOL_MIN_IDLE }}
+          MAIN_COM_DB_URL: ${{ secrets.MAIN_COM_DB_URL }}
+          MAIN_COM_DB_USERNAME: ${{ secrets.MAIN_COM_DB_USERNAME }}
+          MAIN_COM_DISCORD_BOT_TOKEN: ${{ secrets.MAIN_COM_DISCORD_BOT_TOKEN }}
+          MAIN_COM_DISCORD_CLIENT_ID: ${{ secrets.MAIN_COM_DISCORD_CLIENT_ID }}
+          MAIN_COM_DISCORD_CLIENT_SECRET: ${{ secrets.MAIN_COM_DISCORD_CLIENT_SECRET }}
+          MAIN_COM_DISCORD_FRONTEND_REDIRECT_URI: ${{ secrets.MAIN_COM_DISCORD_FRONTEND_REDIRECT_URI }}
+          MAIN_COM_DISCORD_OPS_WEBHOOK_URL: ${{ secrets.MAIN_COM_DISCORD_OPS_WEBHOOK_URL }}
+          MAIN_COM_DISCORD_REDIRECT_URI: ${{ secrets.MAIN_COM_DISCORD_REDIRECT_URI }}
+          MAIN_COM_FORMS_TRIGGER_POLL_INTERVAL: ${{ secrets.MAIN_COM_FORMS_TRIGGER_POLL_INTERVAL }}
+          MAIN_COM_GH_APP_CLIENT_ID: ${{ secrets.MAIN_COM_GH_APP_CLIENT_ID }}
+          MAIN_COM_GH_APP_CLIENT_SECRET: ${{ secrets.MAIN_COM_GH_APP_CLIENT_SECRET }}
+          MAIN_COM_GH_APP_FRONTEND_REDIRECT_URI: ${{ secrets.MAIN_COM_GH_APP_FRONTEND_REDIRECT_URI }}
+          MAIN_COM_GH_APP_REDIRECT_URI: ${{ secrets.MAIN_COM_GH_APP_REDIRECT_URI }}
+          MAIN_COM_GH_APP_TOKEN_URL: ${{ secrets.MAIN_COM_GH_APP_TOKEN_URL }}
+          MAIN_COM_GH_APP_WEBHOOK_SECRET: ${{ secrets.MAIN_COM_GH_APP_WEBHOOK_SECRET }}
+          MAIN_COM_GITHUB_APP_CLIENT_ID: ${{ secrets.MAIN_COM_GITHUB_APP_CLIENT_ID }}
+          MAIN_COM_GITHUB_APP_CLIENT_SECRET: ${{ secrets.MAIN_COM_GITHUB_APP_CLIENT_SECRET }}
+          MAIN_COM_GITHUB_APP_FRONTEND_REDIRECT_URI: ${{ secrets.MAIN_COM_GITHUB_APP_FRONTEND_REDIRECT_URI }}
+          MAIN_COM_GITHUB_APP_PRIVATE_KEY: ${{ secrets.MAIN_COM_GITHUB_APP_PRIVATE_KEY }}
+          MAIN_COM_GITHUB_APP_REDIRECT_URI: ${{ secrets.MAIN_COM_GITHUB_APP_REDIRECT_URI }}
+          MAIN_COM_GITHUB_APP_SLUG: ${{ secrets.MAIN_COM_GITHUB_APP_SLUG }}
+          MAIN_COM_GITHUB_APP_TOKEN_URL: ${{ secrets.MAIN_COM_GITHUB_APP_TOKEN_URL }}
+          MAIN_COM_GITHUB_APP_WEBHOOK_SECRET: ${{ secrets.MAIN_COM_GITHUB_APP_WEBHOOK_SECRET }}
+          MAIN_COM_GMAIL_TRIGGER_POLL_INTERVAL: ${{ secrets.MAIN_COM_GMAIL_TRIGGER_POLL_INTERVAL }}
+          MAIN_COM_GOOGLE_CLIENT_ID: ${{ secrets.MAIN_COM_GOOGLE_CLIENT_ID }}
+          MAIN_COM_GOOGLE_CLIENT_SECRET: ${{ secrets.MAIN_COM_GOOGLE_CLIENT_SECRET }}
+          MAIN_COM_GOOGLE_OAUTH_INCREMENTAL_AUTH: ${{ secrets.MAIN_COM_GOOGLE_OAUTH_INCREMENTAL_AUTH }}
+          MAIN_COM_GOOGLE_REDIRECT_URI: ${{ secrets.MAIN_COM_GOOGLE_REDIRECT_URI }}
+          MAIN_COM_JWT_EXPIRATION: ${{ secrets.MAIN_COM_JWT_EXPIRATION }}
+          MAIN_COM_JWT_REFRESH_EXPIRATION: ${{ secrets.MAIN_COM_JWT_REFRESH_EXPIRATION }}
+          MAIN_COM_JWT_SECRET: ${{ secrets.MAIN_COM_JWT_SECRET }}
+          MAIN_COM_MAIL_HOST: ${{ secrets.MAIN_COM_MAIL_HOST }}
+          MAIN_COM_MAIL_PASSWORD: ${{ secrets.MAIN_COM_MAIL_PASSWORD }}
+          MAIN_COM_MAIL_PORT: ${{ secrets.MAIN_COM_MAIL_PORT }}
+          MAIN_COM_MAIL_USERNAME: ${{ secrets.MAIN_COM_MAIL_USERNAME }}
+          MAIN_COM_MONGO_URI: ${{ secrets.MAIN_COM_MONGO_URI }}
+          MAIN_COM_MVC_ASYNC_TIMEOUT_MS: ${{ secrets.MAIN_COM_MVC_ASYNC_TIMEOUT_MS }}
+          MAIN_COM_NOTION_AUTH_URL: ${{ secrets.MAIN_COM_NOTION_AUTH_URL }}
+          MAIN_COM_NOTION_CLIENT_ID: ${{ secrets.MAIN_COM_NOTION_CLIENT_ID }}
+          MAIN_COM_NOTION_CLIENT_SECRET: ${{ secrets.MAIN_COM_NOTION_CLIENT_SECRET }}
+          MAIN_COM_NOTION_FRONTEND_REDIRECT_URI: ${{ secrets.MAIN_COM_NOTION_FRONTEND_REDIRECT_URI }}
+          MAIN_COM_NOTION_REDIRECT_URI: ${{ secrets.MAIN_COM_NOTION_REDIRECT_URI }}
+          MAIN_COM_NOTION_TOKEN_URL: ${{ secrets.MAIN_COM_NOTION_TOKEN_URL }}
+          MAIN_COM_OAUTH2_REDIRECT_URI: ${{ secrets.MAIN_COM_OAUTH2_REDIRECT_URI }}
+          MAIN_COM_QUARTZ_THREAD_COUNT: ${{ secrets.MAIN_COM_QUARTZ_THREAD_COUNT }}
+          MAIN_COM_QUARTZ_THREAD_NAME_PREFIX: ${{ secrets.MAIN_COM_QUARTZ_THREAD_NAME_PREFIX }}
+          MAIN_COM_RDS_DB_PASSWORD: ${{ secrets.MAIN_COM_RDS_DB_PASSWORD }}
+          MAIN_COM_RDS_DB_URL: ${{ secrets.MAIN_COM_RDS_DB_URL }}
+          MAIN_COM_RDS_DB_USERNAME: ${{ secrets.MAIN_COM_RDS_DB_USERNAME }}
+          MAIN_COM_REDIS_HOST: ${{ secrets.MAIN_COM_REDIS_HOST }}
+          MAIN_COM_REDIS_PORT: ${{ secrets.MAIN_COM_REDIS_PORT }}
+          MAIN_COM_SLACK_CLIENT_ID: ${{ secrets.MAIN_COM_SLACK_CLIENT_ID }}
+          MAIN_COM_SLACK_CLIENT_SECRET: ${{ secrets.MAIN_COM_SLACK_CLIENT_SECRET }}
+          MAIN_COM_SLACK_FRONTEND_REDIRECT_URI: ${{ secrets.MAIN_COM_SLACK_FRONTEND_REDIRECT_URI }}
+          MAIN_COM_SLACK_REDIRECT_URI: ${{ secrets.MAIN_COM_SLACK_REDIRECT_URI }}
+          MAIN_COM_SPRING_PROFILES_ACTIVE: ${{ secrets.MAIN_COM_SPRING_PROFILES_ACTIVE }}
+          MAIN_COM_WORKFLOW_EXECUTION_PARALLELISM: ${{ secrets.MAIN_COM_WORKFLOW_EXECUTION_PARALLELISM }}
+          MAIN_COM_WORKFLOW_EXECUTOR_CORE_POOL_SIZE: ${{ secrets.MAIN_COM_WORKFLOW_EXECUTOR_CORE_POOL_SIZE }}
+          MAIN_COM_WORKFLOW_EXECUTOR_MAX_POOL_SIZE: ${{ secrets.MAIN_COM_WORKFLOW_EXECUTOR_MAX_POOL_SIZE }}
+          MAIN_COM_WORKFLOW_EXECUTOR_QUEUE_CAPACITY: ${{ secrets.MAIN_COM_WORKFLOW_EXECUTOR_QUEUE_CAPACITY }}
+        run: |
+          set +x
+          set -euo pipefail
+          umask 077
+          candidate_env="$(mktemp "$RUNNER_TEMP/ieum-backend-main-env.XXXXXX")"
+          trap 'rm -f -- "$candidate_env"' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          python3 scripts/bluegreen/backend_env.py "$candidate_env" --environment main
+          for secret_name in ${!MAIN_COM_@}; do
+            unset "$secret_name"
           done
+          unset IEUM_BACKEND_SECRETS_JSON
+          python3 /home/kwung/deploy/bluegreen-main/bluegreen.py --lock-timeout 14400 deploy \
+            --job-deadline-epoch "$IEUM_BLUEGREEN_JOB_DEADLINE_EPOCH" \
+            --service backend --image "$IMAGE_ID" \
+            --env-file "$candidate_env" --replace-env
 
-          docker logs --tail 200 "$CONTAINER_NAME"
-          exit 1
+      - name: Remove downloaded image archive
+        if: always()
+        env:
+          IMAGE_DIRECTORY: ${{ steps.image_directory.outputs.directory }}
+        run: |
+          python3 - <<'PYCLEAN'
+          import os
+          from pathlib import Path
+          import shutil
+          value = os.environ.get('IMAGE_DIRECTORY', '')
+          if value:
+              directory = Path(value)
+              if (directory.parent != Path(os.environ['RUNNER_TEMP'])
+                      or not directory.name.startswith('ieum-backend-main-download.')
+                      or directory.is_symlink()):
+                  raise SystemExit('Invalid Main image cleanup directory')
+              shutil.rmtree(directory)
+          PYCLEAN
+
+  stage_bootstrap:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.operation == 'stage-bootstrap' && vars.MAIN_BOOTSTRAP_ENABLED == 'true'
+    timeout-minutes: 30
+    name: Stage Main bootstrap inputs without starting containers
+    runs-on:
+      group: ieum_main_server
+      labels: [self-hosted, linux, x64, ieum-backend, main, deploy]
+    env:
+      IEUM_DEPLOY_ENVIRONMENT: main
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify installed Main controller
+        env:
+          CONTROLLER_SHA: ${{ vars.MAIN_BLUEGREEN_CONTROLLER_SHA256 }}
+          HELPER_SHA: ${{ vars.MAIN_BLUEGREEN_HELPER_SHA256 }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$CONTROLLER_SHA" =~ ^[a-f0-9]{64}$ || ! "$HELPER_SHA" =~ ^[a-f0-9]{64}$ ]]; then
+            echo "::error::Configure approved Main controller/helper SHA-256 variables"
+            exit 1
+          fi
+          printf '%s  %s\n' \
+            "$CONTROLLER_SHA" /home/kwung/deploy/bluegreen-main/bluegreen.py \
+            "$HELPER_SHA" /usr/local/sbin/ieum-main-bluegreen-nginx | sha256sum -c - >/dev/null 2>&1
+
+      - name: Create private image download directory
+        id: image_directory
+        run: |
+          set -euo pipefail
+          umask 077
+          directory="$(mktemp -d "$RUNNER_TEMP/ieum-backend-main-download.XXXXXX")"
+          printf 'directory=%s\n' "$directory" >> "$GITHUB_OUTPUT"
+
+      - name: Download exact build artifact
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          path: ${{ steps.image_directory.outputs.directory }}
+          merge-multiple: true
+
+      - name: Verify archive and loaded image identity
+        id: loaded_image
+        env:
+          IMAGE_DIRECTORY: ${{ steps.image_directory.outputs.directory }}
+          IMAGE_NAME: ${{ secrets.MAIN_COM_IMAGE_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_ID: ${{ needs.build.outputs.image_id }}
+          ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          python3 scripts/bluegreen/main_image.py load \
+            --file "$IMAGE_DIRECTORY/image.tar" --image "$IMAGE_NAME:$IMAGE_TAG" \
+            --image-id "$IMAGE_ID" --sha256 "$ARCHIVE_SHA256"
+
+      - name: Stage Main bootstrap settings
+        env:
+          IMAGE_ID: ${{ steps.loaded_image.outputs.image_id }}
+          MAIN_COM_AES_SECRET_KEY: ${{ secrets.MAIN_COM_AES_SECRET_KEY }}
+          MAIN_COM_AGENT_INTERNAL_TOKEN: ${{ secrets.MAIN_COM_AGENT_INTERNAL_TOKEN }}
+          MAIN_COM_AGENT_TIMEOUT_SECONDS: ${{ secrets.MAIN_COM_AGENT_TIMEOUT_SECONDS }}
+          MAIN_COM_APP_BASE_URL: ${{ secrets.MAIN_COM_APP_BASE_URL }}
+          MAIN_COM_BETA_ALLOWED_MODELS: ${{ secrets.MAIN_COM_BETA_ALLOWED_MODELS }}
+          MAIN_COM_BETA_DAILY_CALL_QUOTA: ${{ secrets.MAIN_COM_BETA_DAILY_CALL_QUOTA }}
+          MAIN_COM_BETA_PLATFORM_KEY_ENABLED: ${{ secrets.MAIN_COM_BETA_PLATFORM_KEY_ENABLED }}
+          MAIN_COM_BETA_TOKEN_BUDGET: ${{ secrets.MAIN_COM_BETA_TOKEN_BUDGET }}
+          MAIN_COM_CORS_ALLOWED_ORIGINS: ${{ secrets.MAIN_COM_CORS_ALLOWED_ORIGINS }}
+          MAIN_COM_DB_PASSWORD: ${{ secrets.MAIN_COM_DB_PASSWORD }}
+          MAIN_COM_DB_POOL_CONNECTION_TIMEOUT_MS: ${{ secrets.MAIN_COM_DB_POOL_CONNECTION_TIMEOUT_MS }}
+          MAIN_COM_DB_POOL_IDLE_TIMEOUT_MS: ${{ secrets.MAIN_COM_DB_POOL_IDLE_TIMEOUT_MS }}
+          MAIN_COM_DB_POOL_MAX_LIFETIME_MS: ${{ secrets.MAIN_COM_DB_POOL_MAX_LIFETIME_MS }}
+          MAIN_COM_DB_POOL_MAX_SIZE: ${{ secrets.MAIN_COM_DB_POOL_MAX_SIZE }}
+          MAIN_COM_DB_POOL_MIN_IDLE: ${{ secrets.MAIN_COM_DB_POOL_MIN_IDLE }}
+          MAIN_COM_DB_URL: ${{ secrets.MAIN_COM_DB_URL }}
+          MAIN_COM_DB_USERNAME: ${{ secrets.MAIN_COM_DB_USERNAME }}
+          MAIN_COM_DISCORD_BOT_TOKEN: ${{ secrets.MAIN_COM_DISCORD_BOT_TOKEN }}
+          MAIN_COM_DISCORD_CLIENT_ID: ${{ secrets.MAIN_COM_DISCORD_CLIENT_ID }}
+          MAIN_COM_DISCORD_CLIENT_SECRET: ${{ secrets.MAIN_COM_DISCORD_CLIENT_SECRET }}
+          MAIN_COM_DISCORD_FRONTEND_REDIRECT_URI: ${{ secrets.MAIN_COM_DISCORD_FRONTEND_REDIRECT_URI }}
+          MAIN_COM_DISCORD_OPS_WEBHOOK_URL: ${{ secrets.MAIN_COM_DISCORD_OPS_WEBHOOK_URL }}
+          MAIN_COM_DISCORD_REDIRECT_URI: ${{ secrets.MAIN_COM_DISCORD_REDIRECT_URI }}
+          MAIN_COM_FORMS_TRIGGER_POLL_INTERVAL: ${{ secrets.MAIN_COM_FORMS_TRIGGER_POLL_INTERVAL }}
+          MAIN_COM_GH_APP_CLIENT_ID: ${{ secrets.MAIN_COM_GH_APP_CLIENT_ID }}
+          MAIN_COM_GH_APP_CLIENT_SECRET: ${{ secrets.MAIN_COM_GH_APP_CLIENT_SECRET }}
+          MAIN_COM_GH_APP_FRONTEND_REDIRECT_URI: ${{ secrets.MAIN_COM_GH_APP_FRONTEND_REDIRECT_URI }}
+          MAIN_COM_GH_APP_REDIRECT_URI: ${{ secrets.MAIN_COM_GH_APP_REDIRECT_URI }}
+          MAIN_COM_GH_APP_TOKEN_URL: ${{ secrets.MAIN_COM_GH_APP_TOKEN_URL }}
+          MAIN_COM_GH_APP_WEBHOOK_SECRET: ${{ secrets.MAIN_COM_GH_APP_WEBHOOK_SECRET }}
+          MAIN_COM_GITHUB_APP_CLIENT_ID: ${{ secrets.MAIN_COM_GITHUB_APP_CLIENT_ID }}
+          MAIN_COM_GITHUB_APP_CLIENT_SECRET: ${{ secrets.MAIN_COM_GITHUB_APP_CLIENT_SECRET }}
+          MAIN_COM_GITHUB_APP_FRONTEND_REDIRECT_URI: ${{ secrets.MAIN_COM_GITHUB_APP_FRONTEND_REDIRECT_URI }}
+          MAIN_COM_GITHUB_APP_PRIVATE_KEY: ${{ secrets.MAIN_COM_GITHUB_APP_PRIVATE_KEY }}
+          MAIN_COM_GITHUB_APP_REDIRECT_URI: ${{ secrets.MAIN_COM_GITHUB_APP_REDIRECT_URI }}
+          MAIN_COM_GITHUB_APP_SLUG: ${{ secrets.MAIN_COM_GITHUB_APP_SLUG }}
+          MAIN_COM_GITHUB_APP_TOKEN_URL: ${{ secrets.MAIN_COM_GITHUB_APP_TOKEN_URL }}
+          MAIN_COM_GITHUB_APP_WEBHOOK_SECRET: ${{ secrets.MAIN_COM_GITHUB_APP_WEBHOOK_SECRET }}
+          MAIN_COM_GMAIL_TRIGGER_POLL_INTERVAL: ${{ secrets.MAIN_COM_GMAIL_TRIGGER_POLL_INTERVAL }}
+          MAIN_COM_GOOGLE_CLIENT_ID: ${{ secrets.MAIN_COM_GOOGLE_CLIENT_ID }}
+          MAIN_COM_GOOGLE_CLIENT_SECRET: ${{ secrets.MAIN_COM_GOOGLE_CLIENT_SECRET }}
+          MAIN_COM_GOOGLE_OAUTH_INCREMENTAL_AUTH: ${{ secrets.MAIN_COM_GOOGLE_OAUTH_INCREMENTAL_AUTH }}
+          MAIN_COM_GOOGLE_REDIRECT_URI: ${{ secrets.MAIN_COM_GOOGLE_REDIRECT_URI }}
+          MAIN_COM_JWT_EXPIRATION: ${{ secrets.MAIN_COM_JWT_EXPIRATION }}
+          MAIN_COM_JWT_REFRESH_EXPIRATION: ${{ secrets.MAIN_COM_JWT_REFRESH_EXPIRATION }}
+          MAIN_COM_JWT_SECRET: ${{ secrets.MAIN_COM_JWT_SECRET }}
+          MAIN_COM_MAIL_HOST: ${{ secrets.MAIN_COM_MAIL_HOST }}
+          MAIN_COM_MAIL_PASSWORD: ${{ secrets.MAIN_COM_MAIL_PASSWORD }}
+          MAIN_COM_MAIL_PORT: ${{ secrets.MAIN_COM_MAIL_PORT }}
+          MAIN_COM_MAIL_USERNAME: ${{ secrets.MAIN_COM_MAIL_USERNAME }}
+          MAIN_COM_MONGO_URI: ${{ secrets.MAIN_COM_MONGO_URI }}
+          MAIN_COM_MVC_ASYNC_TIMEOUT_MS: ${{ secrets.MAIN_COM_MVC_ASYNC_TIMEOUT_MS }}
+          MAIN_COM_NOTION_AUTH_URL: ${{ secrets.MAIN_COM_NOTION_AUTH_URL }}
+          MAIN_COM_NOTION_CLIENT_ID: ${{ secrets.MAIN_COM_NOTION_CLIENT_ID }}
+          MAIN_COM_NOTION_CLIENT_SECRET: ${{ secrets.MAIN_COM_NOTION_CLIENT_SECRET }}
+          MAIN_COM_NOTION_FRONTEND_REDIRECT_URI: ${{ secrets.MAIN_COM_NOTION_FRONTEND_REDIRECT_URI }}
+          MAIN_COM_NOTION_REDIRECT_URI: ${{ secrets.MAIN_COM_NOTION_REDIRECT_URI }}
+          MAIN_COM_NOTION_TOKEN_URL: ${{ secrets.MAIN_COM_NOTION_TOKEN_URL }}
+          MAIN_COM_OAUTH2_REDIRECT_URI: ${{ secrets.MAIN_COM_OAUTH2_REDIRECT_URI }}
+          MAIN_COM_QUARTZ_THREAD_COUNT: ${{ secrets.MAIN_COM_QUARTZ_THREAD_COUNT }}
+          MAIN_COM_QUARTZ_THREAD_NAME_PREFIX: ${{ secrets.MAIN_COM_QUARTZ_THREAD_NAME_PREFIX }}
+          MAIN_COM_RDS_DB_PASSWORD: ${{ secrets.MAIN_COM_RDS_DB_PASSWORD }}
+          MAIN_COM_RDS_DB_URL: ${{ secrets.MAIN_COM_RDS_DB_URL }}
+          MAIN_COM_RDS_DB_USERNAME: ${{ secrets.MAIN_COM_RDS_DB_USERNAME }}
+          MAIN_COM_REDIS_HOST: ${{ secrets.MAIN_COM_REDIS_HOST }}
+          MAIN_COM_REDIS_PORT: ${{ secrets.MAIN_COM_REDIS_PORT }}
+          MAIN_COM_SLACK_CLIENT_ID: ${{ secrets.MAIN_COM_SLACK_CLIENT_ID }}
+          MAIN_COM_SLACK_CLIENT_SECRET: ${{ secrets.MAIN_COM_SLACK_CLIENT_SECRET }}
+          MAIN_COM_SLACK_FRONTEND_REDIRECT_URI: ${{ secrets.MAIN_COM_SLACK_FRONTEND_REDIRECT_URI }}
+          MAIN_COM_SLACK_REDIRECT_URI: ${{ secrets.MAIN_COM_SLACK_REDIRECT_URI }}
+          MAIN_COM_SPRING_PROFILES_ACTIVE: ${{ secrets.MAIN_COM_SPRING_PROFILES_ACTIVE }}
+          MAIN_COM_WORKFLOW_EXECUTION_PARALLELISM: ${{ secrets.MAIN_COM_WORKFLOW_EXECUTION_PARALLELISM }}
+          MAIN_COM_WORKFLOW_EXECUTOR_CORE_POOL_SIZE: ${{ secrets.MAIN_COM_WORKFLOW_EXECUTOR_CORE_POOL_SIZE }}
+          MAIN_COM_WORKFLOW_EXECUTOR_MAX_POOL_SIZE: ${{ secrets.MAIN_COM_WORKFLOW_EXECUTOR_MAX_POOL_SIZE }}
+          MAIN_COM_WORKFLOW_EXECUTOR_QUEUE_CAPACITY: ${{ secrets.MAIN_COM_WORKFLOW_EXECUTOR_QUEUE_CAPACITY }}
+        run: |
+          set +x
+          set -euo pipefail
+          umask 077
+          candidate_env="$(mktemp "$RUNNER_TEMP/ieum-backend-main-env.XXXXXX")"
+          trap 'rm -f -- "$candidate_env"' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          python3 scripts/bluegreen/backend_env.py "$candidate_env" --environment main
+          for secret_name in ${!MAIN_COM_@}; do
+            unset "$secret_name"
+          done
+          unset IEUM_BACKEND_SECRETS_JSON
+          python3 /home/kwung/deploy/bluegreen-main/bluegreen.py --lock-timeout 30 stage-bootstrap \
+            --service backend --image "$IMAGE_ID" \
+            --env-file "$candidate_env"
+
+      - name: Remove downloaded image archive
+        if: always()
+        env:
+          IMAGE_DIRECTORY: ${{ steps.image_directory.outputs.directory }}
+        run: |
+          python3 - <<'PYCLEAN'
+          import os
+          from pathlib import Path
+          import shutil
+          value = os.environ.get('IMAGE_DIRECTORY', '')
+          if value:
+              directory = Path(value)
+              if (directory.parent != Path(os.environ['RUNNER_TEMP'])
+                      or not directory.name.startswith('ieum-backend-main-download.')
+                      or directory.is_symlink()):
+                  raise SystemExit('Invalid Main image cleanup directory')
+              shutil.rmtree(directory)
+          PYCLEAN

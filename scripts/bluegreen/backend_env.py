@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a private deployment candidate from DEV_COM_ Actions secrets.
+"""Build a private DEV_COM_ or MAIN_COM_ deployment candidate from Actions secrets.
 
 This module never reads a server .env file, expands shell expressions, or prints
 configuration values. The controller owns the final per-color runtime snapshots.
@@ -17,6 +17,8 @@ import sys
 MAX_ENV_BYTES = 48 * 1024
 MAX_JSON_BYTES = 96 * 1024
 SECRET_PREFIX = 'DEV_COM_'
+ENVIRONMENT_PREFIXES = {'dev': SECRET_PREFIX, 'main': 'MAIN_COM_'}
+MAIN_BUILD_KEYS = ('JAVA_VERSION', 'IMAGE_NAME')
 SECRETS_VARIABLE = 'IEUM_BACKEND_SECRETS_JSON'
 FORBIDDEN_CHARACTERS = '\x00\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029'
 
@@ -46,6 +48,22 @@ ALIASES = {
     'GH_APP_FRONTEND_REDIRECT_URI': 'GITHUB_APP_FRONTEND_REDIRECT_URI',
     'GH_APP_WEBHOOK_SECRET': 'GITHUB_APP_WEBHOOK_SECRET',
 }
+# MAIN receives these individual step variables, not the repository Secrets JSON.
+# Keep optional application settings absent when GitHub supplies an empty value,
+# so the application's existing defaults still apply.
+MAIN_OPTIONAL_KEYS = (
+    'APP_BASE_URL', 'BETA_PLATFORM_KEY_ENABLED', 'BETA_DAILY_CALL_QUOTA',
+    'BETA_TOKEN_BUDGET', 'BETA_ALLOWED_MODELS', 'GITHUB_APP_PRIVATE_KEY', 'GITHUB_APP_SLUG',
+    'DISCORD_OPS_WEBHOOK_URL', 'GOOGLE_OAUTH_INCREMENTAL_AUTH', 'MVC_ASYNC_TIMEOUT_MS',
+    'DB_POOL_MAX_SIZE', 'DB_POOL_MIN_IDLE', 'DB_POOL_CONNECTION_TIMEOUT_MS',
+    'DB_POOL_MAX_LIFETIME_MS', 'DB_POOL_IDLE_TIMEOUT_MS', 'AGENT_TIMEOUT_SECONDS',
+    'QUARTZ_THREAD_COUNT', 'QUARTZ_THREAD_NAME_PREFIX', 'WORKFLOW_EXECUTOR_CORE_POOL_SIZE',
+    'WORKFLOW_EXECUTOR_MAX_POOL_SIZE', 'WORKFLOW_EXECUTOR_QUEUE_CAPACITY',
+    'WORKFLOW_EXECUTION_PARALLELISM', 'GMAIL_TRIGGER_POLL_INTERVAL', 'FORMS_TRIGGER_POLL_INTERVAL',
+)
+MAIN_SECRET_NAMES = tuple('MAIN_COM_' + key for key in sorted(
+    set(REQUIRED_KEYS) | set(OPTIONAL_KEYS) | set(ALIASES) |
+    set(MAIN_OPTIONAL_KEYS) | {'SPRING_PROFILES_ACTIVE'}))
 # Spring relaxed binding can ignore underscores. Reserve equivalent spellings
 # too, and reject higher-priority configuration / JVM launch escape hatches.
 RESERVED_KEYS = (
@@ -90,8 +108,19 @@ def invalid_json_constant(_value):
     raise BackendEnvironmentError('invalid_json')
 
 
-def build_environment(payload):
+def main_payload(environment):
+    """Read only explicitly supported MAIN inputs, without falling back to DEV or JSON."""
+    # Both a canonical name and its legacy alias appear in the workflow. GitHub
+    # resolves an unregistered secret to '', so exclude it before collision checks.
+    return json.dumps({name: environment[name] for name in MAIN_SECRET_NAMES
+                       if name in environment and environment[name] != ''})
+
+
+def build_environment(payload, environment='dev'):
     """Select the prefix from JSON and rebuild a complete literal environment."""
+    if environment not in ENVIRONMENT_PREFIXES:
+        raise BackendEnvironmentError('invalid_environment')
+    prefix = ENVIRONMENT_PREFIXES[environment]
     if not isinstance(payload, str) or not payload:
         raise BackendEnvironmentError('missing_configuration')
     try:
@@ -101,24 +130,28 @@ def build_environment(payload):
     if len(encoded) > MAX_JSON_BYTES:
         raise BackendEnvironmentError('secrets_payload_too_large')
     try:
-        environment = json.loads(payload, object_pairs_hook=unique_object,
+        source = json.loads(payload, object_pairs_hook=unique_object,
                                  parse_constant=invalid_json_constant)
     except (json.JSONDecodeError, RecursionError):
         raise BackendEnvironmentError('invalid_json') from None
-    if not isinstance(environment, dict):
+    if not isinstance(source, dict):
         raise BackendEnvironmentError('invalid_json')
     values = {}
     seen = set()
-    for secret_name, value in environment.items():
+    for secret_name, value in source.items():
         normalized_name = secret_name.upper()
-        if not normalized_name.startswith(SECRET_PREFIX):
+        if not normalized_name.startswith(prefix):
             continue
         if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', secret_name) is None:
             raise BackendEnvironmentError('invalid_secret_name')
-        suffix = normalized_name[len(SECRET_PREFIX):]
+        suffix = normalized_name[len(prefix):]
         if re.fullmatch(r'[A-Z_][A-Z0-9_]*', suffix) is None:
             raise BackendEnvironmentError('invalid_secret_name')
+        if environment == 'main' and canonical_key(suffix) in {canonical_key(k) for k in MAIN_BUILD_KEYS}:
+            continue
         key = ALIASES.get(suffix, suffix)
+        if environment == 'main' and canonical_key(key) == canonical_key('SPRING_PROFILES_ACTIVE'):
+            key = 'SPRING_PROFILES_ACTIVE'
         canonical = canonical_key(key)
         if canonical in RESERVED_CANONICAL_KEYS or canonical.startswith(RESERVED_CANONICAL_PREFIXES):
             raise BackendEnvironmentError('reserved_configuration')
@@ -131,12 +164,16 @@ def build_environment(payload):
         if any(character in value for character in FORBIDDEN_CHARACTERS):
             raise BackendEnvironmentError('unsupported_control_character')
         values[key] = value
-    for key in REQUIRED_KEYS:
+    required = REQUIRED_KEYS
+    for key in required:
         if not values.get(key) or values[key].isspace():
             raise BackendEnvironmentError('missing_required_configuration')
-    for key, default in DEFAULTS.items():
+    defaults = {'SPRING_PROFILES_ACTIVE': 'main'} if environment == 'main' else DEFAULTS
+    for key, default in defaults.items():
         if values.get(key, '') == '':
             values[key] = default
+    if environment == 'main' and values['SPRING_PROFILES_ACTIVE'] != 'main':
+        raise BackendEnvironmentError('invalid_main_profile')
     for key in OPTIONAL_KEYS:
         if values.get(key) == '':
             values.pop(key)
@@ -149,9 +186,9 @@ def build_environment(payload):
     return result
 
 
-def write_candidate(destination, payload):
+def write_candidate(destination, payload, environment='dev'):
     """Populate only an empty, owned, private regular file created by mktemp."""
-    content = build_environment(payload)
+    content = build_environment(payload, environment)
     descriptor = None
     try:
         descriptor = os.open(Path(destination), os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
@@ -183,9 +220,17 @@ def write_candidate(destination, payload):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('candidate', type=Path)
+    parser.add_argument('--environment', choices=tuple(ENVIRONMENT_PREFIXES), default='dev')
     arguments = parser.parse_args(argv)
     try:
-        write_candidate(arguments.candidate, os.environ.get(SECRETS_VARIABLE))
+        if arguments.environment == 'main':
+            payload = main_payload(os.environ)
+            for name in MAIN_SECRET_NAMES:
+                os.environ.pop(name, None)
+            os.environ.pop(SECRETS_VARIABLE, None)
+        else:
+            payload = os.environ.get(SECRETS_VARIABLE)
+        write_candidate(arguments.candidate, payload, arguments.environment)
     except BackendEnvironmentError as failure:
         print('Backend environment rejected: ' + failure.code, file=sys.stderr)
         return 1
