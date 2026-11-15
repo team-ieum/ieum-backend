@@ -59,6 +59,7 @@ def records(content):
 
 
 class BuildEnvironmentTest(unittest.TestCase):
+    """Internal serialization validation; the CLI selects explicit inputs first."""
     def assert_rejected(self, payload):
         with self.assertRaises(backend_env.BackendEnvironmentError) as caught:
             backend_env.build_environment(payload)
@@ -143,7 +144,7 @@ class BuildEnvironmentTest(unittest.TestCase):
         values['SPRING_PROFILES_ACTIVE'] = 'dev,custom'
         self.assertEqual(records(backend_env.build_environment(secret_payload(values))), values)
 
-    def test_new_prefixed_suffixes_are_automatically_forwarded_including_empty_values(self):
+    def test_serializer_preserves_selected_suffixes_including_empty_values(self):
         values = valid_env()
         values.update({'NEW_SERVICE_TOKEN': SECRET, 'FEATURE_EXPERIMENT': '', '_CUSTOM_SETTING': 'enabled'})
         self.assertEqual(records(backend_env.build_environment(secret_payload(values))),
@@ -259,7 +260,7 @@ class BuildEnvironmentTest(unittest.TestCase):
                         self.assertEqual(self.assert_rejected(secret_payload(extra={PREFIX + suffix: value})).code,
                                          'reserved_configuration')
 
-    def test_normal_pool_and_queue_reclaim_settings_are_automatically_forwarded(self):
+    def test_serializer_accepts_nonreserved_pool_and_queue_reclaim_settings(self):
         values = valid_env()
         values.update({'DB_POOL_MAX_SIZE': '35', 'SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE': '35',
                        'IEUM_WORKFLOW_QUEUE_RECLAIM_MIN_IDLE': 'PT10M',
@@ -365,6 +366,94 @@ class BuildEnvironmentTest(unittest.TestCase):
         self.assertNotIn('NEW_SERVICE_TOKEN', after)
 
 
+class DevExplicitInputsTest(unittest.TestCase):
+    def test_unregistered_canonical_names_do_not_collide_with_registered_aliases(self):
+        supplied = dict.fromkeys(backend_env.DEV_SECRET_NAMES, '')
+        supplied.update(secret_data())
+        supplied[PREFIX + 'GITHUB_APP_WEBHOOK_SECRET'] = SECRET
+        for alias, target in EXPECTED_ALIASES.items():
+            supplied[PREFIX + alias] = supplied[PREFIX + target]
+            supplied[PREFIX + target] = ''
+        actual = records(backend_env.build_environment(backend_env.dev_payload(supplied)))
+        self.assertEqual(actual, {**valid_env(), 'GITHUB_APP_WEBHOOK_SECRET': SECRET,
+                                  'SPRING_PROFILES_ACTIVE': 'dev'})
+
+    def test_populated_alias_collisions_still_fail(self):
+        for alias, target in EXPECTED_ALIASES.items():
+            supplied = secret_data()
+            supplied[PREFIX + target] = SECRET
+            supplied[PREFIX + alias] = SECRET
+            with self.subTest(alias=alias), self.assertRaisesRegex(
+                    backend_env.BackendEnvironmentError, 'duplicate_configuration_key'):
+                backend_env.build_environment(backend_env.dev_payload(supplied))
+
+    def test_missing_empty_and_whitespace_required_inputs_have_no_fallback(self):
+        for key in backend_env.REQUIRED_KEYS:
+            for missing in (None, '', ' \t '):
+                supplied = secret_data()
+                supplied.pop(PREFIX + key)
+                if missing is not None:
+                    supplied[PREFIX + key] = missing
+                supplied.update({TRANSPORT: secret_payload(), 'MAIN_COM_' + key: SECRET,
+                                 'AWS_' + key: SECRET, key: SECRET})
+                with self.subTest(key=key, value=repr(missing)), self.assertRaisesRegex(
+                        backend_env.BackendEnvironmentError, 'missing_required_configuration'):
+                    backend_env.build_environment(backend_env.dev_payload(supplied))
+
+    def test_optional_app_settings_and_literal_values_are_preserved(self):
+        values = valid_env()
+        values.update({key: 'synthetic-' + key.lower() for key in backend_env.DEV_OPTIONAL_KEYS})
+        values['GITHUB_APP_PRIVATE_KEY'] = '  literal = $HOME `value` "quoted" 서울  '
+        values['BETA_PLATFORM_KEY_ENABLED'] = 'false'
+        actual = records(backend_env.build_environment(backend_env.dev_payload(secret_data(values))))
+        self.assertEqual(actual, {**values, 'SPRING_PROFILES_ACTIVE': 'dev'})
+
+    def test_empty_optional_inputs_are_omitted_and_profile_keeps_existing_behavior(self):
+        supplied = dict.fromkeys(backend_env.DEV_SECRET_NAMES, '') | secret_data()
+        actual = records(backend_env.build_environment(backend_env.dev_payload(supplied)))
+        self.assertEqual(actual, {**valid_env(), 'SPRING_PROFILES_ACTIVE': 'dev'})
+        supplied[PREFIX + 'SPRING_PROFILES_ACTIVE'] = 'dev,custom'
+        actual = records(backend_env.build_environment(backend_env.dev_payload(supplied)))
+        self.assertEqual(actual['SPRING_PROFILES_ACTIVE'], 'dev,custom')
+        supplied[PREFIX + 'GITHUB_APP_PRIVATE_KEY'] = ' \t '
+        actual = records(backend_env.build_environment(backend_env.dev_payload(supplied)))
+        self.assertEqual(actual['GITHUB_APP_PRIVATE_KEY'], ' \t ')
+
+    def test_unknown_names_other_environments_build_and_legacy_json_are_ignored(self):
+        supplied = secret_data() | {
+            PREFIX + 'NEW_OPTION': SECRET, PREFIX + 'JAVA_VERSION': '21',
+            PREFIX + 'IMAGE_NAME': 'build-only', PREFIX + 'AGENT_SERVICE_URL': SECRET,
+            'DEV_BLUE_DB_PASSWORD': SECRET, 'DEV_GREEN_DB_PASSWORD': SECRET,
+            'MAIN_COM_APP_BASE_URL': SECRET, 'AWS_SECRET_ACCESS_KEY': SECRET,
+            'DB_PASSWORD': SECRET, TRANSPORT: '{invalid-' + SECRET,
+        }
+        actual = records(backend_env.build_environment(backend_env.dev_payload(supplied)))
+        self.assertEqual(actual, {**valid_env(), 'SPRING_PROFILES_ACTIVE': 'dev'})
+
+    def test_current_app_inputs_and_registered_alias_names_are_supported(self):
+        application = (REPOSITORY / 'api/src/main/resources/application.yml').read_text()
+        required_names = set(re.findall(r'\$\{([A-Z][A-Z0-9_]*)', application))
+        required_names.remove('AGENT_SERVICE_URL')
+        exposed = {name[len(PREFIX):] for name in backend_env.DEV_SECRET_NAMES}
+        self.assertLessEqual(required_names | set(EXPECTED_ALIASES) |
+                             {'GITHUB_APP_PRIVATE_KEY', 'DISCORD_OPS_WEBHOOK_URL'}, exposed)
+        for key in exposed:
+            canonical = backend_env.canonical_key(key)
+            self.assertNotIn(canonical, backend_env.RESERVED_CANONICAL_KEYS)
+            self.assertFalse(canonical.startswith(backend_env.RESERVED_CANONICAL_PREFIXES))
+
+    def test_cli_strips_explicit_inputs_and_legacy_json_before_candidate_processing(self):
+        supplied = secret_data() | {TRANSPORT: 'ignored-json'}
+        def capture(_path, payload, environment):
+            self.assertEqual(environment, 'dev')
+            self.assertEqual(records(backend_env.build_environment(payload))['DB_PASSWORD'], SECRET)
+            self.assertFalse(set(backend_env.DEV_SECRET_NAMES) & set(os.environ))
+            self.assertNotIn(TRANSPORT, os.environ)
+        with patch.dict(os.environ, supplied, clear=True), \
+                patch.object(backend_env, 'write_candidate', side_effect=capture):
+            self.assertEqual(backend_env.main(['/unused/candidate.env']), 0)
+
+
 class WriteCandidateTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -379,12 +468,11 @@ class WriteCandidateTest(unittest.TestCase):
             backend_env.write_candidate(destination, secret_payload() if payload is DEFAULT_PAYLOAD else payload)
         self.assertNotIn(SECRET, str(caught.exception))
 
-    def invoke_cli(self, payload=DEFAULT_PAYLOAD, destination=None):
+    def invoke_cli(self, supplied=DEFAULT_PAYLOAD, destination=None):
         environment = {'PATH': os.defpath}
-        if payload is DEFAULT_PAYLOAD:
-            payload = secret_payload()
-        if payload is not None:
-            environment[TRANSPORT] = payload
+        if supplied is DEFAULT_PAYLOAD:
+            supplied = secret_data()
+        environment.update(supplied or {})
         return subprocess.run([sys.executable, str(SCRIPT), str(destination or self.candidate)],
             env=environment, text=True, capture_output=True, timeout=3)
 
@@ -434,7 +522,7 @@ class WriteCandidateTest(unittest.TestCase):
 
     def test_main_reports_io_failure_as_only_the_fixed_code(self):
         stdout, stderr = io.StringIO(), io.StringIO()
-        with patch.dict(backend_env.os.environ, {TRANSPORT: secret_payload()}, clear=True), \
+        with patch.dict(backend_env.os.environ, secret_data(), clear=True), \
                 patch.object(backend_env.os, 'write', side_effect=OSError(SECRET)), \
                 patch.object(backend_env.sys, 'stdout', stdout), patch.object(backend_env.sys, 'stderr', stderr):
             self.assertEqual(backend_env.main([str(self.candidate)]), 1)
@@ -503,14 +591,14 @@ class WriteCandidateTest(unittest.TestCase):
     def test_cli_failure_exposes_only_a_fixed_code(self):
         values = valid_env()
         values['DB_PASSWORD'] = SECRET + '\nHIDDEN=not-a-record'
-        result = self.invoke_cli(secret_payload(values))
+        result = self.invoke_cli(secret_data(values))
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stdout, '')
         self.assertRegex(result.stderr, r'\ABackend environment rejected: [A-Za-z0-9_-]+\n\Z')
         self.assertNotIn(SECRET, result.stderr)
         self.assertEqual(self.candidate.read_bytes(), b'')
 
-    def test_missing_transport_has_no_traceback_or_destination_leak(self):
+    def test_missing_inputs_have_no_traceback_or_destination_leak(self):
         private_path = self.root / ('private-' + SECRET)
         result = self.invoke_cli(None, private_path)
         self.assertEqual(result.returncode, 1)
@@ -518,6 +606,18 @@ class WriteCandidateTest(unittest.TestCase):
         self.assertRegex(result.stderr, r'\ABackend environment rejected: [A-Za-z0-9_-]+\n\Z')
         self.assertNotIn(SECRET, result.stderr)
         self.assertFalse(private_path.exists())
+
+    def test_raw_secrets_json_is_not_a_cli_fallback(self):
+        result = self.invoke_cli({TRANSPORT: secret_payload()})
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, '')
+        self.assertEqual(result.stderr, 'Backend environment rejected: missing_required_configuration\n')
+        self.assertEqual(self.candidate.read_bytes(), b'')
+
+    def test_cli_ignores_legacy_json_when_explicit_values_are_valid(self):
+        result = self.invoke_cli(secret_data() | {TRANSPORT: '{invalid-' + SECRET})
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, '', ''))
+        self.assertEqual(self.candidate.read_bytes(), backend_env.build_environment(secret_payload()))
 
 
 class BackendWorkflowTest(unittest.TestCase):
@@ -534,7 +634,7 @@ class BackendWorkflowTest(unittest.TestCase):
         cls.header = header
         cls.shell = textwrap.dedent(body)
 
-    def invoke(self, values=None, controller_exit=0, start_xtrace=False, transport=DEFAULT_PAYLOAD, extra=None):
+    def invoke(self, values=None, controller_exit=0, start_xtrace=False, supplied=DEFAULT_PAYLOAD, extra=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             runner = root / 'runner temp'
@@ -547,6 +647,7 @@ class BackendWorkflowTest(unittest.TestCase):
                 'candidate=pathlib.Path(args[args.index("--env-file")+1])\n'
                 'observed={"args":args,"path":str(candidate),"mode":stat.S_IMODE(candidate.stat().st_mode),'
                 '"content":candidate.read_text(),"transportInherited":' + repr(TRANSPORT) + ' in os.environ,'
+                '"devKeysInherited":[k for k in os.environ if k.startswith("DEV_COM_")],'
                 '"appKeysInherited":[k for k in ' + repr(list(backend_env.REQUIRED_KEYS)) + ' if k in os.environ]}\n'
                 'pathlib.Path(' + repr(str(log)) + ').write_text(json.dumps(observed))\n'
                 'sys.exit(' + str(controller_exit) + ')\n')
@@ -559,23 +660,27 @@ class BackendWorkflowTest(unittest.TestCase):
                 values = valid_env()
             elif callable(values):
                 values = values(marker)
-            if transport is DEFAULT_PAYLOAD:
-                transport = secret_payload(values, extra)
-            if transport is not None:
-                environment[TRANSPORT] = transport
+            if supplied is DEFAULT_PAYLOAD:
+                # GitHub supplies an empty string for unregistered canonical/alias names.
+                supplied = dict.fromkeys(backend_env.DEV_SECRET_NAMES, '') | secret_data(values)
+            environment.update(supplied or {})
+            environment.update(extra or {})
             command = ['bash'] + (['-x'] if start_xtrace else []) + ['-c', script]
             result = subprocess.run(command, cwd=root, env=environment, text=True, capture_output=True, timeout=5)
             observed = json.loads(log.read_text()) if log.exists() else None
             return result, observed, list(runner.iterdir()), marker.exists()
 
-    def test_prefixed_transport_is_step_scoped_and_no_secret_expression_enters_shell(self):
-        expected = TRANSPORT + ': ${{ toJSON(secrets) }}'
-        self.assertIn(expected, self.header)
-        self.assertEqual(self.source.count('${{ toJSON(secrets) }}'), 1)
-        self.assertNotIn('toJSON(secrets)', self.source.split('      - name: Deploy with prefixed GitHub Secrets\n', 1)[0])
-        self.assertNotIn('${{ secrets.', self.source)
+    def test_explicit_inputs_are_step_scoped_and_match_collector_allowlist(self):
+        mappings = re.findall(r'^          (DEV_COM_[A-Z0-9_]+): \$\{\{ secrets\.([A-Z0-9_]+) \}\}$',
+                              self.header, re.MULTILINE)
+        self.assertEqual(dict(mappings), {name: name for name in backend_env.DEV_SECRET_NAMES})
+        self.assertEqual(len(mappings), len(backend_env.DEV_SECRET_NAMES))
+        self.assertNotIn('toJSON(secrets)', self.source)
+        self.assertNotIn('${{ secrets.', self.source.split('      - name: Deploy with prefixed GitHub Secrets\n', 1)[0])
         self.assertNotIn('${{', self.shell)
         self.assertNotIn('/home/kwung/deploy/ieum-backend/.env', self.shell)
+        self.assertIn('for secret_name in ${!DEV_COM_@}', self.shell)
+        self.assertIn('unset "$secret_name"', self.shell)
         self.assertIn('unset ' + TRANSPORT, self.shell)
         self.assertLess(self.shell.index('scripts/bluegreen/backend_env.py'), self.shell.index('unset ' + TRANSPORT))
         self.assertLess(self.shell.index('unset ' + TRANSPORT), self.shell.index('/home/kwung/deploy/bluegreen/bluegreen.py'))
@@ -583,11 +688,13 @@ class BackendWorkflowTest(unittest.TestCase):
     def test_success_forwards_private_full_candidate_and_cleans_it_after_deploy(self):
         values = valid_env()
         values.update({key: 'synthetic-' + key.lower() for key in backend_env.OPTIONAL_KEYS})
+        values.update({key: 'synthetic-' + key.lower() for key in backend_env.DEV_OPTIONAL_KEYS})
         result, observed, remaining, _ = self.invoke(values)
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, '', ''))
         self.assertEqual(records(observed['content'].encode()), {**values, 'SPRING_PROFILES_ACTIVE': 'dev'})
         self.assertEqual(observed['mode'], 0o600)
         self.assertFalse(observed['transportInherited'])
+        self.assertEqual(observed['devKeysInherited'], [])
         self.assertEqual(observed['appKeysInherited'], [])
         self.assertIn('--replace-env', observed['args'])
         self.assertEqual(observed['args'][observed['args'].index('--service') + 1], 'backend')
@@ -596,16 +703,19 @@ class BackendWorkflowTest(unittest.TestCase):
         self.assertEqual(remaining, [])
         self.assertNotIn(SECRET, ' '.join(observed['args']))
 
-    def test_new_prefixed_secret_is_used_without_workflow_mapping_changes(self):
+    def test_unknown_prefixed_secret_is_not_automatically_forwarded(self):
         values = valid_env()
         values['NEW_SERVICE_TOKEN'] = SECRET
         result, observed, remaining, _ = self.invoke(values)
         self.assertEqual(result.returncode, 0)
-        self.assertEqual(records(observed['content'].encode())['NEW_SERVICE_TOKEN'], SECRET)
+        self.assertNotIn('NEW_SERVICE_TOKEN', records(observed['content'].encode()))
+        self.assertEqual(observed['devKeysInherited'], [])
         self.assertEqual(remaining, [])
 
     def test_unprefixed_other_credentials_never_enter_candidate(self):
-        extra = {'GITHUB_TOKEN': SECRET, 'AWS_SECRET_ACCESS_KEY': SECRET, 'OTHER_SERVICE_TOKEN': SECRET, 'MAIN_DB_PASSWORD': SECRET,
+        extra = {'GITHUB_TOKEN': SECRET, 'AWS_SECRET_ACCESS_KEY': SECRET, 'OTHER_SERVICE_TOKEN': SECRET,
+                 'MAIN_COM_DB_PASSWORD': SECRET, 'MAIN_COM_APP_BASE_URL': SECRET,
+                 TRANSPORT: secret_payload(extra={PREFIX + 'UNKNOWN_TOKEN': SECRET}),
                  'DEVELOPMENT_TOKEN': SECRET, 'DEVX_TOKEN': SECRET}
         result, observed, remaining, _ = self.invoke(extra=extra)
         self.assertEqual(result.returncode, 0)
@@ -633,10 +743,10 @@ class BackendWorkflowTest(unittest.TestCase):
                 self.assertEqual(result.stdout, '')
                 self.assertEqual(result.stderr, 'Backend environment rejected: missing_required_configuration\n')
 
-    def test_invalid_transport_prevents_controller_and_cleans_candidate(self):
-        for invalid in (None, '', '{' + SECRET, '[]', secret_payload(extra={PREFIX + 'AGENT_SERVICE_URL': SECRET})):
-            with self.subTest(kind='invalid transport'):
-                result, observed, remaining, _ = self.invoke(transport=invalid)
+    def test_legacy_json_cannot_fill_missing_explicit_inputs(self):
+        for legacy in ('', '{' + SECRET, '[]', secret_payload()):
+            with self.subTest(kind='legacy JSON without explicit inputs'):
+                result, observed, remaining, _ = self.invoke(supplied={}, extra={TRANSPORT: legacy})
                 self.assertEqual(result.returncode, 1)
                 self.assertIsNone(observed)
                 self.assertEqual(remaining, [])
@@ -661,28 +771,28 @@ class BackendWorkflowTest(unittest.TestCase):
     def test_values_with_shell_syntax_are_not_executed_or_expanded(self):
         def values(marker):
             output = valid_env()
-            output['NEW_SERVICE_TOKEN'] = SECRET + '$(touch ' + shlex.quote(str(marker)) + ')`touch ' + shlex.quote(str(marker)) + '`'
+            output['GITHUB_APP_PRIVATE_KEY'] = SECRET + '$(touch ' + shlex.quote(str(marker)) + ')`touch ' + shlex.quote(str(marker)) + '`'
             return output
         result, observed, remaining, expanded = self.invoke(values)
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, '', ''))
-        self.assertIn('$(touch ', records(observed['content'].encode())['NEW_SERVICE_TOKEN'])
-        self.assertIn('`touch ', records(observed['content'].encode())['NEW_SERVICE_TOKEN'])
+        self.assertIn('$(touch ', records(observed['content'].encode())['GITHUB_APP_PRIVATE_KEY'])
+        self.assertIn('`touch ', records(observed['content'].encode())['GITHUB_APP_PRIVATE_KEY'])
         self.assertFalse(expanded)
         self.assertFalse(observed['transportInherited'])
         self.assertEqual(remaining, [])
 
-    def test_each_new_run_removes_deleted_dynamic_and_empty_optional_values(self):
+    def test_each_new_run_removes_deleted_and_empty_optional_values(self):
         values = valid_env()
-        values.update({'MAIL_PASSWORD': SECRET, 'NEW_SERVICE_TOKEN': SECRET})
+        values.update({'MAIL_PASSWORD': SECRET, 'GITHUB_APP_PRIVATE_KEY': SECRET})
         _, first, _, _ = self.invoke(values)
         del values['MAIL_PASSWORD']
-        del values['NEW_SERVICE_TOKEN']
+        values['GITHUB_APP_PRIVATE_KEY'] = ''
         result, second, remaining, _ = self.invoke(values)
         self.assertEqual(result.returncode, 0)
         self.assertIn('MAIL_PASSWORD', records(first['content'].encode()))
-        self.assertIn('NEW_SERVICE_TOKEN', records(first['content'].encode()))
+        self.assertIn('GITHUB_APP_PRIVATE_KEY', records(first['content'].encode()))
         self.assertNotIn('MAIL_PASSWORD', records(second['content'].encode()))
-        self.assertNotIn('NEW_SERVICE_TOKEN', records(second['content'].encode()))
+        self.assertNotIn('GITHUB_APP_PRIVATE_KEY', records(second['content'].encode()))
         self.assertIn('--replace-env', second['args'])
         self.assertEqual(remaining, [])
 
