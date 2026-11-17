@@ -1,6 +1,6 @@
 ---
 name: manage-skills
-description: 세션 변경사항을 분석하여 검증 스킬 누락을 탐지합니다. 기존 스킬을 동적으로 탐색하고, 새 스킬을 생성하거나 기존 스킬을 업데이트한 뒤 CLAUDE.md를 관리합니다.
+description: 세션 변경사항을 분석하여 검증 스킬 누락을 탐지합니다. 기존 스킬을 동적으로 탐색하고, 새 스킬을 생성하거나 기존 스킬을 업데이트합니다.
 disable-model-invocation: true
 argument-hint: "[선택사항: 특정 스킬 이름 또는 집중할 영역]"
 ---
@@ -158,10 +158,10 @@ Step 1에서 수집한 각 변경 파일에 대해, 등록된 스킬의 패턴�
 
 3. **생성** — `.claude/skills/verify-<name>/SKILL.md`를 템플릿에 따라 생성
 
-4. **연관 스킬 파일 업데이트** — 새 스킬 생성 후 반드시 아래 3개 파일을 업데이트:
+4. **연관 스킬 파일 업데이트** — 새 스킬 생성 후 반드시 아래 2개 파일을 업데이트:
    - `manage-skills/SKILL.md` — 등록된 검증 스킬 테이블
    - `verify-implementation/SKILL.md` — 실행 대상 스킬 테이블
-   - `CLAUDE.md` — Skills 테이블
+   - CLAUDE.md엔 스킬 목록을 두지 않는다 — Claude Code가 스킬을 자동으로 나열한다
 
 ### Step 7: 검증
 
@@ -194,7 +194,6 @@ Step 1에서 수집한 각 변경 파일에 대해, 등록된 스킬의 패턴�
 |------|---------|
 | `.claude/skills/verify-implementation/SKILL.md` | 통합 검증 스킬 (이 스킬이 실행 대상 목록을 관리) |
 | `.claude/skills/manage-skills/SKILL.md` | 이 파일 자체 (등록된 검증 스킬 목록을 관리) |
-| `CLAUDE.md` | 프로젝트 지침 (이 스킬이 Skills 섹션을 관리) |
 
 ## 예외사항
 

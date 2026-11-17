@@ -234,4 +234,4 @@ X개 수정 완료.
 | File | Purpose |
 |------|---------|
 | `.claude/skills/manage-skills/SKILL.md` | 스킬 유지보수 (이 파일의 실행 대상 스킬 목록을 관리) |
-| `CLAUDE.md` | 프로젝트 지침 |
+| `.claude/CLAUDE.md` | 프로젝트 지침 |
