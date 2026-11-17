@@ -1,13 +1,13 @@
 ---
 name: pr-readiness
-description: PR 생성 전 빌드 검증, 코드 품질 점검, Notion 이슈 동기화 확인, PR 설명 초안 생성, Squash Merge 커밋 메시지 제안을 수행합니다.
+description: PR 생성 전 빌드 검증, 코드 품질 점검, Notion 이슈 동기화 확인, PR 설명 초안 생성, 머지 커밋 제목 제안을 수행합니다.
 argument-hint: "[Notion 이슈 ID, 예: IEUM-BE-5]"
 ---
 
 # PR 준비 체크리스트
 
 ## 목적
-PR 생성 전 필요한 모든 점검을 수행하고, PR 설명 초안과 Squash Merge 커밋 메시지를 생성한다.
+PR 생성 전 필요한 모든 점검을 수행하고, PR 설명 초안과 머지 커밋 제목을 생성한다.
 
 ## 실행 절차
 
@@ -68,13 +68,10 @@ PR 생성 전 필요한 모든 점검을 수행하고, PR 설명 초안과 Squas
 - [ ] DB 마이그레이션 스크립트 포함 (해당 시)
 ```
 
-### Step 6: Squash Merge 커밋 메시지 제안
+### Step 6: 머지 커밋 제목 제안
+Create a merge commit으로 머지한다. 제목은 PR 제목 그대로:
 ```
-[{type}] {기능명} (#{PR번호})
-
-- {주요 변경사항 1}
-- {주요 변경사항 2}
-- {주요 변경사항 3}
+[{type}] {기능명} (IEUM-BE-{번호})
 ```
 
 ## 최종 출력 형식
@@ -87,11 +84,10 @@ PR 생성 전 필요한 모든 점검을 수행하고, PR 설명 초안과 Squas
 4. 추가 점검: ✅ 이상 없음 / ⚠️ {항목}
 
 📋 PR 설명 초안이 준비되었습니다.
-💡 git 명령어 (직접 실행):
-  git push origin {브랜치명}
+브랜치를 push하고 dev 대상 PR을 만들까요?
 ```
 
 ## 규칙
-- git 명령은 안내만 하고 실행하지 않음
-- PR은 반드시 Squash Merge
+- push(`git push -u origin {브랜치명}`)와 PR 생성(`gh pr create --base dev`)은 각각 사용자 확인을 받은 뒤 실행한다. 머지는 하지 않는다
+- PR은 머지 커밋(Create a merge commit)으로 머지 — squash 아님 (`.claude/rules/git/pr.md`)
 - feature 브랜치 수명 최대 3일 초과 시 경고 출력

@@ -15,7 +15,6 @@
       "Bash(docker compose *)"
     ],
     "deny": [
-      "Bash(git *)",
       "Bash(sudo *)",
       "Bash(rm -rf *)",
       "Read(.env*)"
@@ -23,15 +22,6 @@
   },
   "hooks": {
     "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -qE '(git push|git commit|git merge|git rebase|git checkout|git branch -[dD])'; then echo 'BLOCK: git 명령은 DoHoon이 직접 실행합니다. 명령어만 안내해주세요.' >&2; exit 1; fi"
-          }
-        ]
-      },
       {
         "matcher": "Bash",
         "hooks": [

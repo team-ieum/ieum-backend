@@ -1,6 +1,6 @@
 ---
 name: notion-branch-bootstrap
-description: Notion 이슈 ID(예: IEUM-BE-5)를 받아 이슈 내용 분석, 브랜치명 제안, 영향 범위 분석, 커밋 계획을 수행합니다. git 명령은 안내만 하고 실행하지 않습니다.
+description: Notion 이슈 ID(예: IEUM-BE-5)를 받아 이슈 내용 분석, 브랜치명 제안, 영향 범위 분석, 커밋 계획을 수행하고, 사용자가 승인하면 dev에서 브랜치를 만듭니다.
 argument-hint: "IEUM-BE-{번호}"
 ---
 
@@ -50,15 +50,17 @@ Notion 이슈 ID를 받아 구현 시작 전 준비 작업을 자동화한다.
 - feature 브랜치 수명 최대 3일 기준으로 작업량 조절
 - 3일 초과 예상 시 이슈 분할 제안
 
-### 6. 실행 안내
-```
-💡 브랜치 생성 명령어 (직접 실행):
-git checkout develop
-git pull origin develop
-git checkout -b {브랜치명}
+### 6. 브랜치 생성
+"`{브랜치명}`을 dev에서 만들까요?"라고 묻고, 승인하면 실행한다:
+```bash
+git status --short          # 커밋 안 된 변경이 있으면 멈추고 사용자에게 알린다
+git switch dev
+git pull --rebase
+git submodule update --init # catalog를 dev 고정 커밋에 맞춘다
+git switch -c {브랜치명}
 ```
 
 ## 규칙
-- **git 명령은 절대 실행하지 않음** — 안내만 출력
+- 브랜치 생성은 사용자 승인 후에만. push·커밋은 이 스킬에서 하지 않는다
 - Notion 검색이 실패하면 이슈 ID를 다시 확인하도록 안내
 - 이슈 내용이 불명확하면 보충이 필요한 부분을 지적

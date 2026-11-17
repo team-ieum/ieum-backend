@@ -1,0 +1,14 @@
+# 보안 — 우회하지 말 것
+- AI API Key·OAuth 토큰은 `AesEncryptor`로 암호화해 저장한다. 조회 응답엔 `key_hint`만, 원문은 실행 시 서버 안에서만 복호화
+- 노드 config엔 비밀 원문 대신 credential id만 둔다 — config는 Mongo에 평문 저장되고 조회 응답에 그대로 실린다. 웹훅 URL 원문은 `RawWebhookUrlGuard`가 거부(`webhookCredentialId`로 참조)
+- `node_runs` JSONB·로그·에러 메시지·알림에 자격증명을 넣지 않는다. 사용자 입력을 남길 땐 `SensitiveDataMasker`를 거친다
+- 연동 해제 시 토큰은 즉시 DELETE — 소프트 딜리트 금지
+- 공개 경로는 `auth/.../SecurityConfig`가 정한다. 새 공개 경로는 `auth/CLAUDE.md` 목록도 함께 고친다
+- agent 위임 토큰은 `DelegationTokenFilter`의 `USER_SCOPED`·`WORKFLOW_SCOPED` 밖을 못 부른다. agent가 BE를 새로 부르면 목록 먼저
+- JWT 예외는 CustomException으로 변환: `ExpiredJwtException` → `TOKEN_EXPIRED`, `JwtException` → `TOKEN_INVALID`
+- HTTP 노드 SSRF 차단(`HttpNodeExecutor` — 루프백·사설·100.64/10·fc00::/7)을 풀지 않는다
+- 리다이렉트로 출처가 바뀌면 자격 헤더를 떼는 동작(`HttpNodeExecutor`)은 사용자 결정 — 묻지 않고 바꾸지 않는다
+- 수신 웹훅의 `WebhookRateLimiter`와 5MB 상한을 우회하지 않는다 — multipart `resolve-lazily: true`를 끄면 상한이 뚫린다(IEUM-BE-91)
+- 로그인·이메일 인증 실패 제한은 `LoginAttemptService`
+- `orderBy()`에 사용자 입력을 직접 넘기지 않는다 — whitelist 필드만
+- `.env*`는 읽거나 출력하지 않는다(`settings.json` deny)
