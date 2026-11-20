@@ -22,6 +22,7 @@ subprojects {
     apply plugin: 'io.spring.dependency-management'
 
     ext['tomcat.version'] = '10.1.62'
+    ext['jackson-bom.version'] = '2.21.8'
 
     java {
         toolchain {
