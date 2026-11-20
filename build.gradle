@@ -21,6 +21,8 @@ subprojects {
     apply plugin: 'java'
     apply plugin: 'io.spring.dependency-management'
 
+    ext['tomcat.version'] = '10.1.62'
+
     java {
         toolchain {
             languageVersion = JavaLanguageVersion.of(21)
