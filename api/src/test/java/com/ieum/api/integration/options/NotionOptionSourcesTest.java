@@ -60,6 +60,7 @@ class NotionOptionSourcesTest {
     private final NotionDataSourceItemsOptionSource items = new NotionDataSourceItemsOptionSource(reader);
     private final NotionTemplatesOptionSource templates = new NotionTemplatesOptionSource(reader);
     private final NotionUsersOptionSource users = new NotionUsersOptionSource(reader);
+    private final NotionPagePropertiesOptionSource pageProperties = new NotionPagePropertiesOptionSource(reader);
     private final UUID userId = UUID.randomUUID();
 
     @AfterEach
@@ -316,7 +317,7 @@ class NotionOptionSourcesTest {
         server.expect(requestTo(SEARCH_URL))
             .andExpect(jsonPath("$.filter.value").value("page"))
             .andRespond(withSuccess("""
-                {"has_more":true,"next_cursor":"p-2","results":[
+                {"has_more":false,"results":[
                   {"object":"page","id":"p1","properties":{
                      "상태":{"type":"status","status":{"name":"진행중"}},
                      "이름":{"type":"title","title":[{"plain_text":"주간 "},{"plain_text":"회의록"}]}}},
@@ -328,7 +329,7 @@ class NotionOptionSourcesTest {
         assertThat(page.items()).containsExactly(
             new OptionItem("p1", "주간 회의록"),
             new OptionItem("p2", "(제목 없음)"));
-        assertThat(page.nextCursor()).isEqualTo("p-2");
+        assertThat(page.nextCursor()).isNull();
     }
 
     @Test
@@ -559,5 +560,103 @@ class NotionOptionSourcesTest {
         assertThat(List.of(pages.key(), databases.key(), items.key(), templates.key(), users.key()))
             .containsExactly("notion.pages", "notion.databases", "notion.data_source_items", "notion.templates", "notion.users");
         assertThat(properties.key()).isEqualTo("notion.properties");
+    }
+
+    // --- IEUM-BE-125: 페이지 드롭다운 DB 행 제외 · 페이지 속성 드롭다운 -------------------------------
+
+    private static String pageJson(String id, String parentType, String title) {
+        return "{\"object\":\"page\",\"id\":\"" + id + "\",\"parent\":{\"type\":\"" + parentType + "\"},"
+            + "\"properties\":{\"이름\":{\"type\":\"title\",\"title\":[{\"plain_text\":\"" + title + "\"}]}}}";
+    }
+
+    @Test
+    @DisplayName("페이지 목록 — 부모가 data_source_id·database_id인 DB 행은 뺀다(설계 결정 ①)")
+    void pagesExcludeDatabaseRows() {
+        connected();
+        server.expect(requestTo(SEARCH_URL))
+            .andRespond(withSuccess("{\"has_more\":false,\"results\":["
+                + pageJson("p1", "workspace", "홈") + "," + pageJson("r1", "data_source_id", "행") + ","
+                + pageJson("r2", "database_id", "옛 행") + "," + pageJson("p2", "page_id", "하위") + "]}",
+                MediaType.APPLICATION_JSON));
+
+        OptionPage page = pages.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).containsExactly(new OptionItem("p1", "홈"), new OptionItem("p2", "하위"));
+        assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("페이지 목록 — 걸러서 20개가 안 차면 다음 커서를 이어 읽되 최대 3번, 마지막 커서를 돌려준다")
+    void pagesFillUpToThreeCalls() {
+        connected();
+        for (String[] call : new String[][]{{null, "c-2"}, {"c-2", "c-3"}, {"c-3", "c-4"}}) {
+            var expect = server.expect(requestTo(SEARCH_URL));
+            expect = call[0] == null ? expect.andExpect(jsonPath("$.start_cursor").doesNotExist())
+                : expect.andExpect(jsonPath("$.start_cursor").value(call[0]));
+            expect.andRespond(withSuccess("{\"has_more\":true,\"next_cursor\":\"" + call[1] + "\",\"results\":["
+                + pageJson("p-" + call[1], "workspace", "페이지") + "," + pageJson("r-" + call[1], "data_source_id", "행")
+                + "]}", MediaType.APPLICATION_JSON));
+        }
+
+        OptionPage page = pages.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).extracting(OptionItem::id).containsExactly("p-c-2", "p-c-3", "p-c-4");
+        assertThat(page.nextCursor()).isEqualTo("c-4");
+    }
+
+    @Test
+    @DisplayName("페이지 목록 — 한 번에 20개가 차면 더 읽지 않는다")
+    void pagesStopWhenFilled() {
+        connected();
+        StringBuilder results = new StringBuilder();
+        for (int i = 0; i < 20; i++) {
+            results.append(i == 0 ? "" : ",").append(pageJson("p" + i, "workspace", "페이지" + i));
+        }
+        server.expect(requestTo(SEARCH_URL))
+            .andRespond(withSuccess("{\"has_more\":true,\"next_cursor\":\"c-2\",\"results\":[" + results + "]}",
+                MediaType.APPLICATION_JSON));
+
+        OptionPage page = pages.fetch(userId, Map.of(), null);
+
+        assertThat(page.items()).hasSize(20);
+        assertThat(page.nextCursor()).isEqualTo("c-2");
+    }
+
+    @Test
+    @DisplayName("페이지 속성 — GET /pages/{id}, 값은 속성 id·이름은 '이름 (type)', 커서 없음")
+    void pagePropertiesFromPage() {
+        connected();
+        server.expect(requestTo(API + "/pages/" + DS))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Notion-Version", "2026-03-11"))
+            .andRespond(withSuccess("""
+                {"object":"page","id":"x","properties":{
+                  "이름":{"id":"title","type":"title","title":[]},
+                  "담당자":{"id":"a%3Db","type":"people","people":[]}}}
+                """, MediaType.APPLICATION_JSON));
+
+        OptionPage page = pageProperties.fetch(userId, Map.of("page_id", DS), null);
+
+        assertThat(page.items()).containsExactly(
+            new OptionItem("title", "이름 (title)"), new OptionItem("a%3Db", "담당자 (people)"));
+        assertThat(page.nextCursor()).isNull();
+        assertThat(pageProperties.key()).isEqualTo("notion.page_properties");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "   ", "{{nodes.a.output.id}}", "../users", "1f2e3d4c5b6a79881f2e3d4c5b6a7988/properties"})
+    @DisplayName("페이지 속성 — page_id가 비었거나 참조식이거나 형식이 아니면 토큰 조회·HTTP 없이 INVALID_INPUT")
+    void pagePropertiesRejectBadPageId(String raw) {
+        assertErrorCode(() -> pageProperties.fetch(userId, Map.of("page_id", raw), null), ErrorCode.INVALID_INPUT);
+        verifyNoInteractions(tokenProvider);
+    }
+
+    @Test
+    @DisplayName("page_id 메시지는 '페이지'로 — data_source_id와 같은 규칙")
+    void pageIdMessages() {
+        assertThatThrownBy(() -> NotionApiReader.pageId(Map.of())).hasMessage("페이지를 먼저 골라 주세요.");
+        assertThatThrownBy(() -> NotionApiReader.pageId(Map.of("page_id", "{{nodes.a.output.id}}")))
+            .hasMessage("변수 참조로 지정된 페이지는 실행 전이라 불러올 수 없어요.");
+        assertThat(NotionApiReader.pageId(Map.of("page_id", " " + DS + " "))).isEqualTo(DS);
     }
 }
