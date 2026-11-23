@@ -47,4 +47,11 @@ public class ChatRequest {
      * 워크플로우 노드 설정은 보지 않는다.
      */
     private UUID credentialId;
+
+    /**
+     * 채팅 빌더 LLM 모델 ID(선택, {@code GET /api/v1/providers}의 bare id). 없거나 공백이면 provider 기본 모델.
+     * 고르려면 {@code credentialId}가 함께 와야 한다 — 검사는 ChatService.resolveAgentConfig.
+     */
+    @Size(max = 100, message = "프로바이더에서 지원하지 않는 모델입니다.")
+    private String model;
 }
