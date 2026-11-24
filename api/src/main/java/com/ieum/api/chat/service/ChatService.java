@@ -226,6 +226,7 @@ public class ChatService {
         aiTokenUsageRecorder.record(AiTokenUsageRecorder.UsageCall.builder()
             .userId(userId)
             .provider(config.llmProvider())
+            .requestedModel(config.model())
             .reportedModel(agentResponse.getModel())
             .platformKey(config.useBetaPlatformKey())
             .source(UsageSource.CHAT)

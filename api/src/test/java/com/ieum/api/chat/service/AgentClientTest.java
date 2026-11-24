@@ -109,10 +109,22 @@ class AgentClientTest {
 
         JsonNode body = new ObjectMapper().readTree(mockWebServer.takeRequest().getBody().readUtf8());
         assertThat(body.fieldNames()).toIterable()
-            .containsExactlyInAnyOrder("workflowId", "prompt", "currentNodes", "currentEdges");
+            .containsExactlyInAnyOrder("workflowId", "prompt", "currentNodes", "currentEdges", "model");
         assertThat(body.path("prompt").asText()).isEqualTo("요약해줘");
         assertThat(body.path("currentNodes").get(0).path("event").asText()).isEqualTo("http.request");
         assertThat(body.path("currentEdges").get(0).path("id").asText()).isEqualTo("e1");
+    }
+
+    @Test
+    @DisplayName("chatStream 본문에 검사한 model을 싣는다")
+    void chatStream_bodyCarriesModel() throws Exception {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "text/event-stream").setBody("event: done\ndata: " + CHAT_RESPONSE_BODY + "\n\n"));
+
+        agentClient.chatStream(baseParams().model("claude-sonnet-5-5").build()).blockLast();
+
+        JsonNode body = new ObjectMapper().readTree(mockWebServer.takeRequest().getBody().readUtf8());
+        assertThat(body.path("model").asText()).isEqualTo("claude-sonnet-5-5");
     }
 
     @Test

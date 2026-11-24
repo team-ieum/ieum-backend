@@ -136,6 +136,7 @@ public class AgentClient {
             .prompt(params.prompt())
             .currentNodes(params.currentNodes())
             .currentEdges(params.currentEdges())
+            .model(params.model())
             .build();
 
         WebClient.RequestBodySpec spec = applyCredentialHeaders(
@@ -251,13 +252,14 @@ public class AgentClient {
         UUID userId,
         String userRole,
         boolean useBetaPlatformKey,
-        String delegationToken
+        String delegationToken,
+        String model
     ) {
         /** 로그/디버그 출력 시 크레덴셜/토큰이 노출되지 않도록 마스킹한다. */
         @Override
         public String toString() {
             return "AgentChatCallParams[workflowId=" + workflowId + ", userId=" + userId
-                + ", llmProvider=" + llmProvider + ", apiKey=***, userRole=" + userRole
+                + ", llmProvider=" + llmProvider + ", model=" + model + ", apiKey=***, userRole=" + userRole
                 + ", useBetaPlatformKey=" + useBetaPlatformKey + ", delegationToken=***]";
         }
     }

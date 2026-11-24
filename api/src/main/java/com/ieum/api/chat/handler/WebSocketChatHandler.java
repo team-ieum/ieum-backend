@@ -205,6 +205,7 @@ public class WebSocketChatHandler {
                     .userRole(userRole)
                     .useBetaPlatformKey(setup.config().useBetaPlatformKey())
                     .delegationToken(delegationToken)
+                    .model(setup.config().model())
                     .build());
 
                 withBetaQuotaRefund(chatStream, betaReservationKey)

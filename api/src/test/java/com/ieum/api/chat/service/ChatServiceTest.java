@@ -450,6 +450,20 @@ class ChatServiceTest {
         verify(betaPlatformProvider, never()).recordTokens(any(), anyLong());
     }
 
+    @Test
+    @DisplayName("finalizeStream은 검사한 요청 model을 사용량 기록의 requestedModel로 넘긴다")
+    void finalizeStream_recordsRequestedModel() throws Exception {
+        ChatAgentResponse resp = buildAgentResponse("CLARIFICATION_NEEDED", null);
+        givenFinalizeStreamSession();
+
+        chatService.finalizeStream(workflowId, sessionId, resp,
+            new ChatService.AgentConfig("CLAUDE", "key", false, "claude-haiku-4-5"), userId);
+
+        ArgumentCaptor<AiTokenUsageRecorder.UsageCall> call = ArgumentCaptor.forClass(AiTokenUsageRecorder.UsageCall.class);
+        verify(aiTokenUsageRecorder).record(call.capture());
+        assertThat(call.getValue().requestedModel()).isEqualTo("claude-haiku-4-5");
+    }
+
     private static final ChatService.AgentConfig BYOK = new ChatService.AgentConfig("CLAUDE", "key", false);
     private static final ChatService.AgentConfig BETA = new ChatService.AgentConfig("GEMINI", null, true);
 

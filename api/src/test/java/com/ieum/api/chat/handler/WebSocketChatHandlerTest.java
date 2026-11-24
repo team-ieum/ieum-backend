@@ -389,6 +389,8 @@ class WebSocketChatHandlerTest {
     @Test
     @DisplayName("위임 토큰을 chatStream에 싣고, 턴이 끝나면 DONE 저장 뒤에 토큰 폐기·락 해제")
     void delegationToken_passedToAgentAndRevokedAfterFinalize() {
+        setup = new StreamSetupResult(
+            sessionId, new AgentConfig("CLAUDE", "key", false, "claude-sonnet-5-5"), "워크플로우 만들어줘", null, null);
         mockPrepareStream();
         given(delegationTokenService.issue(userId, "ROLE_USER", workflowId)).willReturn("deleg-raw");
         ChatAgentResponse agentResponse = mock(ChatAgentResponse.class);
@@ -409,6 +411,7 @@ class WebSocketChatHandlerTest {
         assertThat(params.getValue().llmProvider()).isEqualTo("CLAUDE");
         assertThat(params.getValue().apiKey()).isEqualTo("key");
         assertThat(params.getValue().useBetaPlatformKey()).isFalse();
+        assertThat(params.getValue().model()).isEqualTo("claude-sonnet-5-5");
         InOrder order = inOrder(chatService, delegationTokenService, chatTurnLock);
         order.verify(chatService).finalizeStream(any(), any(), any(), any(), any());
         order.verify(delegationTokenService).revoke("deleg-raw");
