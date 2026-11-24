@@ -97,7 +97,7 @@ class AgentClientTest {
     }
 
     @Test
-    @DisplayName("chatStream 본문은 prompt·노드·엣지만 싣는다 — 연동·MCP·웹훅 목록은 agent가 위임 토큰으로 묻는다")
+    @DisplayName("chatStream 본문은 prompt·노드·엣지·model만 싣는다(미선택 model은 null) — 연동·MCP·웹훅 목록은 agent가 위임 토큰으로 묻는다")
     void chatStream_bodyCarriesOnlyPromptNodesEdges() throws Exception {
         mockWebServer.enqueue(new MockResponse().setResponseCode(200)
             .setHeader("Content-Type", "text/event-stream").setBody("event: done\ndata: " + CHAT_RESPONSE_BODY + "\n\n"));
@@ -109,10 +109,23 @@ class AgentClientTest {
 
         JsonNode body = new ObjectMapper().readTree(mockWebServer.takeRequest().getBody().readUtf8());
         assertThat(body.fieldNames()).toIterable()
-            .containsExactlyInAnyOrder("workflowId", "prompt", "currentNodes", "currentEdges");
+            .containsExactlyInAnyOrder("workflowId", "prompt", "currentNodes", "currentEdges", "model");
         assertThat(body.path("prompt").asText()).isEqualTo("요약해줘");
         assertThat(body.path("currentNodes").get(0).path("event").asText()).isEqualTo("http.request");
         assertThat(body.path("currentEdges").get(0).path("id").asText()).isEqualTo("e1");
+        assertThat(body.path("model").isNull()).isTrue();
+    }
+
+    @Test
+    @DisplayName("chatStream 본문에 검사한 model을 싣는다")
+    void chatStream_bodyCarriesModel() throws Exception {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "text/event-stream").setBody("event: done\ndata: " + CHAT_RESPONSE_BODY + "\n\n"));
+
+        agentClient.chatStream(baseParams().model("claude-sonnet-5-5").build()).blockLast();
+
+        JsonNode body = new ObjectMapper().readTree(mockWebServer.takeRequest().getBody().readUtf8());
+        assertThat(body.path("model").asText()).isEqualTo("claude-sonnet-5-5");
     }
 
     @Test
@@ -147,10 +160,11 @@ class AgentClientTest {
     }
 
     @Test
-    @DisplayName("AgentChatCallParams.toString은 위임 토큰을 가린다")
+    @DisplayName("AgentChatCallParams.toString은 위임 토큰·API 키를 가리고 model은 드러낸다")
     void callParams_toStringMasksDelegationToken() {
-        assertThat(baseParams().delegationToken("deleg-raw").build().toString())
-            .doesNotContain("deleg-raw").contains("delegationToken=***");
+        assertThat(baseParams().delegationToken("deleg-raw").apiKey("secret-key").model("claude-sonnet-5-5").build().toString())
+            .doesNotContain("deleg-raw", "secret-key")
+            .contains("delegationToken=***", "apiKey=***", "model=claude-sonnet-5-5");
     }
 
     @Test

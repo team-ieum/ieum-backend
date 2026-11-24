@@ -136,6 +136,20 @@ class WebSocketChatHandlerTest {
     }
 
     @Test
+    @DisplayName("model이 100자를 넘으면 요청한 세션에만 error 프레임 — prepareStream 미호출, 100자는 통과한다")
+    void tooLongModel_rejectedBeforeLock() {
+        ChatRequest tooLong = chatRequest("워크플로우 만들어줘");
+        ReflectionTestUtils.setField(tooLong, "model", "m".repeat(101));
+        ChatRequest atLimit = chatRequest("워크플로우 만들어줘");
+        ReflectionTestUtils.setField(atLimit, "model", "m".repeat(100));
+
+        handler.handleChat(workflowId, tooLong, principal, WS_SESSION);
+
+        assertRejectedToSessionOnly("프로바이더에서 지원하지 않는 모델입니다.");
+        assertThat(VALIDATOR.validate(atLimit)).isEmpty();
+    }
+
+    @Test
     @DisplayName("공백만 2001자면 두 제약이 다 걸려도 '비었다' 안내가 나간다")
     void blankAndTooLong_reportsBlankFirst() {
         var tracker = new DeploymentWorkTracker(new DeploymentConnections(new ExecutionEventPublisher()));
@@ -389,6 +403,8 @@ class WebSocketChatHandlerTest {
     @Test
     @DisplayName("위임 토큰을 chatStream에 싣고, 턴이 끝나면 DONE 저장 뒤에 토큰 폐기·락 해제")
     void delegationToken_passedToAgentAndRevokedAfterFinalize() {
+        setup = new StreamSetupResult(
+            sessionId, new AgentConfig("CLAUDE", "key", false, "claude-sonnet-5-5"), "워크플로우 만들어줘", null, null);
         mockPrepareStream();
         given(delegationTokenService.issue(userId, "ROLE_USER", workflowId)).willReturn("deleg-raw");
         ChatAgentResponse agentResponse = mock(ChatAgentResponse.class);
@@ -409,6 +425,7 @@ class WebSocketChatHandlerTest {
         assertThat(params.getValue().llmProvider()).isEqualTo("CLAUDE");
         assertThat(params.getValue().apiKey()).isEqualTo("key");
         assertThat(params.getValue().useBetaPlatformKey()).isFalse();
+        assertThat(params.getValue().model()).isEqualTo("claude-sonnet-5-5");
         InOrder order = inOrder(chatService, delegationTokenService, chatTurnLock);
         order.verify(chatService).finalizeStream(any(), any(), any(), any(), any());
         order.verify(delegationTokenService).revoke("deleg-raw");

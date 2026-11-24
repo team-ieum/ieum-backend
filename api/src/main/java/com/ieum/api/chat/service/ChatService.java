@@ -8,6 +8,7 @@ import com.ieum.api.chat.dto.ChatRequest;
 import com.ieum.api.chat.dto.ChatResponse;
 import com.ieum.api.credential.domain.Credential;
 import com.ieum.api.credential.service.CredentialService;
+import com.ieum.api.provider.service.ProviderRegistry;
 import com.ieum.api.workflow.service.NodeCredentialGuard;
 import com.ieum.api.workflow.service.RawWebhookUrlGuard;
 import com.ieum.api.workflow.service.TriggerNodeSchedule;
@@ -67,6 +68,7 @@ public class ChatService {
     private final AiTokenUsageRecorder aiTokenUsageRecorder;
     private final NodeDerivation nodeDerivation;
     private final EventCatalog eventCatalog;
+    private final ProviderRegistry providerRegistry;
 
     // ─────────────────────────────────────── 히스토리 ─────────────────────────
 
@@ -161,9 +163,17 @@ public class ChatService {
      *
      * @throws CustomException WORKFLOW_NOT_FOUND — 워크플로우를 찾을 수 없는 경우
      * @throws CustomException CHAT_CREDENTIAL_REQUIRED — 쓸 키가 없고 self-hosted·베타 자격도 없는 경우
+     * @throws CustomException INVALID_MODEL — model이 있는데 키를 지정하지 않았거나, 키 provider의 tools 지원 모델이 아닌 경우
      */
-    public AgentConfig resolveAgentConfig(UUID workflowId, UUID userId, UUID fallbackCredentialId, String userRole) {
+    public AgentConfig resolveAgentConfig(
+            UUID workflowId, UUID userId, UUID fallbackCredentialId, String userRole, String model) {
         workflowCrudService.getWorkflowByOwner(userId, workflowId);
+
+        // agent와 같은 정규화: 공백뿐이면 기본 모델. 모델 선택은 요청 키가 있을 때만 — 자동 키로 몰래 검사하지 않는다
+        model = (model == null || model.isBlank()) ? null : model.strip();
+        if (model != null && fallbackCredentialId == null) {
+            throw new CustomException(ErrorCode.INVALID_MODEL, "모델을 선택하려면 AI 키를 함께 지정해 주세요.");
+        }
 
         // 채팅 LLM은 워크플로우 노드를 보지 않는다(IEUM-BE-107): 요청 키 → 최근 등록 키 → self-hosted → 베타
         // 여기서는 자격(eligibility) 판정만 한다 — 실제 쿼터 예약(INCR)은 agent 호출 직전(스트림 subscribe 직전)에서
@@ -187,14 +197,26 @@ public class ChatService {
             log.info("[ChatService] 요청 credentialId가 없어 사용자의 기본 크레덴셜을 자동 적용합니다.");
         }
         Credential credential = credentialService.getByIdAndUserId(fallbackCredentialId, userId);
+        String provider = credential.getProvider().name();
+        if (model != null && !isToolsModelOf(provider, model)) {
+            throw new CustomException(ErrorCode.INVALID_MODEL);
+        }
         String decryptedApiKey = credentialProvider.getDecryptedApiKey(fallbackCredentialId.toString(), userId);
-        return new AgentConfig(credential.getProvider().name(), decryptedApiKey, false);
+        return new AgentConfig(provider, decryptedApiKey, false, model);
+    }
+
+    /** 채팅 빌더는 도구 호출을 하므로 카탈로그에서 tools를 지원하는 bare id만 받는다. */
+    private boolean isToolsModelOf(String provider, String model) {
+        return providerRegistry.getAllProviders().stream()
+            .filter(p -> p.provider().equals(provider))
+            .flatMap(p -> p.models().stream())
+            .anyMatch(m -> m.id().equals(model) && m.capabilities().contains("tools"));
     }
 
     /**
      * agent 응답 1건 = 사용량 1행(IEUM-BE-98). REST·WebSocket 두 경로가 모두 여기를 지난다.
-     * 채팅은 모델을 보내지 않아 agent가 provider 기본 모델을 쓴다 — 요청 모델 null로 넘기면 기록기가
-     * 카탈로그 기본 모델로 채운다. 키 없는 self-hosted 호출(ADMIN·TESTER)은 기록하지 않는다.
+     * 사용자가 고른 모델은 requestedModel로 넘기고, 미선택(null)이면 기록기가 카탈로그 기본 모델로 채운다.
+     * agent 응답의 model(reportedModel)이 있으면 그쪽이 우선한다. 키 없는 self-hosted 호출(ADMIN·TESTER)은 기록하지 않는다.
      * 기록기는 별도 트랜잭션에서 저장하고 실패를 삼키므로 채팅 응답·저장에 영향이 없다.
      */
     private void recordUsage(UUID workflowId, UUID userId, AgentConfig config, ChatAgentResponse agentResponse) {
@@ -204,6 +226,7 @@ public class ChatService {
         aiTokenUsageRecorder.record(AiTokenUsageRecorder.UsageCall.builder()
             .userId(userId)
             .provider(config.llmProvider())
+            .requestedModel(config.model())
             .reportedModel(agentResponse.getModel())
             .platformKey(config.useBetaPlatformKey())
             .source(UsageSource.CHAT)
@@ -445,7 +468,8 @@ public class ChatService {
     @Transactional
     public StreamSetupResult prepareStream(UUID workflowId, UUID userId, String userRole, ChatRequest request) {
         ChatSession session = createOrGetSession(workflowId, userId, request.getSessionId());
-        AgentConfig config = resolveAgentConfig(workflowId, userId, request.getCredentialId(), userRole);
+        AgentConfig config = resolveAgentConfig(
+            workflowId, userId, request.getCredentialId(), userRole, request.getModel());
 
         saveUserMessage(session, request.getPrompt());
 
@@ -535,13 +559,19 @@ public class ChatService {
     public record AgentConfig(
         String llmProvider,
         String decryptedApiKey,
-        boolean useBetaPlatformKey
+        boolean useBetaPlatformKey,
+        String model
     ) {
+        /** 모델 미지정(기본 모델). */
+        public AgentConfig(String llmProvider, String decryptedApiKey, boolean useBetaPlatformKey) {
+            this(llmProvider, decryptedApiKey, useBetaPlatformKey, null);
+        }
+
         /** 로그/디버그 출력 시 복호화된 API Key가 노출되지 않도록 마스킹한다. */
         @Override
         public String toString() {
             return "AgentConfig[llmProvider=" + llmProvider
-                + ", decryptedApiKey=***, useBetaPlatformKey=" + useBetaPlatformKey + "]";
+                + ", decryptedApiKey=***, useBetaPlatformKey=" + useBetaPlatformKey + ", model=" + model + "]";
         }
     }
 

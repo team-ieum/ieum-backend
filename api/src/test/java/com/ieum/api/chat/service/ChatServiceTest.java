@@ -13,6 +13,9 @@ import com.ieum.api.chat.dto.ChatResponse;
 import com.ieum.api.credential.domain.AiProvider;
 import com.ieum.api.credential.domain.Credential;
 import com.ieum.api.credential.service.CredentialService;
+import com.ieum.api.provider.model.ModelInfo;
+import com.ieum.api.provider.model.ProviderInfo;
+import com.ieum.api.provider.service.ProviderRegistry;
 import com.ieum.common.exception.CustomException;
 import com.ieum.common.exception.ErrorCode;
 import com.ieum.workflowcore.catalog.EventCatalog;
@@ -93,6 +96,7 @@ class ChatServiceTest {
         // NodeDerivation·EventCatalog는 mock이 아니라 실물이다 — @InjectMocks가 null로 채운 자리를 덮는다
         ReflectionTestUtils.setField(chatService, "nodeDerivation", new NodeDerivation(CATALOG));
         ReflectionTestUtils.setField(chatService, "eventCatalog", CATALOG);
+        ReflectionTestUtils.setField(chatService, "providerRegistry", new ProviderRegistry());
         workflowId = UUID.randomUUID();
         userId = UUID.randomUUID();
         sessionId = UUID.randomUUID();
@@ -177,7 +181,7 @@ class ChatServiceTest {
             .willReturn(List.of());
 
         assertThatThrownBy(() ->
-            chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER")
+            chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER", null)
         ).isInstanceOf(CustomException.class)
             .hasMessageContaining(ErrorCode.CHAT_CREDENTIAL_REQUIRED.getMessage());
     }
@@ -193,7 +197,7 @@ class ChatServiceTest {
         given(credentialService.getByIdAndUserId(latest, userId)).willReturn(credential);
         given(credentialProvider.getDecryptedApiKey(latest.toString(), userId)).willReturn("k");
 
-        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER");
+        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER", null);
 
         assertThat(result.llmProvider()).isEqualTo("OPENAI");
         assertThat(result.decryptedApiKey()).isEqualTo("k");
@@ -210,7 +214,21 @@ class ChatServiceTest {
         given(credentialService.getByIdAndUserId(foreign, userId))
             .willThrow(new CustomException(ErrorCode.NOT_FOUND));
 
-        assertThatThrownBy(() -> chatService.resolveAgentConfig(workflowId, userId, foreign, "ROLE_USER"))
+        assertThatThrownBy(() -> chatService.resolveAgentConfig(workflowId, userId, foreign, "ROLE_USER", null))
+            .isInstanceOf(CustomException.class)
+            .satisfies(e -> assertThat(((CustomException) e).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+        verify(credentialProvider, never()).getDecryptedApiKey(any(), any());
+    }
+
+    @Test
+    @DisplayName("남의 credentialId에 model까지 오면 모델 검사 전에 소유 검증에서 NOT_FOUND")
+    void resolveAgentConfig_foreignRequestCredentialWithModel_notFoundBeforeModelCheck() {
+        UUID foreign = UUID.randomUUID();
+        given(credentialService.getByIdAndUserId(foreign, userId))
+            .willThrow(new CustomException(ErrorCode.NOT_FOUND));
+
+        assertThatThrownBy(() ->
+            chatService.resolveAgentConfig(workflowId, userId, foreign, "ROLE_USER", "gpt-5.6-terra"))
             .isInstanceOf(CustomException.class)
             .satisfies(e -> assertThat(((CustomException) e).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND));
         verify(credentialProvider, never()).getDecryptedApiKey(any(), any());
@@ -222,7 +240,7 @@ class ChatServiceTest {
         given(credentialService.getByUserId(userId))
             .willReturn(List.of());
 
-        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_TESTER");
+        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_TESTER", null);
 
         assertThat(result.llmProvider()).isEqualTo("CLAUDE");
         assertThat(result.decryptedApiKey()).isNull();
@@ -235,7 +253,7 @@ class ChatServiceTest {
             .willReturn(List.of());
         given(betaPlatformProvider.isBetaEligible(userId)).willReturn(true);
 
-        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER");
+        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER", null);
 
         assertThat(result.llmProvider()).isEqualTo("CLAUDE");
         assertThat(result.decryptedApiKey()).isNull();
@@ -258,10 +276,140 @@ class ChatServiceTest {
         given(credentialProvider.getDecryptedApiKey(autoCredentialId.toString(), userId))
             .willReturn("auto-decrypted-key");
 
-        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER");
+        ChatService.AgentConfig result = chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER", null);
 
         assertThat(result.llmProvider()).isEqualTo("CLAUDE");
         assertThat(result.decryptedApiKey()).isEqualTo("auto-decrypted-key");
+    }
+
+    // ─────────────────── resolveAgentConfig 모델 선택 ──────────────────────
+
+    private UUID givenRequestCredential(AiProvider provider) {
+        UUID credentialId = UUID.randomUUID();
+        Credential credential = Mockito.mock(Credential.class);
+        given(credential.getProvider()).willReturn(provider);
+        given(credentialService.getByIdAndUserId(credentialId, userId)).willReturn(credential);
+        return credentialId;
+    }
+
+    @Test
+    @DisplayName("요청 키 provider의 tools 지원 모델이면 AgentConfig에 model을 싣는다")
+    void resolveAgentConfig_requestCredentialWithModel_carriesModel() {
+        UUID credentialId = givenRequestCredential(AiProvider.CLAUDE);
+        given(credentialProvider.getDecryptedApiKey(credentialId.toString(), userId)).willReturn("k");
+
+        ChatService.AgentConfig result =
+            chatService.resolveAgentConfig(workflowId, userId, credentialId, "ROLE_USER", "claude-sonnet-5-5");
+
+        assertThat(result.model()).isEqualTo("claude-sonnet-5-5");
+        assertThat(result.toString()).contains("model=claude-sonnet-5-5").contains("decryptedApiKey=***");
+    }
+
+    @Test
+    @DisplayName("공백뿐인 model은 기본 모델(null)로 본다")
+    void resolveAgentConfig_blankModel_isDefault() {
+        UUID credentialId = givenRequestCredential(AiProvider.CLAUDE);
+        given(credentialProvider.getDecryptedApiKey(credentialId.toString(), userId)).willReturn("k");
+
+        ChatService.AgentConfig result =
+            chatService.resolveAgentConfig(workflowId, userId, credentialId, "ROLE_USER", "   ");
+
+        assertThat(result.model()).isNull();
+    }
+
+    @Test
+    @DisplayName("앞뒤 공백이 붙은 model은 strip해서 검사·전달한다")
+    void resolveAgentConfig_paddedModel_isStripped() {
+        UUID credentialId = givenRequestCredential(AiProvider.CLAUDE);
+        given(credentialProvider.getDecryptedApiKey(credentialId.toString(), userId)).willReturn("k");
+
+        ChatService.AgentConfig result =
+            chatService.resolveAgentConfig(workflowId, userId, credentialId, "ROLE_USER", " claude-sonnet-5-5 ");
+
+        assertThat(result.model()).isEqualTo("claude-sonnet-5-5");
+    }
+
+    @Test
+    @DisplayName("credentialId 없이 공백뿐인 model이면 INVALID_MODEL이 아니라 최근 키 자동 적용 경로로 간다")
+    void resolveAgentConfig_blankModelWithoutCredential_usesDefaultPath() {
+        UUID autoCredentialId = UUID.randomUUID();
+        Credential credential = Mockito.mock(Credential.class);
+        given(credential.getId()).willReturn(autoCredentialId);
+        given(credential.getProvider()).willReturn(AiProvider.CLAUDE);
+        given(credentialService.getByUserId(userId)).willReturn(List.of(credential));
+        given(credentialService.getByIdAndUserId(autoCredentialId, userId)).willReturn(credential);
+        given(credentialProvider.getDecryptedApiKey(autoCredentialId.toString(), userId)).willReturn("k");
+
+        ChatService.AgentConfig result =
+            chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER", "   ");
+
+        assertThat(result.model()).isNull();
+        assertThat(result.decryptedApiKey()).isEqualTo("k");
+    }
+
+    @Test
+    @DisplayName("prepareStream은 요청 키와 앞뒤 공백 붙은 model을 strip해 StreamSetupResult config에 싣는다")
+    void prepareStream_requestCredentialWithPaddedModel_carriesStrippedModel() {
+        given(sessionRepository.save(any())).willReturn(buildSession(workflowId, userId));
+        UUID credentialId = givenRequestCredential(AiProvider.CLAUDE);
+        given(credentialProvider.getDecryptedApiKey(credentialId.toString(), userId)).willReturn("k");
+        ChatRequest request = buildStreamRequest("만들어줘", credentialId);
+        given(request.getModel()).willReturn(" claude-sonnet-5-5 ");
+
+        ChatService.StreamSetupResult setup = chatService.prepareStream(workflowId, userId, "ROLE_USER", request);
+
+        assertThat(setup.config().model()).isEqualTo("claude-sonnet-5-5");
+    }
+
+    @Test
+    @DisplayName("credentialId 없이 model만 오면 자동 키로 검사하지 않고 INVALID_MODEL")
+    void resolveAgentConfig_modelWithoutCredential_rejected() {
+        assertThatThrownBy(() ->
+            chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER", "claude-sonnet-5-5"))
+            .isInstanceOf(CustomException.class)
+            .hasMessage("모델을 선택하려면 AI 키를 함께 지정해 주세요.")
+            .satisfies(e -> assertThat(((CustomException) e).getErrorCode()).isEqualTo(ErrorCode.INVALID_MODEL));
+        verify(credentialService, never()).getByUserId(any());
+    }
+
+    @Test
+    @DisplayName("다른 provider의 모델이면 키 복호화 전에 INVALID_MODEL")
+    void resolveAgentConfig_modelOfOtherProvider_rejectedBeforeDecrypt() {
+        UUID credentialId = givenRequestCredential(AiProvider.CLAUDE);
+
+        assertThatThrownBy(() ->
+            chatService.resolveAgentConfig(workflowId, userId, credentialId, "ROLE_USER", "gpt-5.6-terra"))
+            .isInstanceOf(CustomException.class)
+            .satisfies(e -> assertThat(((CustomException) e).getErrorCode()).isEqualTo(ErrorCode.INVALID_MODEL));
+        verify(credentialProvider, never()).getDecryptedApiKey(any(), any());
+    }
+
+    @Test
+    @DisplayName("provider 접두가 붙은 id는 bare id가 아니라 INVALID_MODEL")
+    void resolveAgentConfig_prefixedModelId_rejected() {
+        UUID credentialId = givenRequestCredential(AiProvider.CLAUDE);
+
+        assertThatThrownBy(() ->
+            chatService.resolveAgentConfig(workflowId, userId, credentialId, "ROLE_USER", "anthropic/claude-sonnet-5-5"))
+            .isInstanceOf(CustomException.class)
+            .satisfies(e -> assertThat(((CustomException) e).getErrorCode()).isEqualTo(ErrorCode.INVALID_MODEL));
+        verify(credentialProvider, never()).getDecryptedApiKey(any(), any());
+    }
+
+    @Test
+    @DisplayName("tools를 지원하지 않는 모델은 INVALID_MODEL")
+    void resolveAgentConfig_modelWithoutTools_rejected() {
+        ProviderRegistry registry = Mockito.mock(ProviderRegistry.class);
+        given(registry.getAllProviders()).willReturn(List.of(new ProviderInfo("CLAUDE", "Claude", List.of("API_KEY"),
+            List.of(new ModelInfo("claude-x", "Claude X", List.of("text"), 1000, 1000, true)))));
+        ReflectionTestUtils.setField(chatService, "providerRegistry", registry);
+        UUID credentialId = givenRequestCredential(AiProvider.CLAUDE);
+
+        assertThatThrownBy(() ->
+            chatService.resolveAgentConfig(workflowId, userId, credentialId, "ROLE_USER", "claude-x"))
+            .isInstanceOf(CustomException.class)
+            .satisfies(e -> assertThat(((CustomException) e).getErrorCode()).isEqualTo(ErrorCode.INVALID_MODEL));
+        verify(credentialProvider, never()).getDecryptedApiKey(any(), any());
     }
 
     // ─────────────────── finalizeStream 이름·베타 토큰 ─────────────────────
@@ -346,6 +494,20 @@ class ChatServiceTest {
         chatService.finalizeStream(workflowId, sessionId, resp, BYOK, userId);
 
         verify(betaPlatformProvider, never()).recordTokens(any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("finalizeStream은 검사한 요청 model을 사용량 기록의 requestedModel로 넘긴다")
+    void finalizeStream_recordsRequestedModel() throws Exception {
+        ChatAgentResponse resp = buildAgentResponse("CLARIFICATION_NEEDED", null);
+        givenFinalizeStreamSession();
+
+        chatService.finalizeStream(workflowId, sessionId, resp,
+            new ChatService.AgentConfig("CLAUDE", "key", false, "claude-haiku-4-5"), userId);
+
+        ArgumentCaptor<AiTokenUsageRecorder.UsageCall> call = ArgumentCaptor.forClass(AiTokenUsageRecorder.UsageCall.class);
+        verify(aiTokenUsageRecorder).record(call.capture());
+        assertThat(call.getValue().requestedModel()).isEqualTo("claude-haiku-4-5");
     }
 
     private static final ChatService.AgentConfig BYOK = new ChatService.AgentConfig("CLAUDE", "key", false);
