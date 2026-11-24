@@ -86,11 +86,11 @@ class ProviderRegistryTest {
     }
 
     @Test
-    @DisplayName("모든 모델 id는 bare id — 라우팅 접두가 없다")
+    @DisplayName("모든 모델 id는 bare id(`/`·공백 없음, 1~100자) — agent BuildChatRequest.model 형식과 같다")
     void idsAreBare() {
         registry.getAllProviders().stream()
                 .flatMap(p -> p.models().stream())
-                .forEach(m -> assertThat(m.id()).as(m.id()).doesNotContain("/"));
+                .forEach(m -> assertThat(m.id()).as(m.id()).matches("[^/\\s]{1,100}"));
     }
 
     @Test

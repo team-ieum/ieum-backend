@@ -22,7 +22,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 분리된 {@code REQUIRES_NEW}로 한다 — 채팅처럼 {@code @Transactional} 안에서 불려도 기록 실패가
  * 바깥 트랜잭션을 rollback-only로 만들지 않고, 바깥이 롤백돼도 이미 쓴 토큰 기록은 남는다.
  *
- * <p><b>모델 결정</b> — agent는 아직 실제 호출 모델을 응답에 싣지 않는다. 그래서 다음 순서로 정한다.
+ * <p><b>모델 결정</b> — agent는 채팅(`/v1/chat/stream`)만 IEUM-AI-120부터 실제 호출 모델을 응답에 싣는다. 그래서 다음 순서로 정한다.
  * <ol>
  *   <li>베타 platform 키: agent가 노드 model을 무시하고 Gemini 기본 모델로 강등한다 → GEMINI + 카탈로그 기본</li>
  *   <li>agent가 응답에 model을 실었으면 그 값(폐기 모델 강등까지 반영된 진실)</li>
@@ -49,7 +49,7 @@ public class AiTokenUsageRecorder {
     /**
      * @param provider       요청한 provider 코드(노드·채팅 설정값). platform 키면 무시하고 GEMINI
      * @param requestedModel 요청한 모델(nullable)
-     * @param reportedModel  agent가 응답에 실은 실제 모델(nullable — 현재 agent는 싣지 않는다)
+     * @param reportedModel  agent가 응답에 실은 실제 모델(nullable — 채팅은 IEUM-AI-120부터 싣는다)
      */
     @Builder
     public record UsageCall(

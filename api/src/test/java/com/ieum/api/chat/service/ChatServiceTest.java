@@ -221,6 +221,20 @@ class ChatServiceTest {
     }
 
     @Test
+    @DisplayName("남의 credentialId에 model까지 오면 모델 검사 전에 소유 검증에서 NOT_FOUND")
+    void resolveAgentConfig_foreignRequestCredentialWithModel_notFoundBeforeModelCheck() {
+        UUID foreign = UUID.randomUUID();
+        given(credentialService.getByIdAndUserId(foreign, userId))
+            .willThrow(new CustomException(ErrorCode.NOT_FOUND));
+
+        assertThatThrownBy(() ->
+            chatService.resolveAgentConfig(workflowId, userId, foreign, "ROLE_USER", "gpt-5.6-terra"))
+            .isInstanceOf(CustomException.class)
+            .satisfies(e -> assertThat(((CustomException) e).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+        verify(credentialProvider, never()).getDecryptedApiKey(any(), any());
+    }
+
+    @Test
     @DisplayName("크레덴셜이 없어도 ROLE_TESTER는 키 없는 AgentConfig로 채팅할 수 있다 (자체 호스팅 LLM 경로)")
     void resolveAgentConfig_noCredential_selfHostedEligible() {
         given(credentialService.getByUserId(userId))

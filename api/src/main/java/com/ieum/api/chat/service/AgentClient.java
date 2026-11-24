@@ -44,7 +44,8 @@ import reactor.core.scheduler.Schedulers;
  * {
  *   "prompt": "유저 자연어 입력",
  *   "currentNodes": [...],          ← null이면 신규 생성, 있으면 수정
- *   "currentEdges": [...]
+ *   "currentEdges": [...],
+ *   "model": "claude-sonnet-5-5"     ← null이면 agent 기본
  * }
  * </pre>
  */
