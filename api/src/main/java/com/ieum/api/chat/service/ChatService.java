@@ -215,8 +215,8 @@ public class ChatService {
 
     /**
      * agent 응답 1건 = 사용량 1행(IEUM-BE-98). REST·WebSocket 두 경로가 모두 여기를 지난다.
-     * 채팅은 모델을 보내지 않아 agent가 provider 기본 모델을 쓴다 — 요청 모델 null로 넘기면 기록기가
-     * 카탈로그 기본 모델로 채운다. 키 없는 self-hosted 호출(ADMIN·TESTER)은 기록하지 않는다.
+     * 사용자가 고른 모델은 requestedModel로 넘기고, 미선택(null)이면 기록기가 카탈로그 기본 모델로 채운다.
+     * agent 응답의 model(reportedModel)이 있으면 그쪽이 우선한다. 키 없는 self-hosted 호출(ADMIN·TESTER)은 기록하지 않는다.
      * 기록기는 별도 트랜잭션에서 저장하고 실패를 삼키므로 채팅 응답·저장에 영향이 없다.
      */
     private void recordUsage(UUID workflowId, UUID userId, AgentConfig config, ChatAgentResponse agentResponse) {

@@ -316,6 +316,38 @@ class ChatServiceTest {
     }
 
     @Test
+    @DisplayName("credentialId 없이 공백뿐인 model이면 INVALID_MODEL이 아니라 최근 키 자동 적용 경로로 간다")
+    void resolveAgentConfig_blankModelWithoutCredential_usesDefaultPath() {
+        UUID autoCredentialId = UUID.randomUUID();
+        Credential credential = Mockito.mock(Credential.class);
+        given(credential.getId()).willReturn(autoCredentialId);
+        given(credential.getProvider()).willReturn(AiProvider.CLAUDE);
+        given(credentialService.getByUserId(userId)).willReturn(List.of(credential));
+        given(credentialService.getByIdAndUserId(autoCredentialId, userId)).willReturn(credential);
+        given(credentialProvider.getDecryptedApiKey(autoCredentialId.toString(), userId)).willReturn("k");
+
+        ChatService.AgentConfig result =
+            chatService.resolveAgentConfig(workflowId, userId, null, "ROLE_USER", "   ");
+
+        assertThat(result.model()).isNull();
+        assertThat(result.decryptedApiKey()).isEqualTo("k");
+    }
+
+    @Test
+    @DisplayName("prepareStream은 요청 키와 앞뒤 공백 붙은 model을 strip해 StreamSetupResult config에 싣는다")
+    void prepareStream_requestCredentialWithPaddedModel_carriesStrippedModel() {
+        given(sessionRepository.save(any())).willReturn(buildSession(workflowId, userId));
+        UUID credentialId = givenRequestCredential(AiProvider.CLAUDE);
+        given(credentialProvider.getDecryptedApiKey(credentialId.toString(), userId)).willReturn("k");
+        ChatRequest request = buildStreamRequest("만들어줘", credentialId);
+        given(request.getModel()).willReturn(" claude-sonnet-5-5 ");
+
+        ChatService.StreamSetupResult setup = chatService.prepareStream(workflowId, userId, "ROLE_USER", request);
+
+        assertThat(setup.config().model()).isEqualTo("claude-sonnet-5-5");
+    }
+
+    @Test
     @DisplayName("credentialId 없이 model만 오면 자동 키로 검사하지 않고 INVALID_MODEL")
     void resolveAgentConfig_modelWithoutCredential_rejected() {
         assertThatThrownBy(() ->

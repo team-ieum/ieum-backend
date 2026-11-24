@@ -136,6 +136,20 @@ class WebSocketChatHandlerTest {
     }
 
     @Test
+    @DisplayName("model이 100자를 넘으면 요청한 세션에만 error 프레임 — prepareStream 미호출, 100자는 통과한다")
+    void tooLongModel_rejectedBeforeLock() {
+        ChatRequest tooLong = chatRequest("워크플로우 만들어줘");
+        ReflectionTestUtils.setField(tooLong, "model", "m".repeat(101));
+        ChatRequest atLimit = chatRequest("워크플로우 만들어줘");
+        ReflectionTestUtils.setField(atLimit, "model", "m".repeat(100));
+
+        handler.handleChat(workflowId, tooLong, principal, WS_SESSION);
+
+        assertRejectedToSessionOnly("프로바이더에서 지원하지 않는 모델입니다.");
+        assertThat(VALIDATOR.validate(atLimit)).isEmpty();
+    }
+
+    @Test
     @DisplayName("공백만 2001자면 두 제약이 다 걸려도 '비었다' 안내가 나간다")
     void blankAndTooLong_reportsBlankFirst() {
         var tracker = new DeploymentWorkTracker(new DeploymentConnections(new ExecutionEventPublisher()));
