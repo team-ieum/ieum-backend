@@ -65,6 +65,12 @@ class NotionApiReader {
         return call(userId, HttpMethod.POST, SEARCH_URI, body);
     }
 
+    /** 페이지(DB 행 포함) — {@code GET /v1/pages/{id}}. {@code properties}가 속성 이름 → {@code {id, type, …}}. */
+    JsonNode page(UUID userId, String pageId) {
+        return call(userId, HttpMethod.GET, UriComponentsBuilder.fromUriString(API + "/pages/{id}")
+            .encode().buildAndExpand(pageId).toUri(), null);
+    }
+
     /** data source 스키마 — {@code GET /v1/data_sources/{id}}. {@code properties}가 속성 이름 → 속성 객체. */
     JsonNode dataSource(UUID userId, String dataSourceId) {
         return call(userId, HttpMethod.GET, UriComponentsBuilder.fromUriString(API + "/data_sources/{id}")
@@ -117,15 +123,25 @@ class NotionApiReader {
      * 토큰 조회·HTTP보다 먼저 부른다.
      */
     static String dataSourceId(Map<String, String> inputs) {
-        String id = inputs.get("data_source_id") == null ? "" : inputs.get("data_source_id").strip();
+        return notionId(inputs, "data_source_id", "데이터베이스");
+    }
+
+    /** inputs의 {@code page_id} — {@link #dataSourceId}와 같은 규칙(IEUM-BE-125 속성 드롭다운). */
+    static String pageId(Map<String, String> inputs) {
+        return notionId(inputs, "page_id", "페이지");
+    }
+
+    /** 비었거나 참조식이거나 Notion id 형식이 아니면 INVALID_INPUT — URL 경로에 끼우기 전에 막는다. */
+    private static String notionId(Map<String, String> inputs, String key, String label) {
+        String id = inputs.get(key) == null ? "" : inputs.get(key).strip();
         if (id.isEmpty()) {
-            throw new CustomException(ErrorCode.INVALID_INPUT, "데이터베이스를 먼저 골라 주세요.");
+            throw new CustomException(ErrorCode.INVALID_INPUT, label + "를 먼저 골라 주세요.");
         }
         if (id.contains("{{")) {
-            throw new CustomException(ErrorCode.INVALID_INPUT, "변수 참조로 지정된 데이터베이스는 실행 전이라 불러올 수 없어요.");
+            throw new CustomException(ErrorCode.INVALID_INPUT, "변수 참조로 지정된 " + label + "는 실행 전이라 불러올 수 없어요.");
         }
         if (!NOTION_ID.matcher(id).matches()) {
-            throw new CustomException(ErrorCode.INVALID_INPUT, "데이터베이스 ID 형식이 올바르지 않습니다.");
+            throw new CustomException(ErrorCode.INVALID_INPUT, label + " ID 형식이 올바르지 않습니다.");
         }
         return id;
     }
